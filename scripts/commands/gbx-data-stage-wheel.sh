@@ -1,12 +1,13 @@
 #!/bin/bash
 # gbx:data:stage-wheel - build JAR first (mvn clean package -DskipTests in Docker), then
-# python3 -m build, and stage wheel to BOTH locations: GBX_ARTIFACT_VOLUME/ (init-script
-# dir; dedupes to one geobrix-*.whl) and the bundle volroot (bundle/%pip path). Set
-# GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step entirely (no Maven build) — for
-# light-tier-only wheel changes (pyrx/pyvx/pygx); the staged JAR is left untouched.
-# Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip Databricks upload.
+# python3 -m build, and stage wheel to BOTH locations: GBX_ARTIFACT_VOLUME/ (artifact
+# Volume dir; dedupes to one geobrix-*.whl) and the bundle volroot (bundle/%pip path). Set
+# GBX_BUNDLE_SKIP_JAR=1 or GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to skip the JAR step entirely
+# (no Maven build, no JAR upload) — for light-tier-only wheel changes (pyrx/pyvx/pygx);
+# the staged JAR and python/geobrix/lib/ are left untouched.
 # Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip Databricks upload.
-# Both flags together = full local build with no Databricks calls (no auth required).
+# Skip-JAR + SKIP_WHEEL_UPLOAD = local wheel-only build with no Maven and no Databricks
+# calls (no auth required). A failure to list/clean the artifact dir exits non-zero.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -15,6 +16,12 @@ source "$SCRIPT_DIR/common.sh"
 
 LOG_FILE=""
 SHOW_HELP=0
+STAGE_ARGS=()
+ENV_STAGE=false
+ENV_VALUE=""
+VERSIONED=false
+DEST=false
+PROFILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -26,45 +33,138 @@ while [[ $# -gt 0 ]]; do
             SHOW_HELP=1
             shift
             ;;
-        *)
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
             shift
+            ;;
+        --env)
+            case "${2:-}" in 5|6|both) ;; *) echo "--env must be 5, 6 or both" >&2; exit 2 ;; esac
+            STAGE_ARGS+=(--env "$2"); ENV_STAGE=true; ENV_VALUE="$2"
+            shift 2
+            ;;
+        --no-prune)
+            STAGE_ARGS+=(--no-prune)
+            shift
+            ;;
+        --versioned)
+            STAGE_ARGS+=(--versioned); VERSIONED=true
+            shift
+            ;;
+        --dest)
+            if [[ -z "${2:-}" || "$2" == --* ]]; then
+                echo "--dest needs a Volume folder" >&2
+                exit 2
+            fi
+            STAGE_ARGS+=(--dest "$2"); DEST=true
+            shift 2
+            ;;
+        --profile)
+            if [[ -z "${2:-}" || "$2" == --* ]]; then
+                echo "--profile needs a profile name" >&2
+                exit 2
+            fi
+            PROFILE="$2"
+            shift 2
+            ;;
+        *)
+            # An option that is silently dropped looks like one that worked (--profile was a
+            # no-op for a while): refuse what this command does not know.
+            echo "Unknown option: $1 (see --help)" >&2
+            exit 2
             ;;
     esac
 done
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+gbx_export_cluster_config
+# The launcher fills DATABRICKS_CONFIG_PROFILE from databricks_cluster_config.env only when the
+# environment has none, so --profile wins over the config file.
+[[ -n "$PROFILE" ]] && export DATABRICKS_CONFIG_PROFILE="$PROFILE"
 
 if [[ "$SHOW_HELP" == "1" ]]; then
     echo "Usage: bash scripts/commands/gbx-data-stage-wheel.sh [OPTIONS]"
     echo ""
-    echo "Build the GeoBrix JAR (in Docker) and Python wheel, then stage to Databricks."
+    echo "Build the GeoBrix JAR (in Docker, unless skipped) and Python wheel, then stage to Databricks."
     echo ""
     echo "Destinations:"
-    echo "  GBX_ARTIFACT_VOLUME/   (init-script dir; dedupes to a single geobrix-*.whl)"
+    echo "  GBX_ARTIFACT_VOLUME/   (artifact Volume dir; dedupes to a single geobrix-*.whl)"
     echo "  bundle volroot/        (bundle/%pip path; overwrite in place)"
     echo ""
     echo "Options:"
+    echo "  --env 5|6|both Stage the env wheel(s) instead: dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl"
+    echo "                 (gbx:build:wheel --env <N> builds it). No JAR step and no build; only the bundle"
+    echo "                 volroot (the %pip path), by the wheel's own +env<N> name. The artifact Volume dir is"
+    echo "                 left as it is, so no other wheel there is touched."
+    echo "  --versioned    With --env: stage each wheel to <bundle volroot>/geobrix/<version>/env<N>/, remove every"
+    echo "                 other geobrix-*.whl there, and verify the uploaded size. The volroot's own wheels stay."
+    echo "  --dest DIR     With one --env 5|6: stage the wheel to the Volume folder DIR (created when missing), upload and"
+    echo "                 verify the size, then remove every other geobrix-*.whl there: an isolated folder holding this one"
+    echo "                 wheel (e.g. for a Unity Catalog install). Needs --env 5|6; exits 2 at once with --versioned or --env both."
+    echo "  --no-prune     Keep every other geobrix-*.whl in the artifact Volume dir (skip the single-version cleanup)"
+    echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
+    echo "                    in the environment or examples/tests/databricks_cluster_config.env)"
     echo "  --log <path>   Write output to this log file (filename → test-logs/<name>)"
+    print_lock_help
     echo "  --help, -h     Show this help"
     echo ""
     echo "Environment:"
     echo "  GBX_BUNDLE_SKIP_JAR=1           Skip the JAR step ENTIRELY (no Maven build,"
     echo "                                  no upload) — light-tier-only wheel changes"
-    echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1    Build JAR locally; skip Databricks upload"
+    echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1    Same as GBX_BUNDLE_SKIP_JAR=1 for this command"
+    echo "                                  (no Maven build, no JAR upload)"
     echo "  GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1  Build wheel locally; skip Databricks upload"
-    echo "  Both together = full local build, no auth required"
+    echo "  A skip-JAR flag + SKIP_WHEEL_UPLOAD = local wheel-only build, no auth required"
     echo ""
     echo "Examples:"
     echo "  bash scripts/commands/gbx-data-stage-wheel.sh"
-    echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1 GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 bash scripts/commands/gbx-data-stage-wheel.sh --log my-build.log"
+    echo "  # light-tier-only wheel (no Maven):"
+    echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1 bash scripts/commands/gbx-data-stage-wheel.sh --log my-build.log"
+    echo "  # both env wheels (the Databricks install), built first with gbx:build:wheel:"
+    echo "  bash scripts/commands/gbx-data-stage-wheel.sh --env both"
+    echo "  # each into its own folder, <volroot>/geobrix/<version>/env<N>/:"
+    echo "  bash scripts/commands/gbx-data-stage-wheel.sh --env both --versioned"
     exit 0
+fi
+
+if [[ "$VERSIONED" == true && "$ENV_STAGE" != true ]]; then
+    echo "--versioned stages env wheels: pass --env 5|6|both" >&2
+    exit 2
+fi
+
+if [[ "$DEST" == true && ( "$ENV_VALUE" != 5 && "$ENV_VALUE" != 6 || "$VERSIONED" == true ) ]]; then
+    echo "--dest stages ONE env wheel: pass --env 5|6, without --versioned" >&2
+    exit 2
 fi
 
 cd "$PROJECT_ROOT" || exit 1
 
+# The JAR step runs `mvn clean package`, which wipes target/: never under a running test, so it
+# takes the container lock. With a skip-JAR flag no Maven runs and no lock is needed.
+JAR_STEP=true
+[ "$ENV_STAGE" = true ] && JAR_STEP=false  # the env wheel carries its own JAR (_jar/)
+for flag in GBX_BUNDLE_SKIP_JAR GBX_BUNDLE_SKIP_JAR_UPLOAD; do
+    case "$(printf '%s' "${!flag:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes) JAR_STEP=false ;;
+    esac
+done
+if [ "$JAR_STEP" = true ]; then
+    check_docker
+    gbx_acquire_test_lock
+fi
+
+# The upload uses WorkspaceClient (databricks-sdk): see gbx_python_with_sdk in common.sh. With
+# no .venv-pyrx the launcher falls back to `python -m build` on that interpreter, so ask for
+# `build` as well. A local-only build (GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1) imports no SDK, so it
+# keeps system python3 and needs neither network nor uv.
+case "$(printf '%s' "${GBX_BUNDLE_SKIP_WHEEL_UPLOAD:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes) GBX_SDK_PYTHON=(python3) ;;
+    *) gbx_python_with_sdk build || exit 1 ;;
+esac
+
 if [[ -n "$LOG_FILE" ]]; then
     mkdir -p "$(dirname "$LOG_FILE")"
-    python3 notebooks/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
+    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py ${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"} 2>&1 | tee "$LOG_FILE"
     exit "${PIPESTATUS[0]}"
 else
-    python3 notebooks/tests/stage_wheel_to_volume.py
+    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py ${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"}
     exit $?
 fi

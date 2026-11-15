@@ -6,7 +6,7 @@ title: Materialized Compression
 
 # Materialized Compression
 
-When a virtual tile becomes bytes on disk or in a Spark row — during a materialize operation, a write, or a tile format conversion — compression is applied. This page explains what GeoBrix compresses by default, how it chooses compression settings for different tile sizes, and when you might want to override the defaults.
+Compression is applied when a virtual tile becomes bytes on disk or in a Spark row. This happens during a materialize operation, a write, or a tile format conversion. This page explains what GeoBrix compresses by default, how it sets compression for different tile sizes, and when to override the defaults.
 
 ## What gets compressed
 
@@ -14,17 +14,26 @@ A **materialized tile** carries its raster payload as encoded bytes. Those bytes
 
 For the structure of a tile and the full virtual↔materialized lifecycle, see **[Tile Structure](./tile-structure)** and **[Virtual Tiles](./virtual-tiles)**.
 
-## GeoBrix's approach: ZSTD + dtype-matched predictor
+## GeoBrix's approach: a dtype-matched predictor with a per-implementation default codec
 
-The default compression in GeoBrix is **ZSTD** paired with a **dtype-matched predictor** that reorders bytes to improve compression ratio:
+Both implementations pair their default codec with a **dtype-matched predictor** that reorders bytes to improve compression ratio. The default codec depends on the implementation:
+
+| Implementation | Default codec | Why |
+|---|---|---|
+| Python level | **ZSTD** (`auto`, size-adaptive level) through the canonical `creation_opts` | Best ratio and write throughput for materialized tiles; see the level ladder below |
+| JVM level | **DEFLATE** (level 6) | Baseline TIFF: every reader decodes it, including Java ImageIO and the Databricks image preview, which cannot decode ZSTD output |
+
+At the JVM level, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` runs at the Python level only and keeps ZSTD as its default (the size-adaptive `auto` level).
+
+The predictor rules are the same in both implementations:
 
 - **float32 / float64**: predictor 3 (horizontal differencing for floating-point data)
 - **int16 / uint16 / int32 / uint32**: predictor 2 (delta encoding for integer data)
 - **uint8 / int8**: predictor 1 (byte data; predictor adds negligible benefit)
 
-All light-tier raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply uniformly across every writer — no writer skips the predictor or applies a dtype-mismatched value.
+All raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply to every writer. No writer skips the predictor or applies a dtype-mismatched value.
 
-The `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**: levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit, and L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
+The Python level's `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**. Levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit. L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
 
 | Decoded tile size | ZSTD level | Why |
 |---|---|---|
@@ -53,10 +62,10 @@ Set `GBX_ZSTD_LEVEL` in the executor environment to override the size-adaptive l
 |---|---|
 | unset or `default` | Size-adaptive ladder above (the default) |
 | `fast` | L1 everywhere — highest encode throughput, output ~0.3–2.5% larger than L6 |
-| `max` | L9 everywhere — heavy-tier-parity ceiling; no smaller output than L6 on GeoBrix tiles |
+| `max` | L9 everywhere — the level a JVM-level tile gets when its metadata names ZSTD; no smaller output than L6 on GeoBrix tiles |
 | `1`–`22` | Explicit fixed level applied to all tile sizes, size-independent |
 
-Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable; `max` (L9) matches the old ladder's ceiling if hard parity with the heavyweight tier is required.
+Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable. `max` (L9) matches the old ladder's ceiling. It is also the default level of an explicit ZSTD tile at the JVM level (`zstd_level` is 9). The JVM level defaults to DEFLATE, so that match applies only to JVM-level tiles whose metadata sets `compression` to `ZSTD`.
 
 ## When to reach for other codecs
 
@@ -66,8 +75,8 @@ Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode 
 - Trade-off: DEFLATE is 2–3× slower to write than ZSTD at the same ratio, and doesn't adapt to tile size.
 
 **`compress="zstd"` with explicit `compressLevel`** — For write-once, read-many catalogs:
-- If you're building a reference dataset that will be read many times, a high fixed level (e.g. `compressLevel=19` for sizes up to 128 MiB) pays off over the lifetime of many reads.
-- Warning: levels ≥ 19 get exponentially slower to write (100–300ms per small tile) and use significant memory (100+ MiB per encode); use only on the driver or small batches.
+- If you're building a reference dataset that will be read many times, a high fixed level pays off over the lifetime of many reads. For example, use `compressLevel=19` for sizes up to 128 MiB.
+- Warning: levels ≥ 19 get exponentially slower to write (100–300ms per small tile) and use significant memory (100+ MiB per encode). Use them only on the driver or small batches.
 
 **`compress="lzw"` or `compress="none"`** — Rarely needed:
 - LZW **expands** float32 and continuous data; use only for categorical/integer classification data.
@@ -100,7 +109,7 @@ df.write.format("gtiff_gbx").option("compress", "none").save(...)
 For `prepare_cogs` (driver-based COG preparation), pass the same options as kwargs:
 
 ```python
-from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+from databricks.labs.gbx.rasterx.helpers import prepare_cogs
 
 prepare_cogs(
     input_dir,
@@ -124,7 +133,7 @@ If you expect downstream processing by tools without ZSTD support, use `compress
 
 ## Evidence table
 
-The following table shows popular codec combinations (none, LZW, DEFLATE, and ZSTD at levels 9–16+predictor) across realistic tile sizes and data types. The benchmark ran on macOS arm64 with GDAL 3.12 and rasterio 1.5. A subsequent full level sweep (L1–L22, 11 tile configurations) confirmed that **L6 is the ratio knee**: L9 and L12 add write time and RSS with negligible size benefit, and L16 can produce *larger* output than L6 on high-entropy float32 tiles. Read decompression time was flat across all levels tested. Sizes 256 MiB–1 GiB are extrapolated and pending Serverless validation.
+The following table shows popular codec combinations (none, LZW, DEFLATE, and ZSTD at levels 9–16+predictor) across realistic tile sizes and data types. The benchmark ran on macOS arm64 with GDAL 3.12 and rasterio 1.5. A subsequent full level sweep (L1–L22, 11 tile configurations) confirmed that **L6 is the ratio knee**. L9 and L12 add write time and RSS with negligible size benefit. L16 can produce *larger* output than L6 on high-entropy float32 tiles. Read decompression time was flat across all levels tested. Sizes 256 MiB–1 GiB are extrapolated and pending Serverless validation.
 
 | Size | Codec | Dtype | Ratio | Write (ms) | Read (ms) | Peak RSS (MiB) |
 |---|---|---|---|---|---|---|
@@ -147,7 +156,7 @@ The following table shows popular codec combinations (none, LZW, DEFLATE, and ZS
 
 **Key observations:**
 - ZSTD L6 + predictor beats or matches DEFLATE on ratio, while writing **2–3× faster** across all sizes.
-- **L6 is the ratio knee for GeoBrix tiles:** L9 and L12 add encode time and peak RSS with negligible output-size benefit; L16 can produce *larger* output than L6 on high-entropy float32 data (level-sweep finding, not shown above).
+- **L6 is the ratio knee for GeoBrix tiles:** L9 and L12 add encode time and peak RSS with negligible output-size benefit. L16 can produce *larger* output than L6 on high-entropy float32 data (level-sweep finding, not shown above).
 - **Read decompression speed is level-independent** — output file size, not the write level, determines read cost. Choosing a higher write level does not improve read throughput.
 - LZW expands float32 data (not shown); use only for categorical integer rasters.
 

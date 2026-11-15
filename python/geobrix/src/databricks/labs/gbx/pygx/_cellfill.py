@@ -14,7 +14,37 @@ before calling :func:`fill`; parity decoders call :func:`decode` and re-render.
 from __future__ import annotations
 
 import struct
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
+
+
+def collect(
+    pairs: Iterable[Tuple[int, Optional[float]]],
+) -> Dict[int, Optional[float]]:
+    """``{cell_id: value}`` from ``(cell_id, value)`` pairs, one value per distinct cell.
+
+    A cell id that repeats keeps its LARGEST non-null value, the same rule the cell
+    rasterizers use for a repeated cell; ``None`` (covered but missing) survives only
+    when every value of the cell is ``None``. Arrival order inside a Spark group is not
+    fixed, so "the last row wins" gave a different fill from run to run.
+    """
+    cells: Dict[int, Optional[float]] = {}
+    for cell_id, value in pairs:
+        if cell_id not in cells or (
+            value is not None and (cells[cell_id] is None or value > cells[cell_id])
+        ):
+            cells[cell_id] = value
+    return cells
+
+
+def check_args(k: int, method: str) -> str:
+    """The fill's two arguments checked: ``k`` at least 0, ``method`` ``'mean'`` or ``'idw'`` in any case. Returns the
+    method in lower case; a wrong one is a ValueError that names the value."""
+    if k < 0:
+        raise ValueError(f"cellfill: k must be >= 0; got {k}")
+    m = method.lower()
+    if m not in ("mean", "idw"):
+        raise ValueError(f"cellfill: method must be 'mean' or 'idw'; got '{method}'")
+    return m
 
 
 def fill(
@@ -37,8 +67,9 @@ def fill(
     - A None cell with no valid neighbour within k rings stays None.
     - k_loop rings are disjoint hollow rings — no double-counting.
     - Only in-group (present in *cells*) neighbours contribute.
-    - Duplicate cell-ID tie-break: last-write-wins (matches heavy ``toMap``);
-      callers build the dict in row-arrival order.
+    - A cell id that repeats keeps its LARGEST non-null value (see :func:`collect`),
+      so the result does not depend on row-arrival order; callers build *cells*
+      with :func:`collect`.
 
     Args:
         cells: ``{int_cell_id: Optional[float]}`` — None = covered-but-missing.
@@ -51,11 +82,7 @@ def fill(
     Returns:
         ``list[(cell_id, Optional[float])]`` in ascending unsigned int64 order.
     """
-    if k < 0:
-        raise ValueError(f"cellfill: k must be >= 0; got {k}")
-    m = method.lower()
-    if m not in ("mean", "idw"):
-        raise ValueError(f"cellfill: method must be 'mean' or 'idw'; got '{method}'")
+    m = check_args(k, method)
 
     # Ascending unsigned int64 order (mirrors Scala Long.compareUnsigned sort).
     ordered = sorted(cells.keys(), key=lambda x: x & 0xFFFF_FFFF_FFFF_FFFF)
@@ -84,6 +111,36 @@ def fill(
                 result.append((cell_id, num / den))
 
     return result
+
+
+def fill_cells(
+    rows: Iterable[Tuple[Optional[int], Optional[float]]],
+    k,
+    method,
+    power,
+    k_loop_fn: Callable[[int, int], List[int]],
+    before_fill: Optional[Callable[[int], None]] = None,
+) -> Optional[List[Tuple[int, Optional[float]]]]:
+    """The array form of the fill: ``(cell_id, value)`` rows to the filled ``[(cell_id, value)]`` in ascending unsigned
+    id order, or None when no row has a cell id. A NULL ``k``, ``method`` or ``power`` takes 1, ``'mean'`` and 2.0;
+    a NaN value is a missing one. One kernel for the session UDFs and the Unity Catalog handlers of every grid.
+    ``before_fill(k)``, when given, is called with the radius after the arguments are checked and before any
+    ring is built, and only when at least one cell is NULL (an all-valid array builds no ring): a caller bounds the
+    work there by raising.
+    """
+    k = 1 if k is None else int(k)
+    method = "mean" if method is None else str(method)
+    check_args(k, method)  # a wrong argument raises whatever the cells are
+    cells = collect(
+        (int(c), None if v is None or v != v else float(v))
+        for c, v in rows
+        if c is not None
+    )
+    if not cells:
+        return None
+    if before_fill is not None and any(v is None for v in cells.values()):
+        before_fill(k)
+    return fill(cells, k, method, 2.0 if power is None else float(power), k_loop_fn)
 
 
 def encode(filled: List[Tuple[int, Optional[float]]]) -> bytes:

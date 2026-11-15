@@ -18,12 +18,11 @@ from _fixtures import single_band_tile_df
 # ============================================================================
 
 
-def rst_rastertoworldcoord_python_light_example(spark):
+def rst_rastertoworldcoord_python_example(spark):
     """Convert pixel coordinates (col, row) to world coordinates (x, y)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Pixel (100, 80) → world struct {x: <easting>, y: <northing>}
     result = df.select(
@@ -32,7 +31,7 @@ def rst_rastertoworldcoord_python_light_example(spark):
     return result["world_coord"]
 
 
-rst_rastertoworldcoord_python_light_example_output = """
+rst_rastertoworldcoord_python_example_output = """
 +-----------------------------+
 |world_coord                  |
 +-----------------------------+
@@ -42,12 +41,11 @@ rst_rastertoworldcoord_python_light_example_output = """
 """
 
 
-def rst_rastertoworldcoordx_python_light_example(spark):
+def rst_rastertoworldcoordx_python_example(spark):
     """Convert pixel column to world X coordinate (easting)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Pixel col=100 → easting
     result = df.select(
@@ -56,7 +54,7 @@ def rst_rastertoworldcoordx_python_light_example(spark):
     return result["easting"]
 
 
-rst_rastertoworldcoordx_python_light_example_output = """
+rst_rastertoworldcoordx_python_example_output = """
 +---------+
 |easting  |
 +---------+
@@ -65,12 +63,11 @@ rst_rastertoworldcoordx_python_light_example_output = """
 """
 
 
-def rst_rastertoworldcoordy_python_light_example(spark):
+def rst_rastertoworldcoordy_python_example(spark):
     """Convert pixel row to world Y coordinate (northing)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Pixel row=80 → northing
     result = df.select(
@@ -79,7 +76,7 @@ def rst_rastertoworldcoordy_python_light_example(spark):
     return result["northing"]
 
 
-rst_rastertoworldcoordy_python_light_example_output = """
+rst_rastertoworldcoordy_python_example_output = """
 +------------+
 |northing    |
 +------------+
@@ -88,12 +85,11 @@ rst_rastertoworldcoordy_python_light_example_output = """
 """
 
 
-def rst_worldtorastercoord_python_light_example(spark):
+def rst_worldtorastercoord_python_example(spark):
     """Convert world coordinates (x, y) to pixel coordinates (col, row)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # World (2122955, -10791275) in the raster CRS → pixel (100, 80) — the exact
     # inverse of the rst_rastertoworldcoord example above.
@@ -105,7 +101,7 @@ def rst_worldtorastercoord_python_light_example(spark):
     return result["pixel_coord"]
 
 
-rst_worldtorastercoord_python_light_example_output = """
+rst_worldtorastercoord_python_example_output = """
 +-----------+
 |pixel_coord|
 +-----------+
@@ -115,12 +111,11 @@ rst_worldtorastercoord_python_light_example_output = """
 """
 
 
-def rst_worldtorastercoordx_python_light_example(spark):
+def rst_worldtorastercoordx_python_example(spark):
     """Convert world X coordinate to pixel column."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # World (2122955, -10791275) → pixel column 100
     result = df.select(
@@ -131,7 +126,7 @@ def rst_worldtorastercoordx_python_light_example(spark):
     return result["pixel_col"]
 
 
-rst_worldtorastercoordx_python_light_example_output = """
+rst_worldtorastercoordx_python_example_output = """
 +---------+
 |pixel_col|
 +---------+
@@ -140,12 +135,11 @@ rst_worldtorastercoordx_python_light_example_output = """
 """
 
 
-def rst_worldtorastercoordy_python_light_example(spark):
+def rst_worldtorastercoordy_python_example(spark):
     """Convert world Y coordinate to pixel row."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # World (2122955, -10791275) → pixel row 80
     result = df.select(
@@ -156,7 +150,7 @@ def rst_worldtorastercoordy_python_light_example(spark):
     return result["pixel_row"]
 
 
-rst_worldtorastercoordy_python_light_example_output = """
+rst_worldtorastercoordy_python_example_output = """
 +---------+
 |pixel_row|
 +---------+
@@ -170,18 +164,17 @@ rst_worldtorastercoordy_python_light_example_output = """
 # ============================================================================
 
 
-def rst_to_webmercator_python_light_example(spark):
+def rst_to_webmercator_python_example(spark):
     """Transform raster from its native CRS to Web Mercator (EPSG:3857)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Reproject to Web Mercator (default bilinear resampling)
     result = df.select(rx.rst_to_webmercator("tile").alias("tile")).first()
     return result["tile"]
 
 
-rst_to_webmercator_python_light_example_output = """
+rst_to_webmercator_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -191,18 +184,19 @@ rst_to_webmercator_python_light_example_output = """
 """
 
 
-def rst_tilexyz_python_light_example(spark):
+def rst_tilexyz_python_example(spark):
     """Render a single Web-Mercator XYZ tile (z, x, y) as PNG bytes."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
 
-    rx.register(spark)
+    gbx.register(spark)
     df = single_band_tile_df(spark)
     # Render z=12, x=1234, y=1523 as a 256x256 PNG. rescale="none" keeps the raw
     # dtype mapping (a slippy-map tile off the raster's footprint renders
     # transparent — rst_tilexyz never returns null).
     result = df.select(
-        rx.rst_tilexyz(
+        rx_api.rst_tilexyz(
             "tile",
             f.lit(12),
             f.lit(1234),
@@ -216,7 +210,7 @@ def rst_tilexyz_python_light_example(spark):
     return result["png_bytes"]
 
 
-rst_tilexyz_python_light_example_output = """
+rst_tilexyz_python_example_output = """
 +----------+
 |png_bytes |
 +----------+
@@ -226,15 +220,15 @@ rst_tilexyz_python_light_example_output = """
 """
 
 
-def rst_xyzpyramid_python_light_example(spark):
+def rst_xyzpyramid_python_example(spark):
     """Generate XYZ tiles across a zoom range (UDTF: one row per tile).
 
     rst_xyzpyramid is a Python UDTF — invoke it as a SQL LATERAL table function
     (a plain df.select would raise NotImplementedError).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # One row per (z, x, y) tile across zoom 0..1.
     return spark.sql(
@@ -243,7 +237,7 @@ def rst_xyzpyramid_python_light_example(spark):
     ).take(3)
 
 
-rst_xyzpyramid_python_light_example_output = """
+rst_xyzpyramid_python_example_output = """
 +---+---+---+--------+
 |z  |x  |y  |bytes   |
 +---+---+---+--------+
@@ -258,23 +252,23 @@ rst_xyzpyramid_python_light_example_output = """
 # ============================================================================
 
 
-def rst_h3_tessellate_python_light_example(spark):
+def rst_h3_tessellate_python_example(spark):
     """Tessellate a raster into H3 hexagonal grid cells (resolution 3).
 
     rst_h3_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
     function (a plain df.select would raise NotImplementedError). One v2-Tile row
     per H3 cell overlapping the raster, each carrying the H3 cellid.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     return spark.sql(
         "SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 3) t"
     ).take(3)
 
 
-rst_h3_tessellate_python_light_example_output = """
+rst_h3_tessellate_python_example_output = """
 +-------------------+-----------------------------------------------------------+
 |cellid             |...                                                        |
 +-------------------+-----------------------------------------------------------+
@@ -284,7 +278,7 @@ rst_h3_tessellate_python_light_example_output = """
 """
 
 
-def rst_bng_tessellate_python_light_example(spark):
+def rst_bng_tessellate_python_example(spark):
     """Tessellate a raster into British National Grid cells (resolution 3 = 1km).
 
     rst_bng_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
@@ -293,17 +287,18 @@ def rst_bng_tessellate_python_light_example(spark):
     over central London (a 2km square around 530000,180000 in EPSG:27700, burned
     directly in that CRS) so the tessellation produces real 1km BNG cells.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
 
-    rx.register(spark)
+    gbx.register(spark)
     # A 2km x 2km square over central London, in EPSG:27700 metres.
     london_wkt = (
         "POLYGON((529000 179000, 531000 179000, "
         "531000 181000, 529000 181000, 529000 179000))"
     )
     london = spark.range(1).select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.lit(london_wkt),
             f.lit(1.0),
             f.lit(529000.0),
@@ -321,7 +316,7 @@ def rst_bng_tessellate_python_light_example(spark):
     ).take(3)
 
 
-rst_bng_tessellate_python_light_example_output = """
+rst_bng_tessellate_python_example_output = """
 +------+-----------------------------------------------------------+
 |cellid|...                                                        |
 +------+-----------------------------------------------------------+
@@ -334,22 +329,22 @@ BNG grid-square STRING)
 """
 
 
-def rst_quadbin_tessellate_python_light_example(spark):
+def rst_quadbin_tessellate_python_example(spark):
     """Tessellate a raster into CARTO quadbin grid cells (resolution 5).
 
     rst_quadbin_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
     function. One v2-Tile row per quadbin cell overlapping the raster.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     return spark.sql(
         "SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 5) t"
     ).take(3)
 
 
-rst_quadbin_tessellate_python_light_example_output = """
+rst_quadbin_tessellate_python_example_output = """
 +-------------------+-----------------------------------------------------------+
 |cellid             |...                                                        |
 +-------------------+-----------------------------------------------------------+
@@ -359,7 +354,7 @@ rst_quadbin_tessellate_python_light_example_output = """
 """
 
 
-def rst_custom_tessellate_python_light_example(spark):
+def rst_custom_tessellate_python_example(spark):
     """Tessellate a raster into custom-grid cells (light tier UDTF via LATERAL).
 
     rst_custom_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
@@ -368,19 +363,18 @@ def rst_custom_tessellate_python_light_example(spark):
     central London in EPSG:27700 (BNG), and use a matching custom grid with the
     same CRS and extent so tessellation produces real chip rows.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs import gbx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    gx.register(spark)
+    gbx.register(spark)
     # A 2km x 2km square over central London, in EPSG:27700 metres.
     london_wkt = (
         "POLYGON((529000 179000, 531000 179000, "
         "531000 181000, 529000 181000, 529000 179000))"
     )
     london = spark.range(1).select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.lit(london_wkt),
             f.lit(1.0),
             f.lit(529000.0),
@@ -402,7 +396,7 @@ def rst_custom_tessellate_python_light_example(spark):
     ).take(3)
 
 
-rst_custom_tessellate_python_light_example_output = """
+rst_custom_tessellate_python_example_output = """
 +--------------------+-----------------------------------------------------------+
 |cellid              |raster                                                     |
 +--------------------+-----------------------------------------------------------+

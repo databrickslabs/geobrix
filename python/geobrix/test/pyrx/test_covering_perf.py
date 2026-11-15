@@ -1,4 +1,4 @@
-"""Stage 3, Task 16: O(boundary) covering interior fast-path for the light tier.
+"""O(boundary) covering interior fast-path for the light tier.
 
 TDD guards (per brief):
 1. Result-identity (direct old-path vs fast-path comparison): _covering_band output
@@ -15,6 +15,7 @@ boundary pixel straddling tile x=15/16, 1 interior pixel fully inside tile x=15)
 The res=0 world-covering fixture cannot distinguish the fast-path from the old path.
 """
 
+import contextlib
 from unittest.mock import patch
 
 import numpy as np
@@ -25,13 +26,19 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx.pygx._custom import CustomGridConf
 from databricks.labs.gbx.pyrx.core.gridagg import raster_to_grid
 
+# result-neutrality of the covering fast path against the old path: a perf-set case, not a unit test
+pytestmark = pytest.mark.perf
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
 def _open(b):
-    return MemoryFile(b).open()
+    # the MemoryFile reads its bytes in place, without a copy: it, and so the bytes, must outlive every read
+    with MemoryFile(b) as mf, mf.open() as ds:
+        yield ds
 
 
 def _to_measure_map(band_result):
@@ -489,8 +496,7 @@ def test_quadbin_covering_sum_nondeg_matches_analytics():
 def test_h3_covering_sum_unchanged_by_fast_path():
     """H3 covering sum is correct (old path, fast-path never fires for H3).
 
-    Uses the same all-in-one-cell fixture from test_gridagg_coverage_assignment.py
-    (2×1 raster at res=1, px=0.5 → all pixels in 1-2 coarse cells).
+    An all-in-one-cell fixture (a 3×2 raster at res=1, px=0.5 → all pixels in 1-2 coarse cells).
     Mass must be conserved: Σ(cell sums) ≈ Σ(pixel values).
     """
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")

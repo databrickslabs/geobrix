@@ -2,7 +2,7 @@
 
 ``layer_to_sources_layers(layer, idx)`` converts one :class:`~databricks.labs.gbx.vizx._layers.Layer`
 into the MapLibre GL ``sources`` dict, ``layers`` list, and ``embed_bytes`` integer
-that ``build_html`` (Task 5) stitches together into a self-contained HTML viewer.
+that ``build_html`` stitches together into a self-contained HTML viewer.
 
 ``build_html(prepared, *, basemap, center, zoom)`` assembles N per-layer outputs into
 one self-contained HTML page with SRI-pinned ``<script>`` tags, a CARTO basemap,
@@ -26,6 +26,8 @@ import io
 import json
 import warnings as _warnings
 from typing import TYPE_CHECKING, Any
+
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 
 if TYPE_CHECKING:
     from databricks.labs.gbx.vizx._layers import Layer
@@ -187,7 +189,7 @@ def _json_for_script(obj) -> str:
 
 
 # ---------------------------------------------------------------------------
-# SRI-pinned CDN constants — hashes are finalised in Task 12.
+# SRI-pinned CDN constants.
 # ---------------------------------------------------------------------------
 
 _MAPLIBRE_JS = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"
@@ -380,7 +382,7 @@ def build_html(
             if leg:
                 legends.append(leg)
             if "_gbx_pmtiles" in sdef:
-                # Read sidecar WITHOUT mutating the caller's dict — Task 6 calls
+                # Read sidecar WITHOUT mutating the caller's dict — the size check calls
                 # build_html twice (size-check then real build) and must find the
                 # sidecar intact on the second call.
                 info_sc = sdef["_gbx_pmtiles"]
@@ -585,6 +587,10 @@ def _layer_label(layer, idx: int) -> str:
     return f"layer[{idx}] ({kind})"
 
 
+# Half the Web Mercator world width, in metres (EPSG:3857 bound).
+_WEB_MERCATOR_HALF = 20037508.342789244
+
+
 def _decode_pmtiles_for_static(layer) -> "Layer":
     """Convert a pmtiles Layer into a raster_layer or vector_layer for plot_static.
 
@@ -599,13 +605,12 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
     Raises ValueError when the archive contains no renderable tiles.
     """
     from databricks.labs.gbx.pmtiles import pmtiles_info
+    from databricks.labs.gbx.pmtiles._directory import iter_tiles
     from databricks.labs.gbx.vizx._layers import raster_layer, vector_layer
     from databricks.labs.gbx.vizx._pmtiles import (
-        MemorySource,
         _decode_mvt_to_geoms,
         _is_raster_type,
         _maybe_gunzip,
-        all_tiles,
     )
 
     data = layer.data
@@ -644,7 +649,7 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         # Tile counts per zoom; pick the highest zoom whose count is within budget.
         _MAX_OVERVIEW_TILES = 256
         per_zoom: dict = {}
-        for (z, x, y), _payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), _payload in iter_tiles(raw):
             per_zoom.setdefault(z, 0)
             per_zoom[z] += 1
         if not per_zoom:
@@ -658,7 +663,7 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         )
 
         placed = []
-        for (z, x, y), payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), payload in iter_tiles(raw):
             if z != target_z:
                 continue
             img = Image.open(io.BytesIO(_maybe_gunzip(payload))).convert("RGBA")
@@ -680,8 +685,27 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         if rows.any() and cols.any():
             r = np.where(rows)[0][[0, -1]]
             c = np.where(cols)[0][[0, -1]]
-            canvas = canvas[r[0] : r[1] + 1, c[0] : c[1] + 1]
-        return raster_layer(canvas, opacity=layer.opacity)
+            r0, r1, c0, c1 = r[0], r[1] + 1, c[0], c[1] + 1
+            canvas = canvas[r0:r1, c0:c1]
+        else:
+            r0, r1, c0, c1 = 0, canvas.shape[0], 0, canvas.shape[1]
+        # Place the mosaic in Web Mercator metres from its tile grid. Drawn in pixel
+        # space instead, the axes sit near (0, 0) with y inverted and a contextily
+        # basemap computes an empty tile list for them ("zero-size array to reduction
+        # operation minimum"); with a real extent the basemap zoom follows the area.
+        world = 2 * _WEB_MERCATOR_HALF
+        m_per_px_x = world / (2**target_z) / tw
+        m_per_px_y = world / (2**target_z) / th
+        left = -_WEB_MERCATOR_HALF + minx * tw * m_per_px_x
+        top = _WEB_MERCATOR_HALF - miny * th * m_per_px_y
+        lyr = raster_layer(canvas, opacity=layer.opacity)
+        lyr.extent = (
+            left + c0 * m_per_px_x,
+            left + c1 * m_per_px_x,
+            top - r1 * m_per_px_y,
+            top - r0 * m_per_px_y,
+        )
+        return lyr
     else:
         # Vector (MVT): decode the COARSEST zoom that actually has features. A normal
         # pyramid (e.g. gbx_st_asmvt_pyramid) carries every feature at every zoom, so the
@@ -695,7 +719,7 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         import geopandas as gpd
 
         tiles_by_z: dict = defaultdict(list)
-        for (z, x, y), payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), payload in iter_tiles(raw):
             tiles_by_z[z].append((x, y, payload))
 
         # A drop_densest overview drops most features at low zooms, so the min zoom can
@@ -766,17 +790,17 @@ def _layer_audit_entry(layer, idx: int, embed_bytes: int) -> dict:
 def _max_tile_bytes(raw: bytes) -> int | None:
     """Return the maximum single-tile decompressed byte size in a pmtiles archive.
 
-    Iterates the archive's actual tiles via ``all_tiles``.
+    Iterates the archive's actual tiles via ``iter_tiles``.
     Returns ``None`` if the archive contains no tiles or cannot be parsed.
     """
     try:
         import gzip
 
-        from pmtiles.reader import MemorySource, all_tiles
+        from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
         max_size = 0
         found = False
-        for (z, x, y), payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), payload in iter_tiles(raw):
             found = True
             data = payload
             if data[:2] == b"\x1f\x8b":
@@ -790,6 +814,18 @@ def _max_tile_bytes(raw: bytes) -> int | None:
         return None
 
 
+def _skipped_embed_estimate(layer) -> int:
+    """Rendered (base64-inflated) size of a layer that was not prepared.
+
+    An over-budget embedded pmtiles layer is skipped before assembly, so it has
+    no prepared ``embed_bytes``; its real cost is the archive size x
+    ``_BASE64_INFLATION`` (the same measure the over-budget guard uses).
+    """
+    if getattr(layer, "kind", None) != "pmtiles":
+        return 0
+    return int(len(_pmtiles_raw_bytes(layer) or b"") * _BASE64_INFLATION)
+
+
 def _build_audit(
     layers, prepared, total_embed_bytes, max_embed_bytes, simplify_tiles_spec
 ) -> dict:
@@ -797,7 +833,12 @@ def _build_audit(
     audit_layers_list = []
     for idx, layer in enumerate(layers):
         entry = prepared[idx] if idx < len(prepared) else None
-        eb = entry[2] if (entry is not None and len(entry) > 2) else 0
+        if entry is None:
+            # Skipped (over-budget) layer: report its estimated rendered size, not 0,
+            # so the per-layer figures add up to the total.
+            eb = _skipped_embed_estimate(layer)
+        else:
+            eb = entry[2] if len(entry) > 2 else 0
         audit_layers_list.append(_layer_audit_entry(layer, idx, eb))
 
     fits = total_embed_bytes <= max_embed_bytes
@@ -915,20 +956,21 @@ def audit_layers(
             prepared.append(None)
 
     valid_prepared = [e for e in prepared if e is not None]
-    if valid_prepared:
-        total_embed_bytes = len(build_html(valid_prepared, emphasis=emphasis).encode())
-    else:
-        # All layers were over-budget individually — estimate the RENDERED embed
-        # size as the base64-inflated (~4/3x) sum of raw archive bytes, matching
-        # the per-layer guard above (the cell-output cap counts rendered HTML).
-        total_embed_bytes = int(
-            sum(
-                len(_pmtiles_raw_bytes(layer) or b"")
-                for layer in lyrs
-                if getattr(layer, "kind", None) == "pmtiles"
-            )
-            * _BASE64_INFLATION
-        )
+    # Skipped (over-budget) layers still count toward the embed total, at their
+    # estimated RENDERED size (base64-inflated ~4/3x; the cell-output cap counts
+    # rendered HTML). Without them an over-budget archive next to a small layer
+    # would audit as "embed".
+    skipped_bytes = sum(
+        _skipped_embed_estimate(layer)
+        for layer, entry in zip(lyrs, prepared)
+        if entry is None
+    )
+    html_bytes = (
+        len(build_html(valid_prepared, emphasis=emphasis).encode())
+        if valid_prepared
+        else 0
+    )
+    total_embed_bytes = html_bytes + skipped_bytes
 
     return _build_audit(
         lyrs, prepared, total_embed_bytes, max_embed_bytes, simplify_tiles_spec
@@ -958,6 +1000,19 @@ def _autofit_pmtiles_layer(layer, per_pmtiles_mb: float):
     return _pml(reduced, label=getattr(layer, "label", None)), True
 
 
+def _warn_static_fallback(max_embed_mb, text, warn_msgs) -> None:
+    """Warn that an over-budget embed fell back to static, unless that was asked for.
+
+    An explicit ``max_embed_mb=0`` is the caller choosing the static render (every
+    default budget is > 0), so nothing was silently dropped: the one-line audit already
+    states the verdict, and a warning would scold a deliberate choice.
+    """
+    if max_embed_mb == 0:
+        return
+    warn_msgs.append(text)
+    _warnings.warn(text, stacklevel=3)
+
+
 def prepare_layers(
     layers,
     *,
@@ -977,7 +1032,7 @@ def prepare_layers(
        ``pmtiles_info`` on potentially-malformed archives and throw).  These are
        immediately routed to the fallback path.
     3. All other layers -> :func:`layer_to_sources_layers` (embed bytes measured).
-    4. **(Simplify hook -- Task 11)** if ``simplify_tiles_spec`` or
+    4. **(Simplify hook)** if ``simplify_tiles_spec`` or
        ``layer.simplify`` is present, invoke :func:`_simplify_layer`.  Since the
        engine is not yet implemented the stub raises :exc:`NotImplementedError`;
        this rung is therefore **not** entered unless a spec is explicitly supplied.
@@ -995,7 +1050,7 @@ def prepare_layers(
     Args:
         layers:               A list of :class:`~databricks.labs.gbx.vizx._layers.Layer`.
         max_embed_mb:         HTML size threshold in mebibytes (default ``DEFAULT_MAX_EMBED_MB`` = 8).
-        simplify_tiles_spec:  Optional spec dict passed to the Task-11 simplify
+        simplify_tiles_spec:  Optional spec dict passed to the simplify
                               engine.  Currently wired only; passing a non-``None``
                               value invokes the stub and raises
                               :exc:`NotImplementedError`.
@@ -1061,7 +1116,7 @@ def prepare_layers(
             continue
 
         # ------------------------------------------------------------------ #
-        # Rung 3 -- simplify hook (Task 11).                                 #
+        # Rung 3 -- simplify hook.                                 #
         # Runs BEFORE the raw-oversize bail so an over-budget archive gets a  #
         # chance to be reduced under budget and stay interactive.             #
         # URL-mode pmtiles skip simplify (remote archive, zero embed cost).   #
@@ -1161,6 +1216,13 @@ def prepare_layers(
             )
             * _BASE64_INFLATION
         )
+        + sum(
+            entry[2]
+            for layer, entry in zip(layers, prepared)
+            if entry is not None
+            and len(entry) > 2
+            and getattr(layer, "kind", None) != "pmtiles"
+        )
     )
     size_desc = f"{total_bytes / 1_048_576:.1f} MB" + (
         "" if html_bytes is not None else " (rendered est.)"
@@ -1171,13 +1233,13 @@ def prepare_layers(
             f"prepare_layers: assembled HTML exceeds budget ({size_desc} > "
             f"{max_embed_mb} MB). {remedy_msg}"
         )
-    warn_text = (
+    _warn_static_fallback(
+        max_embed_mb,
         f"prepare_layers: embedded HTML ({size_desc}) exceeds "
         f"max_embed_mb={max_embed_mb}; falling back to static render. "
-        f"Offending layer(s): {', '.join(oversize_labels)}. {remedy_msg}"
+        f"Offending layer(s): {', '.join(oversize_labels)}. {remedy_msg}",
+        warn_msgs,
     )
-    warn_msgs.append(warn_text)
-    _warnings.warn(warn_text, stacklevel=2)
 
     # Build static-path layer list: decode pmtiles -> raster/vector for plot_static.
     static_layers = []
@@ -1515,6 +1577,8 @@ def _raster_to_image(
     - A filesystem path (str) to a GeoTIFF/COG.
     - ``bytes`` or ``bytearray`` of an in-memory GeoTIFF (e.g. a tile's
       ``raster`` field).
+    - A tile struct / ``VirtualTile`` (materialized, or virtual: ``raster`` NULL with a
+      ``path``).
     - A bare ``numpy.ndarray`` (no geo metadata; unit-square [0,1] corners
       are synthesised).
 
@@ -1534,14 +1598,13 @@ def _raster_to_image(
         return png_b64, corners
 
     # --- rasterio path (path or bytes) -------------------------------------
-    import rasterio
     from rasterio.io import MemoryFile
 
     if isinstance(data, (bytes, bytearray)):
         # MemoryFile needs a double context-manager: outer opens the file object,
-        # inner .open() returns the rasterio DatasetReader.
+        # inner open_bytes(mf) returns the rasterio DatasetReader (allowed drivers only).
         with MemoryFile(bytes(data)) as mf:
-            with mf.open() as src:
+            with open_bytes(mf) as src:
                 png_b64, corners = _src_to_png_b64(src, raster_max_px)
         return png_b64, corners
     elif isinstance(data, str):
@@ -1553,14 +1616,23 @@ def _raster_to_image(
                 break
         if path.startswith("//"):
             path = "/" + path.lstrip("/")
-        with rasterio.open(path) as src:
+        with open_data(path, remote_ok=True) as src:  # the caller's own layer path
             png_b64, corners = _src_to_png_b64(src, raster_max_px)
         return png_b64, corners
     else:
-        raise TypeError(
-            f"_raster_to_image: unsupported data type {type(data).__name__!r}; "
-            "expected str path, bytes, or numpy.ndarray"
-        )
+        # A tile struct (Row/dict), VirtualTile: materialized or virtual (raster NULL,
+        # path set, as the readers return). resolve_tile_row opens either, window applied.
+        from databricks.labs.gbx.vizx._tiles import resolve_tile_row
+
+        try:
+            with resolve_tile_row(data) as src:
+                png_b64, corners = _src_to_png_b64(src, raster_max_px)
+        except (AttributeError, KeyError, TypeError) as exc:
+            raise TypeError(
+                f"_raster_to_image: unsupported data type {type(data).__name__!r}; "
+                "expected str path, bytes, numpy.ndarray, or a raster tile"
+            ) from exc
+        return png_b64, corners
 
 
 def _src_to_png_b64(src, raster_max_px: int) -> tuple[str, list]:
@@ -1718,12 +1790,12 @@ def _mvt_layer_names_from_bytes(raw: bytes, *, max_tiles: int = 40) -> list:
     """
     try:
         import mapbox_vector_tile as mvt
-        from pmtiles.reader import MemorySource, all_tiles
 
+        from databricks.labs.gbx.pmtiles._directory import iter_tiles
         from databricks.labs.gbx.vizx._pmtiles import _maybe_gunzip
 
         names, seen = [], set()
-        for i, (_key, payload) in enumerate(all_tiles(MemorySource(raw))):
+        for i, (_key, payload) in enumerate(iter_tiles(raw)):
             if i >= max_tiles:
                 break
             for lname in mvt.decode(_maybe_gunzip(payload)).keys():
@@ -1766,7 +1838,7 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
         data.startswith("http://") or data.startswith("https://")
     ):
         # We cannot call pmtiles_info on a remote URL without fetching it.
-        # Report tile_type as "unknown" for the url mode; the Task-5 HTML builder
+        # Report tile_type as "unknown" for the url mode; the HTML builder
         # can default to "vector" or the caller can supply a style.
         return {
             "mode": "url",
@@ -1832,9 +1904,9 @@ def _raster_tile_px(info: dict) -> int:
     try:
         import struct
 
-        from pmtiles.reader import MemorySource, all_tiles
+        from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
-        for _key, payload in all_tiles(MemorySource(raw)):
+        for _key, payload in iter_tiles(raw):
             if payload[:8] == b"\x89PNG\r\n\x1a\n" and len(payload) >= 24:
                 return int(struct.unpack(">I", payload[16:20])[0])
             break  # only the first tile; non-PNG -> fall back to the default
@@ -1874,7 +1946,7 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
         src[sid]["minzoom"] = int(info["min_zoom"])
     if info.get("max_zoom") is not None:
         src[sid]["maxzoom"] = int(info["max_zoom"])
-    # Sidecar consumed (and popped) by the Task-5 HTML builder.
+    # Sidecar consumed (and popped) by the HTML builder.
     src[sid]["_gbx_pmtiles"] = info
 
     if is_raster:

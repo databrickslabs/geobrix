@@ -5,12 +5,19 @@ import numpy as np
 import shapely.wkb
 from rasterio.features import rasterize as _rasterize
 from rasterio.features import shapes as _shapes
-from rasterio.fill import fillnodata as _fillnodata
-from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 from shapely.geometry import shape as _shape
 
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
 _NODATA = -9999.0
+
+
+def rasterize_working_bytes(width_px: int, height_px: int) -> int:
+    """An upper estimate of the memory :func:`rasterize_geom` holds at its peak: the burned grid, its copy for the
+    encoder and the encoded bytes (24 bytes a pixel)."""
+    return int(width_px) * int(height_px) * 24
 
 
 def rasterize_geom(
@@ -87,17 +94,14 @@ def rasterize_geom(
         transform=transform,
         nodata=_NODATA,
     )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(arr, 1)
-        return mf.read()
+    return write_gtiff(profile, arr[np.newaxis, ...])
 
 
 def polygonize(ds, band: int = 1, connectedness: int = 4):
     """Extract vector polygons from contiguous equal-value regions of a band.
 
-    Returns a list of (geom_wkb: bytes, value: float). NoData pixels are
-    excluded via the band mask. ``connectedness`` is 4 or 8.
+    Returns a list of (geom_wkb: bytes, value: float). NoData, masked and
+    transparent pixels are excluded (``_nodata.band_valid_mask``). ``connectedness`` is 4 or 8.
 
     Mirrors heavyweight ``gbx_rst_polygonize`` (GDAL ``GDALPolygonize``), which
     is the *integer* polygonize: it reads the band as ``Int32``, so a float
@@ -111,7 +115,9 @@ def polygonize(ds, band: int = 1, connectedness: int = 4):
     """
     b = int(band)
     arr = ds.read(b)
-    msk = ds.read_masks(b)  # 0 where NoData -> excluded from shapes
+    msk = band_valid_mask(
+        ds, b
+    )  # NoData, masked or transparent -> excluded from shapes
     # GDALPolygonize reads the band as Int32: GDAL's float->int RasterIO rounds
     # to nearest, so np.round (round-half-to-even) reproduces it bit-for-bit.
     arr = np.round(arr).astype("int32")
@@ -123,11 +129,27 @@ def polygonize(ds, band: int = 1, connectedness: int = 4):
     return out
 
 
+def check_breaks(breaks) -> None:
+    """ValueError naming the element when ``breaks`` holds a NULL (a parameter error, found before any tile is read)."""
+    for i, b in enumerate(breaks):
+        if b is None:
+            raise ValueError(
+                f"rst_isoband: breaks must not contain NULL; element {i} is NULL. "
+                "Fix: remove the NULL from the breaks array."
+            )
+
+
+def check_ascending(breaks) -> None:
+    """ValueError when ``breaks`` is not strictly ascending."""
+    if not np.all(np.diff(np.asarray(breaks, dtype="float64")) > 0):
+        raise ValueError("breaks must be strictly ascending")
+
+
 def isoband(ds, breaks, band=1):
     """Reclassify a band into value bins ``[breaks[i], breaks[i+1])`` and return one
     ``(geom_wkb, band_index, lower, upper)`` tuple per CONTIGUOUS patch.
 
-    NoData pixels are excluded via the band mask. *breaks* must be strictly
+    NoData, masked and transparent pixels are excluded (``_nodata.band_valid_mask``). *breaks* must be strictly
     ascending; values below ``breaks[0]`` or >= ``breaks[-1]`` are dropped.
 
     Args:
@@ -142,15 +164,14 @@ def isoband(ds, breaks, band=1):
         Polygon (2-D, raster CRS).
     """
     brk = np.asarray(breaks, dtype="float64")
-    if not np.all(np.diff(brk) > 0):
-        raise ValueError("breaks must be strictly ascending")
+    check_ascending(brk)
     arr = ds.read(int(band))
-    msk = ds.read_masks(int(band))  # 0 where NoData
+    msk = band_valid_mask(ds, int(band))  # False where NoData, masked or transparent
     # np.digitize(right=False) maps a value v to index i such that breaks[i-1] <= v < breaks[i].
     # Subtract 1 → band index in [0, len(brk)-2] for in-range values; 0 maps below-range → -1,
     # and len(brk)-1 maps >= breaks[-1] → len(brk)-2+1 = out-of-range.
     idx = np.digitize(arr, brk, right=False) - 1
-    valid = (idx >= 0) & (idx <= len(brk) - 2) & (msk != 0)
+    valid = (idx >= 0) & (idx <= len(brk) - 2) & msk
     idx = np.where(valid, idx, -1).astype("int32")
     out = []
     for geom_dict, v in _shapes(
@@ -166,29 +187,3 @@ def isoband(ds, breaks, band=1):
             )
         )
     return out
-
-
-def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
-    """Interpolate across NoData gaps in a raster dataset.
-
-    *ds* is an open rasterio DatasetReader. Returns GTiff bytes with NoData
-    pixels filled by interpolation from their neighbours.
-    """
-    msd = 100.0 if max_search_dist is None else float(max_search_dist)
-    smi = 0 if smoothing_iter is None else int(smoothing_iter)
-    profile = ds.profile.copy()
-    profile.update(driver="GTiff")
-    bands = []
-    for i in range(1, ds.count + 1):
-        band = ds.read(i)
-        msk = ds.read_masks(i)  # 0 where NoData, 255 where valid
-        bands.append(
-            _fillnodata(
-                band, mask=msk, max_search_distance=msd, smoothing_iterations=smi
-            )
-        )
-    data = np.stack(bands)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data)
-        return mf.read()

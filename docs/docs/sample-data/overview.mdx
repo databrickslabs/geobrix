@@ -20,20 +20,22 @@ Copy any code block below into a Databricks notebook cell and run it. The data w
 
 GeoBrix provides two curated sample data bundles with geographically coherent datasets for NYC and London. All datasets within each region cover the same area, so you can run realistic workflows (clip rasters to boundaries, zonal statistics, multi-scale spatial joins).
 
-### Essential Bundle (~355MB) — Get Started Quickly
+### Essential Bundle (~536MB) — Get Started Quickly
 - **NYC:** Taxi Zones, Boroughs, Sentinel-2 imagery, SRTM elevation  
 - **London:** Postcodes, Sentinel-2 imagery, SRTM elevation  
 - **Formats:** GeoJSON, GeoTIFF (including elevation DEMs)  
 - **Use for:** Learning GeoBrix basics, RasterX operations, GridX BNG examples, basic spatial analysis  
 - **[Jump to setup →](./setup#notebook)**
 
-### Complete Bundle (~795MB) — Full Format Coverage
+### Complete Bundle (~683MB) — Full Format Coverage
 - Everything in Essential, plus:
-  - NYC Neighborhoods, Parks, Subway, HRRR weather (NetCDF/GRIB2), extra SRTM tile (NYC East), GeoPackage
+  - NYC Neighborhoods, Parks, Subway, HRRR weather (NetCDF/GRIB2), extra SRTM tile (NYC East), GeoPackage, File Geodatabase
   - London Boroughs
-- **Formats:** All of the above + Shapefile, GeoPackage. FileGDB can be created optionally via the [Vector Data](./vector-data#file-geodatabase---nyc-multi-feature-class) script.  
+- **Formats:** All of the above + Shapefile, GeoPackage, FileGDB. The File Geodatabase (`nyc/filegdb/NYC_Sample.gdb.zip`) is built with the other Complete datasets; see [Vector Data](./vector-data#file-geodatabase---nyc-multi-feature-class) for the script.  
 - **Use for:** Multi-scale analysis, all GeoBrix reader formats, advanced workflows, production-like examples  
 - **[Jump to setup →](./setup#notebook)**
+
+A small generated weather cube (Zarr) backs the [Zarr](../api/zarr-stores) pages; it is not part of either bundle (see [Raster Data](./raster-data#zarr---era5-like-weather-cube-global)).
 
 **Which to choose?** Essential for learning and most docs; Complete if you need Shapefile/NetCDF/GeoPackage/FileGDB or want the full set of datasets.
 
@@ -133,14 +135,14 @@ Sample Data subpages (same order as sidebar):
 
 - [Setup](./setup) — Configure storage and run Essential or Complete bundle scripts
 - [Vector Data](./vector-data) — Per-dataset download scripts (NYC Taxi Zones, Boroughs, London Postcodes, Neighborhoods, Parks, Subway, GeoPackage, FileGDB, London Boroughs)
-- [Raster Data](./raster-data) — Sentinel-2 (NYC & London), SRTM elevation, HRRR weather (GRIB2)
+- [Raster Data](./raster-data) — Sentinel-2 (NYC & London), SRTM elevation, HRRR weather (GRIB2), and the generated Zarr weather cube
 - [Additional](./additional) — Synthetic data and alternative data sources (NYC Open Data, STAC, USGS, Ordnance Survey)
 
 ## Bring-Your-Own-AOI Downloaders
 
-Beyond the curated NYC/London bundles, GeoBrix ships downloader clients that fetch data for
-**any bounding-box area of interest** and stage it into a Unity Catalog Volume — used by the
-[notebook example series](../examples/overview#notebook-series).
+Beyond the curated NYC/London bundles, GeoBrix ships downloader clients. They fetch data for
+**any bounding-box area of interest** and stage it into a Unity Catalog Volume. The
+[notebook example series](../examples/overview#notebook-series) uses them.
 
 | Downloader | Source | Data |
 |---|---|---|

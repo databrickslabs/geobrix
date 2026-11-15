@@ -7,6 +7,7 @@ Each function returns [band (INT), cellID, measure] columns directly.
 """
 
 from pathlib import Path
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 
 def _get_multiband_df(spark):
@@ -24,11 +25,11 @@ def _get_multiband_df(spark):
 # ============================================================================
 
 
-def rst_h3_rastertogridavg_python_light_example(spark):
+def rst_h3_rastertogridavg_python_example(spark):
     """Aggregate raster values to H3 grid using average (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     # LATERAL UDTF returns [band, cellID, measure] columns directly
@@ -37,7 +38,7 @@ def rst_h3_rastertogridavg_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridavg_python_light_example_output = """
+rst_h3_rastertogridavg_python_example_output = """
 +----+------------------+-------+
 |band|cellID            |measure|
 +----+------------------+-------+
@@ -48,11 +49,11 @@ rst_h3_rastertogridavg_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridcount_python_light_example(spark):
+def rst_h3_rastertogridcount_python_example(spark):
     """Count pixels per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -60,7 +61,7 @@ def rst_h3_rastertogridcount_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridcount_python_light_example_output = """
+rst_h3_rastertogridcount_python_example_output = """
 +----+------------------------------+-------+
 |band|cellID                        |measure|
 +----+------------------------------+-------+
@@ -71,11 +72,11 @@ rst_h3_rastertogridcount_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridmax_python_light_example(spark):
+def rst_h3_rastertogridmax_python_example(spark):
     """Get maximum values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -83,7 +84,7 @@ def rst_h3_rastertogridmax_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridmax_python_light_example_output = """
+rst_h3_rastertogridmax_python_example_output = """
 +----+------------------------------+-------+
 |band|cellID                        |measure|
 +----+------------------------------+-------+
@@ -94,11 +95,11 @@ rst_h3_rastertogridmax_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridmin_python_light_example(spark):
+def rst_h3_rastertogridmin_python_example(spark):
     """Get minimum values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -106,7 +107,7 @@ def rst_h3_rastertogridmin_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridmin_python_light_example_output = """
+rst_h3_rastertogridmin_python_example_output = """
 +----+------------------------------+-------+
 |band|cellID                        |measure|
 +----+------------------------------+-------+
@@ -117,11 +118,11 @@ rst_h3_rastertogridmin_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridmedian_python_light_example(spark):
+def rst_h3_rastertogridmedian_python_example(spark):
     """Get median values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -129,7 +130,7 @@ def rst_h3_rastertogridmedian_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridmedian_python_light_example_output = """
+rst_h3_rastertogridmedian_python_example_output = """
 +----+------------------------------+-------+
 |band|cellID                        |measure|
 +----+------------------------------+-------+
@@ -140,11 +141,11 @@ rst_h3_rastertogridmedian_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridsum_python_light_example(spark):
+def rst_h3_rastertogridsum_python_example(spark):
     """Sum pixel values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -152,7 +153,7 @@ def rst_h3_rastertogridsum_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridsum_python_light_example_output = """
+rst_h3_rastertogridsum_python_example_output = """
 +----+------------------------------+--------+
 |band|cellID                        |measure |
 +----+------------------------------+--------+
@@ -163,11 +164,11 @@ rst_h3_rastertogridsum_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridvariance_python_light_example(spark):
+def rst_h3_rastertogridvariance_python_example(spark):
     """Get variance per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -175,7 +176,7 @@ def rst_h3_rastertogridvariance_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridvariance_python_light_example_output = """
+rst_h3_rastertogridvariance_python_example_output = """
 +----+------------------------------+-------+
 |band|cellID                        |measure|
 +----+------------------------------+-------+
@@ -186,11 +187,11 @@ rst_h3_rastertogridvariance_python_light_example_output = """
 """
 
 
-def rst_h3_rastertogridstddev_python_light_example(spark):
+def rst_h3_rastertogridstddev_python_example(spark):
     """Get standard deviation per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -198,7 +199,7 @@ def rst_h3_rastertogridstddev_python_light_example(spark):
     ).take(5)
 
 
-rst_h3_rastertogridstddev_python_light_example_output = """
+rst_h3_rastertogridstddev_python_example_output = """
 +----+------------------+-------+
 |band|cellID            |measure|
 +----+------------------+-------+
@@ -214,11 +215,11 @@ rst_h3_rastertogridstddev_python_light_example_output = """
 # ============================================================================
 
 
-def rst_quadbin_rastertogridavg_python_light_example(spark):
+def rst_quadbin_rastertogridavg_python_example(spark):
     """Aggregate raster values to Quadbin grid using average (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -226,7 +227,7 @@ def rst_quadbin_rastertogridavg_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridavg_python_light_example_output = """
+rst_quadbin_rastertogridavg_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -237,11 +238,11 @@ rst_quadbin_rastertogridavg_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridcount_python_light_example(spark):
+def rst_quadbin_rastertogridcount_python_example(spark):
     """Count pixels per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -249,7 +250,7 @@ def rst_quadbin_rastertogridcount_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridcount_python_light_example_output = """
+rst_quadbin_rastertogridcount_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -260,11 +261,11 @@ rst_quadbin_rastertogridcount_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridmax_python_light_example(spark):
+def rst_quadbin_rastertogridmax_python_example(spark):
     """Get maximum values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -272,7 +273,7 @@ def rst_quadbin_rastertogridmax_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridmax_python_light_example_output = """
+rst_quadbin_rastertogridmax_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -283,11 +284,11 @@ rst_quadbin_rastertogridmax_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridmin_python_light_example(spark):
+def rst_quadbin_rastertogridmin_python_example(spark):
     """Get minimum values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -295,7 +296,7 @@ def rst_quadbin_rastertogridmin_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridmin_python_light_example_output = """
+rst_quadbin_rastertogridmin_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -306,11 +307,11 @@ rst_quadbin_rastertogridmin_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridmedian_python_light_example(spark):
+def rst_quadbin_rastertogridmedian_python_example(spark):
     """Get median values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -318,7 +319,7 @@ def rst_quadbin_rastertogridmedian_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridmedian_python_light_example_output = """
+rst_quadbin_rastertogridmedian_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -329,11 +330,11 @@ rst_quadbin_rastertogridmedian_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridsum_python_light_example(spark):
+def rst_quadbin_rastertogridsum_python_example(spark):
     """Sum pixel values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -341,7 +342,7 @@ def rst_quadbin_rastertogridsum_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridsum_python_light_example_output = """
+rst_quadbin_rastertogridsum_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -352,11 +353,11 @@ rst_quadbin_rastertogridsum_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridvariance_python_light_example(spark):
+def rst_quadbin_rastertogridvariance_python_example(spark):
     """Get variance per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -364,7 +365,7 @@ def rst_quadbin_rastertogridvariance_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridvariance_python_light_example_output = """
+rst_quadbin_rastertogridvariance_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -375,11 +376,11 @@ rst_quadbin_rastertogridvariance_python_light_example_output = """
 """
 
 
-def rst_quadbin_rastertogridstddev_python_light_example(spark):
+def rst_quadbin_rastertogridstddev_python_example(spark):
     """Get standard deviation per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -387,7 +388,7 @@ def rst_quadbin_rastertogridstddev_python_light_example(spark):
     ).take(5)
 
 
-rst_quadbin_rastertogridstddev_python_light_example_output = """
+rst_quadbin_rastertogridstddev_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -407,15 +408,15 @@ rst_quadbin_rastertogridstddev_python_light_example_output = """
 # ============================================================================
 
 
-def rst_bng_rastertogridavg_python_light_example(spark):
+def rst_bng_rastertogridavg_python_example(spark):
     """Aggregate raster values to BNG grid using average (light tier UDTF).
 
     NOTE: BNG reprojects the raster to EPSG:27700 before binning. Use a
     raster whose extent lies over Britain for geographically meaningful cell ids.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -424,7 +425,7 @@ def rst_bng_rastertogridavg_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridavg_python_light_example_output = """
+rst_bng_rastertogridavg_python_example_output = """
 +----+------+------------------+
 |band|cellID|measure           |
 +----+------+------------------+
@@ -436,11 +437,11 @@ rst_bng_rastertogridavg_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridcount_python_light_example(spark):
+def rst_bng_rastertogridcount_python_example(spark):
     """Count pixels per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -449,7 +450,7 @@ def rst_bng_rastertogridcount_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridcount_python_light_example_output = """
+rst_bng_rastertogridcount_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -461,11 +462,11 @@ rst_bng_rastertogridcount_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridmax_python_light_example(spark):
+def rst_bng_rastertogridmax_python_example(spark):
     """Get maximum values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -474,7 +475,7 @@ def rst_bng_rastertogridmax_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridmax_python_light_example_output = """
+rst_bng_rastertogridmax_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -486,11 +487,11 @@ rst_bng_rastertogridmax_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridmin_python_light_example(spark):
+def rst_bng_rastertogridmin_python_example(spark):
     """Get minimum values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -499,7 +500,7 @@ def rst_bng_rastertogridmin_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridmin_python_light_example_output = """
+rst_bng_rastertogridmin_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -511,11 +512,11 @@ rst_bng_rastertogridmin_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridmedian_python_light_example(spark):
+def rst_bng_rastertogridmedian_python_example(spark):
     """Get median values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -524,7 +525,7 @@ def rst_bng_rastertogridmedian_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridmedian_python_light_example_output = """
+rst_bng_rastertogridmedian_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -536,11 +537,11 @@ rst_bng_rastertogridmedian_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridsum_python_light_example(spark):
+def rst_bng_rastertogridsum_python_example(spark):
     """Sum pixel values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -549,7 +550,7 @@ def rst_bng_rastertogridsum_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridsum_python_light_example_output = """
+rst_bng_rastertogridsum_python_example_output = """
 +----+------+-------+
 |band|cellID|measure|
 +----+------+-------+
@@ -561,11 +562,11 @@ rst_bng_rastertogridsum_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridvariance_python_light_example(spark):
+def rst_bng_rastertogridvariance_python_example(spark):
     """Get variance per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -574,7 +575,7 @@ def rst_bng_rastertogridvariance_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridvariance_python_light_example_output = """
+rst_bng_rastertogridvariance_python_example_output = """
 +----+------+------------------+
 |band|cellID|measure           |
 +----+------+------------------+
@@ -586,11 +587,11 @@ rst_bng_rastertogridvariance_python_light_example_output = """
 """
 
 
-def rst_bng_rastertogridstddev_python_light_example(spark):
+def rst_bng_rastertogridstddev_python_example(spark):
     """Get standard deviation per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -599,7 +600,7 @@ def rst_bng_rastertogridstddev_python_light_example(spark):
     return result
 
 
-rst_bng_rastertogridstddev_python_light_example_output = """
+rst_bng_rastertogridstddev_python_example_output = """
 +----+------+------------------+
 |band|cellID|measure           |
 +----+------+------------------+
@@ -616,7 +617,7 @@ rst_bng_rastertogridstddev_python_light_example_output = """
 # ============================================================================
 
 
-def h3_cell_bbox_python_light_example(spark):
+def h3_cell_bbox_python_example(spark):
     """Bounding box STRUCT for H3 cells in a given CRS (light tier scalar UDF).
 
     gbx_h3_cell_bbox is a scalar function — call it in a plain select over a
@@ -624,7 +625,7 @@ def h3_cell_bbox_python_light_example(spark):
     resolution-9 cell ids and request the EPSG:4326 centroid-mode bbox
     (kring_pad omitted → default). Returns STRUCT<xmin, ymin, xmax, ymax>.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.h3 import functions as hx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.createDataFrame(
@@ -633,11 +634,11 @@ def h3_cell_bbox_python_light_example(spark):
     )
     return df.select(
         "cellid",
-        rx.gbx_h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids")).alias("bbox"),
+        hx.h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids")).alias("bbox"),
     ).take(3)
 
 
-h3_cell_bbox_python_light_example_output = """
+h3_cell_bbox_python_example_output = """
 +------------------+------------------------------+
 |cellid            |bbox                          |
 +------------------+------------------------------+
@@ -676,17 +677,15 @@ _LONDON_4KM_WKT = (
 
 def _setup_custom_raster_view(spark):
     """Register pyrx + pygx; create a synthetic BNG raster temp view for custom-grid tests."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs import gbx
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    gx.register(spark)
+    gbx.register(spark)
     # Synthesize a small single-band raster over the 4km London BNG square.
     # rst_rasterize produces a raster in EPSG:27700 with integer metre coordinates
     # that exactly match the custom grid bounds below.
     df = spark.range(1).select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.lit(_LONDON_4KM_WKT),
             f.lit(1.0),
             f.lit(529000.0),
@@ -701,7 +700,7 @@ def _setup_custom_raster_view(spark):
     df.createOrReplaceTempView("custom_rasters")
 
 
-def rst_custom_rastertogridavg_python_light_example(spark):
+def rst_custom_rastertogridavg_python_example(spark):
     """Aggregate raster values to custom-grid cells using average (light tier UDTF).
 
     Synthesizes a single-band BNG raster (EPSG:27700) over a 4km London square
@@ -715,7 +714,7 @@ def rst_custom_rastertogridavg_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridavg_python_light_example_output = """
+rst_custom_rastertogridavg_python_example_output = """
 +----+--------------------+-------+
 |band|cellID              |measure|
 +----+--------------------+-------+
@@ -725,7 +724,7 @@ rst_custom_rastertogridavg_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridcount_python_light_example(spark):
+def rst_custom_rastertogridcount_python_example(spark):
     """Count pixels per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -734,7 +733,7 @@ def rst_custom_rastertogridcount_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridcount_python_light_example_output = """
+rst_custom_rastertogridcount_python_example_output = """
 +----+--------------------+-------+
 |band|cellID              |measure|
 +----+--------------------+-------+
@@ -744,7 +743,7 @@ rst_custom_rastertogridcount_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridmax_python_light_example(spark):
+def rst_custom_rastertogridmax_python_example(spark):
     """Get maximum values per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -753,7 +752,7 @@ def rst_custom_rastertogridmax_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridmax_python_light_example_output = """
+rst_custom_rastertogridmax_python_example_output = """
 +----+--------------------+-------+
 |band|cellID              |measure|
 +----+--------------------+-------+
@@ -763,7 +762,7 @@ rst_custom_rastertogridmax_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridmin_python_light_example(spark):
+def rst_custom_rastertogridmin_python_example(spark):
     """Get minimum values per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -772,7 +771,7 @@ def rst_custom_rastertogridmin_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridmin_python_light_example_output = """
+rst_custom_rastertogridmin_python_example_output = """
 +----+--------------------+-------+
 |band|cellID              |measure|
 +----+--------------------+-------+
@@ -782,7 +781,7 @@ rst_custom_rastertogridmin_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridmedian_python_light_example(spark):
+def rst_custom_rastertogridmedian_python_example(spark):
     """Get median values per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -791,7 +790,7 @@ def rst_custom_rastertogridmedian_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridmedian_python_light_example_output = """
+rst_custom_rastertogridmedian_python_example_output = """
 +----+--------------------+--------+
 |band|cellID              |measure |
 +----+--------------------+--------+
@@ -801,7 +800,7 @@ rst_custom_rastertogridmedian_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridsum_python_light_example(spark):
+def rst_custom_rastertogridsum_python_example(spark):
     """Sum pixel values per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -810,7 +809,7 @@ def rst_custom_rastertogridsum_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridsum_python_light_example_output = """
+rst_custom_rastertogridsum_python_example_output = """
 +----+--------------------+--------+
 |band|cellID              |measure |
 +----+--------------------+--------+
@@ -820,7 +819,7 @@ rst_custom_rastertogridsum_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridvariance_python_light_example(spark):
+def rst_custom_rastertogridvariance_python_example(spark):
     """Get population variance per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -829,7 +828,7 @@ def rst_custom_rastertogridvariance_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridvariance_python_light_example_output = """
+rst_custom_rastertogridvariance_python_example_output = """
 +----+--------------------+----------+
 |band|cellID              |measure   |
 +----+--------------------+----------+
@@ -839,7 +838,7 @@ rst_custom_rastertogridvariance_python_light_example_output = """
 """
 
 
-def rst_custom_rastertogridstddev_python_light_example(spark):
+def rst_custom_rastertogridstddev_python_example(spark):
     """Get population standard deviation per custom-grid cell (light tier UDTF)."""
     _setup_custom_raster_view(spark)
     return spark.sql(
@@ -848,11 +847,167 @@ def rst_custom_rastertogridstddev_python_light_example(spark):
     ).take(5)
 
 
-rst_custom_rastertogridstddev_python_light_example_output = """
+rst_custom_rastertogridstddev_python_example_output = """
 +----+--------------------+--------+
 |band|cellID              |measure |
 +----+--------------------+--------+
 |1   |<custom cell bigint>|0.0     |
 +----+--------------------+--------+
 (population standard deviation per band × custom-grid cell; 0.0 when all pixels equal)
+"""
+
+
+# ============================================================================
+# Partial states per grid cell — rst_<grid>_rastertogrid_partial
+#
+# One scalar call per tile returns ARRAY<STRUCT<band, cellid, count, sum, m2,
+# min, max>>; `inline` turns it into rows. The average of a cell is
+# `sum / count`. The fixture is a 40 x 40 tile of value 1.0 made with
+# `rst_rasterize`: a lon/lat box of London for H3 and quadbin, a 4 km square of
+# the British National Grid for BNG and the custom grid.
+# ============================================================================
+
+_LONDON_BOX_WKT = "POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))"
+
+
+def _partial_states(spark, tile_df, partial):
+    """One row per band and cell with count and average, from a `*_rastertogrid_partial` column."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    states = tile_df.select(partial.alias("states")).select(f.inline("states"))
+    return states.select(
+        "band", "cellid", "count", (f.col("sum") / f.col("count")).alias("avg")
+    ).collect()
+
+
+def _london_wgs84_tile(spark):
+    from databricks.labs import gbx
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    gbx.register(spark)
+
+    return spark.range(1).select(
+        rx_api.rst_rasterize(
+            f.lit(_LONDON_BOX_WKT),
+            f.lit(1.0),
+            f.lit(-0.20),
+            f.lit(51.40),
+            f.lit(-0.10),
+            f.lit(51.50),
+            f.lit(40),
+            f.lit(40),
+            f.lit(4326),
+        ).alias("tile")
+    )
+
+
+def _london_bng_tile(spark):
+    from databricks.labs import gbx
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    gbx.register(spark)
+
+    return spark.range(1).select(
+        rx_api.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT),
+            f.lit(1.0),
+            f.lit(529000.0),
+            f.lit(179000.0),
+            f.lit(533000.0),
+            f.lit(183000.0),
+            f.lit(40),
+            f.lit(40),
+            f.lit(27700),
+        ).alias("tile")
+    )
+
+
+def rst_h3_rastertogrid_partial_python_example(spark):
+    """Give the state of every H3 cell a tile covers, in one pass (light pyrx tier)."""
+    df = _london_wgs84_tile(spark)
+    return _partial_states(
+        spark, df, rx_api.rst_h3_rastertogrid_partial("tile", 6)
+    )
+
+
+rst_h3_rastertogrid_partial_python_example_output = """
++----+------------------+-----+---+
+|band|cellid            |count|avg|
++----+------------------+-----+---+
+|1   |603927292439166975|61.0 |1.0|
+|1   |603927296197263359|607.0|1.0|
+|1   |603927296331481087|326.0|1.0|
+|... |                  |     |   |
++----+------------------+-----+---+
+(one row per band and H3 cell, 8 in all)
+"""
+
+
+def rst_quadbin_rastertogrid_partial_python_example(spark):
+    """Give the state of every quadbin cell a tile covers, in one pass (light pyrx tier)."""
+    df = _london_wgs84_tile(spark)
+    return _partial_states(
+        spark, df, rx_api.rst_quadbin_rastertogrid_partial("tile", 12)
+    )
+
+
+rst_quadbin_rastertogrid_partial_python_example_output = """
++----+-------------------+-----+---+
+|band|cellid             |count|avg|
++----+-------------------+-----+---+
+|1   |5243165738268622847|180.0|1.0|
+|1   |5243165738805493759|220.0|1.0|
+|1   |5243165739073929215|540.0|1.0|
+|1   |5243165739610800127|660.0|1.0|
++----+-------------------+-----+---+
+(one row per band and quadbin cell)
+"""
+
+
+def rst_bng_rastertogrid_partial_python_example(spark):
+    """Give the state of every British National Grid cell a tile covers, in one pass (light pyrx tier)."""
+    df = _london_bng_tile(spark)
+    return _partial_states(
+        spark, df, rx_api.rst_bng_rastertogrid_partial("tile", 3)
+    )
+
+
+rst_bng_rastertogrid_partial_python_example_output = """
++----+------+-----+---+
+|band|cellid|count|avg|
++----+------+-----+---+
+|1   |TQ2979|100.0|1.0|
+|1   |TQ2980|100.0|1.0|
+|1   |TQ2981|100.0|1.0|
+|... |      |     |   |
++----+------+-----+---+
+(one row per band and 1 km BNG cell, 16 in all; cellid is a STRING)
+"""
+
+
+def rst_custom_rastertogrid_partial_python_example(spark):
+    """Give the state of every custom-grid cell a tile covers, in one pass (light pyrx tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _london_bng_tile(spark)
+    grid = f.call_function(
+        "gbx_custom_grid",
+        f.lit(529000), f.lit(533000), f.lit(179000), f.lit(183000),
+        f.lit(2), f.lit(4000), f.lit(4000), f.lit(27700),
+    )
+    return _partial_states(
+        spark, df, rx_api.rst_custom_rastertogrid_partial("tile", grid, 1)
+    )
+
+
+rst_custom_rastertogrid_partial_python_example_output = """
++----+-----------------+-----+---+
+|band|cellid           |count|avg|
++----+-----------------+-----+---+
+|1   |72057594037927936|400.0|1.0|
+|1   |72057594037927937|400.0|1.0|
+|1   |72057594037927938|400.0|1.0|
+|1   |72057594037927939|400.0|1.0|
++----+-----------------+-----+---+
+(one row per band and 2 km custom-grid cell)
 """

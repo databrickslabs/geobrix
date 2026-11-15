@@ -23,5 +23,8 @@ def assert_viz_available() -> None:
         raise ImportError(
             "gbx.vizx requires the [vizx] extra (missing: "
             + ", ".join(missing)
-            + "). Install with: pip install 'geobrix[vizx]'"
+            + "). Install "
+            + "the [vizx] extra of the env wheel for the runtime on Databricks "
+            + "(\"geobrix[vizx] @ <the +env5/+env6 wheel>\"), or pip install 'geobrix[vizx]' "
+            + "off Databricks"
         )

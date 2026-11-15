@@ -1,8 +1,7 @@
-import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
 import org.apache.spark.sql.functions._
 
-// Register functions
-vx.register(spark)
+// Scala registers no SQL: register once from Python or SQL (databricks.labs.gbx.register(spark)),
+// then call the SQL names below.
 
 // Full migration workflow
 val legacyTable = spark.table("legacy_mosaic_geometries")

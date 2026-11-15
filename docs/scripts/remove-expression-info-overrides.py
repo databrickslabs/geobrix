@@ -125,127 +125,40 @@ def remove_block(content: str) -> str:
     return "\n".join(new_lines)
 
 
-def main():
-    files = [
-        "com/databricks/labs/gbx/rasterx/expressions/agg/RST_CombineAvgAgg.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/agg/RST_DerivedBandAgg.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/agg/RST_MergeAgg.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_SRID.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_GeoReference.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_NDVI.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/grid/RST_H3_RasterToGridMin.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/grid/RST_H3_RasterToGridMedian.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/grid/RST_H3_RasterToGridMax.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/grid/RST_H3_RasterToGridCount.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/grid/RST_H3_RasterToGridAvg.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/generators/RST_ToOverlappingTiles.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/generators/RST_SeparateBands.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/generators/RST_ReTile.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/generators/RST_MakeTiles.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/generators/RST_H3_Tessellate.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/constructor/RST_FromFile.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/constructor/RST_FromContent.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/constructor/RST_FromBands.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Width.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_UpperLeftY.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_UpperLeftX.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Type.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Summary.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Subdatasets.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_SkewY.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_SkewX.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_ScaleY.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_ScaleX.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Rotation.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_PixelWidth.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_PixelHeight.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_PixelCount.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_NumBands.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Min.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_MetaData.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_MemSize.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Median.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Max.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Height.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_GetSubdataset.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_GetNoData.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Format.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_BoundingBox.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_BandMetaData.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/accessors/RST_Avg.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_WorldToRasterCoordY.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_WorldToRasterCoordX.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_WorldToRasterCoord.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_UpdateType.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_Transform.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_RasterToWorldCoordY.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_RasterToWorldCoordX.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_RasterToWorldCoord.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_Merge.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_MapAlgebra.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_InitNoData.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_Filter.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_DerivedBand.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_DTMFromGeoms.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_Convolve.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_CombineAvg.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_Clip.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_AsFormat.scala",
-        "com/databricks/labs/gbx/rasterx/expressions/RST_TryOpen.scala",
-        "com/databricks/labs/gbx/gridx/bng/generators/BNG_GeometryKRingExplode.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_GeometryKRing.scala",
-        "com/databricks/labs/gbx/gridx/bng/agg/BNG_CellIntersectionAgg.scala",
-        "com/databricks/labs/gbx/gridx/bng/generators/BNG_GeometryKLoopExplode.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_GeometryKLoop.scala",
-        "com/databricks/labs/gbx/gridx/bng/agg/BNG_CellUnionAgg.scala",
-        "com/databricks/labs/gbx/gridx/bng/generators/BNG_KLoopExplode.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_EastNorthAsBNG.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_KRing.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_AsWKT.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_CellArea.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_CellIntersection.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_Tessellate.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_Polyfill.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_Centroid.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_AsWKB.scala",
-        "com/databricks/labs/gbx/gridx/bng/generators/BNG_TessellateExplode.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_EuclideanDistance.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_KLoop.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_Distance.scala",
-        "com/databricks/labs/gbx/gridx/bng/BNG_CellUnion.scala",
-        "com/databricks/labs/gbx/gridx/bng/generators/BNG_KRingExplode.scala",
-        "com/databricks/labs/gbx/vectorx/jts/legacy/expressions/ST_LegacyAsWKB.scala",
-    ]
-    # Also discover any other .scala under expressions that might have overrides
-    for rel in list(files):
-        path = SRC / rel
-        if not path.exists():
-            print(f"Skip (missing): {rel}", file=sys.stderr)
-            continue
-        text = path.read_text()
-        new_text = remove_block(text)
-        if new_text != text:
-            path.write_text(new_text)
-            print(f"Updated: {rel}")
-        else:
-            pass  # No block found
+# The Scala packages that hold expressions. The tree is the list: a deleted or renamed file needs no edit here.
+PACKAGES = [
+    "com/databricks/labs/gbx/rasterx",
+    "com/databricks/labs/gbx/gridx",
+    "com/databricks/labs/gbx/vectorx",
+]
 
-    # Second pass: any file under rasterx/expressions, gridx/bng, vectorx that still has overrides
-    for base in ["com/databricks/labs/gbx/rasterx/expressions", "com/databricks/labs/gbx/gridx/bng", "com/databricks/labs/gbx/vectorx"]:
+
+def main():
+    """Strip the orphan overrides from every expression file under PACKAGES that still has one.
+
+    ``--check`` lists the files that would change, writes nothing, and exits 1 when there are any.
+    """
+    check = "--check" in sys.argv[1:]
+    changed = []
+    for base in PACKAGES:
         base_path = SRC / base
         if not base_path.exists():
             continue
-        for path in base_path.rglob("*.scala"):
-            rel = path.relative_to(SRC).as_posix()
-            if rel in files:
-                continue
+        for path in sorted(base_path.rglob("*.scala")):
             text = path.read_text()
             if not OVERRIDE_PATTERN.search(text):
                 continue
             new_text = remove_block(text)
-            if new_text != text:
+            if new_text == text:
+                continue
+            rel = path.relative_to(SRC).as_posix()
+            changed.append(rel)
+            if not check:
                 path.write_text(new_text)
-                print(f"Updated: {rel}")
+            print(f"{'Would update' if check else 'Updated'}: {rel}")
+    if check and changed:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

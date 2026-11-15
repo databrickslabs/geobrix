@@ -18,6 +18,11 @@ login/search_data/download) for offline unit tests.
 
 from __future__ import annotations
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import os
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -79,8 +84,8 @@ class EarthdataClient:
         except ImportError as exc:
             raise ImportError(
                 "earthaccess is required for the NASA Earthdata / EMIT client. "
-                "Install the optional extra: geobrix[earthdata] "
-                "(e.g. geobrix[light_env6,earthdata])."
+                "Install it as a separate step after the env wheel: "
+                "pip install 'earthaccess>=0.11,<1' 'botocore<1.44.0'."
             ) from exc
         return earthaccess
 

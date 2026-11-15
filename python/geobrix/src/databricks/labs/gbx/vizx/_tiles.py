@@ -8,6 +8,8 @@ instructions, and v1/v2/bytes shapes all normalize identically — no reimplemen
 import warnings
 from contextlib import contextmanager
 
+from databricks.labs.gbx._gdal_policy import open_bytes
+
 
 def _extract_tile(tile_or_row, tile_col):
     """Pull the tile value out of a Row/dict that has a tile_col, else pass through.
@@ -74,7 +76,7 @@ def _collect_bounded(df, tile_col, limit, *, warn_overflow=True):
 
 
 # ---------------------------------------------------------------------------
-# Mosaic (Task 3)
+# Mosaic
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +142,7 @@ def _plot_tiles_mosaic(
             profile["nodata"] = nodata
         with mf.open(**profile) as dst:
             dst.write(mosaic)
-        with mf.open() as src:
+        with open_bytes(mf) as src:
             data, tfm, scale = _decimated_read(src, max_pixels)
             _render(
                 data,
@@ -185,7 +187,7 @@ def plot_tiles(
         ``"facet"`` (default) — grid of thumbnail panels, up to ``limit`` tiles.
         ``"first"`` — render only the first tile.
         ``"mosaic"`` — stitch same-CRS tiles into one georeferenced image; raises
-        ``ValueError`` on mixed CRS (Task 3).
+        ``ValueError`` on mixed CRS.
     limit:
         Maximum number of tiles collected from the DataFrame. Defaults to 25 for
         ``facet``, 1 for ``first``, 64 for ``mosaic``. The whole DataFrame is

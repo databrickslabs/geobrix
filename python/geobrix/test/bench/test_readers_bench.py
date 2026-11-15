@@ -1,8 +1,11 @@
 """Unit test: reader bench pure-local path produces a ResultRow with timing."""
 
+import os
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -20,7 +23,7 @@ def _write_sample(path):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
@@ -45,9 +48,7 @@ def test_pure_local_reader_bench_emits_result(tmp_path):
 
 # ---------------------------------------------------------------------------
 # sizeInMB passthrough: run_format_read must set the sizeInMB reader option for
-# the heavy raster formats (netcdf_gdal / gdal / gtiff_gdal), not only for the
-# light raster_gbx reader. The netcdf raster leg passes size_mib=-1 (one tile
-# per grid var) so the heavy reader matches the light reader's granularity.
+# the light raster_gbx reader.
 # ---------------------------------------------------------------------------
 
 
@@ -86,42 +87,26 @@ class _StubSpark:
         self.read = _StubReadNamespace(self.sink)
 
 
-def test_run_format_read_passes_sizeinmb_to_netcdf_gdal():
+@pytest.mark.parametrize("size_mib", [-1, 32])
+def test_run_format_read_passes_sizeinmb_to_raster_gbx(size_mib):
     spark = _StubSpark()
-    r = readers.run_format_read(
-        spark,
-        "/tmp/netcdf",
-        run_id="t",
-        warmup=1,
-        measured=1,
-        api="heavyweight",
-        fmt="netcdf_gdal",
-        options={"filterRegex": r".*\.nc$"},
-        size_mib=-1,
-        where="venv",
-    )
-    assert r.status == "ok", f"expected ok, got: {r.note}"
-    # The heavy raster reader must have received the sizeInMB knob (=-1 here).
-    assert spark.sink["options"].get("sizeInMB") == "-1"
-    # Explicit format-passed options are still applied.
-    assert spark.sink["options"].get("filterRegex") == r".*\.nc$"
-
-
-def test_run_format_read_passes_sizeinmb_to_gdal_and_gtiff_gdal():
-    for fmt in ("gdal", "gtiff_gdal"):
-        spark = _StubSpark()
-        readers.run_format_read(
+    with patch("databricks.labs.gbx.manager.register_sources"):
+        r = readers.run_format_read(
             spark,
             "/tmp/x",
             run_id="t",
             warmup=1,
             measured=1,
-            api="heavyweight",
-            fmt=fmt,
-            size_mib=32,
+            api="lightweight",
+            fmt="raster_gbx",
+            options={"filterRegex": r".*\.tif$"},
+            size_mib=size_mib,
             where="venv",
         )
-        assert spark.sink["options"].get("sizeInMB") == "32", f"{fmt} missing sizeInMB"
+    assert r.status == "ok", f"expected ok, got: {r.note}"
+    assert spark.sink["options"].get("sizeInMB") == str(size_mib)
+    # Explicit format-passed options are still applied.
+    assert spark.sink["options"].get("filterRegex") == r".*\.tif$"
 
 
 # ---------------------------------------------------------------------------
@@ -145,15 +130,12 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     import json
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
-
-    from databricks.labs.gbx.pyrx import _file_ref
 
     # Create a minimal 8x8 float32 GeoTIFF with no-data set.
     tif = tmp_path / "tile.tif"
     data = (np.arange(64, dtype="float32") / 64.0).reshape(8, 8)
-    with rasterio.open(
+    with open_raster(
         str(tif),
         "w",
         driver="GTiff",
@@ -171,15 +153,22 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     manifest_file = tmp_path / "m.json"
     manifest_file.write_text(json.dumps([{"path": str(tif), "window": [0, 0, 8, 8]}]))
 
-    # Spy on file_ref_arg: if called, the geobrix FILE path is wired.
+    # Spy on file_ref_sql, the FILE mint of the registered rst_avg: if called, the geobrix FILE path is wired.
+    from databricks.labs.gbx.ds import file_gbx
+
     file_ref_calls = []
-    _orig = _file_ref.file_ref_arg
+    _orig = file_gbx.file_ref_sql
 
-    def _spy(tile_col):
-        file_ref_calls.append(tile_col)
-        return _orig(tile_col)
+    def _spy(tile_sql, spark=None):
+        file_ref_calls.append(tile_sql)
+        return _orig(tile_sql, spark)
 
-    monkeypatch.setattr(_file_ref, "file_ref_arg", _spy)
+    monkeypatch.setattr(file_gbx, "file_ref_sql", _spy)
+    from databricks.labs.gbx import _api
+
+    _api._done(spark).discard(
+        "gbx_rst_avg"
+    )  # so the call registers it again, through the spy
 
     rows = readers.run_virtual_tile_pixel_read(
         spark=spark,
@@ -196,10 +185,10 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     r = rows[0]
     assert r.status == "ok", f"expected ok, got {r.note!r}"
     assert r.rows >= 1
-    # The critical assertion: file_ref_arg must have been called, proving that
+    # The critical assertion: file_ref_sql must have been called when rst_avg registered, proving that
     # the geobrix FILE path (not a hand-rolled rasterio.open bypass) is invoked.
     assert file_ref_calls, (
-        "file_ref_arg was never called — run_virtual_tile_pixel_read is still "
+        "file_ref_sql was never called — run_virtual_tile_pixel_read is still "
         "bypassing the geobrix FILE path (hand-rolled rasterio.open UDF). "
         "Fix: use rst_avg(col('tile')) instead of a bare rasterio.open UDF."
     )
@@ -273,3 +262,59 @@ def test_stage_exif_corpus_writes_readable_jpegs(tmp_path):
     assert len(jpgs) == 3
     with Image.open(str(jpgs[0])) as img:
         assert img.size[0] > 0 and img.size[1] > 0
+
+
+def test_stage_zarr_cog_corpus_copies_each_step_once(spark, tmp_path):
+    """One tiled GeoTIFF per step of a Zarr store, longitudes moved to -180..180, the same
+    values; a second call finds the manifest and writes nothing."""
+    import pytest
+
+    pytest.importorskip("zarr")
+    from databricks.labs.gbx.zarr._testing import era5_like_dataset, make_era5_like
+
+    ds = era5_like_dataset(hours=4, step=10.0, variables=("t2m",))
+    store = make_era5_like(
+        tmp_path / "s.zarr", dataset=ds, sharded=False, chunks=(2, 19, 36)
+    )
+    out = tmp_path / "cog"
+    man = readers.stage_zarr_cog_corpus(spark, str(store), str(out), block=3)
+    assert len(man["files"]) == 4 and man["lon_roll"] == -18  # 180 E is column 18
+    with rasterio.open(man["files"][2]) as src:
+        assert src.profile["tiled"] and src.crs.to_epsg() == 4326
+        assert src.bounds.left == -185.0  # half a 10-degree cell west of -180
+        np.testing.assert_array_equal(
+            src.read(1), np.roll(ds.t2m.values[2], -18, axis=1)
+        )
+    stamp = {f: (out / f).stat().st_mtime_ns for f in os.listdir(out)}
+    assert readers.stage_zarr_cog_corpus(spark, str(store), str(out)) == man
+    assert {f: (out / f).stat().st_mtime_ns for f in os.listdir(out)} == stamp
+
+
+def test_stage_zarr_cog_corpus_refuses_what_would_not_match_the_store(spark, tmp_path):
+    """A corpus staged from another store or variable is not reused, and a south-first grid
+    is refused: either way the GeoTIFF baselines would time unequal work."""
+    import pytest
+
+    pytest.importorskip("zarr")
+    from databricks.labs.gbx.zarr._testing import era5_like_dataset, make_era5_like
+
+    ds = era5_like_dataset(hours=2, step=10.0, variables=("t2m",))
+    store = make_era5_like(
+        tmp_path / "s.zarr", dataset=ds, sharded=False, chunks=(2, 19, 36)
+    )
+    other = make_era5_like(
+        tmp_path / "o.zarr", dataset=ds, sharded=False, chunks=(2, 19, 36)
+    )
+    out = tmp_path / "cog"
+    readers.stage_zarr_cog_corpus(spark, str(store), str(out), block=2)
+    with pytest.raises(ValueError, match="staged from") as e:
+        readers.stage_zarr_cog_corpus(spark, str(other), str(out))
+    assert "Fix:" in str(e.value)
+    south = make_era5_like(
+        tmp_path / "n.zarr",
+        dataset=ds.isel(latitude=slice(None, None, -1)),
+        sharded=False,
+        chunks=(2, 19, 36),
+    )
+    with pytest.raises(ValueError, match="south-first"):
+        readers.stage_zarr_cog_corpus(spark, str(south), str(tmp_path / "cog2"))

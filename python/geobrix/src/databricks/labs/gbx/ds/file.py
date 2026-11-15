@@ -48,6 +48,9 @@ class FileGbxReader(DataSourceReader):
     def read(self, partition: "_PathPartition") -> Iterator[Tuple]:
         import datetime as _dt
 
+        if _listing.is_empty_plan(partition):
+            return
+
         local = _listing.to_local_path(partition.file_path)
         # UC Volume FUSE can transiently raise FileNotFoundError (eventual-
         # consistency lag). Retry up to 10× before re-raising.

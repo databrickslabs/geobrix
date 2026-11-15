@@ -12,10 +12,11 @@ from pathlib import Path
 
 # Determine paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.5.2-jar-with-dependencies.jar"
+GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.6.0-jar-with-dependencies.jar"
 
 # Sample data root: from path_config (defaults to test-data minimal bundle at runtime)
 from path_config import SAMPLE_DATA_BASE  # noqa: E402
+from deadline_guard import DEFAULT_DEADLINE_S, DeadlineGuard, end_test  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -29,6 +30,7 @@ def spark_with_geobrix():
     Returns:
         SparkSession with GeoBrix readers and functions available
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from pyspark.sql import SparkSession
     except ImportError as e:
@@ -63,8 +65,7 @@ def spark_with_geobrix():
     
     # Try to register GeoBrix functions
     try:
-        from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         print(f"✅ GeoBrix rasterx functions registered")
     except ImportError:
         print("⚠️  GeoBrix rasterx not available (Python bindings may not be installed)")
@@ -72,14 +73,20 @@ def spark_with_geobrix():
         print(f"⚠️  Could not register rasterx functions: {e}")
     
     try:
-        from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-        vx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_st_legacy',))
         print(f"✅ GeoBrix vectorx functions registered")
     except ImportError:
         print("⚠️  GeoBrix vectorx not available")
     except Exception as e:
         print(f"⚠️  Could not register vectorx functions: {e}")
     
+    # The lightweight readers and writers (raster_gbx, shapefile_gbx, ...) are Python data sources: register them
+    try:
+        gbx_manager.register_sources(spark)
+        print("✅ GeoBrix lightweight data sources registered")
+    except Exception as e:
+        print(f"⚠️  Could not register the lightweight data sources: {e}")
+
     yield spark
     
     # Cleanup
@@ -109,6 +116,42 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow running"
     )
+    config.addinivalue_line(
+        "markers",
+        "delta_session: starts its own local Spark session with Delta Lake (zarr_delta.py), "
+        "which replaces the shared one; the root conftest runs these tests last",
+    )
+    config.addinivalue_line(
+        "markers",
+        "deadline(seconds): fail the test if it is still running after this many "
+        "seconds (default: GBX_DOC_TEST_TIMEOUT_S, else 600)",
+    )
+
+
+# Every test runs under a deadline (see deadline_guard.py); no streaming query may
+# outlive its test. Raise or lower one test's limit with @pytest.mark.deadline(seconds).
+@pytest.fixture(autouse=True)
+def _deadline(request):
+    """Fail a test that outlives its deadline; no streaming query may outlive its test."""
+    marker = request.node.get_closest_marker("deadline")
+    seconds = marker.args[0] if marker else DEFAULT_DEADLINE_S
+    spark_fixture = next(
+        (n for n in ("spark", "spark_with_geobrix") if n in request.fixturenames), None
+    )
+    # Resolved first, so starting Spark does not count against the deadline.
+    spark = request.getfixturevalue(spark_fixture) if spark_fixture else None
+    guard = DeadlineGuard(
+        request.node.name,
+        seconds,
+        request.config.pluginmanager.getplugin("capturemanager"),
+        uses_jvm=spark is not None,
+    )
+    guard.start()
+    try:
+        yield
+    finally:
+        leaked = end_test(guard, spark)
+    assert not leaked, f"streaming queries left running: {[q.name for q in leaked]}"
 
 
 def pytest_collection_modifyitems(config, items):
@@ -125,6 +168,10 @@ def pytest_collection_modifyitems(config, items):
         # Auto-mark slow tests
         if "slow" in item.name.lower() or "batch" in item.name.lower():
             item.add_marker(pytest.mark.slow)
+
+    # The Zarr doc tests start a Delta session of their own and stop the shared one: they go last.
+    own = [i for i in items if i.get_closest_marker("delta_session")]
+    items[:] = [i for i in items if i not in own] + own
 
 
 @pytest.fixture

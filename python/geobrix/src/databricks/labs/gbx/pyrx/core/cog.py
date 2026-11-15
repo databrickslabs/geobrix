@@ -91,13 +91,13 @@ def sniff_header(raster_bytes: bytes) -> CogInfo:
     **Heuristic limitation:** "tiled + >=1 overview IFD" is a necessary but NOT
     sufficient condition for a spec-valid COG.  A GeoTIFF built with
     ``build_overviews`` passes this sniffer (overviews present) but FAILS
-    ``rio_cogeo.cogeo.cog_validate`` because the overview IFDs are written AFTER
+    GDAL's COG validator because the overview IFDs are written AFTER
     the full-resolution image IFD, which violates the COG IFD-order requirement.
 
     GeoBrix PRODUCERS always emit COGs via GDAL's ``driver="COG"``
     (``analysis.cog_convert``), which orders IFDs correctly by construction and
     is spec-valid.  Strict spec-validation (IFD order check) is the job of
-    ``rio_cogeo.cogeo.cog_validate``; this sniffer is a fast read-path heuristic
+    GDAL's ``validate_cloud_optimized_geotiff``; this sniffer is a fast read-path heuristic
     only.
     """
     try:

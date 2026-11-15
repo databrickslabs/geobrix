@@ -8,7 +8,7 @@ import CodeFromTest from '@site/src/components/CodeFromTest';
 
 ## Important Notice
 
-Please note that all projects in the [/databrickslabs](https://github.com/databrickslabs) GitHub account are provided for your exploration only, and are **not formally supported by Databricks** with Service Level Agreements (SLAs). 
+Please note that all projects in the [/databrickslabs](https://github.com/databrickslabs) GitHub account are provided for your exploration only. They are **not formally supported by Databricks** with Service Level Agreements (SLAs). 
 
 They are provided AS-IS and we do not make any guarantees of any kind. 
 
@@ -69,7 +69,7 @@ Getting error when reading large GeoTIFF files.
 </CodeFromTest>
 
 <CodeFromTest language="python" validationLevel="static" title="Reproduction Code">
-{`df = spark.read.format("gdal").load("/data/large.tif")
+{`df = spark.read.format("raster_gbx").load("/data/large.tif")
 df.count()`}
 </CodeFromTest>
 
@@ -81,17 +81,15 @@ Should read file successfully.
 OOM error on executors.`}
 </CodeFromTest>
 
-(The `gdal` reader shown above is part of the heavyweight tier — see [Choosing an Execution Tier](./api/execution-tiers).)
-
 ### Reproduce on Databricks Runtime 19
 
-On a Databricks Runtime 19 cluster (light tier):
+On a Databricks Runtime 19 cluster:
 
 <CodeFromTest language="python" validationLevel="static" title="DBR 19 Reproduction Template">
 {`# Adapt the path below to your staged wheel location (see installation guide).
-%pip install "geobrix[light_dbr19] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
 
-from databricks.labs.gbx import pyrx
+from databricks.labs.gbx import register
 
 # Define sample code here to reproduce the issue.
 # Include the output and full error traceback.`}
@@ -138,13 +136,13 @@ Found an error in the documentation or have a suggestion for improvement?
 
 ## Related Projects
 
-### DBLabs Mosaic (Maintenance Mode)
+### DBLabs Mosaic (Retired)
 
 If you're using DBLabs Mosaic (DBR 13.3 LTS):
 - [Mosaic Documentation](https://databrickslabs.github.io/mosaic/index.html)
 - [Mosaic GitHub](https://github.com/databrickslabs/mosaic)
 
-**Note**: Mosaic is in maintenance mode and will be retired with [DBR 13.3 EoS](https://docs.databricks.com/aws/en/release-notes/runtime/#supported-databricks-runtime-lts-releases) in August 2026.
+**Note**: Mosaic was retired with [DBR 13.3 EoS](https://docs.databricks.com/aws/en/release-notes/runtime/#supported-databricks-runtime-lts-releases) (August 2026).
 
 ### Databricks Built-in Spatial Functions
 

@@ -11,10 +11,10 @@ object GridxPackageExamples {
 import org.apache.spark.sql.functions._
 
 // Register functions
-bx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 
 // Calculate cell area
-val areaDf = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area")
+val areaDf = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area")
 areaDf.show()
 
 // Create BNG cells from points (point as WKT; GeoBrix does not accept st_point)
@@ -34,7 +34,7 @@ bngCells.show()"""
   val GRIDX_SCALA_USAGE_output: String = """+-----------+
 |area       |
 +-----------+
-|1000000.0  |
+|1.0        |
 +-----------+
 
 +-------+-------+----------+

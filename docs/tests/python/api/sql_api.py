@@ -16,21 +16,13 @@ SAMPLE_NYC_GEOJSON = f"{SAMPLE_DATA_BASE}/nyc/taxi-zones/nyc_taxi_zones.geojson"
 # REGISTRATION (shown in docs)
 # =============================================================================
 
-REGISTER_PYTHON = """from databricks.labs.gbx.rasterx import functions as rx
-from databricks.labs.gbx.gridx.bng import functions as bx
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+REGISTER_PYTHON = """from databricks.labs import gbx
 
-rx.register(spark)
-bx.register(spark)
-vx.register(spark)"""
+gbx.register(spark)"""
 
-REGISTER_SCALA = """import com.databricks.labs.gbx.rasterx.{functions => rx}
-import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
-
-rx.register(spark)
-bx.register(spark)
-vx.register(spark)"""
+REGISTER_SCALA = """// Scala registers no SQL. Register once from Python or SQL (databricks.labs.gbx.register(spark)),
+// then call the SQL functions from Scala.
+spark.sql("SELECT gbx_rst_width(tile) FROM tiles")"""
 
 # =============================================================================
 # SQL SNIPPETS (one constant per doc block)
@@ -55,8 +47,7 @@ DESCRIBE FUNCTION gbx_rst_boundingbox;
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
 
 SQL_READ_AND_QUERY_RASTERS = f"""-- Read rasters (use your sample data path)
-CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`{SAMPLE_NYC_RASTERS}`;
+CREATE OR REPLACE TEMP VIEW rasters USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTERS}');
 
 -- Extract metadata
 SELECT
@@ -174,8 +165,7 @@ FROM legacy_features;
 SELECT * FROM features_analyzed WHERE area > 1000;"""
 
 SQL_READ_GEOJSON = f"""-- Read GeoJSON (use your path)
-CREATE OR REPLACE TEMP VIEW features AS
-SELECT * FROM geojson_ogr.`{SAMPLE_NYC_GEOJSON}`;
+CREATE OR REPLACE TEMP VIEW features USING geojson_gbx OPTIONS (path '{SAMPLE_NYC_GEOJSON}');
 
 -- Query with geometry
 SELECT
@@ -186,7 +176,7 @@ FROM features
 WHERE st_area(st_geomfromwkb(geom_0)) > 1000;"""
 
 SQL_READ_GEOPACKAGE = """-- Read GeoPackage (note: specify layer in Python/Scala first)
--- gpkg = spark.read.format("gpkg").option("layerName", "buildings").load("/data/city.gpkg")
+-- gpkg = spark.read.format("gpkg_gbx").option("layerName", "buildings").load("/data/city.gpkg")
 -- gpkg.createOrReplaceTempView("buildings")
 
 SELECT
@@ -335,13 +325,12 @@ SQL_READ_GEOPACKAGE_output = """
 
 def register_functions_python(spark):
     """Register GeoBrix functions via Python for SQL use."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 
-    rx.register(spark)
-    bx.register(spark)
-    vx.register(spark)
+    gbx.register(spark)
     return rx, bx, vx
 
 

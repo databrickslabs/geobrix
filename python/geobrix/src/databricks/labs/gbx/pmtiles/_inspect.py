@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from typing import Union
 
-from pmtiles.reader import MemorySource, Reader, all_tiles
+from pmtiles.reader import MemorySource, Reader
 from pmtiles.tile import Compression, TileType
+
+from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
 # TileType / Compression enum -> the lowercase string keys the viewers branch on.
 _TILE_TYPE_NAME = {
@@ -54,11 +56,12 @@ def pmtiles_info(path: Union[str, bytes, bytearray]) -> dict:
     ``tile_compression`` (lowercase string). Driver-side only.
     """
     data = _read_bytes(path)
-    source = MemorySource(data)
-    reader = Reader(source)
+    reader = Reader(MemorySource(data))
     h = reader.header()
     metadata = reader.metadata()
-    tile_count = sum(1 for _ in all_tiles(MemorySource(data)))
+    # iter_tiles, not the library's all_tiles: it reads the uncompressed
+    # directories the heavyweight writer stores, which all_tiles gunzips.
+    tile_count = sum(1 for _ in iter_tiles(data))
     return {
         "tile_type": _TILE_TYPE_NAME.get(h["tile_type"], "unknown"),
         "tile_compression": _COMPRESSION_NAME.get(h["tile_compression"], "unknown"),

@@ -1,6 +1,6 @@
 """Verify raster parity gate: decoded-pixel comparison vs byte-identical.
 
-Task 7 verification: after T6 (both tiers now ZSTD+predictor), the parity gate
+Both tiers now write ZSTD+predictor, so the parity gate
 must compare decoded pixels (not file bytes) because light auto-levels (L16 for small
 tiles) while heavy fixed-levels (L9). Same pixels, different bytes -> a byte-identical
 gate would FAIL even though tiles are semantically identical.
@@ -17,7 +17,7 @@ import pytest
 
 rasterio = pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+    reason="rasterio not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
 import numpy as np  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402

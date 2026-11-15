@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
@@ -23,54 +24,20 @@ import org.scalatest.matchers.should.Matchers._
 class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
 
     /**
-      * Parity: corrupt raster → rst_width is NULL (not 0 or any sentinel).
+      * Parity: corrupt raster → rst_boundingbox is NULL (not an empty polygon or any sentinel).
       *
       * Mirrors the assertion in RST_AccessorsEvalTest but lives here to make the
       * cross-tier parity contract explicit and discoverable.
       */
-    test("parity: corrupt raster → rst_width is NULL (heavy, Task 1 contract)") {
+    test("parity: corrupt raster → rst_boundingbox is NULL (heavy, Task 1 contract)") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_width(col("raster")).as("w")).collect()
-        assert(res.head.get(0) == null, "corrupt raster width must be NULL (not 0 sentinel)")
-    }
-
-    /**
-      * Parity: corrupt raster → rst_srid is NULL (not 0).
-      *
-      * Tasks 1/2 contract: SRID 0 was the old sentinel; the degrade path now
-      * returns NULL so callers can distinguish "no CRS" from "corrupt tile".
-      */
-    test("parity: corrupt raster → rst_srid is NULL (heavy, Task 2 contract)") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_srid(col("raster")).as("s")).collect()
-        assert(res.head.get(0) == null, "corrupt raster SRID must be NULL (not 0 sentinel)")
-    }
-
-    /**
-      * Parity: corrupt raster → rst_scalex is NULL (not NaN).
-      *
-      * Mirrors the assertion already present in RST_AccessorsEvalTest; duplicated
-      * here to surface the cross-tier scalex-not-NaN contract explicitly.
-      */
-    test("parity: corrupt raster → rst_scalex is NULL (not NaN) (heavy, Task 1 contract)") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_scalex(col("raster")).as("sx")).collect()
-        assert(res.head.get(0) == null, "corrupt raster scalex must be NULL (not NaN sentinel)")
+        val res = df.select(rst_boundingbox(col("raster")).as("b")).collect()
+        assert(res.head.get(0) == null, "corrupt raster bounding box must be NULL (not a sentinel)")
     }
 
     /**
@@ -93,16 +60,16 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         spark.conf.set("spark.databricks.labs.gbx.expressions.crash.on.error", "true")
         try {
             // DataFrame built AFTER conf.set so ExpressionConfigExpr snapshots crashExpressions=true.
-            // Corrupt tile via rst_fromcontent (same as the other 3 parity tests) so the tile struct
+            // Corrupt tile via rst_fromcontent (same as the parity test above) so the tile struct
             // type is correct and the accessor reaches safeEval's crash branch rather than failing
             // at plan analysis time.
             val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
                 .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-            val ex = intercept[Throwable] { df.select(rst_width(col("raster"))).collect() }
+            val ex = intercept[Throwable] { df.select(rst_boundingbox(col("raster"))).collect() }
             // Verify it is the safeEval crash-path Error, not an incidental plan/analysis error.
             // Walk the cause chain: Spark wraps driver-side errors in SparkException layers.
             val chain = LazyList

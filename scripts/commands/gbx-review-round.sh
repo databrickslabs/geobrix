@@ -6,7 +6,11 @@
 # full-branch pass never fires by accident. Isaac Review is incremental
 # (session cache + PR-finding reuse), so per-round scoping is cheap and
 # cumulative across runs.
-
+#
+# The whole body is one brace group: bash reads a script as it runs, so an edit or a checkout of this
+# file during the minutes-long isaac step moved the read offset and killed the run with "syntax error".
+# A group is parsed completely before it starts.
+{
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -24,6 +28,7 @@ RULE=""
 LOG_PATH=""
 ALLOW_LARGE=0
 KEEP_OUTPUTS=0
+INCLUDE_GENERATED=0
 PASSTHRU=()
 
 show_help() {
@@ -43,6 +48,9 @@ show_help() {
     echo -e "  ${GREEN}--allow-large${NC}    Proceed even if the scope exceeds ${LARGE_THRESHOLD} files."
     echo -e "  ${GREEN}--keep-outputs${NC}   Review .ipynb files WITH their stored outputs (default strips"
     echo -e "                   them: embedded plots overflow isaac's context and aren't code)."
+    echo -e "  ${GREEN}--include-generated${NC}  Also review the generated lock files (requirements-dev-container*.txt,"
+    echo -e "                   requirements*-ci.txt). Default: skipped (scripts/commands/isaac-review-local.yaml,"
+    echo -e "                   Isaac opt_out.paths); they are hash-pinned compile output."
     echo -e "  ${GREEN}--log <path>${NC}     Tee output to a log (filename -> test-logs/<name>)."
     echo -e "  ${GREEN}-h, --help${NC}       Show this help."
     echo ""
@@ -68,6 +76,7 @@ while [[ $# -gt 0 ]]; do
         --rule) RULE="$2"; shift 2 ;;
         --allow-large) ALLOW_LARGE=1; shift ;;
         --keep-outputs) KEEP_OUTPUTS=1; shift ;;
+        --include-generated) INCLUDE_GENERATED=1; shift ;;
         --log) LOG_PATH="$(resolve_log_path "$2")"; shift 2 ;;
         --) shift; while [[ $# -gt 0 ]]; do PASSTHRU+=("$1"); shift; done ;;
         *) PASSTHRU+=("$1"); shift ;;
@@ -83,6 +92,7 @@ if ! command -v dbexec >/dev/null 2>&1; then
     exit 2
 fi
 
+CALLER_DIR="$PWD"
 cd "$PROJECT_ROOT" || exit 2
 
 # Resolve the base ref (default: the branch's upstream = your unpushed commits).
@@ -153,7 +163,9 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     trap 'git -C "$PROJECT_ROOT" worktree remove --force "$REVIEW_DIR" >/dev/null 2>&1' EXIT
     git worktree add --quiet --detach "$REVIEW_DIR" "$MERGE_BASE" || exit 2
     strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
-    git -C "$REVIEW_DIR" commit -q -a --allow-empty \
+    # The scratch commit never leaves this machine, so it carries its own identity: a checkout with no
+    # git user configured (a CI runner) must still be able to review.
+    git -C "$REVIEW_DIR" -c user.name=gbx-review -c user.email=gbx-review@localhost commit -q -a --allow-empty \
         -m "chore(review): scratch base with notebook outputs stripped" \
         -m "Local and detached, never pushed: lets isaac review without multi-MB outputs." \
         >/dev/null || exit 2
@@ -164,10 +176,52 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
     ISAAC_ARGS=(review --uncommitted)
     echo -e "${CYAN}Notebook outputs stripped${NC} for review (${#NOTEBOOKS[@]} .ipynb; --keep-outputs to include them)."
+elif [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null)" ]]; then
+    # isaac's local mode reviews the checkout's uncommitted and untracked files too, not only base...HEAD: in a
+    # tree another agent edits, that pulls their work-in-progress into the review. Review HEAD from a clean
+    # detached worktree instead, so the scope is the committed change alone.
+    REVIEW_DIR="$(mktemp -d -t gbx-review-wt.XXXXXX)"
+    trap 'git -C "$PROJECT_ROOT" worktree remove --force "$REVIEW_DIR" >/dev/null 2>&1' EXIT
+    git worktree add --quiet --detach "$REVIEW_DIR" HEAD || exit 2
+    echo -e "${CYAN}Uncommitted changes here:${NC} reviewing HEAD in a clean worktree, so only ${BASE}...HEAD is in scope."
+fi
+# Report every severity, and skip the generated lock files by default (Isaac opt_out.paths in the
+# layered config). One config is passed: isaac-review-local.yaml (all severities + the opt_out), or with
+# --include-generated isaac-review-severities.yaml (all severities only), so that mode does not fall back
+# to Isaac's critical/major-only threshold. A config the caller passes after `--` (-c/--config) is
+# theirs to manage, so none is added then.
+HAS_OWN_CONFIG=0
+for a in ${PASSTHRU[@]+"${PASSTHRU[@]}"}; do
+    case "$a" in -c|--config|-c=*|--config=*) HAS_OWN_CONFIG=1 ;; esac
+done
+if [[ "$HAS_OWN_CONFIG" -ne 1 ]]; then
+    if [[ "$INCLUDE_GENERATED" -eq 1 ]]; then
+        ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-severities.yaml")
+    else
+        ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-local.yaml")
+    fi
 fi
 [[ "$FULL" -eq 1 ]] && ISAAC_ARGS+=(--full)
 [[ -n "$RULE" ]] && ISAAC_ARGS+=(--run-rule "$RULE")
-[[ ${#PASSTHRU[@]} -gt 0 ]] && ISAAC_ARGS+=("${PASSTHRU[@]}")
+# isaac resolves a relative -o/--output or -c/--config against its own working directory, which is a
+# scratch worktree (deleted on exit, and without the checkout's own edits) when notebook outputs are
+# stripped or the checkout is dirty: anchor them to the caller's directory.
+if [[ ${#PASSTHRU[@]} -gt 0 ]]; then
+    for i in "${!PASSTHRU[@]}"; do
+        case "${PASSTHRU[$i]}" in
+            -o|--output|-c|--config)
+                j=$((i + 1))
+                if [[ -n "${PASSTHRU[$j]:-}" && "${PASSTHRU[$j]}" != /* ]]; then
+                    PASSTHRU[$j]="$CALLER_DIR/${PASSTHRU[$j]}"
+                fi ;;
+            -o=*|--output=*|-c=*|--config=*)
+                if [[ "${PASSTHRU[$i]#*=}" != /* ]]; then
+                    PASSTHRU[$i]="${PASSTHRU[$i]%%=*}=$CALLER_DIR/${PASSTHRU[$i]#*=}"
+                fi ;;
+        esac
+    done
+    ISAAC_ARGS+=("${PASSTHRU[@]}")
+fi
 
 echo -e "${CYAN}Running:${NC} dbexec repo run isaac ${ISAAC_ARGS[*]}"
 show_separator
@@ -192,11 +246,11 @@ if grep -q 'No changes found' "$SCAN_FILE"; then
     exit 4
 fi
 
-if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long' "$SCAN_FILE"; then
+if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long|^\[[a-z_]+\] (Agent execution failed|Failed to parse claude output)' "$SCAN_FILE"; then
     rm -f "$SCAN_FILE"
     echo "" >&2
     echo -e "${RED}Isaac Review FAILED silently:${NC} the model call errored (likely 'Prompt is too long' —" >&2
-    echo -e "the ${FILE_COUNT}-file diff overflowed the context window). A '0 findings' result from this" >&2
+    echo -e "the ${FILE_COUNT}-file diff overflowed the context window, or a reviewer agent failed to run). A '0 findings' result from this" >&2
     echo -e "run is ${RED}NOT${NC} trustworthy. Narrow the scope with ${GREEN}--base <recent-ref>${NC} so each pass fits," >&2
     echo -e "or review in smaller commit-range slices." >&2
     exit 4
@@ -204,3 +258,4 @@ fi
 
 rm -f "$SCAN_FILE"
 exit "$rc"
+}; exit $?  # same line as the group: bash reads nothing after it

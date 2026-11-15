@@ -1,4 +1,4 @@
-"""TDD Stage 3 Task 6: custom-grid raster_to_grid + iter_tessellate (light tier).
+"""Custom-grid raster_to_grid + iter_tessellate (light tier).
 
 Failing state before implementation:
   - raster_to_grid(grid="custom") raises ValueError("unknown grid")
@@ -13,6 +13,8 @@ After implementation:
   - custom tessellate covering: >= 4 chips
   - custom cell IDs are plain ints (Long-compatible)
 """
+
+import contextlib
 
 import numpy as np
 import pytest
@@ -90,8 +92,11 @@ def _make_raster_no_crs(data, *, origin_x=0.0, origin_y=200.0, px=100.0):
         return mf.read()
 
 
+@contextlib.contextmanager
 def _open(b):
-    return MemoryFile(b).open()
+    # the MemoryFile reads its bytes in place, without a copy: it, and so the bytes, must outlive every read
+    with MemoryFile(b) as mf, mf.open() as ds:
+        yield ds
 
 
 _CONF = _make_conf()

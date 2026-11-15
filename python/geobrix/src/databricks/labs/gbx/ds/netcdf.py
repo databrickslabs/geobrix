@@ -18,7 +18,8 @@ from typing import Dict, Iterator, List, Tuple
 from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
 
-from databricks.labs.gbx.ds import _encode, _listing, _netcdf
+from databricks.labs.gbx._gdal_policy import open_bytes
+from databricks.labs.gbx.ds import _encode, _listing, _netcdf, _quarantine
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
 # Estimated decoded-bytes ceiling for bandDim stacking before a soft-warn is emitted.
@@ -26,6 +27,20 @@ from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reade
 # materialize cap (the Connect per-tile cap is 64 MiB via _connect_aware_lru_sizing).
 # This constant is module-level so tests can lower it via monkeypatch.
 _BANDDIM_WARN_BYTES: int = 256 * 1024 * 1024
+
+
+def _option(options: "object", name: str, default: str = "") -> str:
+    """Option ``name`` of a reader, whatever the case of the key.
+
+    Spark hands a Python reader its options case-insensitively: ``dict(options)`` of
+    them has lowercase keys (``dimindex``), while the option names here are camel case
+    (``dimIndex``). A plain dict (a test, a direct call) keeps the case it was given.
+    """
+    want = name.lower()
+    for key, value in dict(options).items():
+        if str(key).lower() == want:
+            return value
+    return default
 
 
 def _parse_dim_index(raw: str) -> Dict[str, int]:
@@ -103,7 +118,7 @@ def _encode_single_band_tile(
     """
     from rasterio.io import MemoryFile
 
-    arr = _netcdf.array_2d(ds, var, sel=sel if sel else None)
+    arr = _netcdf.fill_kept(_netcdf.array_2d(ds, var, sel=sel if sel else None), nodata)
 
     if sel:
         suffix = ",".join(f"{k}={v}" for k, v in sorted(sel.items()))
@@ -126,7 +141,7 @@ def _encode_single_band_tile(
     with MemoryFile() as mf:
         with mf.open(**profile) as out:
             out.write(arr.astype(profile["dtype"]), 1)
-        with mf.open() as rds:
+        with open_bytes(mf) as rds:
             cellid, raster_bytes, meta = _encode.encode_tile(
                 rds,
                 window=(0, 0, w, h),
@@ -158,10 +173,13 @@ def _encode_multiband_tile(
     Returns ``(source, (cellid, raster_bytes, meta))``.
     """
     import numpy as np
+    from rasterio.enums import ColorInterp
     from rasterio.io import MemoryFile
 
     # Decode the first slice to learn shape/dtype; write it to band 1.
-    first_arr = _netcdf.array_2d(ds, var, sel={**sel, band_dim: 0})
+    first_arr = _netcdf.fill_kept(
+        _netcdf.array_2d(ds, var, sel={**sel, band_dim: 0}), nodata
+    )
     h, w = first_arr.shape[-2], first_arr.shape[-1]
     dtype = str(first_arr.dtype)
 
@@ -207,14 +225,20 @@ def _encode_multiband_tile(
 
     with MemoryFile() as mf:
         with mf.open(**profile) as out:
+            # The steps of a variable are plain bands, none of them alpha. GDAL labels band 4
+            # of a 4-band uint8 GTiff alpha (and bands 1-3 of a 3-band one RGB) when it
+            # creates one, and ignores a label set after the pixels are written.
+            out.colorinterp = [ColorInterp.undefined] * n_bands
             out.write(first_arr.astype(dtype), 1)
             del first_arr
             for k in range(1, n_bands):
-                arr_k = _netcdf.array_2d(ds, var, sel={**sel, band_dim: k})
+                arr_k = _netcdf.fill_kept(
+                    _netcdf.array_2d(ds, var, sel={**sel, band_dim: k}), nodata
+                )
                 out.write(arr_k.astype(dtype), k + 1)
                 del arr_k
             out.descriptions = tuple(f"{band_dim}={c}" for c in band_coords)
-        with mf.open() as rds:
+        with open_bytes(mf) as rds:
             cellid, raster_bytes, meta = _encode.encode_tile(
                 rds,
                 window=(0, 0, w, h),
@@ -251,10 +275,13 @@ class NetcdfRasterReader(RasterGbxReader):
     def read(self, partition: "_FilePartition") -> Iterator[Tuple]:
         from itertools import product as _product
 
+        if _listing.is_empty_plan(partition):
+            return
+
         # Parse dimIndex, fanout, and bandDim options.
-        dim_index = _parse_dim_index(self.options.get("dimIndex", ""))
-        fanout_dims = _parse_fanout(self.options.get("fanout", ""))
-        band_dim = self.options.get("bandDim", "").strip()
+        dim_index = _parse_dim_index(_option(self.options, "dimIndex"))
+        fanout_dims = _parse_fanout(_option(self.options, "fanout"))
+        band_dim = _option(self.options, "bandDim").strip()
 
         # Overlap guards.
         overlap_df = set(dim_index) & set(fanout_dims)
@@ -275,13 +302,34 @@ class NetcdfRasterReader(RasterGbxReader):
                     "a dimension cannot be both stacked (bandDim) and expanded (fanout)."
                 )
 
+        # With read_paths' on_error="skip" (a hook on the reader) a variable, or
+        # one slice of it, that cannot be read is a bad record and the others
+        # are still read; without one it fails the read.
+        hook = _quarantine.hook_of(self)
+
+        def _bad(label: str, exc: BaseException) -> None:
+            if hook is None or isinstance(exc, _quarantine.PASS_THROUGH):
+                raise exc
+            _quarantine.reraise_environment(exc)  # memory, modules, I/O: not data
+            hook(label, _quarantine.error_class(exc), _quarantine.describe(exc))
+
+        if hook is not None:
+            short = _netcdf.classic_truncation(partition.file_path)
+            if short is not None:
+                hook(None, _quarantine.RECORDS_NOT_READ, short)
+                return
+
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
             variables = _netcdf.select_variables(ds, self.options, "raster")
 
             for var in variables:
-                transform, crs = _netcdf.grid_transform_crs(ds, var)
-                nodata = _netcdf.nodata_of(ds, var)
-                var_ldims = dict(_netcdf.leading_dims(ds, var))
+                try:
+                    transform, crs = _netcdf.grid_transform_crs(ds, var)
+                    nodata = _netcdf.nodata_of(ds, var)
+                    var_ldims = dict(_netcdf.leading_dims(ds, var))
+                except BaseException as exc:  # noqa: BLE001 - see _bad
+                    _bad(f"variable={var}", exc)
+                    continue
 
                 # Per-variable typo warning (includes bandDim in the check).
                 if var_ldims and (dim_index or fanout_dims or band_dim):
@@ -323,29 +371,37 @@ class NetcdfRasterReader(RasterGbxReader):
                     for dname, idx in zip(fanout_names, combo):
                         sel[dname] = idx
 
-                    if band_dim_for_var:
-                        n_bands = var_ldims[band_dim_for_var]
-                        source, tile = _encode_multiband_tile(
-                            ds,
-                            var,
-                            sel,
-                            band_dim_for_var,
-                            n_bands,
-                            transform,
-                            crs,
-                            nodata,
-                            partition.file_path,
+                    try:
+                        if band_dim_for_var:
+                            n_bands = var_ldims[band_dim_for_var]
+                            source, tile = _encode_multiband_tile(
+                                ds,
+                                var,
+                                sel,
+                                band_dim_for_var,
+                                n_bands,
+                                transform,
+                                crs,
+                                nodata,
+                                partition.file_path,
+                            )
+                        else:
+                            source, tile = _encode_single_band_tile(
+                                ds,
+                                var,
+                                sel,
+                                transform,
+                                crs,
+                                nodata,
+                                partition.file_path,
+                            )
+                    except BaseException as exc:  # noqa: BLE001 - see _bad
+                        _bad(
+                            f"variable={var}"
+                            + "".join(f",{d}={i}" for d, i in sorted(sel.items())),
+                            exc,
                         )
-                    else:
-                        source, tile = _encode_single_band_tile(
-                            ds,
-                            var,
-                            sel,
-                            transform,
-                            crs,
-                            nodata,
-                            partition.file_path,
-                        )
+                        continue
 
                     yield (source, tile)
 

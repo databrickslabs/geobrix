@@ -31,7 +31,7 @@ case class Custom_AsWKT(
         val gridVal = gridExpr.eval(input)
         if (gridVal == null) return null
 
-        val cell = cellVal.asInstanceOf[Long]
+        val cell = Custom_GridSpec.asLong(cellVal, "cell")
         val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
 
         GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(JTS.toWKT(sys.cellIdToGeometry(cell))))

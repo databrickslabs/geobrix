@@ -8,11 +8,6 @@ rasters under src/test/resources/binary/ (shown in the docs as GTIFF_SAMPLE_DIR
 etc.). No /Volumes mount or path_config import is needed.
 """
 
-try:
-    from databricks.labs.gbx.pyrx import functions as rx
-except ImportError:
-    rx = None
-
 # Committed sample rasters (resolved from the repo root) that the Setup example
 # loads. In the rendered docs these appear as GTIFF_SAMPLE_DIR / GTIFF_MULTI_DIR /
 # DTM_DIR / NETCDF_DIR placeholders — a reader points them at their own files.
@@ -67,9 +62,11 @@ def _tile_df(spark, **kw):
     """One-row DataFrame with a tile struct column named 'tile'."""
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx.rasterx import functions as rx_api
+
     raster = _make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 # ---------------------------------------------------------------------------
@@ -78,19 +75,16 @@ def _tile_df(spark, **kw):
 
 
 def pyrx_setup_example(spark):
-    """Register pyrx and load each sample raster into a `tile` DataFrame + temp view.
+    """Register GeoBrix and load each sample raster into a `tile` DataFrame + temp view.
 
     Assumes the geobrix wheel is already installed (see the Installation guide).
     The examples on this page read from four temp views; this builds all of them.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
-    from databricks.labs.gbx.ds.register import register as register_readers
+    from databricks.labs.gbx import register
 
-    rx.register(spark)
-    # Register the lightweight Python DataSource readers (raster_gbx / gtiff_gbx /
-    # netcdf_gbx / cog_gbx). Pure-Python, no JAR — the light-tier counterpart of the
-    # heavy gdal / gtiff_gdal / netcdf_gdal readers.
-    register_readers(spark)
+    # One call registers every gbx_* SQL function and the Python DataSource readers
+    # (raster_gbx / gtiff_gbx / netcdf_gbx / cog_gbx).
+    register(spark)
 
     GTIFF_SAMPLE_DIR = _SAMPLE_PATHS["gtiff"]
     GTIFF_MULTI_DIR = _SAMPLE_PATHS["gtiff_multi"]
@@ -126,7 +120,7 @@ Every example on this page reads from one of these views.
 
 def pyrx_accessors_example(spark):
     """Read basic raster properties from the tile struct."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     tile_df = _tile_df(spark, width=4, height=3, count=2, epsg=4326)
     row = tile_df.select(
@@ -150,7 +144,7 @@ Row(width=4, height=3, srid=4326, bands=2)
 
 def pyrx_transform_example(spark):
     """Reproject the raster tile to a target CRS (EPSG:3857)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     tile_df = _tile_df(spark, epsg=4326)
     out = tile_df.select(rx.rst_transform("tile", 3857).alias("t"))
@@ -173,7 +167,7 @@ def pyrx_clip_example(spark):
     import shapely.wkb
     from pyspark.sql import functions as f
     from shapely.geometry import box
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     tile_df = _tile_df(spark, width=4, height=3, epsg=4326)
     # Clip to a 1 x 0.5 degree box — smaller than the full 2 x 1.5 degree extent.
@@ -200,15 +194,15 @@ Clipped tile is smaller than the original 4 x 3 (e.g. Row(w=2, h=1)).
 def pyrx_polygonize_example(spark):
     """Extract vector polygons from contiguous equal-value regions in the raster.
 
-    rst_polygonize (pyrx) is a streaming Python UDTF. Register first, then query
-    with a SQL LATERAL table function — this avoids buffering all polygons in
-    memory (unbounded fan-out OOM guard).
+    rst_polygonize is a table function over GDAL's raster polygonize. Register
+    first, then query it with a SQL LATERAL join: one row per region.
     """
+    from databricks.labs import gbx
     import numpy as np
     from pyspark.sql import functions as f
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     # Build a 4 x 4 raster with a 2 x 2 block of value 5.0 in the centre;
     # all other pixels are NoData so polygonize traces only the filled region.
@@ -230,10 +224,10 @@ def pyrx_polygonize_example(spark):
         raster_bytes = mf.read()
 
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
-    # rst_polygonize is a streaming Python UDTF; invoke via SQL LATERAL.
-    rx.register(spark)
+    # rst_polygonize is a table function; invoke via SQL LATERAL.
+    gbx.register(spark)
     tile_df.createOrReplaceTempView("_pyrx_poly_demo")
     rows = spark.sql(
         "SELECT t.value FROM _pyrx_poly_demo, LATERAL gbx_rst_polygonize(tile, 1, 4) t"
@@ -256,20 +250,22 @@ def pyrx_land_cover_example(spark):
     region to polygons.
 
     ``rst_land_cover`` assigns each pixel a class id -- an index into
-    ``land_cover.DEFAULT_CLASSES`` (``["vegetation", "bare", "impervious",
-    "dark"]``); NoData/unclassified pixels are ``-1``. The class-mask tile it
+    the class scheme ``["vegetation", "bare", "impervious",
+    "dark"]``; NoData/unclassified pixels are ``-1``. The class-mask tile it
     returns is single-band Int32, so it composes with ``rst_polygonize`` (a
     streaming Python UDTF) exactly like any other single-band tile --
     ``rst_land_cover`` is also registered as ``gbx_rst_land_cover`` in SQL.
     """
+    from databricks.labs import gbx
     import numpy as np
     import shapely.wkb
     from pyspark.sql import functions as f
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
     from databricks.labs.gbx.core.crs import area_m2
-    from databricks.labs.gbx.pyrx import functions as rx
-    from databricks.labs.gbx.pyrx.core.land_cover import DEFAULT_CLASSES
+    from databricks.labs.gbx.rasterx import functions as rx_api
+    # The class scheme: a class id is an index into this list.
+    classes = ["vegetation", "bare", "impervious", "dark"]
 
     # Build a 32 x 32, 3-band (RGB) uint8 raster with two regions: left half
     # green (-> vegetation), right half bright/gray (-> bare).
@@ -296,23 +292,23 @@ def pyrx_land_cover_example(spark):
         raster_bytes = mf.read()
 
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     lc_df = tile_df.select(
-        rx.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
+        rx_api.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
     )
 
     # rst_land_cover is also registered as gbx_rst_land_cover in SQL; the
     # resulting class-mask tile further composes with the registered streaming
     # UDTF gbx_rst_polygonize, invoked via SQL LATERAL.
-    rx.register(spark)
+    gbx.register(spark)
     lc_df.createOrReplaceTempView("_pyrx_land_cover_demo")
     rows = spark.sql(
         "SELECT t.geom_wkb AS g, t.value AS v FROM _pyrx_land_cover_demo, "
         "LATERAL gbx_rst_polygonize(lc, 1, 4) t"
     ).collect()
 
-    # value -> class name via the fixed DEFAULT_CLASSES scheme.
-    class_names = {int(r["v"]): DEFAULT_CLASSES[int(r["v"])] for r in rows}
+    # value -> class name via the class scheme.
+    class_names = {int(r["v"]): classes[int(r["v"])] for r in rows}
 
     # min_area is not an rst_polygonize / rst_land_cover parameter -- apply it
     # as a post-polygonize filter, in metric square meters, via
@@ -331,7 +327,49 @@ def pyrx_land_cover_example(spark):
 pyrx_land_cover_example_output = """
 Two contiguous regions traced from the class-mask tile, e.g.:
 [Row(g=<wkb bytes>, v=0), Row(g=<wkb bytes>, v=1)]
-class_names -> {0: "vegetation", 1: "bare"}  (id -> DEFAULT_CLASSES[id])
+class_names -> {0: "vegetation", 1: "bare"}  (id -> classes[id])
+"""
+
+
+def rst_land_cover_python_example(spark):
+    """Classify an RGB tile with the spectral thresholds and read the class ids."""
+    import numpy as np
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+    from databricks.labs.gbx.rasterx import functions as rx_api
+    from databricks.labs.gbx.rasterx import helpers
+
+    # A 2 x 2 RGB tile: a green pixel, a light pixel, a grey pixel and a dark one.
+    a = np.array(
+        [[[30, 210], [100, 30]], [[200, 205], [100, 30]], [[40, 200], [100, 30]]],
+        np.uint8,
+    )
+    profile = dict(
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 2, 1, 1),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(a)
+        raster_bytes = mf.read()
+    df = spark.createDataFrame([(raster_bytes,)], ["raster"])
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    lc = tile_df.select(
+        rx_api.rst_land_cover("tile", "spectral", 6, 0).alias("tile")
+    ).first()["tile"]
+    return helpers.tile_to_numpy(lc)
+
+
+rst_land_cover_python_example_output = """
+[[[0 1]
+  [2 3]]]
+(class ids: 0 vegetation, 1 bare, 2 impervious, 3 dark; -1 is NoData)
 """
 
 
@@ -342,14 +380,15 @@ class_names -> {0: "vegetation", 1: "bare"}  (id -> DEFAULT_CLASSES[id])
 
 def pyrx_sql_example(spark):
     """Register pyrx SQL functions and query them from Spark SQL."""
+    from databricks.labs import gbx
     from pyspark.sql import functions as f
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx.register(spark)
 
     raster_bytes = _make_geotiff_bytes(width=4, height=3, count=2, epsg=4326)
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     tile_df.createOrReplaceTempView("rasters_sql")
 
     result = spark.sql(

@@ -5,7 +5,7 @@ from pyspark.sql.types import IntegerType, StructField, StructType
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
-from databricks.labs.gbx.pyrx.functions import rst_apply, tile_to_numpy
+from databricks.labs.gbx.rasterx.helpers import rst_apply, tile_to_numpy
 
 
 def test_tile_to_numpy_bytes_and_struct_agree():
@@ -36,3 +36,21 @@ def test_rst_apply_null_tile_returns_null(spark):
     )
     out = df.select(rst_apply("tile", lambda ds: 1.0).alias("v")).collect()
     assert out[0]["v"] is None
+
+
+def test_rst_apply_takes_a_ddl_string_return_type_as_its_data_type(spark, monkeypatch):
+    """The Arrow form of the UDF builds its output from a DataType: a DDL string is parsed before it gets there."""
+    from pyspark.sql.types import DoubleType
+
+    from databricks.labs.gbx import _transport
+
+    seen = []
+    real = _transport.SessionTileUdf
+
+    def spy(func, return_type, *a, **k):
+        seen.append(return_type)
+        return real(func, return_type, *a, **k)
+
+    monkeypatch.setattr(_transport, "SessionTileUdf", spy)
+    rst_apply("tile", lambda ds: 1.0, returnType="double")
+    assert seen == [DoubleType()]

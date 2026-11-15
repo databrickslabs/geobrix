@@ -39,7 +39,7 @@ class GridSystemKLoopTest extends AnyFunSuite {
         r1.intersect(r2) shouldBe empty
     }
 
-    // M1: cross-grid k=0 contract via GridSystem trait
+    // cross-grid k=0 contract via GridSystem trait
     test("BNG kLoop(cell, 0) returns Seq(cellID) via GridSystem trait") {
         // TQ388792 is a valid interior BNG cell
         val cell: Long = BNG.parse("TQ388792")

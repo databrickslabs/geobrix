@@ -10,7 +10,7 @@
 # healthy, freshly-cached server instead of a broken one.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 
 source "$SCRIPT_DIR/common.sh"
 
@@ -32,7 +32,7 @@ onBrokenLinks='warn', so broken internal links are reported but the build
 still exits 0 (this keeps the routine build + dev-server-restart flow from
 being blocked by a stray broken link). Pass --strict for a green validation
 gate (pre-push / CI): the command then exits non-zero if Docusaurus reports
-ANY broken link. Either way, a running dev server is still restarted so
+ANY broken link or broken anchor. Either way, a running dev server is still restarted so
 port 3000 is never left down.
 
 USAGE:
@@ -98,15 +98,23 @@ setup_log_file "$LOG_PATH"
 
 # Detect a running dev server (shared helper reads /tmp/docusaurus-<port>.pid).
 # Capture the port(s) so we can bring the server back up on the same one.
+# Only this checkout's servers share its docs/.docusaurus cache; another checkout's is left running.
 RUNNING_PORTS=()
 while IFS= read -r port; do
-    [ -n "$port" ] && RUNNING_PORTS+=("$port")
+    [ -n "$port" ] || continue
+    if gbx_docs_port_is_mine "$port" "$PROJECT_ROOT"; then
+        RUNNING_PORTS+=("$port")
+    else
+        echo -e "${YELLOW}Leaving the server on port $port alone (not started from this checkout).${NC}"
+    fi
 done < <(detect_docs_dev_servers)
 
 if [ ${#RUNNING_PORTS[@]} -gt 0 ]; then
     echo -e "${CYAN}Dev server running on port(s): ${YELLOW}${RUNNING_PORTS[*]}${NC}"
     echo -e "${CYAN}Stopping it so the build doesn't corrupt its .docusaurus cache...${NC}"
-    bash "$SCRIPT_DIR/gbx-docs-stop.sh"
+    for port in "${RUNNING_PORTS[@]}"; do
+        bash "$SCRIPT_DIR/gbx-docs-stop.sh" --port "$port"
+    done
     sleep 2
 fi
 
@@ -118,7 +126,7 @@ rm -rf "$PROJECT_ROOT/docs/.docusaurus" "$PROJECT_ROOT/docs/build"
 
 echo -e "${CYAN}Running npm run build...${NC}"
 if [ "$STRICT" = true ]; then
-    echo -e "${CYAN}(strict mode: broken links will FAIL the build)${NC}"
+    echo -e "${CYAN}(strict mode: broken links and anchors will FAIL the build)${NC}"
 fi
 show_separator
 
@@ -131,9 +139,11 @@ npm run build 2>&1 | tee "$BUILD_OUT"
 EXIT_CODE=${PIPESTATUS[0]}
 
 # Docusaurus prints "found broken links!" / "broken links found:" / "Broken
-# link on source page ..." when any internal link fails to resolve.
+# link on source page ..." when any internal link fails to resolve, and
+# "found broken anchors!" / "Broken anchor on source page ..." when a link's
+# #fragment names no anchor on its target page (onBrokenAnchors also warns).
 BROKEN_LINKS=false
-if grep -qiE "broken link" "$BUILD_OUT"; then
+if grep -qiE "broken (link|anchor)" "$BUILD_OUT"; then
     BROKEN_LINKS=true
 fi
 rm -f "$BUILD_OUT"
@@ -144,12 +154,12 @@ if [ $EXIT_CODE -ne 0 ]; then
     echo -e "${RED}❌ Docs build failed (exit code: $EXIT_CODE).${NC}"
 elif [ "$BROKEN_LINKS" = true ]; then
     if [ "$STRICT" = true ]; then
-        echo -e "${RED}❌ Docs build (--strict): Docusaurus reported BROKEN LINKS (listed above).${NC}"
+        echo -e "${RED}❌ Docs build (--strict): Docusaurus reported BROKEN LINKS or ANCHORS (listed above).${NC}"
         EXIT_CODE=1
     else
-        echo -e "${YELLOW}⚠️  Docs build compiled, but Docusaurus reported BROKEN LINKS.${NC}"
+        echo -e "${YELLOW}⚠️  Docs build compiled, but Docusaurus reported BROKEN LINKS or ANCHORS.${NC}"
         echo -e "${YELLOW}    onBrokenLinks='warn' → the build still exits 0. Re-run with --strict to fail on this,${NC}"
-        echo -e "${YELLOW}    and grep the output above for 'broken link' to see them.${NC}"
+        echo -e "${YELLOW}    and grep the output above for 'broken link' / 'broken anchor' to see them.${NC}"
     fi
 else
     echo -e "${GREEN}✅ Docs build succeeded (MDX compiles, all links resolve).${NC}"

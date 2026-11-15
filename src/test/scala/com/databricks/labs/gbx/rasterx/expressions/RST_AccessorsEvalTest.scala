@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.DataFrame
@@ -14,7 +15,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -22,34 +23,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
             val base = df.cache()
             base.collect()
             Seq(
-              rst_avg(col("raster")),
-              rst_bandmetadata(col("raster"), lit(1)),
-              rst_boundingbox(col("raster")),
-              rst_format(col("raster")),
-              rst_georeference(col("raster")),
-              rst_getnodata(col("raster")),
-              rst_height(col("raster")),
-              rst_max(col("raster")),
-              rst_median(col("raster")),
-              rst_memsize(col("raster")),
-              rst_metadata(col("raster")),
-              rst_min(col("raster")),
-              rst_numbands(col("raster")),
-              rst_pixelcount(col("raster")),
-              rst_pixelheight(col("raster")),
-              rst_pixelwidth(col("raster")),
-              rst_rotation(col("raster")),
-              rst_scalex(col("raster")),
-              rst_scaley(col("raster")),
-              rst_skewx(col("raster")),
-              rst_skewy(col("raster")),
-              rst_srid(col("raster")),
-              rst_subdatasets(col("raster")),
-              rst_summary(col("raster")),
-              rst_type(col("raster")),
-              rst_upperleftx(col("raster")),
-              rst_upperlefty(col("raster")),
-              rst_width(col("raster"))
+              rst_boundingbox(col("raster"))
             ).foreach(f => base.select(f).collect())
             base.unpersist()
         }
@@ -70,91 +44,18 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
 
         noException should be thrownBy runQuery(df2)
 
-        val netCDFPath = this.getClass.getResource("/binary/netcdf-CMIP5/").toString
-
-        val df3: DataFrame = Seq(
-          (1, s"$netCDFPath/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc")
-        ).toDF("id", "path")
-            .withColumn("raster", udfs.rasterFromPath(col("path"), "NetCDF"))
-            .withColumn("subds", rst_getsubdataset(col("raster"), lit("prAdjust")))
-
-        noException should be thrownBy df3.collect()
-
     }
 
-    test("RST_Width returns NULL (not 0) on a corrupt raster") {
+    test("RST_BoundingBox returns NULL on a corrupt raster") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_width(col("raster")).as("w")).collect()
-        assert(res.head.get(0) == null, "corrupt raster width must be NULL, not the 0 sentinel")
-    }
-
-    test("RST_Height returns NULL (not -1) on a corrupt raster") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_height(col("raster")).as("h")).collect()
-        assert(res.head.get(0) == null, "corrupt raster height must be NULL, not the -1 sentinel")
-    }
-
-    test("RST_MemSize returns NULL (not -1L) on a corrupt raster") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_memsize(col("raster")).as("m")).collect()
-        assert(res.head.get(0) == null, "corrupt raster memsize must be NULL, not the -1L sentinel")
-    }
-
-    test("RST_ScaleX returns NULL (not NaN) on a corrupt raster") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_scalex(col("raster")).as("sx")).collect()
-        assert(res.head.get(0) == null, "corrupt raster scalex must be NULL, not NaN sentinel")
-    }
-
-    test("RST_SRID returns NULL (not 0) on a corrupt raster") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
-        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_srid(col("raster")).as("s")).collect()
-        assert(res.head.get(0) == null, "corrupt raster SRID must be NULL, not 0")
-    }
-
-    test("RST_SRID returns real EPSG code (non-null, non-zero) for a valid EPSG raster") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-        // chicago_sp27.tif has EPSG:26771 — a known non-zero SRID, proving execute()'s happy path is untouched.
-        val tifPath = this.getClass.getResource("/binary/geotiff-small/chicago_sp27.tif").toString
-        val df = spark.read
-            .format("binaryFile")
-            .load(tifPath)
-            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_srid(col("raster")).as("s")).collect()
-        val srid = res.head.get(0)
-        assert(srid != null, "valid EPSG raster SRID must not be NULL")
-        assert(srid.asInstanceOf[Int] != 0, "valid EPSG raster SRID must not be 0")
-        assert(srid.asInstanceOf[Int] == 26771, s"expected EPSG:26771 but got $srid")
+        val res = df.select(rst_boundingbox(col("raster")).as("b")).collect()
+        assert(res.head.get(0) == null, "corrupt raster bounding box must be NULL")
     }
 
 }

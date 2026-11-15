@@ -1,6 +1,8 @@
-# Source of truth for the protobuf-6 CI lock (Serverless env 6 / classic DBR 19).
-# Covers: light_env6, light_dbr19 — all alias geobrix[light_dbr19], the canonical
-# pb6 extra.  THIS IS THE PRIMARY CI LIGHT LOCK (pyrx_build action).
+# Source of truth for the protobuf-6 CI lock: the light tier at the versions the env6 runtime
+# family (Serverless env 6 / classic DBR 19) preinstalls. On Databricks those runtimes install
+# the env6 wheel; this lock tests the plain wheel's light tier (its base dependencies,
+# pyproject.toml) off Databricks with the same versions. THIS IS THE PRIMARY CI LIGHT LOCK
+# (pyrx_build action).
 # Protobuf-5 twin: requirements-light-env5-ci.in (env5 + dbr17 + dbr18).
 #
 # Consumed by .github/actions/pyrx_build via:
@@ -19,7 +21,7 @@
 
 # --- build backend (for `python -m build` lightweight wheel) ---
 build==1.6.1
-setuptools==83.0.0
+setuptools==84.2.1
 wheel==0.46.2
 
 # --- runtime: pyspark local mode + pandas_udf (Arrow) ---
@@ -31,7 +33,7 @@ pyspark==4.0.0
 numpy==2.3.4
 pandas==2.3.3
 pyarrow==21.0.0
-# urllib3 pinned to the Serverless env 6 / DBR 19 base version; cap <2.6 (pyproject [light_dbr19]).
+# urllib3 pinned to the Serverless env 6 / DBR 19 base version (the env6 wheel's cap is <2.6).
 urllib3==2.5.0
 
 # --- lightweight raster stack (rasterio ships bundled GDAL — no native install) ---
@@ -40,21 +42,18 @@ shapely==2.1.2
 
 # --- entity-hardened XML parsing for external GDAL .vrt mosaic indexes ---
 # (raster_gbx VRT expansion; guards untrusted .vrt against XXE / billion-laughs).
-# Dep-free, pure Python. Matches the [light-base] pyproject floor + dev container.
+# Dep-free, pure Python. Matches the pyproject base-dependency floor + dev container.
 defusedxml==0.7.1
 
-# --- band math: focal filters / convolution (scipy.ndimage) + map-algebra (numexpr) ---
+# --- band math: focal filters / convolution (scipy.ndimage) + numexpr (rio-tiler imports it) ---
 # scipy pinned to the DBR 19 / Serverless env 6 installed version. numexpr is NOT in DBR's
-# library set, so it is pinned independently (safe math-expression evaluator for
-# rst_mapalgebra — no arbitrary-code exec).
+# library set, so it is pinned independently (rio_tiler.expression imports it).
 scipy==1.16.3
-numexpr==2.11.0
+numexpr==2.14.2
 
 # --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---
-rio-tiler==9.0.6
-
-# --- COG output (rst_cog_convert) ---
-rio-cogeo==7.0.2
+# The newest release the extras admit (rio-tiler>=9.0,<10): CI tests what users install.
+rio-tiler==9.4.12
 
 # --- PMTiles tile-archive output (pmtiles_gbx writer) ---
 pmtiles==3.7.0
@@ -64,7 +63,7 @@ pyogrio==0.13.0
 pyproj==3.7.2
 
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
-# MUST match pyproject [light_env6] (alias of [light_dbr19]): mapbox-vector-tile>=2.2
+# MUST match the env6 wheel's vendored mapbox-vector-tile (envs/env6/vendor-pure.txt): 2.2.x
 # Protobuf-6 env; no <2.2 cap needed.  Confirmed on Serverless env 6 2026-08-23.
 mapbox-vector-tile==2.2.0
 
@@ -72,15 +71,26 @@ mapbox-vector-tile==2.2.0
 h3==4.5.0
 quadbin==0.2.2
 
-# --- contour (scikit-image) + viewshed (xarray-spatial) ---
-scikit-image==0.26.0
-xarray-spatial==0.9.9
-
 # --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
-# ERA5). xarray comes transitively via xarray-spatial; netcdf4 is the one new
-# engine (single wheel bundling netcdf-c + HDF5). Pulls cftime. Keep in lockstep
-# with the pyproject [light-base] floor and requirements-dev-container.in. ---
-netcdf4==1.7.2
+# ERA5): xarray with the netcdf4 engine (single wheel bundling netcdf-c + HDF5;
+# pulls cftime). Keep in lockstep with the pyproject base-dependency floors, and netcdf4 with
+# requirements-dev-container.in (where xarray comes through rioxarray). ---
+xarray==2026.7.0
+netcdf4==1.7.4
+
+# --- Zarr transactional stores (test/zarr): the [zarr_dbr19] / [zarr_env6] extras. Ranges MUST
+# match pyproject [zarr_dbr19]; the lock records the exact resolved versions + hashes. xarray
+# (the fixture writer) is pinned above. The extra targets DBR 19 / env 6,
+# so it has no env5 twin. (delta-spark for the manifest tests is a JAR, not a pip package: CI
+# fetches it with scripts/ci/fetch-delta-test-jars.sh.) ---
+zarr>=3.4.1,<3.5
+numcodecs>=0.17,<0.18
+zarrs>=0.2.3,<0.3
+tensorstore>=0.1.85,<0.2
+obstore>=0.11,<0.13
+ml_dtypes>=0.5,<1
+msgspec>=0.19,<1
+donfig>=0.8,<1
 
 # --- STAC light client deps the test/stac suite actually imports: requests
 # (stac/_download.py, module top) + tenacity (stac/_search.py search_one retry,
@@ -89,13 +99,12 @@ netcdf4==1.7.2
 # stub + monkeypatch), which is why they stay out of this light lock. tenacity
 # matches requirements-dev-container.in; requests is bumped ABOVE the dev-container
 # pin to clear its CVE (fix 2.33.0). 2.33.0's deps (urllib3<3,>=1.26 / idna<4,>=2.5)
-# stay within the env6 base caps, so this does not disturb the pinned urllib3/idna. ---
+# stay within the env6 urllib3 cap, so this does not disturb the pinned urllib3. ---
 requests==2.34.2
 tenacity==9.1.4
-# MUST match pyproject [light_env6] (alias of [light_dbr19]): idna<3.12
-# Serverless env 6 / DBR 19 base is idna 3.11; cap <3.12 silences the
-# "a core package changed: idna" notebook notice. idna 3.x is API-stable; cosmetic.
-idna<3.12
+# idna is NOT capped: the patched httpx2 (rio-tiler's HTTP
+# client, 2.12+) requires idna>=3.18, and the runtime base is idna 3.11. The lock resolves it;
+# an install upgrades the runtime's idna (a one-time "core package changed" notice on Databricks).
 # earthaccess is kept here for test/earthdata + test/stac CI coverage; it is now the
 # [earthdata] extra (not part of shipped _all wheels — pulled explicitly by EMIT users).
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
@@ -126,7 +135,7 @@ geopandas==1.1.4
 mapclassify==2.10.0
 contextily==1.6.2
 anywidget==0.9.18
-tippecanoe==2.45.0
+tippecanoe==2.72.0
 # IPython is what the Databricks/Jupyter runtime provides; gbx.vizx.plot_interactive
 # reaches displayHTML through it (IPython.get_ipython user_ns) and falls back to
 # IPython.display. test/vizx/test_interactive.py exercises both paths, so the light
@@ -134,13 +143,25 @@ tippecanoe==2.45.0
 ipython==9.7.0
 
 # --- LiDAR point-cloud reading (laspy + pure-Rust LAZ backend) ---
-laspy==2.5.4
-lazrs==0.6.3
+laspy==2.7.0
+lazrs==0.8.2
 
 # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
-# Pure-Python; no native dep. Part of [light-base]; available without [photogrammetry].
+# Pure-Python; no native dep. A base dependency; available without [photogrammetry].
 exifread>=3.0,<4
 
 # --- test runner (light-CI only; dev-container / notebooks harness stay on 8.4.2
-# until a coordinated all-manifests bump). 9.0.3 clears CVE-2025-71176 (tmpdir). ---
-pytest==9.0.3
+# until a coordinated all-manifests bump). 9.1.1 is the latest stable. ---
+pytest==9.1.1
+
+# --- transitive packages floored at their security-patched releases ---
+# GeoBrix declares only pillow directly (pyproject.toml: pillow>=11.1.0, the lowest runtime base); certifi comes
+# in through requests and httpx2, aiohttp and multidict through earthaccess -> s3fs -> aiobotocore.
+# A floor stops a regenerated lock from resolving below the patched release. CI-only: the
+# declared pillow floor and the shipped extras (pyproject.toml) keep their ranges, and pip leaves the
+# runtime's own pillow (11.1.0 on DBR 17.3/18/env 5, 12.0.0 on DBR 19/env 6) in place, because nothing GeoBrix
+# installs requires a newer one.
+pillow>=13.0.0
+certifi>=2026.10.19
+aiohttp>=3.14.4
+multidict>=6.9.1

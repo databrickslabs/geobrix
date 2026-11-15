@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.databricks.labs</groupId>
     <artifactId>geobrix</artifactId>
-    <version>0.5.2</version>
+    <version>0.6.0</version>
     <name>GeoBrix</name>
     <description>High-performance spatial processing library for Databricks (GDAL, Spark). Raster, Grid, and Vector packages.</description>
     <url>https://databrickslabs.github.io/geobrix/</url>
@@ -16,6 +16,12 @@
     </scm>
 
     <properties>
+        <!-- jackson-databind (provided) must be the Spark build's own version: 2.18.2 for Spark 4.0.0.
+             Override with -Djackson.version=... when building against another Spark (Spark 4.3: 2.21.2). -->
+        <jackson.version>2.18.2</jackson.version>
+        <!-- Build output directory. A Spark compat build (gbx:test:scala with a spark-version option) points
+             it elsewhere so it never touches the default target/ and its JARs. -->
+        <gbx.build.dir>${project.basedir}/target</gbx.build.dir>
         <!-- Build Configuration -->
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
@@ -54,7 +60,7 @@
           rejects, so a non-empty no-op tag is used instead.
 
           `com.databricks.labs.gbx.bench.RequiresProjIsolation` tags the two
-          transform-layer tests in RST_TransformCrsGridSpec that need a fresh JVM:
+          transform-layer tests in RegisteredProjGridSpec that need a fresh JVM:
           PROJ freezes its grid-lookup cache process-globally on first use, so
           these tests only produce a meaningful result in an isolated JVM (via
           `-Dsuites=<single spec>` + the NoOpExcludeSentinel override).
@@ -77,13 +83,22 @@
         <spec2.version>4.2.0</spec2.version>
         <!-- Lint: set -Dscalastyle.fail=false in CI when lint should not fail the build (e.g. non-main PRs) -->
         <scalastyle.fail>true</scalastyle.fail>
+        <!-- GDAL's Java classes from the native build that makes the env wheel's JNI: <GDAL_VERSION>-gbx<GBX_NATIVE_REVISION>
+             of scripts/native/pins.conf (pins.py audit checks it). The jar is scripts/native/maven/gdal-<this>.jar, in no
+             repository: `python3 scripts/native/java_jar.py install` puts it into the local one, sha256-checked against
+             its pin, once per checkout and after every bump (the dev container's Maven setup and CI run it). -->
+        <gdal.java.version>3.13.3-gbx1</gdal.java.version>
     </properties>
 
     <dependencies>
+        <!-- provided: Databricks Runtime and pyspark ship scala-library. A bundled copy shadows the
+             runtime's newer one from /databricks/jars (DCS, DBR 19). Guarded by
+             scripts/ci/check_jar_packaging.py. -->
         <dependency>
             <groupId>org.scala-lang</groupId>
             <artifactId>scala-library</artifactId>
             <version>${scala.version}</version>
+            <scope>provided</scope>
         </dependency>
         <!-- Test -->
         <dependency>
@@ -101,7 +116,7 @@
         <dependency>
             <groupId>org.scalamock</groupId>
             <artifactId>scalamock_${scala.compat.version}</artifactId>
-            <version>7.5.5</version>
+            <version>7.6.0</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -155,20 +170,22 @@
             <version>2.4.0</version>
             <scope>provided</scope>
         </dependency>
-        <!-- JSON for function-info (DESCRIBE FUNCTION examples); must match Spark 4.x / jackson-module-scala (>= 2.18.0) -->
+        <!-- JSON for function-info (DESCRIBE FUNCTION examples); must match the Spark jackson-module-scala.
+             jackson.version defaults to the Spark 4.0.0 value; a compat build overrides it with the
+             Spark version's own (see the spark-version option of gbx:test:scala). -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.18.2</version>
+            <version>${jackson.version}</version>
             <scope>provided</scope>
         </dependency>
         <!--geo dependencies-->
         <dependency>
             <groupId>com.uber</groupId>
             <artifactId>h3</artifactId>
-            <!--H3 fixed at 3.7.0 until Photon updates the version-->
+            <!--H3 3.7.3 matches the h3 that DBR 17.3, 18 and 19 ship (Installed Java libraries)-->
             <!--suppress MavenPackageUpdate-->
-            <version>3.7.0</version>
+            <version>3.7.3</version>
         </dependency>
         <dependency>
             <groupId>org.locationtech.jts</groupId>
@@ -181,26 +198,31 @@
             <version>1.20.0</version>
         </dependency>
         <dependency>
-            <groupId>org.locationtech.proj4j</groupId>
-            <artifactId>proj4j-epsg</artifactId>
-            <version>1.4.3</version>
-        </dependency>
-        <dependency>
-            <groupId>org.locationtech.proj4j</groupId>
-            <artifactId>proj4j</artifactId>
-            <version>1.3.0</version>
-        </dependency>
-        <dependency>
             <groupId>org.gdal</groupId>
             <artifactId>gdal</artifactId>
-            <version>3.11.0</version>
+            <version>${gdal.java.version}</version>
         </dependency>
 
     </dependencies>
 
     <build>
+        <directory>${gbx.build.dir}</directory>
         <sourceDirectory>src/main/scala</sourceDirectory>
         <testSourceDirectory>src/test/scala</testSourceDirectory>
+        <resources>
+            <resource>
+                <directory>${basedir}/src/main/resources</directory>
+            </resource>
+            <!-- The function manifest, packed into the JAR: the GDAL spec engine reads its specs from this copy,
+                 and the manager refuses a JAR that is not the wheel's, so the two copies cannot drift. -->
+            <resource>
+                <directory>${basedir}/python/geobrix/src/databricks/labs/gbx/manifest</directory>
+                <targetPath>com/databricks/labs/gbx/manifest</targetPath>
+                <includes>
+                    <include>functions.json</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Add docs/tests/scala as additional test source directory -->
             <plugin>
@@ -267,8 +289,11 @@
                         </goals>
                         <configuration>
                             <rules>
+                                <!-- The floor is the version .mvn/wrapper/maven-wrapper.properties pins,
+                                     so a different Maven cannot build what CI builds. -->
                                 <requireMavenVersion>
-                                    <version>[3.8.0,)</version>
+                                    <version>[3.9.16,)</version>
+                                    <message>This repo needs the Maven version pinned in .mvn/wrapper/maven-wrapper.properties or newer. On the host and in CI, run ./mvnw instead of mvn (it downloads and checksum-verifies the pinned Maven). Inside the geobrix-dev container ./mvnw cannot work; the image's Maven is out of date, so rebuild the image with gbx:docker:rebuild.</message>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
                                     <version>[17,)</version>
@@ -457,12 +482,12 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-deploy-plugin</artifactId>
-                <version>3.1.4</version>
+                <version>3.2.0</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-clean-plugin</artifactId>
-                <version>3.2.0</version>
+                <version>3.5.0</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

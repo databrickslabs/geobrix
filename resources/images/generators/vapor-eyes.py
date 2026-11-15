@@ -371,7 +371,7 @@ NOTEBOOKS = {
         ],
         chips=["h3_boundaryaswkb", "gbx_st_asmvt_pyramid", "gbx_pmtiles_agg",
                "show_pmtiles"],
-        note="databrickslabs/geobrix  ·  vector PMTiles  ·  lightweight tier",
+        note="databrickslabs/geobrix  ·  vector PMTiles  ·  Python level",
     ),
 }
 

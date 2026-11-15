@@ -328,18 +328,8 @@ def plot_point_cloud_flythrough(
     """
     import warnings
 
-    import matplotlib
-    import matplotlib.pyplot as plt
-
     from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
     from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
-
-    # Ensure Agg backend for headless rendering
-    if matplotlib.get_backend().lower() != "agg":
-        try:
-            matplotlib.use("Agg")
-        except Exception:  # noqa: BLE001
-            pass
 
     # ---- Resolve frame count ----
     n = _n_frames(fps, seconds, frames)
@@ -391,9 +381,9 @@ def plot_point_cloud_flythrough(
             figsize=figsize,
             dpi=dpi,
             z_exaggeration=z_exaggeration,
+            detached=True,  # own Agg canvas: the session's backend is untouched
         )
         frame_arrays.append(_fig_to_rgb_array(fig))
-        plt.close(fig)
 
     # ---- Encode and write ----
     if out_path is None:

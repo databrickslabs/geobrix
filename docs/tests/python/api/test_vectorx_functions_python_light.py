@@ -8,6 +8,7 @@ Per-function example tests are added by T2–T5 (one batch per function family).
 """
 
 import pytest
+from databricks.labs.gbx.vectorx import functions as vx_api
 
 try:
     from . import vectorx_functions_python_light as light_examples
@@ -25,10 +26,10 @@ def _vectorx_light_setup_views(spark):
 
     Mirrors the test/setup pattern from test_rasterx_*_python_light.py.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_vectorx_light  # noqa: PLC0415
 
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_',), level="L3")
     create_setup_views_vectorx_light(spark)
 
 
@@ -89,7 +90,7 @@ def test_vectorx_light_setup_views_created(spark):
 def test_st_triangulate_python_light_example(spark):
     """st_triangulate LATERAL emits 2 non-null WKB triangle bytes for the 4-corner fixture."""
     assert light_examples is not None
-    result = light_examples.st_triangulate_python_light_example(spark)
+    result = light_examples.st_triangulate_python_example(spark)
     assert result is not None, "st_triangulate should return non-null triangle bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -100,7 +101,7 @@ def test_st_triangulate_python_light_example(spark):
 def test_st_interpolateelevationbbox_python_light_example(spark):
     """st_interpolateelevationbbox LATERAL emits non-null POINT Z bytes for the 3×3 grid."""
     assert light_examples is not None
-    result = light_examples.st_interpolateelevationbbox_python_light_example(spark)
+    result = light_examples.st_interpolateelevationbbox_python_example(spark)
     assert (
         result is not None
     ), "st_interpolateelevationbbox should return non-null elevation_point bytes"
@@ -113,7 +114,7 @@ def test_st_interpolateelevationbbox_python_light_example(spark):
 def test_st_interpolateelevationgeom_python_light_example(spark):
     """st_interpolateelevationgeom LATERAL emits non-null POINT Z bytes for the origin grid."""
     assert light_examples is not None
-    result = light_examples.st_interpolateelevationgeom_python_light_example(spark)
+    result = light_examples.st_interpolateelevationgeom_python_example(spark)
     assert (
         result is not None
     ), "st_interpolateelevationgeom should return non-null elevation_point bytes"
@@ -128,10 +129,10 @@ def test_st_interpolateelevationgeom_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_asmvt_python_light_example(spark):
+def test_st_asmvt_python_example(spark):
     """st_asmvt returns non-empty MVT BINARY for the tile-local mvt_features fixture."""
     assert light_examples is not None
-    result = light_examples.st_asmvt_python_light_example(spark)
+    result = light_examples.st_asmvt_python_example(spark)
     assert result is not None, "st_asmvt should return non-null MVT bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -139,10 +140,41 @@ def test_st_asmvt_python_light_example(spark):
     assert len(result) > 0, "MVT bytes should be non-empty"
 
 
+def test_st_asmvt_array_python_example(spark):
+    """st_asmvt_array encodes the fixture's two features, as st_asmvt does."""
+    import json  # noqa: PLC0415
+
+    import mapbox_vector_tile  # noqa: PLC0415
+    from shapely import from_geojson  # noqa: PLC0415
+
+    assert light_examples is not None
+
+    def decoded(blob):
+        tile = mapbox_vector_tile.decode(
+            bytes(blob), default_options={"y_coord_down": True}
+        )
+        return sorted(
+            (
+                from_geojson(json.dumps(f["geometry"])).wkt,
+                tuple(sorted(f["properties"].items())),
+            )
+            for f in tile["layer"]["features"]
+        )
+
+    result = light_examples.st_asmvt_array_python_example(spark)
+    assert isinstance(result, (bytes, bytearray)) and len(result) > 0
+    got = decoded(result)
+    assert got == [
+        ("POINT (100 100)", (("id", 1), ("name", "a"))),
+        ("POINT (200 200)", (("id", 2), ("name", "b"))),
+    ]
+    assert got == decoded(light_examples.st_asmvt_python_example(spark))
+
+
 def test_st_asmvt_pyramid_python_light_example(spark):
     """st_asmvt_pyramid LATERAL emits non-empty MVT bytes for WGS-84 POINT(0,0) zoom 0-2."""
     assert light_examples is not None
-    result = light_examples.st_asmvt_pyramid_python_light_example(spark)
+    result = light_examples.st_asmvt_pyramid_python_example(spark)
     assert (
         result is not None
     ), "st_asmvt_pyramid should emit at least one tile for POINT(0,0) zoom 0-2"
@@ -158,17 +190,17 @@ def test_st_asmvt_pyramid_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_crs_python_light_example(spark):
+def test_st_crs_python_example(spark):
     """st_crs returns 'EPSG:4326' for the SRID=4326 EWKT fixture."""
     assert light_examples is not None
-    result = light_examples.st_crs_python_light_example(spark)
+    result = light_examples.st_crs_python_example(spark)
     assert result == "EPSG:4326", f"Expected EPSG:4326, got {result!r}"
 
 
-def test_st_setcrs_python_light_example(spark):
+def test_st_setcrs_python_example(spark):
     """st_setcrs returns non-null EWKB bytes with SRID=4326 stamped."""
     assert light_examples is not None
-    result = light_examples.st_setcrs_python_light_example(spark)
+    result = light_examples.st_setcrs_python_example(spark)
     assert result is not None, "st_setcrs should not return None for in-domain input"
     assert isinstance(
         result, (bytes, bytearray)
@@ -176,10 +208,10 @@ def test_st_setcrs_python_light_example(spark):
     assert len(result) > 0, "EWKB bytes should be non-empty"
 
 
-def test_st_transformcrs_python_light_example(spark):
+def test_st_transformcrs_python_example(spark):
     """st_transformcrs returns non-null EWKB bytes for in-domain POINT(13,42) -> EPSG:32633."""
     assert light_examples is not None
-    result = light_examples.st_transformcrs_python_light_example(spark)
+    result = light_examples.st_transformcrs_python_example(spark)
     # POINT(13, 42) is inside UTM zone 33N's area of use — must be non-null.
     assert (
         result is not None
@@ -192,12 +224,10 @@ def test_st_transformcrs_python_light_example(spark):
 
 def test_st_setcrs_stamps_different_crs(spark):
     """st_setcrs changes the embedded SRID — not a no-op when target differs from source."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
-
     df = spark.table("vector_geoms")
     # Stamp EPSG:3857 (not the fixture's 4326) and read back via st_crs.
     result = df.select(
-        vx.st_crs(vx.st_setcrs("geom", "EPSG:3857")).alias("new_crs")
+        vx_api.st_crs(vx_api.st_setcrs("geom", "EPSG:3857")).alias("new_crs")
     ).first()
     assert (
         result["new_crs"] == "EPSG:3857"
@@ -211,10 +241,10 @@ def test_st_setcrs_stamps_different_crs(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_legacyaswkb_python_light_example(spark):
+def test_st_legacyaswkb_python_example(spark):
     """st_legacyaswkb returns non-null WKB bytes for the legacy POINT(13, 42) fixture."""
     assert light_examples is not None
-    result = light_examples.st_legacyaswkb_python_light_example(spark)
+    result = light_examples.st_legacyaswkb_python_example(spark)
     assert result is not None, "st_legacyaswkb should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -235,10 +265,10 @@ def test_st_legacyaswkb_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_shiftlongitude_python_light_example(spark):
+def test_st_shiftlongitude_python_example(spark):
     """st_shiftlongitude shifts POINT(-170, 10) to POINT(190, 10) (x += 360)."""
     assert light_examples is not None
-    result = light_examples.st_shiftlongitude_python_light_example(spark)
+    result = light_examples.st_shiftlongitude_python_example(spark)
     assert result is not None, "st_shiftlongitude should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -250,10 +280,10 @@ def test_st_shiftlongitude_python_light_example(spark):
     assert abs(geom.y - 10.0) < 1e-9, f"Expected y=10.0 unchanged, got {geom.y}"
 
 
-def test_st_wrapx_python_light_example(spark):
+def test_st_wrapx_python_example(spark):
     """st_wrapx wraps POINT(190, 10) back to POINT(-170, 10) with origin=180, direction=-360."""
     assert light_examples is not None
-    result = light_examples.st_wrapx_python_light_example(spark)
+    result = light_examples.st_wrapx_python_example(spark)
     assert result is not None, "st_wrapx should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -265,10 +295,10 @@ def test_st_wrapx_python_light_example(spark):
     assert abs(geom.y - 10.0) < 1e-9, f"Expected y=10.0 unchanged, got {geom.y}"
 
 
-def test_st_split_python_light_example(spark):
+def test_st_split_python_example(spark):
     """st_split returns a 2-piece GeometryCollection when splitting an antimeridian polygon."""
     assert light_examples is not None
-    result = light_examples.st_split_python_light_example(spark)
+    result = light_examples.st_split_python_example(spark)
     assert result is not None, "st_split should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -290,12 +320,12 @@ def test_st_split_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_makevalid_python_light_example(spark):
+def test_st_makevalid_python_example(spark):
     """st_makevalid returns non-null valid WKB bytes for a bowtie self-intersecting polygon."""
     import json  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_makevalid_python_light_example(spark)
+    result = light_examples.st_makevalid_python_example(spark)
     assert result is not None, "st_makevalid should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -310,12 +340,12 @@ def test_st_makevalid_python_light_example(spark):
     )
 
 
-def test_st_explainvalidity_python_light_example(spark):
+def test_st_explainvalidity_python_example(spark):
     """st_explainvalidity returns JSON with valid=false, code=10, non-null location for bowtie."""
     import json  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_explainvalidity_python_light_example(spark)
+    result = light_examples.st_explainvalidity_python_example(spark)
     assert result is not None, "st_explainvalidity should return non-null JSON string"
     assert isinstance(result, str), f"Expected str (JSON), got {type(result)}"
     d = json.loads(result)
@@ -332,13 +362,13 @@ def test_st_explainvalidity_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_simplifypreservetopology_python_light_example(spark):
+def test_st_simplifypreservetopology_python_example(spark):
     """st_simplifypreservetopology returns valid simplified WKB with vertex dropped."""
     from shapely import is_valid  # noqa: PLC0415
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_simplifypreservetopology_python_light_example(spark)
+    result = light_examples.st_simplifypreservetopology_python_example(spark)
     assert result is not None, "st_simplifypreservetopology should return non-null WKB bytes"
     assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
     geom = wkb_loads(bytes(result))
@@ -347,12 +377,12 @@ def test_st_simplifypreservetopology_python_light_example(spark):
     assert len(geom.exterior.coords) < 7, "Near-collinear vertex should have been dropped"
 
 
-def test_st_removerepeatedpoints_python_light_example(spark):
+def test_st_removerepeatedpoints_python_example(spark):
     """st_removerepeatedpoints removes exact duplicate consecutive vertices."""
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_removerepeatedpoints_python_light_example(spark)
+    result = light_examples.st_removerepeatedpoints_python_example(spark)
     assert result is not None, "st_removerepeatedpoints should return non-null WKB bytes"
     assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
     geom = wkb_loads(bytes(result))
@@ -361,12 +391,12 @@ def test_st_removerepeatedpoints_python_light_example(spark):
     )
 
 
-def test_st_reduceprecision_python_light_example(spark):
+def test_st_reduceprecision_python_example(spark):
     """st_reduceprecision snaps POINT(1.234, 5.678) to POINT(1.0, 6.0) on grid 1.0."""
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_reduceprecision_python_light_example(spark)
+    result = light_examples.st_reduceprecision_python_example(spark)
     assert result is not None, "st_reduceprecision should return non-null WKB bytes"
     assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
     geom = wkb_loads(bytes(result))
@@ -374,13 +404,13 @@ def test_st_reduceprecision_python_light_example(spark):
     assert abs(geom.y - 6.0) < 1e-9, f"Expected y=6.0 after snap-to-grid, got {geom.y}"
 
 
-def test_st_node_python_light_example(spark):
+def test_st_node_python_example(spark):
     """st_node returns valid MultiLineString/LineString after noding a figure-eight."""
     from shapely import is_valid  # noqa: PLC0415
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_node_python_light_example(spark)
+    result = light_examples.st_node_python_example(spark)
     assert result is not None, "st_node should return non-null WKB bytes"
     assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
     geom = wkb_loads(bytes(result))
@@ -390,12 +420,12 @@ def test_st_node_python_light_example(spark):
     assert is_valid(geom), "Noded geometry should be valid"
 
 
-def test_st_snap_python_light_example(spark):
+def test_st_snap_python_example(spark):
     """st_snap snaps near-miss linestring vertices onto the reference at y=0."""
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_snap_python_light_example(spark)
+    result = light_examples.st_snap_python_example(spark)
     assert result is not None, "st_snap should return non-null WKB bytes"
     assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
     geom = wkb_loads(bytes(result))
@@ -412,21 +442,21 @@ def test_st_snap_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_coverageisvalid_python_light_example(spark):
+def test_st_coverageisvalid_python_example(spark):
     """st_coverageisvalid returns True for two adjacent squares sharing a clean edge."""
     assert light_examples is not None
-    result = light_examples.st_coverageisvalid_python_light_example(spark)
+    result = light_examples.st_coverageisvalid_python_example(spark)
     assert result is True, (
         f"Adjacent squares sharing a clean edge should be a valid coverage, got {result!r}"
     )
 
 
-def test_st_coverageinvalidedges_python_light_example(spark):
+def test_st_coverageinvalidedges_python_example(spark):
     """st_coverageinvalidedges returns non-empty WKB bytes for overlapping squares."""
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_coverageinvalidedges_python_light_example(spark)
+    result = light_examples.st_coverageinvalidedges_python_example(spark)
     assert result is not None, "Overlapping coverage should return non-null bad_edges"
     assert isinstance(result, (bytes, bytearray)), (
         f"Expected bytes (WKB/EWKB), got {type(result)}"
@@ -434,6 +464,27 @@ def test_st_coverageinvalidedges_python_light_example(spark):
     assert len(result) > 0, "bad_edges WKB bytes should be non-empty"
     geom = wkb_loads(bytes(result))
     assert not geom.is_empty, "Invalid edges geometry should be non-empty for overlapping polygons"
+
+
+def test_st_coverageisvalid_array_python_example(spark):
+    """st_coverageisvalid_array is True for two adjacent squares, as the aggregate is."""
+    assert light_examples is not None
+    result = light_examples.st_coverageisvalid_array_python_example(spark)
+    assert result is True, f"Expected True, got {result!r}"
+    assert result is light_examples.st_coverageisvalid_python_example(spark)
+
+
+def test_st_coverageinvalidedges_array_python_example(spark):
+    """st_coverageinvalidedges_array returns the overlap's edges, equal to the aggregate's."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_coverageinvalidedges_array_python_example(spark)
+    assert isinstance(result, (bytes, bytearray)) and len(result) > 0
+    edges = wkb_loads(bytes(result))
+    assert not edges.is_empty, "overlapping squares have invalid edges"
+    agg = light_examples.st_coverageinvalidedges_python_example(spark)
+    assert edges.equals(wkb_loads(bytes(agg)))
 
 
 def test_coverage_simplify_python_light_example(spark):

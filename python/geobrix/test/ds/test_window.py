@@ -107,9 +107,10 @@ def test_bbox_crs_is_reprojected():
         assert win is not None
         b = rasterio.windows.bounds(win, ds.transform)  # in source CRS (3857)
         exp = transform_bounds("EPSG:4326", "EPSG:3857", -122.47, 37.72, -122.43, 37.78)
-        # within one source pixel (rounding to whole pixels)
-        px = abs(ds.transform.a)
-        assert all(abs(a - c) <= px for a, c in zip(b, exp))
+        # within one source pixel of its own axis (rounding to whole pixels); 3857 pixels are not square
+        # here, and the far edge now reaches the pixel that holds the bbox edge
+        px, py = abs(ds.transform.a), abs(ds.transform.e)
+        assert all(abs(a - c) <= p for a, c, p in zip(b, exp, (px, py, px, py)))
     finally:
         ds.close()
         mf.close()
@@ -197,3 +198,16 @@ def test_window_for_geom_reprojects_bounds():
     )
     win = window_for_geom(ds, box(minx, miny, maxx, maxy), geom_crs="EPSG:4326")
     assert win is not None and int(win.width) > 0 and int(win.height) > 0
+
+
+def test_far_edge_pixels_of_an_unaligned_bbox_are_covered():
+    # 0.5-degree pixels from x=10. A bbox over x 10.3..11.1 spans pixel columns 0.6..2.2, so it
+    # needs columns 0, 1 and 2. Flooring the offset and ceiling the LENGTH gave columns 0 and 1.
+    mf, ds = _open()
+    try:
+        win = window_for_bbox(ds, (10.3, 49.0, 11.1, 50.0))
+        assert (int(win.col_off), int(win.width)) == (0, 3)
+        assert rasterio.windows.bounds(win, ds.transform)[2] >= 11.1
+    finally:
+        ds.close()
+        mf.close()

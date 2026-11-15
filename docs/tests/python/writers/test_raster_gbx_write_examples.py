@@ -19,3 +19,7 @@ def test_write_gtiff_gbx(spark):
 
 def test_write_with_namecol(spark):
     ex.write_with_namecol(spark)
+
+
+def test_write_with_compress(spark):
+    ex.write_with_compress(spark)

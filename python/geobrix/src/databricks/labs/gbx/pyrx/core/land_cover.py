@@ -6,10 +6,28 @@ branches via ``scipy.cluster.vq.kmeans2`` with spectral cluster-labeling."""
 import numpy as np
 from scipy import ndimage as ndi
 from scipy.cluster.vq import kmeans2
-from skimage.morphology import disk
+
+from databricks.labs.gbx.pyrx.core._nodata import emit
 
 # Class scheme: index = class id; -1 = nodata/unclassified.
 DEFAULT_CLASSES = ["vegetation", "bare", "impervious", "dark"]
+
+
+METHODS = ("spectral", "kmeans", "hybrid")
+
+
+def check_args(method, n_clusters, smooth) -> None:
+    """The arguments of ``rst_land_cover``: a wrong one raises a ``ValueError`` that names it."""
+    if str(method).lower() not in METHODS:
+        raise ValueError(
+            f"rst_land_cover: unknown method {method!r}; known: {', '.join(METHODS)}"
+        )
+    if int(n_clusters) < 1:
+        raise ValueError(
+            f"rst_land_cover: n_clusters must be 1 or more; got {n_clusters}"
+        )
+    if int(smooth) < 0:
+        raise ValueError(f"rst_land_cover: smooth must be 0 or more; got {smooth}")
 
 
 def features(arr) -> dict:
@@ -98,6 +116,14 @@ def _kmeans(arr, f, names, n_clusters):
     return lab
 
 
+def _disk(radius: int) -> np.ndarray:
+    """A disk footprint of ``radius`` pixels: the cells whose centre lies within the radius of the centre cell (the
+    footprint ``skimage.morphology.disk`` gives, as uint8)."""
+    r = np.arange(-radius, radius + 1)
+    x, y = np.meshgrid(r, r)
+    return ((x**2 + y**2) <= radius**2).astype(np.uint8)
+
+
 def _despeckle(lab, window):
     """Drop small connected specks of each class by binary-opening its mask.
 
@@ -111,7 +137,7 @@ def _despeckle(lab, window):
     for c in np.unique(lab):
         if c < 0:
             continue
-        m = ndi.binary_opening(lab == c, structure=disk(max(1, window // 2)))
+        m = ndi.binary_opening(lab == c, structure=_disk(max(1, window // 2)))
         out[(lab == c) & ~m] = -1  # drop specks of class c
     return out
 
@@ -168,3 +194,26 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
         lab = _despeckle(lab, smooth)
         lab[f["nodata"]] = -1  # re-mask nodata after de-speckle
     return lab.astype(np.int32), names
+
+
+class TooFewBands(ValueError):
+    """The tile has fewer than the three colour bands the classification reads."""
+
+
+def classify_dataset(ds, method, n_clusters, smooth) -> bytes:
+    """The land-cover labels of an open tile (red, green, blue, optionally near-infrared in its first bands) as
+    single-band Int32 GTiff bytes, -1 where a pixel is unclassified. :class:`TooFewBands` for a tile of fewer than
+    three bands; the arguments are as :func:`check_args` reads them."""
+    if ds.count < 3:
+        raise TooFewBands(
+            f"rst_land_cover needs a tile with 3 or more bands (red, green, blue); this one has {ds.count}. "
+            "Fix: stack the bands first (gbx_rst_frombands)"
+        )
+    arr = ds.read().transpose(1, 2, 0)  # (bands,H,W) -> HxWxbands
+    labels, _names = classify(
+        arr,
+        method=str(method).lower(),
+        n_clusters=int(n_clusters),
+        smooth=int(smooth),
+    )
+    return emit(ds, labels, -1, labels == -1, "int32")

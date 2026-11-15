@@ -6,8 +6,7 @@ Uses st_geomfromwkb, st_area, st_centroid. Validated under docs/tests-dbr/.
 """
 
 SQL_READ_SHAPEFILE = """-- Read shapefile (use your path)
-CREATE OR REPLACE TEMP VIEW shapes AS
-SELECT * FROM shapefile_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip`;
+CREATE OR REPLACE TEMP VIEW shapes USING shapefile_gbx OPTIONS (path '/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip');
 
 -- Convert geometry
 CREATE OR REPLACE VIEW shapes_geom AS

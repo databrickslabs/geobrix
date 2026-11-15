@@ -1,0 +1,77 @@
+package com.databricks.labs.gbx.kernels
+
+import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import org.apache.spark.sql.SparkSession
+
+/** Test scope only: install the Catalyst companions the suites exercise, as the Python manager does at L1.
+  * Production code registers no SQL from Scala; the manager decides every name's level and calls [[L1Installer]]. */
+object TestL1 {
+
+    /** One fully qualified companion per line. When a companion is deleted, its line goes with it. */
+    private val companions: Seq[String] = Seq(
+        // rasterx
+        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox",
+        "com.databricks.labs.gbx.rasterx.expressions.agg.RST_H3_RasterizeAgg",
+        "com.databricks.labs.gbx.rasterx.expressions.agg.RST_Quadbin_RasterizeAgg",
+        "com.databricks.labs.gbx.rasterx.expressions.agg.RST_BNG_RasterizeAgg",
+        "com.databricks.labs.gbx.rasterx.expressions.agg.RST_Custom_RasterizeAgg",
+        "com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromContent",
+        "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY",
+        "com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ",
+        // gridx/bng
+        "com.databricks.labs.gbx.gridx.bng.BNG_AsWKB",
+        "com.databricks.labs.gbx.gridx.bng.BNG_AsWKT",
+        "com.databricks.labs.gbx.gridx.bng.BNG_CellArea",
+        "com.databricks.labs.gbx.gridx.bng.BNG_CellIntersection",
+        "com.databricks.labs.gbx.gridx.bng.BNG_CellUnion",
+        "com.databricks.labs.gbx.gridx.bng.BNG_Centroid",
+        "com.databricks.labs.gbx.gridx.bng.BNG_Distance",
+        "com.databricks.labs.gbx.gridx.bng.BNG_EuclideanDistance",
+        "com.databricks.labs.gbx.gridx.bng.BNG_GeometryKLoop",
+        "com.databricks.labs.gbx.gridx.bng.BNG_GeometryKRing",
+        "com.databricks.labs.gbx.gridx.bng.BNG_KLoop",
+        "com.databricks.labs.gbx.gridx.bng.BNG_KRing",
+        "com.databricks.labs.gbx.gridx.bng.BNG_PointAsCell",
+        "com.databricks.labs.gbx.gridx.bng.BNG_Polyfill",
+        "com.databricks.labs.gbx.gridx.bng.BNG_Tessellate",
+        "com.databricks.labs.gbx.gridx.bng.BNG_CellFill",
+        "com.databricks.labs.gbx.gridx.bng.generators.BNG_GeometryKLoopExplode",
+        "com.databricks.labs.gbx.gridx.bng.generators.BNG_GeometryKRingExplode",
+        "com.databricks.labs.gbx.gridx.bng.generators.BNG_KLoopExplode",
+        "com.databricks.labs.gbx.gridx.bng.generators.BNG_KRingExplode",
+        "com.databricks.labs.gbx.gridx.bng.generators.BNG_TessellateExplode",
+        // gridx/custom
+        "com.databricks.labs.gbx.gridx.custom.Custom_Grid",
+        "com.databricks.labs.gbx.gridx.custom.Custom_PointAsCell",
+        "com.databricks.labs.gbx.gridx.custom.Custom_AsWKB",
+        "com.databricks.labs.gbx.gridx.custom.Custom_AsWKT",
+        "com.databricks.labs.gbx.gridx.custom.Custom_Centroid",
+        "com.databricks.labs.gbx.gridx.custom.Custom_Polyfill",
+        "com.databricks.labs.gbx.gridx.custom.Custom_KRing",
+        "com.databricks.labs.gbx.gridx.custom.Custom_KLoop",
+        "com.databricks.labs.gbx.gridx.custom.Custom_Distance",
+        "com.databricks.labs.gbx.gridx.custom.Custom_CellFill",
+        "com.databricks.labs.gbx.gridx.custom.Custom_GeometryKRing",
+        "com.databricks.labs.gbx.gridx.custom.Custom_GeometryKLoop",
+        "com.databricks.labs.gbx.gridx.custom.generators.Custom_GeometryKRingExplode",
+        "com.databricks.labs.gbx.gridx.custom.generators.Custom_GeometryKLoopExplode",
+        // gridx/h3
+        "com.databricks.labs.gbx.gridx.h3.H3_CellFill",
+        // vectorx
+        "com.databricks.labs.gbx.vectorx.expressions.ST_Triangulate",
+        "com.databricks.labs.gbx.vectorx.expressions.ST_InterpolateElevationBBox",
+        "com.databricks.labs.gbx.vectorx.expressions.ST_TransformCrs",
+        // vectorx/jts/legacy
+        "com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB"
+    )
+
+    /** Install every companion under its own SQL name; fail loudly when the installer refuses one. */
+    def installAll(spark: SparkSession): Unit =
+        companions.foreach { fqn =>
+            // scalastyle:off classforname
+            val name = Class.forName(fqn + "$").getField("MODULE$").get(null).asInstanceOf[WithExpressionInfo].name
+            // scalastyle:on classforname
+            val r = L1Installer.install(spark, name, fqn)
+            require(r == "ok", s"$fqn: $r")
+        }
+}

@@ -1,4 +1,4 @@
-"""Task 3 tests: rst_setcrs / rst_transformcrs + tile.crs population in readers.
+"""Tests for rst_setcrs / rst_transformcrs + tile.crs population in readers.
 
 Tests:
 - rst_setcrs(tile, "ESRI:54008") -> CRS relabeled; pixels unchanged; rst_crs reads back.
@@ -24,6 +24,7 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -272,7 +273,6 @@ def test_setsrid_after_setcrs_clears_pending_crs():
         from pyspark.sql import functions as f
         from pyspark.sql.types import StructField, StructType
 
-        from databricks.labs.gbx.pyrx import functions as prx
         from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
         spark = SparkSession.builder.master("local[2]").getOrCreate()
@@ -286,7 +286,7 @@ def test_setsrid_after_setcrs_clears_pending_crs():
         schema = StructType([StructField("tile", V2_TILE_SCHEMA, False)])
         df = spark.createDataFrame([(vt.to_row(),)], schema)
         row = df.select(
-            prx.rst_crs(prx.rst_setsrid("tile", f.lit(3857))).alias("c")
+            rx.rst_crs(rx.rst_setsrid("tile", f.lit(3857))).alias("c")
         ).first()
         assert (
             row["c"] == "EPSG:3857"
@@ -382,6 +382,30 @@ def test_transformcrs_identity_short_circuit():
         np.testing.assert_array_equal(ds.read(), orig_data)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [ValueError("bad tile"), MemoryError(), RecursionError()],
+    ids=lambda e: type(e).__name__,
+)
+def test_transformcrs_tile_error_tile_is_data_not_exhaustion(monkeypatch, exc):
+    """Like the JVM's NonFatal: a failure on the data is an error tile (the reason under
+    last_error); running out of memory or stack fails the task so it can be retried."""
+    from databricks.labs.gbx.pyrx import functions as pf
+
+    def boom(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(pf, "_transformcrs_bytes", boom)
+    tile = {"cellid": 7, "raster": b"x"}
+    if isinstance(exc, (MemoryError, RecursionError)):
+        with pytest.raises(type(exc)):
+            pf._transformcrs_tile(tile, "EPSG:3857")
+        return
+    out = pf._transformcrs_tile(tile, "EPSG:3857")
+    assert out["raster"] is None and out["cellid"] == 7
+    assert "bad tile" in out["metadata"]["last_error"]
+
+
 # ---------------------------------------------------------------------------
 # Spark Column UDF tests
 # ---------------------------------------------------------------------------
@@ -391,13 +415,11 @@ def test_rst_setcrs_spark_esri(spark):
     """rst_setcrs('ESRI:54008') Spark UDF relabels CRS; rst_crs reads back."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_setcrs("tile", f.lit("ESRI:54008"))).alias("c")
+        rx.rst_crs(rx.rst_setcrs("tile", f.lit("ESRI:54008"))).alias("c")
     ).first()
     crs_str = row["c"]
     assert crs_str is not None
@@ -408,14 +430,12 @@ def test_rst_setcrs_intcast_spark(spark):
     """rst_setcrs('4326') same result as rst_setsrid(4326) via int-cast rule."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = make_geotiff_bytes(epsg=32633)
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_setcrs("tile", f.lit("4326"))).alias("setcrs_crs"),
-        prx.rst_crs(prx.rst_setsrid("tile", f.lit(4326))).alias("setsrid_crs"),
+        rx.rst_crs(rx.rst_setcrs("tile", f.lit("4326"))).alias("setcrs_crs"),
+        rx.rst_crs(rx.rst_setsrid("tile", f.lit(4326))).alias("setsrid_crs"),
     ).first()
     assert row["setcrs_crs"] == row["setsrid_crs"] == "EPSG:4326"
 
@@ -432,14 +452,12 @@ def test_rst_setcrs_bare_string_crs_is_a_literal(spark):
     """
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_setcrs("tile", "ESRI:54008")).alias("set_bare"),
-        prx.rst_crs(prx.rst_transformcrs("tile", "EPSG:3857")).alias("xform_bare"),
+        rx.rst_crs(rx.rst_setcrs("tile", "ESRI:54008")).alias("set_bare"),
+        rx.rst_crs(rx.rst_transformcrs("tile", "EPSG:3857")).alias("xform_bare"),
     ).first()
     assert row["set_bare"] is not None
     assert "ESRI" in row["set_bare"] and "54008" in row["set_bare"]
@@ -450,15 +468,13 @@ def test_rst_setcrs_column_crs_still_works(spark):
     """A real Column CRS argument is read per row (the escape hatch must survive)."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b, "ESRI:54008")], ["raster", "crs_col"])
     df = df.select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("crs_col")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("crs_col")
     )
     row = df.select(
-        prx.rst_crs(prx.rst_setcrs("tile", f.col("crs_col"))).alias("c")
+        rx.rst_crs(rx.rst_setcrs("tile", f.col("crs_col"))).alias("c")
     ).first()
     assert row["c"] is not None
     assert "ESRI" in row["c"] and "54008" in row["c"]
@@ -468,13 +484,11 @@ def test_rst_transformcrs_spark_epsg(spark):
     """rst_transformcrs('EPSG:3857') reprojects; crs reflects new target."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("c")
+        rx.rst_crs(rx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("c")
     ).first()
     assert row["c"] == "EPSG:3857"
 
@@ -483,13 +497,11 @@ def test_rst_transformcrs_non_epsg_spark(spark):
     """rst_transformcrs('ESRI:54008') works for non-EPSG target via Spark UDF."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_transformcrs("tile", f.lit("ESRI:54008"))).alias("c")
+        rx.rst_crs(rx.rst_transformcrs("tile", f.lit("ESRI:54008"))).alias("c")
     ).first()
     crs_str = row["c"]
     assert crs_str is not None
@@ -565,9 +577,7 @@ def test_reader_virtual_tile_crs_is_none(spark):
             row["crs"] is None
         ), f"Expected None for virtual tile.crs, got: {row['crs']!r}"
         # But rst_crs (which reads the source header) should still return the CRS.
-        from databricks.labs.gbx.pyrx import functions as prx
-
-        row2 = df.select(prx.rst_crs("tile").alias("c")).first()
+        row2 = df.select(rx.rst_crs("tile").alias("c")).first()
         assert (
             row2["c"] == "EPSG:4326"
         ), f"rst_crs via header expected 'EPSG:4326', got: {row2['c']!r}"

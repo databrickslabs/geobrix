@@ -1,0 +1,67 @@
+# cargo-deny policy for every GeoBrix Rust crate. Started from `cargo deny init` at the pinned version
+# (CARGO_DENY_VERSION in scripts/native/pins.conf) and cut down to the settings that matter.
+#   licenses, bans, sources  run offline in the build container (scripts/commands/gbx-build-native.sh)
+#   advisories               needs the public advisory database
+# A crate that needs another licence is a decision to take on purpose: add it to `allow` here, in the same change.
+
+[graph]
+all-features = false
+
+[advisories]
+yanked = "deny"
+# Time-boxed, one advisory at a time: each entry names why it is not reachable and when to look again.
+ignore = [
+    { id = "RUSTSEC-2026-0459", reason = "CVE-2026-119375, SQLite before 3.54.0 in the bundled source of libsqlite3-sys. Not reachable here: libsqlite3-sys comes only through proj-sys 0.27.0 (proj 0.31.0), which caps it at <0.36, so the patched 0.39 cannot be taken until proj-sys moves. The [[bans.features]] below deny every bundled feature of libsqlite3-sys, so no SQLite source is compiled; PROJ links the payload's own libsqlite3. The only crate that resolves it is rust/gbxrs-native-probe, which is not shipped (publish = false, in no wheel or JAR) and opens only the payload's proj.db, never an untrusted database or -wal file. Revisit 2026-12-09, or when proj-sys allows libsqlite3-sys >=0.39." },
+]
+
+[licenses]
+# Permissive licences only, consistent with the licence-clean native stack.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# GeoBrix's own crates are not published (publish = false) and carry the Databricks licence.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+# GDAL, PROJ, GEOS and SQLite come from the payload (one GDAL per process, shared with rasterio and osgeo), never
+# from a crate's own bundled build. proj-sys also builds its bundled PROJ when pkg-config finds no libproj; that
+# fallback has no feature to ban, so `gbx:build:native --target rust-native` sets the crate's own guard against it
+# and checks that the extension needs the payload's libproj.
+deny = [
+    { crate = "gdal-src", reason = "builds its own GDAL: link the payload's libgdal" },
+    { crate = "geos-src", reason = "builds its own GEOS: link the payload's libgeos_c" },
+]
+
+[[bans.features]]
+crate = "gdal-sys"
+deny = ["bundled"]
+
+[[bans.features]]
+crate = "geos-sys"
+deny = ["static"]
+
+[[bans.features]]
+crate = "proj-sys"
+deny = ["bundled_proj"]
+
+[[bans.features]]
+crate = "libsqlite3-sys"
+deny = ["bundled", "bundled-sqlcipher", "bundled-sqlcipher-vendored-openssl", "bundled-windows"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

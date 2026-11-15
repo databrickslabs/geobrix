@@ -4,16 +4,14 @@ import com.databricks.labs.gbx.gridx.bng.BNG_CellFill
 import com.databricks.labs.gbx.gridx.custom.{Custom_CellFill, Custom_GridSpec}
 import com.databricks.labs.gbx.gridx.grid.{BNG, CustomGridSystem, GridConf, GridSystem, H3, Quadbin}
 import com.databricks.labs.gbx.gridx.h3.H3_CellFill
-import com.databricks.labs.gbx.gridx.quadbin.Quadbin_CellFill
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
-import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 /** Grid-generic cell-space fill: [[CellFill.fill]] semantics across all four grid systems,
- *  plus name/arity/round-trip checks for the four `gbx_<grid>_cellfill` aggregator wrappers.
+ *  plus name/arity/round-trip checks for the three `gbx_<grid>_cellfill` aggregator wrappers.
  *  Drives the core and `update`/`eval` directly (no Spark session).
  */
 class CellFillTest extends AnyFunSuite {
@@ -98,16 +96,14 @@ class CellFillTest extends AnyFunSuite {
 
     test("canonical names") {
         H3_CellFill.name shouldBe "gbx_h3_cellfill"
-        Quadbin_CellFill.name shouldBe "gbx_quadbin_cellfill"
         BNG_CellFill.name shouldBe "gbx_bng_cellfill"
         Custom_CellFill.name shouldBe "gbx_custom_cellfill"
     }
 
-    test("h3/quadbin/bng builder accepts arities 2..5 (cellid, value, [k], [method], [power])") {
+    test("h3/bng builder accepts arities 2..5 (cellid, value, [k], [method], [power])") {
         def args(n: Int): Seq[Expression] = (0 until n).map(_ => Literal(1L))
         for (n <- 2 to 5) {
             H3_CellFill.builder()(args(n)) shouldBe a[H3_CellFill]
-            Quadbin_CellFill.builder()(args(n)) shouldBe a[Quadbin_CellFill]
             BNG_CellFill.builder()(args(n)) shouldBe a[BNG_CellFill]
         }
         an[IllegalArgumentException] should be thrownBy H3_CellFill.builder()(args(1))
@@ -127,14 +123,10 @@ class CellFillTest extends AnyFunSuite {
     // Aggregator wrappers: update/eval round-trip through the shared core.
     // -------------------------------------------------------------------------------------------
 
-    /** Decode `array<struct<cellid:LONG, value:DOUBLE?>>` into a cellId -> Option[Double] map. */
-    private def decodeLong(res: Any): Map[Long, Option[Double]] = {
-        val arr = res.asInstanceOf[ArrayData]
-        (0 until arr.numElements()).map { i =>
-            val row = arr.getStruct(i, 2)
-            row.getLong(0) -> (if (row.isNullAt(1)) None else Some(row.getDouble(1)))
-        }.toMap
-    }
+    /** Decode the BINARY fill payload (`[count:Int]( cellId:Long, present:Boolean, [value:Double] )*N`) into a
+     *  cellId -> Option[Double] map. */
+    private def decodeLong(res: Any): Map[Long, Option[Double]] =
+        CellFillAcc.deserialize(res.asInstanceOf[Array[Byte]]).cells.toMap
 
     test("H3_CellFill update/eval round-trip fills the NULL center with the neighbour mean") {
         val center = H3.pointToCellID(-0.1, 51.5, 8)
@@ -150,7 +142,40 @@ class CellFillTest extends AnyFunSuite {
         out(center) shouldBe Some(5.0)
     }
 
-    test("BNG_CellFill eval renders cell ids as BNG strings") {
+    test("a cell id that repeats keeps its largest value whatever order the rows arrive in (H10)") {
+        val center = H3.pointToCellID(-0.1, 51.5, 8)
+        val ring1  = H3.kLoop(center, 1)
+        def fillWith(order: Seq[Double]): Map[Long, Option[Double]] = {
+            val agg = H3_CellFill(
+                Literal.create(null, LongType), Literal.create(null, DoubleType),
+                Literal(1), Literal("mean"), Literal(2.0))
+            val buf = agg.createAggregationBuffer()
+            agg.update(buf, center, None)
+            order.foreach(v => agg.update(buf, ring1(0), Some(v)))
+            decodeLong(agg.eval(buf))
+        }
+        // 3, 9, 5: the largest (9) is neither first nor last; any arrival order gives the same fill
+        for (order <- Seq(Seq(3.0, 9.0, 5.0), Seq(9.0, 5.0, 3.0), Seq(5.0, 3.0, 9.0))) {
+            val out = fillWith(order)
+            out(ring1(0)) shouldBe Some(9.0)
+            out(center) shouldBe Some(9.0)
+        }
+    }
+
+    test("a NaN value is missing: order-independent, and it never feeds a neighbour's mean") {
+        val center = H3.pointToCellID(-0.1, 51.5, 8)
+        val nb     = H3.kLoop(center, 1)(0)
+        for (order <- Seq(Seq(Double.NaN, 4.0), Seq(4.0, Double.NaN))) {
+            val one = CellFill.largestPerCell(order.map(v => (nb, Some(v): Option[Double])))
+            one(nb) shouldBe Some(4.0)
+        }
+        CellFill.largestPerCell(Seq((nb, Some(Double.NaN)))) shouldBe Map(nb -> None)
+        val filled = CellFill.fill(H3, Map(center -> Some(Double.NaN), nb -> Some(6.0)), 1, "mean", 2.0).toMap
+        filled(center) shouldBe Some(6.0)
+        filled(nb) shouldBe Some(6.0)
+    }
+
+    test("BNG_CellFill eval carries the BNG cell ids as Long in the BINARY payload") {
         val center = BNG.pointToCellID(530000.0, 180000.0, 4)
         val ring1  = BNG.kLoop(center, 1)
         val agg = BNG_CellFill(
@@ -160,13 +185,9 @@ class CellFillTest extends AnyFunSuite {
         agg.update(buf, center, None)
         ring1.foreach(nb => agg.update(buf, nb, Some(5.0)))
 
-        val arr = agg.eval(buf).asInstanceOf[ArrayData]
-        arr.numElements() shouldBe (1 + ring1.length)
-        val decoded = (0 until arr.numElements()).map { i =>
-            val row = arr.getStruct(i, 2)
-            row.getUTF8String(0).toString -> (if (row.isNullAt(1)) None else Some(row.getDouble(1)))
-        }.toMap
-        decoded(BNG.format(center)) shouldBe Some(5.0)
+        val decoded = decodeLong(agg.eval(buf))
+        decoded.size shouldBe (1 + ring1.length)
+        decoded(center) shouldBe Some(5.0)
     }
 
     test("Custom_CellFill eval fills through the reconstructed grid struct") {

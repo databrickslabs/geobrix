@@ -13,7 +13,7 @@ import pytest
 
 h3 = pytest.importorskip("h3", reason="h3 not installed")
 
-from databricks.labs.gbx.pygx import h3_los_visible  # noqa: E402
+from databricks.labs.gbx.gridx.helpers import h3_los_visible  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

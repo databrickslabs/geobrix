@@ -1,4 +1,4 @@
-"""Environment checks for the pyvx light tier."""
+"""Environment checks for the pyvx functions at the Python level."""
 
 
 def assert_mvt_available() -> None:
@@ -14,9 +14,9 @@ def assert_mvt_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx requires a light-tier extra; missing: "
+            "pyvx needs "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ", which the env wheel provides. Fix: install the env wheel for this runtime."
         )
 
 
@@ -34,9 +34,9 @@ def assert_legacy_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx legacy requires a light-tier extra; missing: "
+            "pyvx legacy needs "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ", which the env wheel provides. Fix: install the env wheel for this runtime."
         )
 
 
@@ -53,9 +53,9 @@ def assert_tin_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx TIN/legacy requires a light-tier extra; missing: "
+            "pyvx TIN/legacy needs "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ", which the env wheel provides. Fix: install the env wheel for this runtime."
         )
 
 
@@ -76,7 +76,7 @@ def assert_crs_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx CRS requires a light-tier extra; missing: "
+            "pyvx CRS needs "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ", which the env wheel provides. Fix: install the env wheel for this runtime."
         )

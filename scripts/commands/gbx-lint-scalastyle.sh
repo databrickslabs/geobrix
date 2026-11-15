@@ -13,6 +13,7 @@ show_help() {
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--log <path>${NC}    Write output to log file (e.g. scalastyle.log → test-logs/scalastyle.log)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}          Show this help"
     echo ""
     echo -e "${CYAN}Notes:${NC}"
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
         --log)
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
+            ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
             ;;
         --help|-h)
             show_help
@@ -44,12 +49,13 @@ cd "$PROJECT_ROOT"
 show_banner "Lint: ScalaStyle"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 echo -e "${CYAN}Running scalastyle on src/main/scala...${NC}"
 echo ""
 show_separator
 
-docker exec geobrix-dev /bin/bash -c "unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scalastyle:check -q"
+docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scalastyle:check -q"
 EXIT_CODE=$?
 
 show_separator

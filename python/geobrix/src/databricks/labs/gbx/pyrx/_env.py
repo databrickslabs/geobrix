@@ -2,15 +2,29 @@
 
 rasterio's manylinux/macOS wheels ship their own GDAL + PROJ data. We point
 GDAL_DATA / PROJ_DATA at those bundled paths *only if unset*, so pyrx does not
-collide with any cluster-level GDAL installed by the heavyweight init script.
+collide with a cluster-level GDAL (the heavyweight tier's, or the DCS image's), and
+PROJ_DATA also when it names no proj.db this process can read (see configure_gdal_env).
+Registered PROJ grid dirs are merged with the PROJ data into one directory, which
+becomes PROJ_DATA (rasterio reads PROJ_DATA as a single path; see _proj_data_dir).
 """
 
+import bisect
+import hashlib
+import logging
 import os
-from typing import Optional, Sequence, Tuple
+import shutil
+import stat
+import threading
+import time
+import warnings
+from contextlib import contextmanager
+from typing import Dict, List, Optional, Sequence, Tuple
+
+_log = logging.getLogger(__name__)
 
 
 def _bundled_gdal_data() -> Optional[str]:
-    """Return rasterio's bundled GDAL data dir, or None.
+    """Return rasterio's bundled GDAL data dir, else the env wheel's payload share (``_native/share/gdal``), or None.
 
     Use GDALDataFinder().search() (a deterministic filesystem search) rather than
     get_gdal_data(), which reflects GDAL's *runtime* config state — that returns
@@ -22,13 +36,21 @@ def _bundled_gdal_data() -> Optional[str]:
         from rasterio._env import GDALDataFinder
 
         path = GDALDataFinder().search()
-        return path if path and os.path.isdir(path) else None
+        if path and os.path.isdir(path):
+            return path
     except Exception:
-        return None
+        pass
+    # The env wheel's rasterio ships no GDAL data: its GDAL reads the payload's share (_native/share/gdal), the same
+    # directory the activation points GDAL_DATA at.
+    from databricks.labs.gbx import _native
+
+    native = _native.native_dir()
+    share = os.path.join(os.path.dirname(native), "share", "gdal") if native else None
+    return share if share and os.path.isdir(share) else None
 
 
 def _bundled_proj_data() -> Optional[str]:
-    """Return rasterio's bundled PROJ data dir, or None.
+    """Return rasterio's bundled PROJ data dir, else the env wheel's payload share (``_native/share/proj``), or None.
 
     rasterio._env.PROJDataFinder().search() returns a single directory string.
     Verify that proj.db exists in the directory to avoid setting PROJ_DATA to an
@@ -44,35 +66,288 @@ def _bundled_proj_data() -> Optional[str]:
             and os.path.exists(os.path.join(path, "proj.db"))
         ):
             return path
-        return None
     except Exception:
-        return None
+        pass
+    # The env wheel's rasterio ships no PROJ data: its PROJ reads the payload's share (_native/share/proj), the same
+    # directory the activation points PROJ_DATA at (as _bundled_gdal_data does for GDAL_DATA).
+    from databricks.labs.gbx import _native
+
+    native = _native.native_dir()
+    share = os.path.join(os.path.dirname(native), "share", "proj") if native else None
+    if share and os.path.exists(os.path.join(share, "proj.db")):
+        return share
+    return None
 
 
-def _prepend_unique(base: str, extra: Sequence[str]) -> str:
-    """os.pathsep-join `extra` dirs ahead of `base`, de-duped, preserving order."""
-    parts = []
+def _readable_proj_data(value: str) -> bool:
+    """True when a directory of ``value`` (``os.pathsep``-joined) holds a ``proj.db`` this
+    process can read."""
+    for d in (value or "").split(os.pathsep):
+        db = os.path.join(d, "proj.db")
+        if d and os.path.isfile(db) and os.access(db, os.R_OK):
+            return True
+    return False
+
+
+def _set_rasterio_proj_search_path(path: str) -> None:
+    """Point rasterio's GDAL at ``path`` now: rasterio applies ``PROJ_DATA`` as GDAL's PROJ
+    search path when it is imported (and again when its first ``rasterio.Env`` of the
+    process starts), so a value replaced after the import still holds for a CRS built
+    outside an Env."""
+    try:
+        from rasterio._env import set_proj_data_search_path
+    except Exception:
+        return
+    set_proj_data_search_path(path)
+
+
+# The PROJ search path configure_gdal_env last gave rasterio's GDAL (None: never).
+_RASTERIO_PROJ_PATH: Optional[str] = None
+
+
+def _point_rasterio_at(path: str) -> None:
+    """``_set_rasterio_proj_search_path(path)`` once per new value: every PROJ_DATA that
+    configure_gdal_env exports (the bundled data in place of an unreadable dir, a merged
+    dir of registered grids) must reach rasterio's search path too, or a transform built
+    without a new rasterio.Env misses the registered grids and PROJ takes a lower-accuracy
+    operation, or none. Not repeated for the same value (configure_gdal_env runs per row).
+    """
+    global _RASTERIO_PROJ_PATH
+    if path and path != _RASTERIO_PROJ_PATH:
+        _set_rasterio_proj_search_path(path)
+        _RASTERIO_PROJ_PATH = path
+
+
+def _search_order(base: str, extra: Sequence[str]) -> List[str]:
+    """`extra` dirs ahead of `base` (either may be os.pathsep-joined), de-duped, in order."""
+    parts: List[str] = []
     for d in list(extra) + ([base] if base else []):
         for seg in d.split(os.pathsep) if d else []:
             if seg and seg not in parts:
                 parts.append(seg)
-    return os.pathsep.join(parts)
+    return parts
+
+
+# One PROJ data directory per (search order) for this process, and the base each was
+# built from, so a later call that finds its own merged dir in PROJ_DATA unwraps it
+# instead of nesting it.
+_PROJ_DATA_DIRS: Dict[Tuple[str, ...], str] = {}
+_PROJ_DATA_BASES: Dict[str, str] = {}
+# The grid dirs _register_pyproj_search_dirs appended to pyproj's data dir (so a later, smaller set takes them out).
+_PYPROJ_ADDED: list = []
+# A directory that could not be listed leaves its files out of the merged directory. That
+# build is reused only until the time here (then rebuilt, which lists again): per-row
+# callers must not repeat the listing retries, and a dir that was unreachable once (FUSE)
+# must not stay missing for the life of the process.
+_PROJ_DATA_RETRY_AT: Dict[Tuple[str, ...], float] = {}
+_UNLISTABLE_RETRY_S = 60.0
+_WARNED_UNLISTABLE: set = set()  # dirs already named in a warning (once per process)
+# Keys whose directory is being (re)built right now; the others keep using the build
+# they have instead of waiting for it. Guarded by the lock below, which is held only to
+# read and publish: listing a dir can sit in retries for ~20 s.
+_PROJ_DATA_BUILDING: set = set()
+_PROJ_DATA_LOCK = threading.Lock()
+_MERGED_PREFIX = "gbx_proj_data_"
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _usable_merged_dir(path: str, uid: Optional[int]) -> bool:
+    """A real directory (not a symlink) owned by this user: another user's pre-made dir
+    of the same name is never trusted."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and (uid is None or st.st_uid == uid)
+
+
+def _list_dir(d: str) -> Optional[List[str]]:
+    """Sorted entry names of `d`; None if it still cannot be listed after the transient
+    retries every FUSE read gets (a UC Volume can miss for a moment even when healthy).
+
+    A dir that stays unlistable is named in one warning per process: its files are then
+    missing from PROJ_DATA, which silently costs accuracy (a grid is not applied). Such a
+    dir is tried once on later rebuilds (a quick miss), not retried for ~20 s again.
+    """
+    # core._retry, not ds._listing: importing the ds package registers every data source,
+    # which needs core.crs, and core.crs is what is importing this module right now.
+    from databricks.labs.gbx.core._retry import _retry_transient
+
+    once = {"attempts": 1} if d in _WARNED_UNLISTABLE else {}
+    try:
+        return sorted(_retry_transient(lambda: os.listdir(d), **once))
+    except OSError as e:
+        if d not in _WARNED_UNLISTABLE:
+            _WARNED_UNLISTABLE.add(d)
+            warnings.warn(
+                f"register_proj_grids: could not list the PROJ data directory {d!r} "
+                f"({e}); its files are left out of PROJ_DATA, so grids in it are not "
+                f"applied by the raster functions. Listing it again in "
+                f"{_UNLISTABLE_RETRY_S:g} s.",
+                RuntimeWarning,
+                stacklevel=5,
+            )
+        return None
+
+
+def _merged_entries(search: Sequence[str]) -> Tuple[Dict[str, str], List[str]]:
+    """`name -> target` for every entry of `search`'s dirs (first dir to hold a name wins
+    it, which is PROJ's own order for a multi-directory search path), and the dirs that
+    could not be listed."""
+    entries: Dict[str, str] = {}
+    unlisted: List[str] = []
+    for d in search:
+        names = _list_dir(d)
+        if names is None:
+            unlisted.append(d)
+            continue
+        for name in names:
+            entries.setdefault(name, os.path.abspath(os.path.join(d, name)))
+    return entries, unlisted
+
+
+def _build_merged_proj_dir(search: Sequence[str], entries: Dict[str, str]) -> str:
+    """Create (or reuse) ONE directory of symlinks to `entries` (see _merged_entries).
+
+    The directory name hashes the search order and the entries, so it is shared by every
+    process of the same user on the node and is rebuilt when a grid dir gains files. It
+    is built under a temp name and renamed into place, so readers never see it
+    half-populated. Raises OSError if it cannot be built (e.g. no symlink support).
+    """
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        local_temp_root,
+        new_local_temp_dir,
+    )
+
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    key = "\0".join(list(search) + [f"{n}={t}" for n, t in sorted(entries.items())])
+    digest = hashlib.sha256(key.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+    final = os.path.join(local_temp_root(), f"{_MERGED_PREFIX}{uid or 0}_{digest}")
+    if _usable_merged_dir(final, uid):
+        return final
+
+    tmp = new_local_temp_dir(_MERGED_PREFIX + "build_")
+    try:
+        for name, target in entries.items():
+            os.symlink(target, os.path.join(tmp, name))
+        try:
+            os.rename(tmp, final)
+            return final
+        except OSError:
+            # Another process won the rename (reuse its dir), or the name is taken by a
+            # directory this user does not own (keep the private one just built).
+            if _usable_merged_dir(final, uid):
+                shutil.rmtree(tmp, ignore_errors=True)
+                return final
+            return tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
+    """The single directory to export as PROJ_DATA: `extra_proj_dirs` ahead of `base`.
+
+    rasterio hands PROJ_DATA to GDAL as ONE search path (no os.pathsep split) every time
+    a rasterio Env starts, so an os.pathsep-joined value is a directory that does not
+    exist: proj.db is lost for every thread that opens it afterwards ("Cannot find
+    proj.db") and the registered grids are not found either. A merged directory of
+    symlinks gives every reader of PROJ_DATA (rasterio, pyogrio, PROJ) one real path.
+
+    Returns None when `base` is unknown: exporting the grid dirs alone would hide the
+    proj.db PROJ finds on its own. Falls back to `base` if the merged dir cannot be built.
+    """
+    if not base:
+        warnings.warn(
+            "register_proj_grids: the PROJ data directory is unknown (PROJ_DATA/PROJ_LIB "
+            "unset and no bundled rasterio PROJ data found), so the registered grid "
+            "directories are not added to PROJ_DATA for the raster functions.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return None
+    search = _search_order(base, extra_proj_dirs)
+    if len(search) == 1:
+        return search[0]
+    key = tuple(search)
+    with _PROJ_DATA_LOCK:
+        hit = _PROJ_DATA_DIRS.get(key)
+        retry_at = _PROJ_DATA_RETRY_AT.get(key)
+        usable = bool(hit) and (hit == base or os.path.isdir(hit))
+        # Within the retry window, or while another caller relists, keep the build we
+        # have: a degraded one still holds proj.db and every dir that did list.
+        if usable and (
+            retry_at is None or _now() < retry_at or key in _PROJ_DATA_BUILDING
+        ):
+            return hit
+        _PROJ_DATA_BUILDING.add(key)
+    try:
+        # Outside the lock: the listing retries sleep for ~20 s on a dir that is down.
+        entries, unlisted = _merged_entries(search)
+        try:
+            path = _build_merged_proj_dir(search, entries)
+        except OSError as e:
+            warnings.warn(
+                f"register_proj_grids: could not build a merged PROJ data directory "
+                f"({e}); the raster functions will not see the registered grid "
+                f"directories {list(extra_proj_dirs)}.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            path = base  # cached too: per-row callers must not retry the build
+    except BaseException:
+        with _PROJ_DATA_LOCK:
+            _PROJ_DATA_BUILDING.discard(key)
+        raise
+    with _PROJ_DATA_LOCK:
+        _PROJ_DATA_BUILDING.discard(key)
+        _PROJ_DATA_DIRS[key] = path
+        if unlisted:
+            _PROJ_DATA_RETRY_AT[key] = _now() + _UNLISTABLE_RETRY_S
+        else:
+            _PROJ_DATA_RETRY_AT.pop(key, None)
+        if path != base:
+            _PROJ_DATA_BASES[path] = base
+    return path
+
+
+def _set_osr_search_paths(dirs: Sequence[str]) -> None:
+    """Set GDAL's PROJ search path on the process's default PROJ context (osr.SetPROJSearchPaths), so a grid directory
+    registered after the context was built reaches the raster transforms. Only when osgeo is rasterio's GDAL: another
+    GDAL's context is not this process's."""
+    try:
+        from databricks.labs.gbx import _osgeo
+
+        if not _osgeo._same_libgdal_report().get("shared"):
+            return
+        from osgeo import osr
+    except (
+        Exception
+    ):  # noqa: BLE001 - no payload osgeo: the environment variable is all there is
+        return
+    osr.SetPROJSearchPaths(list(dirs))
 
 
 def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
     """Add custom grid dirs to pyproj's PROJ search path (best-effort, idempotent).
 
-    Setting ``PROJ_DATA`` in the environment is enough for the GDAL/rasterio raster
-    path, but NOT for pyproj — the light vector transform engine. pyproj resolves and
-    caches its PROJ data dir at import and installs it on the proj context explicitly,
-    so a ``PROJ_DATA`` env var changed *afterwards* is ignored for grids loaded through
-    a pyproj ``Transformer``. Registering the dirs via ``pyproj.datadir`` is what makes
-    an in-process transform actually find a user grid.
+    pyproj resolves and caches its PROJ data dir at import and installs it on the proj
+    context explicitly, so a ``PROJ_DATA`` env var changed *afterwards* is ignored for
+    grids loaded through a pyproj ``Transformer``. Registering the dirs via
+    ``pyproj.datadir`` is what makes an in-process transform find a user grid. (The
+    GDAL/rasterio side has the same limit: a PROJ context that already exists keeps the
+    search path it was built with, so ``configure_gdal_env`` also sets it with
+    ``osr.SetPROJSearchPaths``.)
 
     Dirs are APPENDED (never prepended): pyproj's own data dir stays first so proj.db
     resolution is untouched, and PROJ searches grid files across all search paths
     regardless of order (grid filenames are unique, so there is no override contest).
-    Only fires when a dir is genuinely new, so repeated per-row calls are cheap.
+    A dir added here earlier and not in ``extra_proj_dirs`` now (a ``replace=True``
+    registration) is taken out again. Only fires when the set changes, so repeated
+    per-row calls are cheap.
     """
     try:
         from pyproj.datadir import get_data_dir, set_data_dir
@@ -83,21 +358,1041 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
     except Exception:
         return
     parts = [p for p in current.split(os.pathsep) if p]
-    added = [d for d in extra_proj_dirs if d and d not in parts]
-    if added:
-        set_data_dir(os.pathsep.join(parts + added))
+    wanted = [d for d in extra_proj_dirs if d]
+    dropped = [d for d in _PYPROJ_ADDED if d not in wanted]
+    kept = [p for p in parts if p not in dropped]
+    added = [d for d in wanted if d not in kept]
+    if added or dropped:
+        set_data_dir(os.pathsep.join(kept + added))
+    _PYPROJ_ADDED[:] = [d for d in _PYPROJ_ADDED if d in wanted] + [
+        d for d in added if d not in _PYPROJ_ADDED
+    ]
+
+
+def pyproj_grid_dirs() -> list:
+    """The PROJ grid dirs now on pyproj's search path because ``configure_gdal_env`` put them there.
+
+    A worker holds no driver registry; its UDF closure adds the grid dirs it carries, and this is
+    how code that runs after that finds them again.
+    """
+    return list(_PYPROJ_ADDED)
+
+
+# To find the sidecar files of a raster it opens (external overviews .ovr, masks .msk,
+# .aux.xml, world files), GDAL lists the file's folder by default. Over a Volume's FUSE
+# mount that listing is slow and grows with the folder: 0.3 s to 10 s for one open in a
+# folder of 745 GeoTIFFs on a Serverless worker. configure_gdal_env sets the option to
+# TRUE for the process: GDAL then reads no listing and checks each sidecar by name
+# (GDALOpenInfo leaves the sibling list NULL; CPLCheckForFile, GDALReadWorldFile2 and the
+# .aux.xml lookup stat each candidate, lower- and upper-case extension), so sidecars are
+# still found, at 5 to 7 name checks an open, which on Serverless FUSE cost about what the
+# listing did. open_raster goes one step further for the light tier's own opens of local
+# and Volume files: it lists each folder once per process (_FolderListings) and opens a
+# file the listing shows no sidecar for with EMPTY_DIR (GDAL checks nothing), a file with
+# sidecars GDAL finds by name with TRUE, and anything else with NO (GDAL's own listing,
+# which matches names case-insensitively). A value set by the user, NO included, is kept
+# and decides every open. GDAL reads the option at each open, and a rasterio.Env value
+# wins over the environment variable.
+_READDIR_ON_OPEN = "GDAL_DISABLE_READDIR_ON_OPEN"
+_READDIR_PROCESS_VALUE = "TRUE"
+# True once configure_gdal_env set the option (it was not set by the user): only then does
+# open_raster choose a value per open.
+_READDIR_SET_HERE = False
+
+# The sidecar suffixes GDAL looks for by exact name when it has no sibling list (TRUE): the
+# file's name plus a suffix, and the file's stem with another extension. From GDAL 3.13
+# (the same in 3.12): .aux.xml (gcore/gdalpamdataset.cpp:898-909); .ovr/.OVR
+# (gcore/gdaldefaultoverviews.cpp:267-284); .msk/.MSK (:1614-1631); .aux/.AUX
+# (:313-325, gcore/gdal_misc.cpp:4541-4572 and :4660-4671); world files, the derived first+last+"w"
+# extension, extension+"w" and "wld", each lower then upper case (gcore/gdal_misc.cpp:
+# 2680-2771; frmts/gtiff/gtiffdataset_read.cpp:6096-6106); .tab (gdal_misc.cpp:2465-2500),
+# .xml and .hdr (gtiffdataset_read.cpp:4219-4262, 4281, 6741).
+_NAME_SIDECARS = (".aux.xml", ".ovr", ".OVR", ".msk", ".MSK", ".aux", ".AUX")
+_STEM_SIDECAR_EXTS = ("wld", "tab", "xml", "hdr", "aux")
+# The vendor metadata files GDAL's metadata readers look for under names not made from the
+# raster's stem (gcore/mdreader/reader_*.cpp): summary.txt (ALOS), *_MTL.txt (Landsat),
+# DIM_*.XML and RPC_*.XML (Pleiades), METADATA.DIM (SPOT), *.pass and *.rpc (EROS), and
+# the .txt / .hdr files ALOS derives. A folder holding any of them is left to GDAL's own
+# listing (NO), as without GeoBrix. The readers' stem-named files (*.IMD, *.RPB, *.XML,
+# *.PVL, *_rpc.txt, *_METADATA.XML) are candidates of the raster itself.
+_VENDOR_METADATA_EXTS = frozenset((".txt", ".dim", ".pass", ".rpc", ".hdr"))
+_VENDOR_METADATA_PREFIXES = ("dim_", "rpc_")
+# The only extensions a file may have to be opened with EMPTY_DIR: formats whose GDAL driver
+# opens no other file but the sidecars the listing already checks (named after the file:
+# .aux.xml, .ovr, .msk, world files, ...): GTiff, PNG, JPEG, JPEG 2000, netCDF, HDF4/HDF5
+# (HDF-EOS), GRIB (its .idx index is named after the file, so it is a candidate). A file of
+# any other kind keeps TRUE: a VRT or GTI opens its sources, some while it opens (a warped
+# VRT: under EMPTY_DIR its source lost its external .ovr), an .xml or .safe or .json can be
+# a dataset that names other files, an HFA .img has its .rrd/.ige, a .zarr opens its chunks.
+_EMPTY_DIR_EXTS = frozenset(
+    (
+        ".tif",
+        ".tiff",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".jp2",
+        ".nc",
+        ".h5",
+        ".he5",
+        ".hdf",
+        ".grib",
+        ".grb",
+        ".grb2",
+        ".grib2",
+    )
+)
+
+
+def _vendor_metadata(low_name: str) -> bool:
+    """True for a (lower-cased) folder entry a GDAL metadata reader may look for."""
+    ext = os.path.splitext(low_name)[1]
+    if ext in _VENDOR_METADATA_EXTS:
+        return True
+    return ext == ".xml" and low_name.startswith(_VENDOR_METADATA_PREFIXES)
+
+
+def _stat_sidecars(name: str) -> frozenset:
+    """Every sidecar name GDAL checks by exact name for the file *name* (see above)."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    exts = list(_STEM_SIDECAR_EXTS)
+    if len(ext) >= 2:
+        exts += [ext[0] + ext[-1] + "w", ext + "w"]
+    names = {name + s for s in _NAME_SIDECARS}
+    for e in exts:
+        names.update((f"{stem}.{e.lower()}", f"{stem}.{e.upper()}"))
+    return frozenset(names)
+
+
+class _IndexedNames(frozenset):
+    """The names of one folder, indexed for ``readdir_mode_for``: how many are vendor
+    metadata files, and the names sorted by lower case, so the candidates of a file (the
+    entries that start, in any case, with its stem and then ``.`` or ``_``) are two slices
+    of a sorted list found by bisection, where a pass over the names costs a few
+    milliseconds an open in a folder of 10,000. Built once per listing."""
+
+    def __init__(self, names=()):
+        super().__init__()
+        pairs = []
+        vendor = 0
+        for n in self:
+            low = n.lower()
+            pairs.append(
+                (n if low == n else low, n)
+            )  # the same string when it is lower case
+            if _vendor_metadata(low):
+                vendor += 1
+        pairs.sort()
+        self._vendor = vendor
+        self._pairs = pairs
+
+    def vendor_besides(self, name: str) -> bool:
+        """Whether a vendor metadata file other than *name* itself is in the folder."""
+        own = 1 if name in self and _vendor_metadata(name.lower()) else 0
+        return self._vendor > own
+
+    def candidates(self, prefix: str, name: str) -> list:
+        """The names other than *name* whose lower case starts with ``prefix.`` or ``prefix_``."""
+        out = []
+        for sep, end in (
+            (".", "/"),
+            ("_", "`"),
+        ):  # "/" and "`" are the characters after "." and "_"
+            lo = bisect.bisect_left(self._pairs, (prefix + sep,))
+            hi = bisect.bisect_left(self._pairs, (prefix + end,), lo)
+            out.extend(n for _low, n in self._pairs[lo:hi] if n != name)
+        return out
+
+
+def readdir_mode_for(name: str, folder_names) -> str:
+    """The GDAL_DISABLE_READDIR_ON_OPEN value an open of the file *name* takes, given the
+    names in its folder: ``EMPTY_DIR`` when nothing in the folder can be a sidecar of it,
+    ``TRUE`` when every candidate is a name GDAL checks by exact name, else ``NO``.
+
+    A candidate is a folder entry, other than the file, whose name starts, in any case,
+    with the file's stem and then ``.`` or ``_``. A candidate GDAL would not find by exact
+    name (``x.Tfw`` beside ``x.tif``, ``x.png``, ``x_rpc.txt``) or a vendor metadata file
+    anywhere in the folder leaves the open to GDAL's own listing (``NO``). With no
+    candidate, only a file of an allowlisted single-file format (_EMPTY_DIR_EXTS) gets
+    ``EMPTY_DIR``; any other gets ``TRUE``.
+    """
+    stem = name.rpartition(".")[0] or name
+    prefix = stem.lower()
+    if isinstance(folder_names, _IndexedNames):
+        # a listing's own index: the same rule, answered without a pass over every name
+        vendor = folder_names.vendor_besides(name)
+        candidates = folder_names.candidates(prefix, name)
+    else:
+        candidates = []
+        vendor = False
+        for other in folder_names:
+            if other == name:
+                continue
+            low = other.lower()
+            if low.startswith(prefix) and low[len(prefix) : len(prefix) + 1] in (
+                ".",
+                "_",
+            ):
+                candidates.append(other)
+            if _vendor_metadata(low):
+                vendor = True
+    if vendor:
+        return "NO"
+    if not candidates:
+        # EMPTY_DIR only for a format that opens no other file (_EMPTY_DIR_EXTS): the files
+        # a VRT, GTI or other multi-file format opens while it opens would take EMPTY_DIR
+        # too and lose their own sidecars. Any other kind checks its sidecars by name.
+        ext = os.path.splitext(name)[1].lower()
+        return "EMPTY_DIR" if ext in _EMPTY_DIR_EXTS else "TRUE"
+    exact = _stat_sidecars(name)
+    return "TRUE" if all(c in exact for c in candidates) else "NO"
+
+
+# A folder held as larger than the listing bound (_MAX_LISTED_NAMES, far above GDAL's own
+# listing limit, see listing_cap), and a folder that could not be listed (retried after
+# _UNLISTABLE_LISTING_RETRY_S).
+#
+# The bound is what _TOO_LARGE guards: a listing is held in memory and costs the time of the
+# whole folder (a Volume returns a folder's names only once it has fetched them all: 0.5 s
+# for 1,000 names, 14.5 s for 40,000 on a Serverless worker). GDAL's own limit (1,000) used
+# to be the bound, which left every file of a bigger folder under the process value TRUE,
+# where GDAL stats each sidecar name of each open: on a Volume's FUSE under concurrent load
+# a 10,000-tile read took 1.7 to 3.1 times as long as with no look-up. A folder up to the
+# bound is now listed once per process, and each file takes the mode its sidecars call for.
+_TOO_LARGE = object()
+_UNLISTABLE = object()
+_UNLISTABLE_LISTING_RETRY_S = 60.0
+# The most names a folder may hold to be listed (a larger one is held as _TOO_LARGE and its
+# files keep TRUE), and the most names held across all listings (the least recently used go
+# first). Measured with tracemalloc on 100,000 names held (set, sorted index and names):
+# about 110 bytes a name for the set and the index, plus the name itself (41 bytes and one
+# per character), and a mixed-case name is held a second time lower-cased. For 21-character
+# names that is 168 bytes lower-case and 230 mixed-case; for 49-character names 196 and 286.
+# So a folder at the bound holds up to 29 MB and the budget up to 86 MB, with a listing in
+# progress adding its transient list of names.
+_MAX_LISTED_NAMES = 100_000
+_MAX_TOTAL_NAMES = 300_000
+# A relisting takes at least this many times what the last listing of the folder took.
+_RELIST_COST_FACTOR = 10.0
+# A file missing from a held listing lists its folder again at most this often. A listing
+# of a folder at the cap (1,000 names) cost 0.25-0.9 s on a Serverless worker; once per
+# 10 s keeps that under a tenth of the time of a worker that opens new files of a growing
+# folder all the time, and a file written meanwhile is opened with TRUE (by-name checks:
+# correct, just not the faster EMPTY_DIR) until the next listing.
+_RELIST_INTERVAL_S = 10.0
+
+
+def _gdal_atoi(raw) -> int:
+    """``atoi`` as GDAL applies it to a config option: leading spaces, an optional sign,
+    the leading digits; 0 when there are none ("5.5" -> 5, "12x" -> 12, "abc" -> 0)."""
+    text = str(raw).lstrip()
+    sign = 1
+    if text[:1] in ("+", "-"):
+        sign = -1 if text[0] == "-" else 1
+        text = text[1:]
+    digits = ""
+    for ch in text:
+        if ch not in "0123456789":
+            break
+        digits += ch
+    return sign * int(digits) if digits else 0
+
+
+def listing_ceiling() -> int:
+    """The most names a folder may hold for the light tier to list it (``_MAX_LISTED_NAMES``
+    unless changed on ``_LISTINGS``): past it the folder is held as too large and its files
+    keep the process value. Not GDAL's own limit (listing_cap), which is far lower."""
+    return _LISTINGS.max_listed_names
+
+
+def listing_cap() -> Optional[int]:
+    """GDAL's own limit on a folder listing, GDAL_READDIR_LIMIT_ON_OPEN (1000 unless set),
+    read as GDAL reads it (atoi): past it GDAL drops the listing and checks sidecars by
+    name (gcore/gdalopeninfo.cpp, GetSiblingFiles). None for no limit, a value of 0 or less
+    (as GDAL's ``nMaxFiles > 0`` test treats it, so "abc" is no limit)."""
+    raw = None
+    try:
+        from rasterio.env import get_gdal_config
+
+        raw = get_gdal_config("GDAL_READDIR_LIMIT_ON_OPEN", normalize=False)
+    except Exception:  # noqa: BLE001
+        raw = os.environ.get("GDAL_READDIR_LIMIT_ON_OPEN")
+    cap = 1000 if raw is None else _gdal_atoi(raw)
+    return cap if cap > 0 else None
+
+
+# The entries GDAL's own folder listing holds that a scandir does not: "." and "..".
+_GDAL_LISTING_DOT_ENTRIES = 2
+
+# A folder is listed once this worker has opened this many of its files: a folder it opens
+# one file of (one scene a folder) is never listed.
+_LIST_AFTER_OPENS = 2
+
+
+class _Flight:
+    """A folder listing in progress: ``done`` is set when ``result`` is there."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.result = None
+
+
+class _FolderListings:
+    """The names in each folder, listed once per process (os.scandir), most recent last.
+
+    A folder is listed once this worker has opened ``list_after_opens`` distinct files of
+    it (however many names it holds, up to ``max_listed_names``); before that its files are opened with the process TRUE (by-name checks), and a
+    folder the worker opens one file of (however often) is never listed. The listing is
+    not moved to a background thread: on a Volume an open in the folder waits for a listing
+    in progress there anyway (a fresh-file open took the 14.4-15.4 s of a 40,000-file
+    listing running in another thread), and the FUSE mount fetches the whole folder before
+    it returns the first name, so a scan stopped at the cap costs as much as a full one.
+
+    Keyed by the folder's resolved path (resolved once per folder string: a FUSE stat costs
+    milliseconds; at most ``4 * max_folders`` folder strings and open records are kept). At
+    most ``max_folders`` listings are held, and at most ``max_total_names`` names across
+    them, the least recently used dropped first. A folder with more than
+    ``max_listed_names`` names (far above GDAL's own listing limit, listing_cap), found by a
+    listing or told by the reader (mark_too_large), goes into its own set of at most
+    ``max_too_large`` folders: its files keep TRUE, the by-name checks, and it is not listed
+    again. A folder that cannot be listed is not tried again for
+    ``_UNLISTABLE_LISTING_RETRY_S``. A file missing from a held listing lists the folder
+    again, at most once per ``relist_interval_s`` and no sooner than ``_RELIST_COST_FACTOR``
+    times what the last listing took, a wait kept when a listing is dropped to stay in budget
+    (its open meanwhile keeps the process value, as before the listing existed). A folder is
+    listed by one thread at a time: the others that miss it meanwhile wait for that listing.
+    A sidecar written after the folder was listed is not seen until the folder is listed
+    again (a file missing from it, or a new worker).
+    """
+
+    def __init__(
+        self,
+        max_folders: int = 64,
+        relist_interval_s: float = _RELIST_INTERVAL_S,
+        list_after_opens: int = _LIST_AFTER_OPENS,
+        max_too_large: int = 1024,
+        max_listed_names: int = _MAX_LISTED_NAMES,
+        max_total_names: int = _MAX_TOTAL_NAMES,
+    ):
+        from collections import OrderedDict
+
+        self.max_folders = max_folders
+        self.relist_interval_s = relist_interval_s
+        self.list_after_opens = list_after_opens
+        self.max_too_large = max_too_large
+        self.max_listed_names = max_listed_names
+        self.max_total_names = max_total_names
+        # key -> (_IndexedNames | _UNLISTABLE, time listed, seconds the listing took)
+        self._names: "OrderedDict[str, tuple]" = OrderedDict()
+        self._too_large: "OrderedDict[str, None]" = OrderedDict()
+        self._resolved: "OrderedDict[str, str]" = OrderedDict()
+        self._opened: "OrderedDict[str, set]" = OrderedDict()
+        # key -> (time listed, seconds the listing took, could not be listed) of a listing
+        # dropped to stay in budget: its names go, the wait before a relisting stays
+        self._dropped: "OrderedDict[str, tuple]" = OrderedDict()
+        # key -> the listing in progress, so that a folder is listed by one thread at a time
+        self._inflight: "dict[str, _Flight]" = {}
+        self._lock = threading.Lock()
+        self.listings = 0
+
+    def clear(self) -> None:
+        with self._lock:
+            self._names.clear()
+            self._dropped.clear()
+            self._too_large.clear()
+            self._resolved.clear()
+            self._opened.clear()
+
+    def _list(self, folder: str):
+        bound = self.max_listed_names
+        names = []
+        try:
+            with os.scandir(folder) as it:
+                for entry in it:
+                    names.append(entry.name)
+                    if len(names) > bound:
+                        self.listings += 1
+                        return _TOO_LARGE
+        except OSError:
+            return None
+        self.listings += 1
+        return _IndexedNames(names)
+
+    def _key(self, folder: str) -> str:
+        with self._lock:
+            key = self._resolved.get(folder)
+            if key is not None:
+                self._resolved.move_to_end(folder)
+                return key
+        key = os.path.realpath(folder)
+        with self._lock:
+            self._resolved[folder] = key
+            while len(self._resolved) > 4 * self.max_folders:
+                self._resolved.popitem(last=False)
+        return key
+
+    def _hold_too_large(self, key: str) -> None:
+        # with self._lock held
+        self._too_large[key] = None
+        self._too_large.move_to_end(key)
+        while len(self._too_large) > self.max_too_large:
+            self._too_large.popitem(last=False)
+        self._names.pop(key, None)
+        self._dropped.pop(key, None)
+
+    def _store(self, key: str, folder: str, seen=None):
+        """List *folder* and hold the listing, once at a time per folder: a thread that finds
+        the folder being listed waits for that listing and takes its result. *seen* is the
+        entry the caller found held (None: none), so that a thread which read the entry just
+        before another stored a newer one takes the newer one rather than listing again.
+        """
+        with self._lock:
+            flight = self._inflight.get(key)
+            if flight is None:
+                held = self._names.get(key)
+                if held is not None and held is not seen:
+                    return None if held[0] is _UNLISTABLE else held[0]
+                if key in self._too_large:
+                    return _TOO_LARGE
+                flight = self._inflight[key] = _Flight()
+                leader = True
+            else:
+                leader = False
+        if not leader:
+            flight.done.wait()
+            return flight.result
+        try:
+            flight.result = self._list_and_hold(key, folder)
+            return flight.result
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+            flight.done.set()
+
+    def _list_and_hold(self, key: str, folder: str):
+        started = _now()
+        names = self._list(folder)
+        listed_at = _now()
+        with self._lock:
+            if names is _TOO_LARGE:
+                self._hold_too_large(key)
+                return _TOO_LARGE
+            self._names[key] = (
+                _UNLISTABLE if names is None else names,
+                listed_at,
+                listed_at - started,
+            )
+            self._names.move_to_end(key)
+            self._dropped.pop(key, None)
+            total = sum(
+                len(v[0]) for v in self._names.values() if v[0] is not _UNLISTABLE
+            )
+            while len(self._names) > self.max_folders or (
+                total > self.max_total_names and len(self._names) > 1
+            ):
+                k, (dropped, at, took) = self._names.popitem(last=False)
+                self._dropped[k] = (at, took, dropped is _UNLISTABLE)
+                if dropped is not _UNLISTABLE:
+                    total -= len(dropped)
+            while len(self._dropped) > 4 * self.max_folders:
+                self._dropped.popitem(last=False)
+        return names
+
+    def mark_too_large(self, folder: str) -> None:
+        """Hold *folder* as too large without listing it (see note_folder_files), unless a
+        listing of it is held already: a real listing outranks a hint."""
+        key = self._key(folder)
+        with self._lock:
+            held = self._names.get(key)
+            if held is not None and held[0] is not _UNLISTABLE:
+                self._names.move_to_end(key)
+                return
+            self._hold_too_large(key)
+
+    def _wait(self, took: float, unlistable: bool) -> float:
+        """The least time before a folder is listed again after a listing that took *took*."""
+        if unlistable:
+            return _UNLISTABLE_LISTING_RETRY_S
+        return max(self.relist_interval_s, _RELIST_COST_FACTOR * took)
+
+    def names(self, folder: str, must_hold: str, now: bool = False):
+        """The names held for *folder* (a frozenset), ``_TOO_LARGE``, or None (not listed
+        yet, or cannot be listed). Lists the folder at the ``list_after_opens``-th distinct
+        file of it this worker opens (with *now*, at the first: a caller that looks the
+        same file up again and again, see sidecar_files), and again when *must_hold* is
+        missing from the names held and the folder was listed at least
+        ``relist_interval_s`` ago (with *now*, once that wait is over whatever the names
+        hold, so a file written beside *must_hold* is seen within it)."""
+        key = self._key(folder)
+        with self._lock:
+            if key in self._too_large:
+                self._too_large.move_to_end(key)
+                return _TOO_LARGE
+            held = self._names.get(key)
+            dropped = None
+            if held is not None:
+                self._names.move_to_end(key)
+            else:
+                dropped = self._dropped.get(key)
+                opened = self._opened.get(key)
+                if opened is None:
+                    opened = self._opened[key] = set()
+                if len(opened) < self.list_after_opens:
+                    opened.add(must_hold)
+                self._opened.move_to_end(key)
+                while len(self._opened) > 4 * self.max_folders:
+                    self._opened.popitem(last=False)
+                distinct = len(opened)
+        if held is None:
+            if distinct < self.list_after_opens and not now:
+                return None
+            if dropped is not None:
+                # listed before and dropped to stay in budget: the wait for a relisting
+                # holds as if the names were still held, or each open would list again
+                at, took, unlistable = dropped
+                if _now() - at < self._wait(took, unlistable):
+                    return None
+            names = self._store(key, folder, seen=None)
+            return names if names is _TOO_LARGE or names else None
+        names, listed_at, took = held
+        if names is _UNLISTABLE:
+            if _now() - listed_at < self._wait(took, True):
+                return None
+            names = self._store(key, folder, seen=held)
+            return names if names is _TOO_LARGE or names else None
+        due = _now() - listed_at >= self._wait(took, False)
+        if must_hold in names and not (now and due):
+            return names
+        if due:
+            relisted = self._store(key, folder, seen=held)
+            if relisted is _TOO_LARGE or relisted:
+                return relisted
+        return names  # without must_hold the caller keeps TRUE for this open
+
+
+_LISTINGS = _FolderListings()
+
+# The tile metadata key the raster_gbx reader stamps on each virtual tile it emits: the
+# number of files it found in the folder of the tile's path when it listed the folder at
+# planning time (only files the reader accepted, so never more than the folder holds).
+FOLDER_FILES_KEY = "path_folder_files"
+
+
+def note_folder_files(path, count) -> None:
+    """Take *count*, a tile's ``path_folder_files``, as a hint about the folder of *path*.
+
+    The value is data (a tile row can carry anything), so it is only ever allowed to choose
+    between two correct modes: a count over the listing bound (listing_ceiling) holds the
+    folder as too large without listing it, and its files keep TRUE (by-name checks);
+    anything else (a count at or under the bound, none, or one that is neither a non-negative int nor a
+    plain ASCII decimal string) does nothing, so
+    the folder is listed as without a hint and its listing decides per file. A hint never
+    yields EMPTY_DIR: only a real listing of the folder can (readdir_mode_for).
+    """
+    if isinstance(count, int) and not isinstance(count, bool):
+        n = count  # the reader's own count (partition.folder_files)
+    else:
+        text = count.strip() if isinstance(count, str) else None
+        if not text or not (text.isascii() and text.isdigit()):
+            return  # not a plain decimal count (None, float, "inf", unicode): no hint
+        n = int(text)
+    if n < 0:
+        return
+    if n <= listing_ceiling():
+        return
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return
+    _LISTINGS.mark_too_large(os.path.dirname(os.path.abspath(p)))
+
+
+# The tile metadata key the raster_gbx reader stamps (as "1") on a virtual tile whose file has
+# nothing beside it in its folder that a GDAL open could pick up (no sidecar, no vendor
+# metadata file: readdir_mode_for gave EMPTY_DIR), for a folder past GDAL's listing limit. The
+# reader sees the folder's names once, on the driver, while it enumerates the files; without
+# the stamp every Python worker lists the same folder again at its second open (14.5 s for
+# 40,000 names alone, 30 to 60 s with a node's workers listing together) or, once the folder is
+# held as too large, checks each sidecar name by name (about 1.4 s an open on a Volume's FUSE).
+# A stamp is data like the folder count, but it can only make GDAL skip sidecars of that one
+# file, which a row that says so wrongly asks for itself.
+SIDECAR_FREE_KEY = "path_sidecar_free"
+# A stamp is held for a minute, and every open of a stamped tile renews it (open_tile notes the
+# tile's hints at each open). A stamp not renewed since was noted for a file that is no longer
+# opened as that tile: after the minute the file takes the listing's rule again, so a sidecar
+# written (or a file replaced) in between is found, as for a folder listed once per worker.
+_SIDECAR_FREE_TTL_S = 60.0
+_SIDECAR_FREE: dict = (
+    {}
+)  # path -> time noted, insertion-ordered: the least recently noted go first
+_SIDECAR_FREE_MAX = 4096
+_SIDECAR_FREE_LOCK = threading.Lock()
+
+
+def note_sidecar_free(path, flag) -> None:
+    """Take *flag*, a tile's ``path_sidecar_free``, as the reader's word that *path* has no
+    sidecar: its opens for the next minute take ``EMPTY_DIR`` (see readdir_mode) without
+    listing its folder. Anything but ``"1"`` (or ``True``) does nothing."""
+    if not (flag is True or (isinstance(flag, str) and flag.strip() == "1")):
+        return
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return
+    key = os.path.abspath(p)
+    with _SIDECAR_FREE_LOCK:
+        _SIDECAR_FREE.pop(key, None)
+        _SIDECAR_FREE[key] = _now()
+        while len(_SIDECAR_FREE) > _SIDECAR_FREE_MAX:
+            del _SIDECAR_FREE[next(iter(_SIDECAR_FREE))]
+
+
+def note_tile_hints(path, metadata) -> None:
+    """Take the reader's hints a tile carries about the folder of its *path*: the count of
+    files (note_folder_files) and the no-sidecar stamp (note_sidecar_free)."""
+    md = metadata or {}
+    note_folder_files(path, md.get(FOLDER_FILES_KEY))
+    note_sidecar_free(path, md.get(SIDECAR_FREE_KEY))
+
+
+def _sidecar_free(abs_path: str) -> bool:
+    """True while the stamp noted for *abs_path* is under its time to live; an expired one is dropped."""
+    with _SIDECAR_FREE_LOCK:
+        noted = _SIDECAR_FREE.get(abs_path)
+        if noted is None:
+            return False
+        if _now() - noted >= _SIDECAR_FREE_TTL_S:
+            del _SIDECAR_FREE[abs_path]
+            return False
+        return True
+
+
+def _is_plain_file_path(path: str) -> bool:
+    """A local or Volume file path; not a GDAL /vsi path, URL or DRIVER:... string."""
+    if path.startswith("/vsi") or "://" in path:
+        return False
+    head = path.split("/", 1)[0]
+    return ":" not in head
+
+
+# The companion files a raster driver reads beside its main file, by exact name, besides the ones GDAL checks for every
+# format (_stat_sidecars): ESRI/ENVI headers and projection files, SAGA's header, statistics and colour tables, and the
+# Erdas rrd and ige files. A materialized read has to carry them, or its bytes lose the CRS and NoData they hold.
+_COMPANION_SUFFIXES = (".hdr", ".prj", ".stx", ".clr", ".rrd", ".ige")
+_COMPANION_STEM_EXTS = ("prj", "sgrd", "mgrd", "stx", "clr", "rrd", "ige")
+
+
+def sidecar_files(path, listed: bool = False) -> list:
+    """The sidecar files that exist beside the raster file *path*, as full paths (sorted, the file itself left out).
+
+    A sidecar is a file GDAL reads with the main one: ``<name>.aux.xml``, ``.ovr`` and ``.msk``, a world file, and
+    the companions of the formats that keep their georeferencing or NoData apart (``.hdr``, ``.prj``, ``.sgrd``).
+    They are looked up by name, as GDAL does with ``GDAL_DISABLE_READDIR_ON_OPEN=TRUE``, so a Volume's folder is not
+    listed. A file the reader stamped as having none (note_sidecar_free) and a path that is not a local or Volume file
+    have none.
+
+    With *listed* the folder's names are taken from its listing (``_FolderListings``, listed at the first call and held
+    for the process, within the listing bound), and only the names in it are looked up: about fifty names are checked
+    one by one otherwise, each a stat that a Volume's FUSE answers in milliseconds, for a caller that asks again at
+    every use of the same file (``raster_source_signature``). A folder held as too large, one that cannot be listed,
+    and a file missing from the names held (written since the listing) are checked by name. The listing is taken again
+    once its wait is over (``relist_interval_s``, 10 s, or ten times what it took), so a sidecar written beside the file
+    is seen within that wait; one changed in place is seen at once (its size and mtime are a stat of a listed name).
+    """
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return []
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return []
+    abs_path = os.path.abspath(p)
+    if _sidecar_free(abs_path):
+        return []
+    folder, name = os.path.split(abs_path)
+    stem = name.rpartition(".")[0] or name
+    names = set(_stat_sidecars(name))
+    for suffix in _COMPANION_SUFFIXES:
+        names.update((name + suffix, name + suffix.upper()))
+    for ext in _COMPANION_STEM_EXTS:
+        names.update((f"{stem}.{ext}", f"{stem}.{ext.upper()}"))
+    names.discard(name)
+    if listed:
+        held = _LISTINGS.names(folder, name, now=True)
+        if isinstance(held, _IndexedNames) and name in held:
+            # the folder's own spellings of the names looked for (case-blind: a case-blind folder answers a stat of
+            # either spelling), the rest of them known absent
+            # (every sidecar name starts with the file's stem and a dot: the candidates of the file). Only the exact
+            # names GDAL looks up count, as the by-name stats below find them on a case-sensitive folder
+            names = {n for n in held.candidates(stem.lower(), name) if n in names}
+    found, seen = [], set()
+    for n in sorted(
+        names, key=lambda x: (x != x.lower(), x)
+    ):  # a lower-case spelling first
+        full = os.path.join(folder, n)
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        key = (
+            st.st_dev,
+            st.st_ino,
+        )  # a case-blind folder shows one file under both spellings
+        if key in seen or not os.path.isfile(full):
+            continue
+        seen.add(key)
+        found.append(full)
+    return found
+
+
+def copied_sidecar_files(path, listed: bool = False) -> list:
+    """The sidecar files a worker-local copy of the raster *path* carries: :func:`sidecar_files` without the ``.ovr``.
+
+    An external overview file holds reduced-resolution copies of the pixels, which no read of the staged copy needs (a
+    tile is cut at full resolution, and the CRS and NoData an ``.ovr`` could not hold are in the other sidecars) and
+    which can be a large part of the file's size. The staged copy of a raster (``StageCache``), the Volume fallback copy
+    (``_stage_local_if_needed``) and ``rst_fromfile`` all take this list, so they agree on what is copied.
+    """
+    return [f for f in sidecar_files(path, listed) if not f.lower().endswith(".ovr")]
+
+
+def _same_value(a, b) -> bool:
+    if isinstance(a, float) and isinstance(b, float) and a != a and b != b:
+        return True
+    return a == b
+
+
+# GDAL's texts (in rasterio's ``RasterioIOError``, which carries no errno) for a failure of the file system rather than of
+# the file: a miss on the mount, and the I/O failures a Volume's FUSE gives for a while. They are retried.
+_TRANSIENT_TEXTS = (
+    "No such file or directory",
+    "I/O error",
+    "Input/output error",
+    "Transport endpoint is not connected",
+    "Stale file handle",
+    "Resource temporarily unavailable",
+)
+
+
+class _Unreadable(Exception):
+    """A file GDAL opened and could not read: it leaves the transient retry at once (see _retry_miss)."""
+
+    def __init__(self, exc: BaseException):
+        super().__init__(str(exc))
+        self.exc = exc
+
+
+def _retry_miss(fn, path=None):
+    """``_retry_transient(fn)`` for the failures a Volume's FUSE gives for a while (a missing file, a failed system
+    call), not for a raster GDAL reads and refuses: rasterio raises that as an ``OSError`` too (``RasterioIOError``,
+    "not recognized as being in a supported file format", a truncated header), and ten tries with their waits would make
+    a corrupt file fail after about twenty seconds instead of at once."""
+    from databricks.labs.gbx.core._retry import _retry_transient
+
+    def attempt():
+        try:
+            return fn()
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            text = str(exc)
+            if exc.errno is not None or any(t in text for t in _TRANSIENT_TEXTS):
+                raise
+            raise _Unreadable(exc) from None
+
+    try:
+        return _retry_transient(attempt, path=path)
+    except _Unreadable as unreadable:
+        raise unreadable.exc from None
+
+
+def sidecars_alter_open(path) -> bool:
+    """Whether the sidecar files beside *path* change what GDAL opens. When they do not (an ``.ovr``, or statistics in
+    an ``.aux.xml``), the file's own bytes stand for it in a tile; when they do, a tile has to be written from the open
+    dataset so those values are baked into it.
+
+    Compared, between the file opened with its sidecars and the same file alone: the CRS, the GCPs (and their CRS), the
+    geotransform, and for each band the NoData, scale, offset, colour interpretation, colour table and mask flags (an
+    external ``.msk`` shows as a per-dataset mask). Not compared: metadata tags, band descriptions, units, category
+    names, statistics and RPCs. They are descriptive, and a tile that holds the pixels, CRS, NoData and georeferencing
+    is the raster as every operation reads it. Both opens retry a transient miss, as every Volume read does; a file
+    GDAL opens and cannot read (corrupt, or not a raster) fails at once, as no retry reads it.
+    """
+    if not any(not f.lower().endswith(".ovr") for f in sidecar_files(path)):
+        return False
+    from rasterio import Env
+
+    from databricks.labs.gbx._gdal_policy import open_data
+
+    def view(ds):
+        palettes = []
+        for i in ds.indexes:
+            try:
+                palettes.append(tuple(sorted(ds.colormap(i).items())))
+            except ValueError:  # the band has no colour table
+                palettes.append(None)
+        gcps, gcp_crs = ds.gcps
+        return (
+            ds.crs.to_wkt() if ds.crs else None,
+            tuple(ds.nodatavals),
+            tuple(ds.transform),
+            tuple(ds.scales),
+            tuple(ds.offsets),
+            tuple((g.row, g.col, g.x, g.y, g.z) for g in gcps),
+            gcp_crs.to_wkt() if gcp_crs else None,
+            tuple(int(c) for c in ds.colorinterp),
+            tuple(palettes),
+            tuple(tuple(sorted(f.name for f in flags)) for flags in ds.mask_flag_enums),
+        )
+
+    def with_sidecars():
+        with open_raster(path) as ds:
+            return view(ds)
+
+    def alone():
+        # the same file as its bytes alone are: no PAM sidecar, no folder look-up
+        with Env(GDAL_PAM_ENABLED="NO", **{_READDIR_ON_OPEN: "EMPTY_DIR"}):
+            with open_data(path) as ds:
+                return view(ds)
+
+    a, b = _retry_miss(with_sidecars, path), _retry_miss(alone, path)
+
+    def same(x, y):
+        if isinstance(x, tuple):
+            return len(x) == len(y) and all(map(same, x, y))
+        return _same_value(x, y)
+
+    return not same(a, b)
+
+
+def _user_env_sets_readdir() -> bool:
+    """True when a rasterio.Env the caller entered names GDAL_DISABLE_READDIR_ON_OPEN."""
+    try:
+        from rasterio.env import getenv, hasenv
+
+        return hasenv() and _READDIR_ON_OPEN in getenv()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def readdir_mode(path) -> Optional[str]:
+    """The GDAL_DISABLE_READDIR_ON_OPEN value for one light-tier open of *path*, or None to
+    leave the open to the current setting. None when the user set the option (in the
+    environment before configure_gdal_env ran, any value; in a rasterio.Env around the
+    call; or as a GDAL config option since), for a cloud, /vsi, DRIVER: or non-path
+    *path* (TRUE, no listing), when the thread-local setter cannot be reached, for a folder
+    that cannot be listed or holds more names than the listing bound (listing_ceiling), and
+    for a file missing from its folder's listing. A folder past GDAL's own listing limit
+    (listing_cap; GDAL's listing counts "." and ".." too) is listed like any other, but
+    never gives ``NO``: GDAL would list it at every open and drop the listing, which is the
+    by-name check (``TRUE``) at the cost of the listing. See _READDIR_ON_OPEN and
+    readdir_mode_for."""
+    if not _READDIR_SET_HERE or _user_env_sets_readdir():
+        return None
+    try:
+        from rasterio.env import get_gdal_config
+
+        if get_gdal_config(_READDIR_ON_OPEN, normalize=False) != _READDIR_PROCESS_VALUE:
+            return None  # set by the user since (an environment variable or an option)
+    except Exception:  # noqa: BLE001 - no rasterio: nothing to decide
+        return None
+    try:
+        p = os.fspath(path)
+    except TypeError:  # a file-like object: rasterio.open takes it, nothing to list
+        return None
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return None
+    if _thread_config() is None:
+        return None  # no per-open value can be set: do not list for nothing
+    folder, name = os.path.split(os.path.abspath(p))
+    if os.path.splitext(name)[1].lower() in _EMPTY_DIR_EXTS and _sidecar_free(
+        os.path.join(folder, name)
+    ):
+        return (
+            "EMPTY_DIR"  # the reader listed the folder: no listing, no by-name checks
+        )
+    names = _LISTINGS.names(folder, name)
+    if names is None or names is _TOO_LARGE or name not in names:
+        return None
+    mode = readdir_mode_for(name, names)
+    if mode == "NO":
+        cap = listing_cap()
+        # GDAL's own listing holds "." and ".." too (measured: it finds a mixed-case world
+        # file beside 998 other names, not beside 999), so it drops itself two names early
+        if cap is not None and len(names) + _GDAL_LISTING_DOT_ENTRIES > cap:
+            return "TRUE"
+    return mode
+
+
+# CPLSetThreadLocalConfigOption / CPLGetThreadLocalConfigOption of the libgdal rasterio
+# uses, through ctypes: (setter, getter), False when they cannot be reached, None before the
+# first look. A rasterio.Env is no use for a per-open value: on exit the outermost Env sets
+# the value it found on entry as a process-wide GDAL config option (rasterio/env.py,
+# Env.__exit__ with _discovered_options), and from then on that option shadows the
+# environment variable, including a value the user sets later. In the main thread
+# rasterio's own set_gdal_config is process-wide too.
+_THREAD_CONFIG = None
+
+
+def _thread_config():
+    """``(set, get)`` for this thread's GDAL config options, or None (see _THREAD_CONFIG).
+    Checked once: a value set through it must be what rasterio's GDAL reads."""
+    global _THREAD_CONFIG
+    if _THREAD_CONFIG is None:
+        _THREAD_CONFIG = False
+        try:
+            import ctypes
+
+            from rasterio.env import get_gdal_config
+
+            from databricks.labs.gbx.pyrx.core.analysis import _load_libgdal
+
+            lib = _load_libgdal()
+            setter = lib.CPLSetThreadLocalConfigOption
+            setter.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            setter.restype = None
+            getter = lib.CPLGetThreadLocalConfigOption
+            getter.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            getter.restype = ctypes.c_char_p
+            setter(b"GBX_THREAD_CONFIG_CHECK", b"1")
+            try:
+                same_gdal = (
+                    get_gdal_config("GBX_THREAD_CONFIG_CHECK", normalize=False) == "1"
+                )
+            finally:
+                setter(b"GBX_THREAD_CONFIG_CHECK", None)
+            if same_gdal:
+                _THREAD_CONFIG = (setter, getter)
+            else:
+                _log.debug(
+                    "GDAL_DISABLE_READDIR_ON_OPEN per open: off (the libgdal reached "
+                    "through ctypes is not rasterio's); opens check sidecars by name"
+                )
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - no reachable libgdal: no per-open value
+            _THREAD_CONFIG = False
+            _log.debug(
+                "GDAL_DISABLE_READDIR_ON_OPEN per open: off (%s: %s); opens check "
+                "sidecars by name",
+                type(exc).__name__,
+                exc,
+            )
+    return _THREAD_CONFIG or None
+
+
+@contextmanager
+def readdir_option(mode: Optional[str]):
+    """Run the block with GDAL_DISABLE_READDIR_ON_OPEN = *mode* for this thread only, and
+    restore the thread's previous value after it. ``None`` leaves the setting alone. When
+    the thread-local setter cannot be reached the block runs under the current setting:
+    a by-name sidecar check (TRUE) in place of the value asked for."""
+    tc = _thread_config() if mode is not None else None
+    if tc is None:
+        yield
+        return
+    setter, getter = tc
+    key = _READDIR_ON_OPEN.encode()
+    prev = getter(key, None)
+    setter(key, mode.encode())
+    try:
+        yield
+    finally:
+        setter(key, prev)
+
+
+# GDAL's raster block cache size is one number for the whole process. Callers that cap it for a
+# block of work go through capped_block_cache: the sizes in force are kept here, the size the
+# process had when the first one began is put back when the last one ends, unless something else
+# changed the size meanwhile (_CACHE_SET is the size the caps last set).
+_CACHE_LOCK = threading.Lock()
+_CACHE_CAPS: List[int] = []
+_CACHE_BEFORE: Optional[int] = None
+_CACHE_SET: Optional[int] = None
+
+
+@contextmanager
+def capped_block_cache(max_bytes: int):
+    """Run the block with GDAL's raster block cache capped at *max_bytes* BYTES, then put back
+    the size it had. A cap never raises a cache that is already smaller (a cluster or a user may
+    have lowered it): the block runs at ``min(size found, max_bytes)``. Sizes: see
+    ``budget.block_cache_bytes``.
+
+    Do not cap it with ``rasterio.Env(GDAL_CACHEMAX=...)``: rasterio hands that value to
+    ``GDALSetCacheMax64``, which counts bytes (``GDAL_CACHEMAX=128`` is a 128-byte cache, where
+    GDAL itself reads it as megabytes), and restores the previous size only when that Env is
+    the outermost one. Entered inside another Env (any open of a MemoryFile or a rasterio
+    session), the cap stayed for the rest of the process: GDAL work after it ran with a cache
+    too small to hold one block, and a multi-threaded algorithm (``GDALViewshedGenerate``)
+    gave a different answer from call to call.
+
+    Overlapping blocks (threads of one worker) are held to the largest cap in force while any of
+    them runs. If something else changes ``GDAL_CACHEMAX`` while a cap is in force (user code,
+    another library), the size is no longer the one the caps set: when the last cap ends, that
+    newer value is left alone rather than overwritten with the size found at the start.
+    """
+    from rasterio.env import get_gdal_config, set_gdal_config
+
+    global _CACHE_BEFORE, _CACHE_SET
+    with _CACHE_LOCK:
+        first = not _CACHE_CAPS
+        before = get_gdal_config("GDAL_CACHEMAX") if first else _CACHE_BEFORE
+        cap = min(before, int(max_bytes))
+        size = max([*_CACHE_CAPS, cap])
+        set_gdal_config("GDAL_CACHEMAX", size)
+        # recorded only once the size is set, so a failure leaves nothing to put back
+        _CACHE_BEFORE = before
+        _CACHE_SET = size
+        _CACHE_CAPS.append(cap)
+    try:
+        yield
+    finally:
+        with _CACHE_LOCK:
+            _CACHE_CAPS.remove(cap)
+            if get_gdal_config("GDAL_CACHEMAX") == _CACHE_SET:
+                size = max(_CACHE_CAPS) if _CACHE_CAPS else _CACHE_BEFORE
+                set_gdal_config("GDAL_CACHEMAX", size)
+                _CACHE_SET = size
+            # else: changed while a cap was in force; leave the newer value
+
+
+def open_raster(path, *args, **kwargs):
+    """``open_data(path, ...)`` (``rasterio.open`` under the driver policy) with
+    GDAL_DISABLE_READDIR_ON_OPEN chosen for this file (readdir_mode), for this open only: GDAL
+    decides which sidecars to look for when it opens the file, so the dataset returned keeps
+    that choice."""
+    from databricks.labs.gbx._gdal_policy import open_data
+
+    with readdir_option(readdir_mode(path)):
+        return open_data(path, *args, **kwargs)
 
 
 def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
-    """Idempotently set GDAL_DATA / PROJ_DATA, prepending custom grid dirs.
+    """Idempotently set GDAL_DATA / PROJ_DATA, adding custom grid dirs.
 
     extra_proj_dirs:
       - None  -> read the driver-side registry (correct only on the driver).
       - list  -> use exactly these (what worker UDF closures pass); [] = none.
-    Custom dirs are prepended ahead of the bundled PROJ data so user grids win.
+    Custom dirs are merged ahead of the base PROJ data (so user grids win) into ONE
+    directory exported as PROJ_DATA; see _proj_data_dir for why it is not a joined list.
     Registered dirs are also pushed into pyproj's search path so the light vector
     (pyproj) transform path finds them — the env var alone does not reach pyproj.
+    A PROJ_DATA / PROJ_LIB that holds no proj.db this process can read is replaced by
+    the bundled PROJ data (a readable one is never changed).
+
+    GDAL_DISABLE_READDIR_ON_OPEN is set to TRUE unless it is set already (see
+    _READDIR_ON_OPEN).
     """
+    global _READDIR_SET_HERE
+    if _READDIR_ON_OPEN not in os.environ:
+        os.environ[_READDIR_ON_OPEN] = _READDIR_PROCESS_VALUE
+        _READDIR_SET_HERE = True
+
     if not os.environ.get("GDAL_DATA"):
         p = _bundled_gdal_data()
         if p:
@@ -108,15 +1403,42 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
 
         extra_proj_dirs = proj_grids.get_registered_dirs()
 
-    base = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
+    current = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
+    base = _PROJ_DATA_BASES.get(current, current)  # unwrap a merged dir set earlier
+    if base and not _readable_proj_data(base):
+        # A PROJ data dir this process cannot read is no PROJ data at all: rasterio would
+        # take it as GDAL's PROJ search path and fail every CRS lookup ("Cannot find
+        # proj.db"). DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which the
+        # unprivileged notebook user of a standard-access cluster cannot read. Use the
+        # bundled data instead, here and in the search path rasterio set at its import.
+        p = _bundled_proj_data()
+        if p:
+            os.environ["PROJ_DATA"] = base = p
+            _set_osr_search_paths([p])
+            _point_rasterio_at(p)
     if not base:
         p = _bundled_proj_data()
         if p:
             base = p
 
-    if extra_proj_dirs:
-        os.environ["PROJ_DATA"] = _prepend_unique(base, extra_proj_dirs)
+    # A joined base (the activation keeps a user's grid directory ahead of the PROJ data as an os.pathsep list, which
+    # PROJ reads) goes through the same merge even with no grid registered: rasterio reads PROJ_DATA as ONE path.
+    if extra_proj_dirs or (base and os.pathsep in base):
+        merged = _proj_data_dir(base, extra_proj_dirs)
+        if merged:
+            os.environ["PROJ_DATA"] = merged
+            _set_osr_search_paths([merged])
+            # rasterio applied the PROJ_DATA of its import (or the bundled data above) as
+            # GDAL's search path; the merged dir holds the registered grids as well
+            _point_rasterio_at(merged)
         _register_pyproj_search_dirs(extra_proj_dirs)
+    elif current in _PROJ_DATA_BASES:
+        # no grid directory now (register_proj_grids(..., replace=True) with none): the merged directory set
+        # earlier goes, so the grids registered before are not found any more
+        os.environ["PROJ_DATA"] = base
+        _set_osr_search_paths([base])
+        _point_rasterio_at(base)
+        _register_pyproj_search_dirs([])
     elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
         os.environ["PROJ_DATA"] = base
 
@@ -127,6 +1449,7 @@ def assert_rasterio_available() -> Tuple[str, str]:
         import rasterio
     except ImportError as e:  # pragma: no cover - exercised only without the extra
         raise ImportError(
-            "pyrx requires rasterio. Install with: pip install 'geobrix[light_env6]'"
+            "pyrx requires rasterio. Install the env wheel for the runtime (on Databricks) or "
+            "pip install geobrix (off Databricks)"
         ) from e
     return rasterio.__gdal_version__, rasterio.__version__

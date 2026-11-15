@@ -1,6 +1,6 @@
 # Audit pinned Python tooling versions
 
-Inventories every place a pinned package version lives across CI, the dev container Dockerfile, the Databricks cluster init script, and the lint venv setup. Use it to **detect drift** between locations, and as the entry point for **bumping pins to a new DBR LTS**.
+Inventories every place a pinned package version lives across CI, the dev container Dockerfile, the DCS image, and the lint venv setup. Use it to **detect drift** between locations, and as the entry point for **bumping pins to a new DBR LTS**.
 
 ## Usage
 
@@ -11,6 +11,11 @@ bash scripts/commands/gbx-versions-audit.sh [OPTIONS]
 ## Options
 
 - `--package <name>` — Show only one package (e.g. `pip`, `numpy`, `pyspark`).
+- `--native` — Audit every consumer of the native pins instead of printing the package inventory (see "Native pins" below).
+- `--host` — Check the host venv AND this checkout's dev container against the native pins.
+- `--check` — With `--native` or `--host`: exit 1 on drift. Without it the report is printed and the exit is 0.
+- `--install-moves` — What installing each env wheel moves on each runtime it targets (see "Install moves" below).
+- `--env 5|6` — With `--install-moves`: only that env wheel's runtimes (repeatable; default both).
 - `--log <path>` — Write output to log file.
 - `--help` — Display help.
 
@@ -27,6 +32,31 @@ gbx:versions:audit --package numpy
 gbx:versions:audit --package pyspark
 ```
 
+## Native pins
+
+`scripts/native/pins.conf` is the one place GeoBrix pins GDAL, PROJ, GEOS and every library they are built from. It also pins the Rust toolchain (with `rust-toolchain.toml`), maturin, cargo-deny and the Python bindings (rasterio, pyogrio, pyproj, shapely, netCDF4). What feeds no GDAL build is in `scripts/native/rust-pins.conf` (PyO3, the georust crates, the rust-native stage's libclang), so a bump there never rebuilds GDAL. Each source has its version, URL, second URL (or `single-source`), file name, SHA-256 and SPDX licence. The sums were identical from two sources, or compared with the project's published checksum, when they were resolved.
+
+```bash
+# every consumer against the pins (CI-style: exit 1 on drift)
+bash scripts/commands/gbx-versions-audit.sh --native --check
+
+# the host venv and the dev container against the pins: Python patch version, the bound
+# packages, and GDAL/PROJ/GEOS as rasterio, pyproj and shapely report them
+bash scripts/commands/gbx-versions-audit.sh --host --check
+```
+
+`--native` runs `python3 scripts/native/pins.py audit`. It checks the pin files themselves (`pins.conf` and `rust-pins.conf`). There must be no placeholder, and every `X_VERSION` must have its checksum. No Rust pin may be in `pins.conf`, where every value is the GDAL build's cache key. It checks the `rust-toolchain.toml` channel and every `Cargo.toml` that depends on `pyo3` (`=PYO3_VERSION`). It checks every `Cargo.lock` against the `CRATE_<name>_VERSION` pins (a locked crate at another version, and a pin no lock uses). It checks every maturin `pyproject.toml` (`maturin==MATURIN_VERSION`), `scripts/native/build-requirements.in`, and the `gdal.java.version` property in `pom.xml` when present. It checks the legacy consumers still on an older GDAL (`scripts/native/legacy-consumers.txt`). A changed value is drift. A regex that no longer matches means the consumer was retired, so delete its line. `--host` reuses the collector and comparison of `gbx:venv:check`; it is red while the environments still carry the previous GDAL stack. `pins.py get KEY` and `pins.py build-args` read the pins for scripts and Docker builds.
+
+## Install moves
+
+```bash
+# env5 (DBR 17.3, 18, Serverless env 5) and env6 (DBR 19, 19 ML, Serverless env 6, 6 ML), both architectures
+bash scripts/commands/gbx-versions-audit.sh --install-moves
+bash scripts/commands/gbx-versions-audit.sh --install-moves --env 6
+```
+
+`scripts/native/install_moves.py` resolves, with uv (the configured index; its output redacted), each env wheel's requirements for CPython 3.12 `manylinux_2_28` on x86_64 and aarch64. It resolves the core install (`envs/env<N>/core.txt`) and the full one (with every `extra-<name>.txt`). Each is resolved against each target runtime's preinstalled packages (`python/geobrix/envs/runtimes/<runtime>.txt`) as constraints. Only the documented moves (`ALLOWED_MOVES`) may leave the runtime's version. Each move is the pin comment of the requirement that causes it. The moves are idna everywhere, anyio, h11, httpcore and typing-extensions on the env5 runtimes, and requests with env5's `[stac]`. A resolution that would move any other preinstalled package fails. Constraints can mask a move. uv backtracks to an older release of whatever raises a preinstalled package's floor, where pip on the runtime takes the newest and moves it. So each install is resolved again with the runtime's versions as preferences only, and any difference fails. What the install adds must have a binary wheel for the platform. No resolved package may be one the wheel vendors (rasterio, pyogrio, pyproj, shapely, netCDF4, GDAL, and the `vendor-pure.txt` packages). One line per runtime, architecture and install (`ok:` or `FAILED:`, the moves, how many packages it adds), then `INSTALL_MOVES envs=... rows=<n> failures=<n>`; exit 1 on a failure. `scripts/ci/test_build_env_wheel.py` runs the same 28 cases (each runtime, both installs, both architectures). On a workstation without uv or the index they skip. In CI (`CI=true`, where the scripts/ci step installs uv through the job's pip) they fail. Refresh a runtime's list from a fresh session's `pip freeze` when its runtime changes.
+
 ## What's tracked
 
 Source of truth (priority order):
@@ -37,7 +67,9 @@ Source of truth (priority order):
 2. **Current PyPI stable** — for tools NOT in DBR: `build`, `pytest-cov`, `geopandas` (pinned to be compatible with DBR's pandas 2.2.x).
 3. **CI matrix** — for tools intentionally divergent from DBR: `pytest 8.4.2` (kept ahead of DBR 8.3.5 because tests don't run in DBR).
 4. **System apt + ubuntugis PPA** — for GDAL native + Python bindings; auto-detected from `gdal-config --version`.
-5. **Intentional DBR divergence** — `pyzmq 25.1.1` (Dockerfile only). DBR has 26.2.0 but our Jupyter ZMQ workaround requires the older pin. Re-evaluate on next DBR LTS bump.
+5. **Build tool** — `maven`: the Maven version the wrapper pins for CI (`.mvn/wrapper/maven-wrapper.properties`), the dev and local-CI images' `MAVEN_VERSION`, and the pom's enforcer floor. `scripts/ci/test_maven_wrapper.py` fails when they differ.
+6. **Intentional DBR divergence** — `pyzmq 25.1.1` (Dockerfile only). DBR has 26.2.0 but our Jupyter ZMQ workaround requires the older pin. Re-evaluate on next DBR LTS bump.
+7. **Zarr extra** — `zarr` (`--package zarr`): the `[zarr_dbr19]` pins in `python/geobrix/pyproject.toml` (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`, `ml_dtypes`, `msgspec`, `donfig`). None is preinstalled on DBR 19, Serverless env 6 or DBR 19 ML, so they follow the Zarr runtime-deps report, not a DBR release-notes table.
 
 ## Files audited
 
@@ -45,10 +77,12 @@ Source of truth (priority order):
 - `.github/actions/python_build/action.yml`
 - `.github/workflows/build_*.yml` and `codecov-*.yml` (matrix values)
 - `scripts/docker/Dockerfile`
-- `scripts/geobrix-gdal-init.sh`
+- `scripts/ci-local/Dockerfile.gha-runner`, `.mvn/wrapper/maven-wrapper.properties`, `pom.xml` (the Maven pin)
+- `scripts/docker/dcs/Dockerfile`
+- `scripts/native/pins.conf`, `scripts/native/rust-pins.conf`, `rust-toolchain.toml`
 - `scripts/commands/gbx-lint-python.sh`
 - `python/geobrix/pyproject.toml` (dev/test extras — currently unpinned)
-- `notebooks/tests/requirements.txt` (lower bounds — not pinned)
+- `examples/tests/requirements.txt` (lower bounds — not pinned)
 
 If a new file pins versions, add it to the `FILES` array in `gbx-versions-audit.sh`.
 
@@ -64,5 +98,5 @@ If a new file pins versions, add it to the `FILES` array in `gbx-versions-audit.
 ## Notes
 
 - The audit is **read-only** — never modifies files. All edits happen via Claude after you review the audit.
-- Pyproject.toml dev/test extras (`isort`, `black`, `flake8`, `build`, `pytest`, etc.) are intentionally unpinned to allow `pip install -e .[dev]` to resolve cleanly. The hard pins live in CI/Docker/init script — those are the trust boundaries.
+- Pyproject.toml dev/test extras (`isort`, `black`, `flake8`, `build`, `pytest`, etc.) are intentionally unpinned to allow `pip install -e .[dev]` to resolve cleanly. The hard pins live in CI/Docker/DCS image — those are the trust boundaries.
 - The audit prints a "Files audited" section at the end with `✓`/`✗` markers — a `✗` means a tracked file is missing (e.g. renamed/deleted). Update `FILES` in the script to fix.

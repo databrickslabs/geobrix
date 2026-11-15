@@ -6,6 +6,8 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
+import java.nio.file.{Files, Paths}
+
 class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
 
     override def beforeAll(): Unit = {
@@ -15,33 +17,6 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("GDAL_VRT_ENABLE_PYTHON defaults to NO after configureGDAL") {
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-    }
-
-    test("withVrtPython flips GDAL_VRT_ENABLE_PYTHON YES inside the block and resets NO after") {
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-        val inside = GDALManager.withVrtPython {
-            gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON")
-        }
-        inside shouldBe "YES"
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-    }
-
-    test("withVrtPython resets to NO when the block throws") {
-        an[RuntimeException] should be thrownBy GDALManager.withVrtPython[Unit] {
-            throw new RuntimeException("boom")
-        }
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-    }
-
-    test("withVrtPython refcounts so nested calls keep YES until the outer exits") {
-        GDALManager.withVrtPython {
-            gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "YES"
-            GDALManager.withVrtPython {
-                gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "YES"
-            }
-            gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "YES"
-        }
         gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
     }
 
@@ -68,12 +43,62 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
         )
         try {
             GDALManager.configureGDAL(config)
-            gdal.GetConfigOption("GDAL_SKIP") shouldBe "FOO"
+            // the driver policy wins over the conf: the conf's names are added to the refused list, never in its place
+            gdal.GetConfigOption("GDAL_SKIP") shouldBe s"${GDALManager.DefaultSkippedDrivers} FOO"
             gdal.GetConfigOption("GDAL_HTTP_TIMEOUT") shouldBe "42"
         } finally {
             // restore defaults so later tests / suites see the hardened config
+            gdal.SetConfigOption("GDAL_SKIP", null)
             GDALManager.configureGDAL("/tmp", "/tmp")
         }
+    }
+
+    test("a later init naming another GDAL is refused; one naming the loaded JNI is a no-op") {
+        GDALManager.init(ExpressionConfig(Map.empty, null)) // an earlier init with no conf (KernelGdal's)
+        val loaded = GDALManager.ensureJniLoaded(None).jni
+        def dirWith(jni: java.nio.file.Path => Unit): String = {
+            val d = Files.createTempDirectory("gbx_native_dir")
+            Files.createDirectories(d.resolve("lib"))
+            jni(d.resolve("lib/libgdalalljni.so"))
+            d.toString
+        }
+        val other = dirWith(p => Files.write(p, Array[Byte](1, 2, 3)))
+        val e = intercept[IllegalStateException] {
+            GDALManager.init(ExpressionConfig(Map(GDALManager.NativeDirKey -> other), null))
+        }
+        e.getMessage should (include(loaded) and include(s"$other/lib/libgdalalljni.so") and include("Fix:"))
+        val same = dirWith(p => Files.createSymbolicLink(p, Paths.get(loaded)))
+        GDALManager.init(ExpressionConfig(Map(GDALManager.NativeDirKey -> same), null))
+        // a later dir with no JNI at all says so, not "another GDAL"
+        val empty = Files.createTempDirectory("gbx_native_dir_empty").toString
+        val missing = intercept[IllegalStateException] {
+            GDALManager.init(ExpressionConfig(Map(GDALManager.NativeDirKey -> empty), null))
+        }
+        missing.getMessage should include(s"no GDAL JNI at $empty/lib/libgdalalljni.so")
+    }
+
+    test("a tile that does not convert to GeoTIFF is a corrupt one, not a policy refusal") {
+        // a dataset with no bands cannot be translated; an aggregate drops such a member as corrupt, and only the
+        // policy refusals (TileBytesRefused) make it the group's answer
+        val ds = gdal.GetDriverByName("MEM").Create("", 4, 4, 0)
+        try {
+            val e = intercept[IllegalArgumentException](TileBytes.toGTiff(ds, "/vsimem/gbx_to_gtiff_fail.tif"))
+            e.getMessage should include("could not be converted to GeoTIFF")
+            e should not be a[TileBytesRefused]
+        } finally ds.delete()
+    }
+
+    test("isHdfFamilyPath: a driver prefix, an extension or the signature of a file without one; not a GeoTIFF") {
+        GDALManager.isHdfFamilyPath("NETCDF:\"/x.nc\":var") shouldBe true
+        GDALManager.isHdfFamilyPath("HDF5:/x.h5://a") shouldBe true
+        // the signature of a netCDF-4 file whose name says nothing, and a GeoTIFF-named copy of it (never sniffed)
+        val src = Paths.get(getClass.getResource("/binary/netcdf-coral/").toURI)
+        val nc = Files.list(src).iterator().next()
+        val dir = Files.createTempDirectory("gbx_hdf_path")
+        val bare = Files.copy(nc, dir.resolve("coral_no_extension"))
+        val tif = Files.copy(nc, dir.resolve("coral.tif"))
+        GDALManager.isHdfFamilyPath(bare.toString) shouldBe true
+        GDALManager.isHdfFamilyPath(tif.toString) shouldBe false
     }
 
 }

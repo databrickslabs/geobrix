@@ -1,5 +1,5 @@
 /*
- * Compile-time validation for Scala API Reference examples (docs/docs/api/scala.mdx).
+ * Compile-time validation for the Scala examples in ScalaApiExamples.
  *
  * Per documentation-test-validation rule: Doc Tests = Compilation Tests.
  * We do NOT execute examples (no SparkSession, file I/O, or SQL execution).
@@ -18,32 +18,23 @@ import org.scalatest.funsuite.AnyFunSuite
 class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   // Compile-only: same imports as docs; reference API so compiler checks signatures
-  test("RasterX imports and register signature compile") {
-    val _: SparkSession => Unit = rx.register _
+  test("RasterX imports compile") {
+    val _: Column = rx.rst_boundingbox(col("tile"))
     succeed
   }
 
   test("RasterX accessor signatures compile") {
     val _: Column = rx.rst_boundingbox(col("tile"))
-    val _: Column = rx.rst_width(col("tile"))
-    val _: Column = rx.rst_height(col("tile"))
-    val _: Column = rx.rst_numbands(col("tile"))
-    val _: Column = rx.rst_metadata(col("tile"))
+    val _: Column = rx.rst_worldtorastercoordy(col("tile"), col("x"), col("y"))
     succeed
   }
 
-  test("RasterX rst_clip three-arg signature compiles") {
-    val _: Column = rx.rst_clip(col("tile"), col("clip"), lit(true))
+  test("GridX imports and cellarea compile") {
+    val _: Column = bx.bng_cellarea(col("cell"))
     succeed
   }
 
-  test("GridX register and cellarea compile") {
-    val _: SparkSession => Unit = bx.register _
-    succeed
-  }
-
-  test("VectorX register and legacy API compile") {
-    val _: SparkSession => Unit = vx.register _
+  test("VectorX legacy API compiles") {
     val _: Column = vx.st_legacyaswkb(col("mosaic_geom"))
     succeed
   }
@@ -77,85 +68,31 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
   // =========================================================================
 
   test("ScalaApiExamples RasterX per-function snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_avg_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_boundingbox_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_numbands_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_width_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combineavg_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinecount_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemax_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemedian_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemin_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinestddev_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinesum_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples RasterX per-function output vals are non-empty") {
-    assert(ScalaApiExamples.rst_avg_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_boundingbox_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_numbands_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_width_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combineavg_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinecount_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemax_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemedian_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemin_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinestddev_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinesum_scala_example_output.nonEmpty)
-  }
-
-  test("ScalaApiExamples rst_align_to rst_chm rst_isoband snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_align_to_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_chm_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_isoband_scala_example.nonEmpty)
-  }
-
-  test("ScalaApiExamples rst_align_to rst_chm rst_isoband output vals are non-empty") {
-    assert(ScalaApiExamples.rst_align_to_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_chm_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_isoband_scala_example_output.nonEmpty)
-  }
-
-  test("ScalaApiExamples Batch F pmtiles_agg snippet vals are non-empty") {
-    assert(ScalaApiExamples.pmtiles_agg_scala_example.nonEmpty)
-  }
-
-  test("ScalaApiExamples Batch F pmtiles_agg output vals are non-empty") {
-    assert(ScalaApiExamples.pmtiles_agg_scala_example_output.nonEmpty)
-  }
-
-  test("PMTiles pmtiles_agg Scala signatures compile") {
-    import com.databricks.labs.gbx.pmtiles.{functions => px}
-    import org.apache.spark.sql.functions._
-    val _: Column = px.pmtiles_agg(col("bytes"), col("z"), col("x"), col("y"))
-    val _: Column = px.pmtiles_agg(col("bytes"), col("z"), col("x"), col("y"), lit("{}"))
-    val _: Column = px.pmtiles_agg(col("bytes"), col("z"), col("x"), col("y"), col("meta"))
-    succeed
   }
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance snippet vals are non-empty") {
     assert(ScalaApiExamples.bng_cellfill_scala_example.nonEmpty)
-    assert(ScalaApiExamples.quadbin_cellfill_scala_example.nonEmpty)
     assert(ScalaApiExamples.h3_cellfill_scala_example.nonEmpty)
     assert(ScalaApiExamples.custom_cellfill_scala_example.nonEmpty)
-    assert(ScalaApiExamples.quadbin_kloop_scala_example.nonEmpty)
     assert(ScalaApiExamples.custom_kloop_scala_example.nonEmpty)
     assert(ScalaApiExamples.custom_distance_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance output vals are non-empty") {
     assert(ScalaApiExamples.bng_cellfill_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.quadbin_cellfill_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.h3_cellfill_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.custom_cellfill_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.quadbin_kloop_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.custom_kloop_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.custom_distance_scala_example_output.nonEmpty)
   }
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance Scala signatures compile") {
     import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-    import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
     import com.databricks.labs.gbx.gridx.custom.{functions => cx}
     import com.databricks.labs.gbx.gridx.h3.{functions => hx}
     import org.apache.spark.sql.functions._
@@ -166,11 +103,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val _: Column = bx.bng_cellfill(col("cellid"), col("value"), 1)
     val _: Column = bx.bng_cellfill(col("cellid"), col("value"), 1, "mean")
     val _: Column = bx.bng_cellfill(col("cellid"), col("value"), 1, "mean", 2.0)
-    val _: Column = qx.quadbin_cellfill(col("cellid"), col("value"))
-    val _: Column = qx.quadbin_cellfill(col("cellid"), col("value"), 1)
-    val _: Column = qx.quadbin_cellfill(col("cellid"), col("value"), 1, "mean", 2.0)
-    val _: Column = qx.quadbin_kloop(col("cell"), lit(1))
-    val _: Column = qx.quadbin_kloop(col("cell"), col("k"))
     val _: Column = hx.h3_cellfill(col("cellid"), col("value"))
     val _: Column = hx.h3_cellfill(col("cellid"), col("value"), 1)
     val _: Column = hx.h3_cellfill(col("cellid"), col("value"), 1, "mean", 2.0)
@@ -183,29 +115,11 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     succeed
   }
 
-  test("ScalaApiExamples custom-grid rastertogrid snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_custom_rastertogridavg_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridcount_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridmax_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridmin_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridmedian_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridsum_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridvariance_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridstddev_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_tessellate_scala_example.nonEmpty)
+  test("ScalaApiExamples custom-grid snippet vals are non-empty") {
     assert(ScalaApiExamples.rst_custom_rasterize_agg_scala_example.nonEmpty)
   }
 
-  test("ScalaApiExamples custom-grid rastertogrid output vals are non-empty") {
-    assert(ScalaApiExamples.rst_custom_rastertogridavg_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridcount_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridmax_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridmin_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridmedian_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridsum_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridvariance_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_rastertogridstddev_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_custom_tessellate_scala_example_output.nonEmpty)
+  test("ScalaApiExamples custom-grid output vals are non-empty") {
     assert(ScalaApiExamples.rst_custom_rasterize_agg_scala_example_output.nonEmpty)
   }
 
@@ -213,7 +127,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val grid = call_function("gbx_custom_grid",
       lit(529000), lit(533000), lit(179000), lit(183000),
       lit(2), lit(4000), lit(4000), lit(27700))
-    val _: Column = rx.rst_custom_rasterize_agg(col("cellid"), grid)
     val _: Column = rx.rst_custom_rasterize_agg(col("cellid"), col("value"), grid)
     val _: Column = rx.rst_custom_rasterize_agg(
       col("cellid"), col("value"), grid,
@@ -225,131 +138,25 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     succeed
   }
 
-  test("RasterX custom-grid rastertogrid Scala signatures compile") {
-    val grid = call_function("gbx_custom_grid",
-      lit(2.0), lit(2.01), lit(55.0), lit(55.01),
-      lit(2), lit(0.01), lit(0.01), lit(4326))
-    val _: Column = rx.rst_custom_rastertogridavg(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridcount(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridmax(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridmin(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridmedian(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridsum(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridvariance(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_rastertogridstddev(col("tile"), grid, lit(0))
-    val _: Column = rx.rst_custom_tessellate(col("tile"), grid, lit(0))
-    succeed
-  }
-
-  test("RasterX rst_align_to rst_chm rst_isoband signatures compile") {
-    val _: Column = rx.rst_align_to(col("tile"), col("reference_tile"))
-    val _: Column = rx.rst_chm(col("dsm_tile"), col("dem_tile"))
-    val _: Column = rx.rst_isoband(col("tile"), col("breaks"))
-    succeed
-  }
-
-  test("RasterX rst_avg rst_boundingbox rst_numbands rst_width signatures compile") {
-    val _: Column = rx.rst_avg(col("tile"))
-    val _: Column = rx.rst_boundingbox(col("tile"))
-    val _: Column = rx.rst_numbands(col("tile"))
-    val _: Column = rx.rst_width(col("tile"))
-    succeed
-  }
-
-  test("RasterX accessor signatures compile — full 29-function set") {
-    val _: Column = rx.rst_bandmetadata(col("tile"), lit(1))
-    val _: Column = rx.rst_format(col("tile"))
-    val _: Column = rx.rst_georeference(col("tile"))
-    val _: Column = rx.rst_getnodata(col("tile"))
-    val _: Column = rx.rst_getsubdataset(col("tile"), lit(""))
-    val _: Column = rx.rst_height(col("tile"))
-    val _: Column = rx.rst_max(col("tile"))
-    val _: Column = rx.rst_median(col("tile"))
-    val _: Column = rx.rst_memsize(col("tile"))
-    val _: Column = rx.rst_metadata(col("tile"))
-    val _: Column = rx.rst_min(col("tile"))
-    val _: Column = rx.rst_pixelcount(col("tile"))
-    val _: Column = rx.rst_pixelheight(col("tile"))
-    val _: Column = rx.rst_pixelwidth(col("tile"))
-    val _: Column = rx.rst_rotation(col("tile"))
-    val _: Column = rx.rst_scalex(col("tile"))
-    val _: Column = rx.rst_scaley(col("tile"))
-    val _: Column = rx.rst_skewx(col("tile"))
-    val _: Column = rx.rst_skewy(col("tile"))
-    val _: Column = rx.rst_srid(col("tile"))
-    val _: Column = rx.rst_crs(col("tile"))
-    val _: Column = rx.rst_subdatasets(col("tile"))
-    val _: Column = rx.rst_summary(col("tile"))
-    val _: Column = rx.rst_type(col("tile"))
-    val _: Column = rx.rst_upperleftx(col("tile"))
-    val _: Column = rx.rst_upperlefty(col("tile"))
-    val _: Column = rx.rst_isempty(col("tile"))
-    val _: Column = rx.rst_tryopen(col("tile"))
-    val _: Column = rx.rst_histogram(col("tile"))
-    succeed
-  }
-
   test("ScalaApiExamples accessor snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_bandmetadata_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_format_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_georeference_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_getnodata_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_getsubdataset_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_height_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_max_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_median_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_memsize_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_metadata_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_min_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelcount_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelheight_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelwidth_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_rotation_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_scalex_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_scaley_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_skewx_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_skewy_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_srid_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_crs_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_subdatasets_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_summary_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_type_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_upperleftx_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_upperlefty_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_isempty_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_tryopen_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_histogram_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_boundingbox_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_worldtorastercoordy_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples accessor output vals are non-empty") {
-    assert(ScalaApiExamples.rst_bandmetadata_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_format_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_georeference_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_getnodata_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_getsubdataset_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_height_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_max_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_median_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_memsize_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_metadata_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_min_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelcount_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelheight_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelwidth_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_rotation_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_scalex_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_scaley_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_skewx_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_skewy_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_srid_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_crs_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_subdatasets_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_summary_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_type_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_upperleftx_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_upperlefty_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_isempty_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_tryopen_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_histogram_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_boundingbox_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_worldtorastercoordy_scala_example_output.nonEmpty)
+  }
+
+  test("JVM job examples compile and are non-empty") {
+    // Compile-only, like the rest of this suite: the signatures are the ones the docs show.
+    def boxes(spark: SparkSession) =
+      spark.table("main.geobrix.rasters")
+        .select(col("path"), rx.rst_boundingbox(col("tile")).alias("bbox"))
+    def ring(spark: SparkSession) =
+      spark.sql("SELECT main.geobrix.gbx_bng_kring('TQ3080', 1) AS cells")
+    val _ = (boxes _, ring _)
+    assert(ScalaApiExamples.jvm_job_dataframe_example.contains("rx.rst_boundingbox"))
+    assert(ScalaApiExamples.jvm_job_uc_example.contains("main.geobrix.gbx_bng_kring"))
   }
 }

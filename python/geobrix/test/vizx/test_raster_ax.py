@@ -5,6 +5,8 @@ Axes (not a new figure) and returns it — so before/after and N-up comparisons 
 be composed with a single figure.
 """
 
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -13,11 +15,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 def _rgb_tif(path):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     data = np.random.default_rng(0).integers(1, 256, size=(3, 16, 16), dtype="uint8")
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

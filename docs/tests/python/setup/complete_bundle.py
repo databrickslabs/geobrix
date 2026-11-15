@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GeoBrix Complete Bundle - Additional Datasets (~440MB more, ~795MB total)
+GeoBrix Complete Bundle - Additional Datasets (~147MB more, ~683MB total)
 
 Run AFTER Essential Bundle setup. Adds neighborhoods, extra elevation,
 HRRR weather, shapefiles (parks, subway), and multi-layer GeoPackage.
@@ -64,7 +64,7 @@ def main():
     import bundle_lib
 
     print("=" * 70)
-    print("GeoBrix Complete Bundle - Additional Downloads (~440MB more, ~795MB total)")
+    print("GeoBrix Complete Bundle - Additional Downloads (~147MB more, ~683MB total)")
     print("=" * 70)
 
     result = bundle_lib.run_complete_bundle(SAMPLE_DATA_PATH)

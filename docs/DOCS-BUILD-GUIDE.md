@@ -127,11 +127,11 @@ Check that:
 
 ### Function info (DESCRIBE FUNCTION EXTENDED)
 
-SQL examples from `docs/tests/python/api/rasterx_functions_sql.py` and `gridx_functions_sql.py` are also used for Spark’s `DESCRIBE FUNCTION EXTENDED <name>` (one-copy pattern). After changing or adding SQL examples in those files, regenerate the function-info resource and commit it:
+The function manifest, the oracle examples and the hand-written SQL examples in `docs/tests/python/api/*_functions_sql.py` feed Spark’s `DESCRIBE FUNCTION EXTENDED <name>`. After changing any of them, regenerate the function-info resource in Docker and commit it:
 
 ```bash
 # From project root
-python3 docs/scripts/generate-function-info.py
+bash scripts/commands/gbx-docs-function-info.sh
 # Commit the updated file:
 #   src/main/resources/com/databricks/labs/gbx/function-info.json
 ```

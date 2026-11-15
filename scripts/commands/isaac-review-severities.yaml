@@ -1,0 +1,12 @@
+# Isaac Review config that gbx:review:round passes with --include-generated: the all-severities block
+# of isaac-review-local.yaml without its opt_out (that file is passed otherwise, and carries both).
+#
+# pr_commenting.auto_post_threshold: Isaac's default reporting threshold is critical/major, so
+# minor and info findings are filtered out of a run. Every severity is reported here; the triage
+# of a round decides what matters.
+pr_commenting:
+  auto_post_threshold:
+    critical: true
+    major: true
+    minor: true
+    info: true

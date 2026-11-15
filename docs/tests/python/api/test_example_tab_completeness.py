@@ -56,8 +56,15 @@ def _load_bindings():
         return json.load(fh)["functions"]
 
 
+# A function in the function manifest lists `surfaces` instead of `bindings`; FunctionExamples renders these
+# tabs for it (the Python tab shows the lightweight example until a function has its own Python example).
+_TIER_OF_SURFACE = {"session": "sql", "python": "python-light", "scala": "scala"}
+
+
 def _bindings_for(fns, name):
     entry = fns.get(name) or fns.get("gbx_" + name) or {}
+    if "surfaces" in entry:
+        return {_TIER_OF_SURFACE[s] for s in entry["surfaces"] if s in _TIER_OF_SURFACE}
     return set(entry.get("bindings", []))
 
 
@@ -102,7 +109,14 @@ def _function_examples_blocks():
 
 
 _FNS = _load_bindings()
-_BLOCKS = _function_examples_blocks()
+# A function of the function manifest (its entry lists `surfaces`) has its tabs checked by
+# gbx:manifest:gen --check, on every page; this test keeps the other functions.
+_ALL_BLOCKS = _function_examples_blocks()
+_BLOCKS = [
+    b
+    for b in _ALL_BLOCKS
+    if "surfaces" not in (_FNS.get("gbx_" + b[0]) or _FNS.get(b[0]) or {})
+]
 
 
 @pytest.mark.parametrize("name,sources", _BLOCKS, ids=[b[0] for b in _BLOCKS])
@@ -139,7 +153,7 @@ def test_no_single_tab_on_multitier_function():
         if not fn:
             continue
         base = re.sub(
-            r"_(sql|python_light|python_heavy|scala)_example$", "", fn.group(1)
+            r"_(sql|python_light|python_heavy|python|scala)_example$", "", fn.group(1)
         )
         tiers = _bindings_for(_FNS, base)
         if len(tiers) > 1:
@@ -152,9 +166,11 @@ def test_no_single_tab_on_multitier_function():
 
 
 def test_blocks_discovered():
+    # Counts the blocks on the page, not the ones left to this file's tab check: every function is now a manifest
+    # function, whose tabs gbx:manifest:gen --check holds, so the checked list is empty.
     assert (
-        len(_BLOCKS) > 50
-    ), f"expected 50+ FunctionExamples blocks, found {len(_BLOCKS)}"
+        len(_ALL_BLOCKS) > 50
+    ), f"expected 50+ FunctionExamples blocks, found {len(_ALL_BLOCKS)}"
 
 
 def _load_check_script():
@@ -178,3 +194,17 @@ def test_annotation_consistency_across_tabs():
     ), "trailing-annotation drift across identical-output tabs:\n  " + (
         "\n  ".join(failures)
     )
+
+
+def test_check_tab_completeness_passes():
+    """The standalone guard's own run: its skip of a manifest row (the docs-tab gate owns those) and the
+    `python` example suffix it reads."""
+    assert _load_check_script().check_tab_completeness() == []
+
+
+def test_the_script_maps_surfaces_to_tabs_as_this_file_does():
+    script = _load_check_script()
+    assert script._TIER_OF_SURFACE == _TIER_OF_SURFACE
+    fns = {"gbx_x": {"surfaces": ["session", "uc", "python"]}}
+    assert script._bindings_for(fns, "x") == {"sql", "python-light"}
+    assert script._bindings_for({"gbx_y": {"bindings": ["sql"]}}, "y") == {"sql"}

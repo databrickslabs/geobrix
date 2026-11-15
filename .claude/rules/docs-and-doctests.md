@@ -33,6 +33,54 @@ Anything under `docs/docs/` is read by end users. Never leak internal release-pl
 
 Quick check before merging: `grep -rn -iE "wave [0-9]+|wave-[0-9]+" docs/docs/ 2>/dev/null` should print nothing. The QC judge enforces this via the `internals-leak` check.
 
+## Concise, clear prose (STE-lite)
+
+Docs stay in user narrative voice. Apply these writing rules from ASD-STE100 (Simplified
+Technical English). They are the rules only, not its controlled dictionary.
+
+- **Sentence length.** A procedure step has at most 20 words; a description has at most 25. Split
+  longer sentences. A table cell or a code comment is not a sentence.
+  The QC check `prose-sentence-length` warns on added sentences over 25 words.
+- **One instruction per sentence.** Write procedures in the imperative: "Install the env wheel."
+  Do not write "You will want to install".
+- **Active voice.** Name who or what acts: "The reader skips the file", not "The file is skipped".
+- **One topic per paragraph,** at most 6 sentences. Use a list for 3 or more parallel items.
+- **Say the result first, then the reason.** Cut how it was found, review history and internal
+  mechanics that do not change what the user does.
+- **One term per concept.** Use the term list below; do not alternate synonyms for variety.
+- **Keep every fact a user acts on:** a breaking change, a changed default, a new parameter, a
+  refusal and its fix, a version pin. Concise means fewer words, not fewer facts.
+
+Term list (start; extend it when you settle a term):
+
+| Use | Not |
+|---|---|
+| surface (what you call: SQL, the Python API, Unity Catalog SQL, Scala) | tier, API (for "where you call it") |
+| level (what runs it): SQL expression (L0), JVM (L1), Python (L3), Unity Catalog function (L4) | light tier, heavy tier, light-tier, bare "SQL" for L0 |
+| lightweight = the Python level; heavyweight = the JVM level (needs the JAR). Shorthand only: define it in `api/execution-tiers`, installation and performance; elsewhere use the level name or link the shorthand to `/docs/api/execution-tiers#the-levels` | lightweight/heavyweight as a tier, an install or a reader kind |
+| the JAR (a performance add-on that dedicated compute can load) | the heavyweight tier, the heavy install |
+| env wheel (`+env5`, `+env6`) | runtime wheel, flavor wheel |
+| tile (the GeoBrix struct) | chip, raster struct (except where the API name says "chip") |
+| Volume (UC Volume) | volume, UC volume path |
+| Serverless | serverless compute, SL |
+| dedicated / standard (access mode) | single user, shared, USER_ISOLATION (except in a quoted setting) |
+
+## Release notes layout
+
+- `release-notes.mdx` is the **summary** page: the current-version banner (`gbx:versions:bump`
+  edits its "Current version:" string) and, per release, three groups in this order: **New**,
+  **Changes**, **Breaking** (omit an empty one). Short user-facing bullets that link to the detail.
+- The 0.6.0 **detail** is a sidebar category with no page of its own, holding
+  `release-notes/0-6/new.mdx`, `changes.mdx` (behavior a user notices, by area) and
+  `breaking.mdx` (each item: what changed + what to do). `release-notes-0-5-and-earlier.mdx`
+  holds v0.5.2 and every earlier release.
+- Lead with capabilities; the tone is matter-of-fact, not a list of what broke. No minutiae:
+  implementation notes, bench ratios (the Performance page holds them), per-commit fixes.
+- A new change goes on the page for its group. Add a summary bullet only for a key item.
+- A new series gets its own `release-notes/<series>/` pages, wired into `sidebars.js`. The
+  release-notes function check reads every page under `docs/docs/release-notes/`, and
+  `scripts/commands/gbx-versions-bump.sh` excludes that tree.
+
 ## MDX gotchas
 
 - **Bare angle-bracket types** in MDX PROSE (`STRUCT<…>`, `Array<…>`) are parsed as JSX and CRASH the build — backtick them.

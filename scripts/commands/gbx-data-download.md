@@ -11,7 +11,8 @@ bash scripts/commands/gbx-data-download.sh [OPTIONS]
 ## Options
 
 - `--bundle <type>` - Which bundle to download: `essential`, `complete`, or `both` (default: both)
-- `--force` - Force re-download even if data already exists
+- `--force` - Refused (exit 2): the bundles skip files that exist. Use `--refresh <rel>` to re-download a file.
+- `--refresh <rel>` - Delete one file under `geobrix-examples` (relative path, no `..`), then re-download it. Repeatable. Pick the bundle that owns the file.
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--help` - Display help message
 
@@ -24,8 +25,8 @@ bash scripts/commands/gbx-data-download.sh
 # Download only essential bundle
 bash scripts/commands/gbx-data-download.sh --bundle essential
 
-# Force re-download of complete bundle
-bash scripts/commands/gbx-data-download.sh --bundle complete --force
+# Re-download only the NYC neighborhoods file (it lives in the complete bundle)
+bash scripts/commands/gbx-data-download.sh --bundle complete --refresh nyc/neighborhoods/nyc_nta.geojson
 
 # Download with logging
 bash scripts/commands/gbx-data-download.sh --log data-download.log

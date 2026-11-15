@@ -17,13 +17,14 @@ round-trip a Long digit-id internally).
 """
 
 import math
+import sys
 
-import h3
 import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core._util import snap_bounds  # noqa: F401  (re-exported)
 
 _NODATA = -9999.0
 _U64 = 0xFFFFFFFFFFFFFFFF
@@ -31,6 +32,8 @@ _U64 = 0xFFFFFFFFFFFFFFFF
 
 def _h3_str(cellid) -> str:
     """Canonical h3 string for a (possibly signed) Spark Long cell id."""
+    import h3  # lazy: only the H3 grid needs it (the quadbin/BNG/custom rasterizers declare no h3)
+
     return h3.int_to_str(int(cellid) & _U64)
 
 
@@ -41,6 +44,8 @@ def _resolution(cell_strs) -> int:
     ``[_h3_str(c) for c in cells]``. Grid-generic resolution lives on the
     adapter (``resolution``), which operates on native cell keys.
     """
+    import h3
+
     res = h3.get_resolution(next(iter(cell_strs)))
     for c in cell_strs:
         if h3.get_resolution(c) != res:
@@ -108,19 +113,29 @@ class _H3Adapter:
         return _resolution(list(keys))
 
     def k_ring(self, key, k):
+        import h3
+
         return h3.grid_disk(key, k)
 
     def cell_center(self, key):
+        import h3
+
         lat, lon = h3.cell_to_latlng(key)  # h3 returns (lat, lon)
         return lon, lat
 
     def cell_boundary(self, key):
+        import h3
+
         return [(lo, la) for la, lo in h3.cell_to_boundary(key)]  # -> (lon, lat)
 
     def pixel_key(self, lon, lat, res):
+        import h3
+
         return h3.latlng_to_cell(float(lat), float(lon), res)
 
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
+        import h3
+
         edge_m = h3.average_hexagon_edge_length(res, unit="m")
         if _is_geographic(srid):
             midlat = (bymin + bymax) / 2.0
@@ -136,10 +151,15 @@ class _QuadbinAdapter:
     def __init__(self):
         from shapely import from_wkb
 
+        self._from_wkb = from_wkb
+
+    @property
+    def _qb(
+        self,
+    ):  # lazy: the module-level adapter table is built without quadbin installed
         from databricks.labs.gbx.pygx import _quadbin as _qb
 
-        self._qb = _qb
-        self._from_wkb = from_wkb
+        return _qb
 
     def to_key(self, cellid):
         return int(cellid) & _U64
@@ -233,6 +253,16 @@ class _BngAdapter:
         # x, y are 27700 eastings/northings (src_crs == output srid == 27700).
         return self._b.point_to_cell_id(float(x), float(y), res)
 
+    def pixel_keys(self, x, y, res):
+        """`pixel_key` of arrays: the same encoder core, so the two cannot drift. Raises, as the scalar does, for a
+        coordinate that is not finite."""
+        x, y = np.asarray(x, dtype="float64"), np.asarray(y, dtype="float64")
+        if not (np.isfinite(x).all() and np.isfinite(y).all()):
+            raise ValueError(
+                "Non-finite (NaN or infinite) coordinates are not supported."
+            )
+        return self._b.point_to_cell_id_vec(x, y, res)
+
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
         # BNG has a metric edge (metres); 27700 is metric, so the metre edge IS
         # the pixel size directly -- NO degree conversion (the whole BNG path is
@@ -272,6 +302,7 @@ class _CustomAdapter:
         return res
 
     def k_ring(self, key, k):
+        # The padding of a derived canvas: the grid's k_ring holds only the cells that exist.
         return self._c.k_ring(self._conf, key, k)
 
     def cell_center(self, key):
@@ -290,6 +321,21 @@ class _CustomAdapter:
         # ValueError (the snap_bounds gridspec can extend slightly past the
         # k-ring boundary, producing a few off-grid pixel centroids).
         return self._c.point_to_cell_id_or_none(self._conf, float(x), float(y), res)
+
+    def snap_lattice(self, srid):
+        """The `snap_bounds` lattice of a derived canvas: the grid's own cell edges.
+
+        A custom grid starts at ``(bound_x_min, bound_y_min)``, not at the coordinate origin, so a canvas snapped to
+        multiples of the pixel size from 0 puts the pixel centres half a cell off the cells whenever the bounds are
+        not a multiple of the pixel. The anchor holds only in the grid's own CRS; a canvas in another CRS has no
+        cell edges to follow. ``tol`` keeps float noise on an aligned edge from adding a pixel.
+        """
+        if srid != self.src_crs:
+            return {}
+        return {
+            "anchor": (float(self._conf.bound_x_min), float(self._conf.bound_y_min)),
+            "tol": 1e-9,
+        }
 
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
         # Default pixel = min(cell_width, cell_height) at this resolution.
@@ -329,24 +375,6 @@ def cell_bbox(cellid, srid=4326, mode="centroids", grid="h3"):
         raise ValueError(f"unknown mode {mode!r}")
     xs, ys = _reproject(lons, lats, ad.src_crs, srid)
     return float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())
-
-
-def snap_bounds(bxmin, bymin, bxmax, bymax, pixel_size):
-    """Snap a bounding box outward to the nearest pixel_size lattice.
-
-    Returns (xmin, ymin, xmax, ymax, width, height) where xmin and ymax are
-    integer multiples of pixel_size, and the grid is at least 1x1. Independent
-    grids built with the same pixel_size and these snapped origins will align.
-    Note: pixel_size is NOT included in the return tuple; callers must thread
-    it separately (e.g. compute_gridspec inserts it into the returned gridspec).
-    """
-    xmin = math.floor(bxmin / pixel_size) * pixel_size
-    ymax = math.ceil(bymax / pixel_size) * pixel_size
-    width = max(1, int(math.ceil((bxmax - xmin) / pixel_size)))
-    height = max(1, int(math.ceil((ymax - bymin) / pixel_size)))
-    xmax = xmin + width * pixel_size
-    ymin = ymax - height * pixel_size
-    return xmin, ymin, xmax, ymax, width, height
 
 
 def compute_gridspec(
@@ -396,10 +424,35 @@ def compute_gridspec(
     if pixel_size is None:
         pixel_size = ad.default_pixel_size(cells, res, srid, bymin, bymax)
 
+    lattice = ad.snap_lattice(srid) if hasattr(ad, "snap_lattice") else {}
     xmin, ymin, xmax, ymax, width, height = snap_bounds(
-        bxmin, bymin, bxmax, bymax, pixel_size
+        bxmin, bymin, bxmax, bymax, pixel_size, **lattice
     )
     return (xmin, ymin, xmax, ymax, pixel_size, width, height, srid)
+
+
+_BAND_PIXELS = (
+    1 << 20
+)  # pixels indexed at a time, so a huge canvas holds a few arrays of this size, not six of its own
+
+
+def _burn_banded(out, lut, ad, lon, lat, resolution, width):
+    """Write each pixel's cell value into `out` (flat, row-major): the cell index of a band of rows at a time
+    (`ad.pixel_keys`), looked up in the sorted cell ids. A pixel whose cell is not in `lut` keeps its NoData.
+    Every pixel is indexed also when there are no cells, so a coordinate that is not finite is refused as it was
+    when each pixel was indexed on its own.
+    """
+    keys = np.fromiter(lut.keys(), dtype=np.int64, count=len(lut))
+    vals = np.fromiter(lut.values(), dtype="float64", count=len(lut))
+    order = np.argsort(keys)
+    keys, vals = keys[order], vals[order]
+    step = max(1, _BAND_PIXELS // max(1, width)) * width  # whole rows
+    for lo in range(0, lon.size, step):
+        pk = ad.pixel_keys(lon[lo : lo + step], lat[lo : lo + step], resolution)
+        if keys.size:
+            pos = np.minimum(np.searchsorted(keys, pk), len(keys) - 1)
+            hit = keys[pos] == pk
+            out[lo : lo + pk.size][hit] = vals[pos[hit]]
 
 
 def cells_to_raster(
@@ -436,13 +489,15 @@ def cells_to_raster(
     lon, lat = _reproject(gx.ravel(), gy.ravel(), srid, ad.src_crs)
 
     out = np.full(lon.size, _NODATA, dtype="float64")
-    # Scalar cell index per pixel (no array API). The grid is bounded to the cells'
-    # padded bbox, so this is O(pixels-in-footprint). PERF FOLLOW-UP: restrict to
-    # pixels within each cell's local window instead of the whole grid.
-    for i in range(lon.size):
-        v = lut.get(ad.pixel_key(float(lon[i]), float(lat[i]), resolution))
-        if v is not None:
-            out[i] = v
+    if hasattr(ad, "pixel_keys"):
+        _burn_banded(out, lut, ad, lon, lat, resolution, width)
+    else:
+        # No array API for this grid: one cell index per pixel. The grid is bounded to the
+        # cells' padded bbox, so this is O(pixels-in-footprint).
+        for i in range(lon.size):
+            v = lut.get(ad.pixel_key(float(lon[i]), float(lat[i]), resolution))
+            if v is not None:
+                out[i] = v
 
     data = out.reshape(height, width)
     decoded_bytes = data.nbytes
@@ -465,3 +520,141 @@ def cells_to_raster(
         with mf.open(**profile) as ds:
             ds.write(data, 1)
         return mf.read()
+
+
+_NO_VALUE = object()
+
+
+def is_missing(v):
+    """True for a NULL: None, NaN, or ``pd.NA``. pandas is used only when the caller already imported it (a Spark UDF
+    always has), so this core stays importable without it."""
+    if v is None:
+        return True
+    pd = sys.modules.get("pandas")
+    if pd is not None:
+        try:
+            return bool(pd.isna(v))
+        except (TypeError, ValueError):  # an array-like is a value, not a NULL
+            return False
+    return v != v
+
+
+def max_value_per_cell(cells, vals, key=None, typed=True):
+    """``{cell: value}`` for the four cell rasterizers, one value per distinct cell.
+
+    The duplicate-cell rule of ``rst_{h3,quadbin,bng,custom}_rasterize_agg``: a cell id
+    that repeats keeps its LARGEST value, the same as the heavyweight tier, which sorts
+    the group by ``(cellid, value)`` and lets the last write win. Arrival order inside a
+    Spark group is not fixed, so "the last row wins" would change the raster from run to
+    run; the largest value does not depend on order.
+
+    A null value never wins. A typed Double column delivers a null as ``NaN`` and a real
+    ``NaN`` looks the same, so both are read as null: they are ignored whenever the cell
+    has a number, and a cell whose every value is null burns ``NaN``. ``typed`` is False
+    when the value was omitted (the UDF then receives an object column of ``None``, not a
+    float column): that is the presence mask, every cell burns ``1.0``. A typed column
+    of nulls is data and follows the rule above.
+
+    ``key`` maps a raw cell id to the id it is stored under (``adapter.to_key``), so two
+    spellings of one cell (``TQ3080`` and ``TQ 3080``, or a quadbin id as signed and
+    unsigned) are one cell here too. The result is keyed by the raw id first seen.
+    """
+    best = {}  # stored id -> [raw id, value or None]
+    for cell, val in zip(cells, vals):
+        k = cell if key is None else key(cell)
+        v = None if is_missing(val) else float(val)
+        cur = best.get(k, _NO_VALUE)
+        if cur is _NO_VALUE:
+            best[k] = [cell, v]
+        elif v is not None and (cur[1] is None or v > cur[1]):
+            cur[1] = v
+    if not typed and all(v is None for _, v in best.values()):
+        return {raw: 1.0 for raw, _ in best.values()}
+    return {raw: float("nan") if v is None else v for raw, v in best.values()}
+
+
+def rasterize_cells(
+    cell_values,
+    cells,
+    ad,
+    grid_name,
+    srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    check_canvas=None,
+):
+    """The gridspec and burn shared by the per-grid rasterize aggregates and their array twins.
+
+    ``cell_values`` is ``{raw_id: float}`` (see :func:`max_value_per_cell`), ``cells`` the same raw ids, ``ad`` the
+    per-grid adapter, ``srid`` the resolved output CRS. The canvas and the other per-group constants are plain values
+    (None for NULL). ``check_canvas(width, height)``, when given, is called with the resolved canvas (given or derived)
+    before anything is allocated, so a caller can refuse a canvas it cannot hold. Returns raw GTiff bytes.
+    """
+    res = ad.resolution([ad.to_key(c) for c in cells])
+
+    def _has(v):
+        return not is_missing(v)
+
+    _mode = mode if _has(mode) else "centroids"
+    _kp = int(kring_pad) if _has(kring_pad) else 1
+    canvas = dict(
+        xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax, width=width, height=height
+    )
+    given = [n for n, v in canvas.items() if _has(v)]
+    if given and len(given) < len(canvas):
+        # NULL xmin derives the canvas from the cells; a canvas given in part is neither that nor an explicit one
+        missing = [n for n in canvas if n not in given]
+        raise ValueError(
+            f"{grid_name} rasterize_agg: the canvas is given in part ({', '.join(given)}), "
+            f"but {', '.join(missing)} {'is' if len(missing) == 1 else 'are'} NULL. "
+            "Fix: pass xmin, ymin, xmax, ymax, width and height together, or NULL for all six to derive the canvas "
+            "from the cells."
+        )
+    if given:
+        gs = (
+            float(xmin),
+            float(ymin),
+            float(xmax),
+            float(ymax),
+            (float(xmax) - float(xmin)) / int(width),
+            int(width),
+            int(height),
+            srid,
+        )
+    else:
+        gs = compute_gridspec(
+            cells,
+            srid=srid,
+            pixel_size=float(pixel_size) if _has(pixel_size) else None,
+            mode=_mode,
+            kring_pad=_kp,
+            grid=grid_name,
+            _ad=ad,
+        )
+    if check_canvas is not None:
+        check_canvas(gs[5], gs[6])
+    return cells_to_raster(cell_values, *gs, resolution=res, grid=grid_name, _ad=ad)
+
+
+def cell_out_srid(fn, out_srid, out_crs):
+    """The output CRS of an H3 or quadbin rasterizer: ``out_srid`` or ``out_crs``, never both (a blank ``out_crs`` is
+    unset); neither is the grid-native EPSG:4326. An int SRID or a CRS string, which this module accepts
+    interchangeably. A NULL is None or NaN."""
+
+    def _set(v):
+        return not is_missing(v)
+
+    crs_set = _set(out_crs) and bool(str(out_crs).strip())
+    srid_set = _set(out_srid)
+    if crs_set and srid_set:
+        raise ValueError(f"{fn}: out_srid and out_crs are both set. Fix: set one.")
+    if crs_set:
+        return out_crs
+    return int(out_srid) if srid_set else 4326

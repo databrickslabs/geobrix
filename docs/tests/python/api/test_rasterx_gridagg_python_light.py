@@ -28,48 +28,48 @@ except (ModuleNotFoundError, ImportError):
     "example_fn,grid_type,aggregator",
     [
         # H3 functions
-        ("rst_h3_rastertogridavg_python_light_example", "h3", "avg"),
-        ("rst_h3_rastertogridcount_python_light_example", "h3", "count"),
-        ("rst_h3_rastertogridmax_python_light_example", "h3", "max"),
-        ("rst_h3_rastertogridmin_python_light_example", "h3", "min"),
-        ("rst_h3_rastertogridmedian_python_light_example", "h3", "median"),
-        ("rst_h3_rastertogridsum_python_light_example", "h3", "sum"),
-        ("rst_h3_rastertogridvariance_python_light_example", "h3", "variance"),
-        ("rst_h3_rastertogridstddev_python_light_example", "h3", "stddev"),
+        ("rst_h3_rastertogridavg_python_example", "h3", "avg"),
+        ("rst_h3_rastertogridcount_python_example", "h3", "count"),
+        ("rst_h3_rastertogridmax_python_example", "h3", "max"),
+        ("rst_h3_rastertogridmin_python_example", "h3", "min"),
+        ("rst_h3_rastertogridmedian_python_example", "h3", "median"),
+        ("rst_h3_rastertogridsum_python_example", "h3", "sum"),
+        ("rst_h3_rastertogridvariance_python_example", "h3", "variance"),
+        ("rst_h3_rastertogridstddev_python_example", "h3", "stddev"),
         # Quadbin functions
-        ("rst_quadbin_rastertogridavg_python_light_example", "quadbin", "avg"),
-        ("rst_quadbin_rastertogridcount_python_light_example", "quadbin", "count"),
-        ("rst_quadbin_rastertogridmax_python_light_example", "quadbin", "max"),
-        ("rst_quadbin_rastertogridmin_python_light_example", "quadbin", "min"),
-        ("rst_quadbin_rastertogridmedian_python_light_example", "quadbin", "median"),
-        ("rst_quadbin_rastertogridsum_python_light_example", "quadbin", "sum"),
+        ("rst_quadbin_rastertogridavg_python_example", "quadbin", "avg"),
+        ("rst_quadbin_rastertogridcount_python_example", "quadbin", "count"),
+        ("rst_quadbin_rastertogridmax_python_example", "quadbin", "max"),
+        ("rst_quadbin_rastertogridmin_python_example", "quadbin", "min"),
+        ("rst_quadbin_rastertogridmedian_python_example", "quadbin", "median"),
+        ("rst_quadbin_rastertogridsum_python_example", "quadbin", "sum"),
         (
-            "rst_quadbin_rastertogridvariance_python_light_example",
+            "rst_quadbin_rastertogridvariance_python_example",
             "quadbin",
             "variance",
         ),
-        ("rst_quadbin_rastertogridstddev_python_light_example", "quadbin", "stddev"),
+        ("rst_quadbin_rastertogridstddev_python_example", "quadbin", "stddev"),
         # BNG functions (expect 0 cells over non-GB fixture)
-        ("rst_bng_rastertogridavg_python_light_example", "bng", "avg"),
-        ("rst_bng_rastertogridcount_python_light_example", "bng", "count"),
-        ("rst_bng_rastertogridmax_python_light_example", "bng", "max"),
-        ("rst_bng_rastertogridmin_python_light_example", "bng", "min"),
-        ("rst_bng_rastertogridmedian_python_light_example", "bng", "median"),
-        ("rst_bng_rastertogridsum_python_light_example", "bng", "sum"),
-        ("rst_bng_rastertogridvariance_python_light_example", "bng", "variance"),
-        ("rst_bng_rastertogridstddev_python_light_example", "bng", "stddev"),
+        ("rst_bng_rastertogridavg_python_example", "bng", "avg"),
+        ("rst_bng_rastertogridcount_python_example", "bng", "count"),
+        ("rst_bng_rastertogridmax_python_example", "bng", "max"),
+        ("rst_bng_rastertogridmin_python_example", "bng", "min"),
+        ("rst_bng_rastertogridmedian_python_example", "bng", "median"),
+        ("rst_bng_rastertogridsum_python_example", "bng", "sum"),
+        ("rst_bng_rastertogridvariance_python_example", "bng", "variance"),
+        ("rst_bng_rastertogridstddev_python_example", "bng", "stddev"),
         # Custom-grid functions (fixture matches grid CRS → expect >=1 row per function)
-        ("rst_custom_rastertogridavg_python_light_example", "custom", "avg"),
-        ("rst_custom_rastertogridcount_python_light_example", "custom", "count"),
-        ("rst_custom_rastertogridmax_python_light_example", "custom", "max"),
-        ("rst_custom_rastertogridmin_python_light_example", "custom", "min"),
-        ("rst_custom_rastertogridmedian_python_light_example", "custom", "median"),
-        ("rst_custom_rastertogridsum_python_light_example", "custom", "sum"),
-        ("rst_custom_rastertogridvariance_python_light_example", "custom", "variance"),
-        ("rst_custom_rastertogridstddev_python_light_example", "custom", "stddev"),
+        ("rst_custom_rastertogridavg_python_example", "custom", "avg"),
+        ("rst_custom_rastertogridcount_python_example", "custom", "count"),
+        ("rst_custom_rastertogridmax_python_example", "custom", "max"),
+        ("rst_custom_rastertogridmin_python_example", "custom", "min"),
+        ("rst_custom_rastertogridmedian_python_example", "custom", "median"),
+        ("rst_custom_rastertogridsum_python_example", "custom", "sum"),
+        ("rst_custom_rastertogridvariance_python_example", "custom", "variance"),
+        ("rst_custom_rastertogridstddev_python_example", "custom", "stddev"),
     ],
 )
-def test_rastertogrid_python_light_example(spark, example_fn, grid_type, aggregator):
+def test_rastertogrid_python_example(spark, example_fn, grid_type, aggregator):
     """Each rastertogrid function returns rows with [band, cellID, measure] columns.
 
     Light tier yields 0 rows for BNG over non-GB fixture (expected).
@@ -137,10 +137,10 @@ def test_rastertogrid_sql_example_executes(spark, example_attr, grid_type):
     Registers the light (pyrx) tier so the LATERAL UDTF form resolves, materializes
     the multiband fixture as `multiband_rasters`, then executes the documented SQL.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     assert sql_examples is not None
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     light_examples._get_multiband_df(spark).createOrReplaceTempView("multiband_rasters")
 
     raw_sql = getattr(sql_examples, example_attr)()
@@ -171,7 +171,7 @@ def test_rastertogrid_sql_example_outputs_exist():
 def test_h3_cell_bbox_python_light_example(spark):
     """h3_cell_bbox light-tier scalar example returns non-null bbox structs."""
     assert light_examples is not None
-    rows = light_examples.h3_cell_bbox_python_light_example(spark)
+    rows = light_examples.h3_cell_bbox_python_example(spark)
     assert isinstance(rows, list) and len(rows) == 3
     for row in rows:
         d = row.asDict()
@@ -180,4 +180,43 @@ def test_h3_cell_bbox_python_light_example(spark):
         assert bbox is not None
         # STRUCT<xmin, ymin, xmax, ymax> — ordered, finite.
         assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
-    assert hasattr(light_examples, "h3_cell_bbox_python_light_example_output")
+    assert hasattr(light_examples, "h3_cell_bbox_python_example_output")
+
+
+# ---------------------------------------------------------------------------
+# rst_<grid>_rastertogrid_partial: the partial state of every cell a tile covers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "grid, cells",
+    [("h3", 8), ("quadbin", 4), ("bng", 16), ("custom", 4)],
+)
+def test_rastertogrid_partial_python_examples(spark, grid, cells):
+    """Each cell of the constant tile averages 1.0, and its count is the one the count table function gives."""
+    assert light_examples is not None
+    rows = getattr(light_examples, f"rst_{grid}_rastertogrid_partial_python_example")(
+        spark
+    )
+    assert len(rows) == cells
+    assert all(r["avg"] == 1.0 and r["count"] > 0 for r in rows)
+    assert len({r["cellid"] for r in rows}) == cells
+    tile_df = (
+        light_examples._london_wgs84_tile(spark)
+        if grid in ("h3", "quadbin")
+        else light_examples._london_bng_tile(spark)
+    )
+    tile_df.createOrReplaceTempView("partial_tile")
+    args = {
+        "h3": "6",
+        "quadbin": "12",
+        "bng": "3",
+        "custom": f"{light_examples._CUSTOM_GRID_SQL}, 1",
+    }[grid]
+    expected = {
+        r["cellID"]: r["measure"]
+        for r in spark.sql(
+            f"SELECT t.* FROM partial_tile, LATERAL gbx_rst_{grid}_rastertogridcount(tile, {args}) t"
+        ).collect()
+    }
+    assert {r["cellid"]: r["count"] for r in rows} == expected

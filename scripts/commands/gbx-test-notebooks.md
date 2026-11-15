@@ -1,6 +1,6 @@
 # Run Notebook Tests
 
-Runs notebooks **cell-by-cell** (no Jupyter kernel) by default: discovers `notebooks/tests/fixtures/*.ipynb` and `notebooks/sample-data/*.ipynb`, executes each code cell with `exec()`, and reports per-cell status. **All runs happen inside the `geobrix-dev` Docker container** via `docker exec`.
+Runs notebooks **cell-by-cell** (no Jupyter kernel) by default: discovers `examples/tests/fixtures/*.ipynb` and `examples/sample-data/*.ipynb`, executes each code cell with `exec()`, and reports per-cell status. **All runs happen inside the `geobrix-dev` Docker container** via `docker exec`.
 
 ---
 
@@ -30,8 +30,9 @@ bash scripts/commands/gbx-test-notebooks.sh [OPTIONS]
 
 ## Default behavior
 
-- **Cell-by-cell (no kernel)**: Default run executes notebooks with the runner in `notebooks/tests/run_notebooks_cell_by_cell.py`. `%pip install` cells are run in the isolated venv (same interpreter as subsequent cells). The venv is pre-installed with pystac-client, planetary-computer, and geopandas so notebooks that use Sentinel-2 or other sample-data deps work with or without a %pip cell.
+- **Cell-by-cell (no kernel)**: Default run executes notebooks with the runner in `examples/tests/run_notebooks_cell_by_cell.py`. `%pip install` cells are run in the isolated venv (same interpreter as subsequent cells). The venv is pre-installed with pystac-client, planetary-computer, and geopandas so notebooks that use Sentinel-2 or other sample-data deps work with or without a %pip cell.
 - **Verbosity**: `GBX_NOTEBOOK_VERBOSITY=quiet|truncated|full` (default: `truncated`). Controls how much source/result is printed per cell.
+- **Databricks-only fixtures are skipped**: a directory or default run leaves out a notebook marked `"metadata": {"gbx": {"cell_by_cell": false}}`, with a `Skipping` line. The harvest and cell-range fixtures carry the mark: they need Spark, `display` and a Volumes wheel. Name its `.ipynb` with `--path` to run it anyway. Those fixtures are covered by `scripts/ci/test_notebook_harvest.py` and `test_notebook_cell_range.py`.
 - **Volumes mount required**: The command checks that `/Volumes` exists in the container. If not, it exits with instructions to start the container using `./scripts/docker/start_docker_with_volumes.sh`.
 - **Pytest when `--path` is a .py file**: e.g. `--path test_notebook_via_script.py` runs pytest for that test file instead of the cell-by-cell runner.
 
@@ -55,7 +56,11 @@ bash scripts/commands/gbx-test-notebooks.sh --allow-absolute-reads
 bash scripts/commands/gbx-test-notebooks.sh --allow-absolute-writes
 ```
 
+## Python version
+
+Everything runs in the container (Python 3.12), including the pytest files under `examples/tests/` (`--path test_job_submit.py`, ...). Run them through this command rather than with a host `pytest`. `run_notebooks_serverless.py`, which some of them import, needs `tomllib` (Python 3.11+). A host `python3` older than that cannot import it.
+
 ## Test location
 
-- **Runner**: `notebooks/tests/run_notebooks_cell_by_cell.py` (discovers and runs notebooks).
-- **Tests**: `notebooks/tests/` (structure mirrors `notebooks/`, e.g. `notebooks/tests/sample-data/` for `notebooks/sample-data/`).
+- **Runner**: `examples/tests/run_notebooks_cell_by_cell.py` (discovers and runs notebooks).
+- **Tests**: `examples/tests/` (structure mirrors `examples/`, e.g. `examples/tests/sample-data/` for `examples/sample-data/`).

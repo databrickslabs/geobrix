@@ -1,0 +1,718 @@
+"""Oracle table for the grid arrays (BNG, quadbin, custom grid, H3): inputs -> expected, run at every level by
+test_family_cross_tier.py.
+
+Expected values come from the fixtures' definitions or an independent library, never from the function
+under test. A 1 km BNG cell inside the 100 km square `TQ` (south-west corner (500000, 100000)) is named
+`TQ<ee><nn>` from its south-west corner in kilometres, so its neighbours are counted out by hand below.
+"""
+
+import struct
+
+from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
+    CG_CELL,
+    CG_NOT_A_CELL,
+    GN,
+    QB_C,
+    QB_E,
+    QB_PT,
+    QB_Z26,
+    G,
+    cg_id,
+)
+from databricks.labs.gbx.bench.oracles import Case, uc_view
+
+# The session rows of every scalar of this module's table also run on the plain Python function
+# (test_family_oracle_l3_callables). `gbx_bng_tessellate` is not opted in: its rows sit in the shared MVP_G table and
+# are judged as exploded rows.
+L3_CALLABLE = True
+
+
+def _tq(e_km: int, n_km: int) -> str:
+    """The 1 km cell whose south-west corner is (e_km, n_km) kilometres, inside TQ."""
+    return f"TQ{e_km - 500:02d}{n_km - 100:02d}"
+
+
+def _square(e_km: int, n_km: int, k: int, hollow: bool):
+    """The cells within ring distance k of the cell at (e_km, n_km) (only those at exactly k when hollow)."""
+    return [
+        _tq(e_km + dx, n_km + dy)
+        for dx in range(-k, k + 1)
+        for dy in range(-k, k + 1)
+        if not hollow or max(abs(dx), abs(dy)) == k
+    ]
+
+
+SQ2 = "POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))"
+SQ2_CELLS = [_tq(530, 180), _tq(531, 180), _tq(530, 181), _tq(531, 181)]
+POINT = "POINT(530500 180500)"
+INF_POINT = struct.pack("<BIdd", 1, 1, float("inf"), float("inf"))
+
+KR, KL, PF = "gbx_bng_kring", "gbx_bng_kloop", "gbx_bng_polyfill"
+GKR, GKL = "gbx_bng_geomkring", "gbx_bng_geomkloop"
+
+GRID_ARRAY = (
+    Case("kring_k1", KR, ("TQ3080", 1), "cell_set", _square(530, 180, 1, False)),
+    Case("kring_k0", KR, ("TQ3080", 0), "cell_set", ["TQ3080"]),
+    Case("kring_k2", KR, ("TQ3080", 2), "cell_set", _square(530, 180, 2, False)),
+    Case("kring_null", KR, (None, 1), "null", variants=(("TQ3080", None),)),
+    # A malformed cell id is a data error: NULL, not a failed query.
+    Case("kring_bad_cell", KR, ("XX9999", 1), "null"),
+    Case("kloop_k1", KL, ("TQ3080", 1), "cell_set", _square(530, 180, 1, True)),
+    Case("kloop_k2", KL, ("TQ3080", 2), "cell_set", _square(530, 180, 2, True)),
+    Case("kloop_null", KL, (None, 1), "null"),
+    # The 2 km square holds the centres of four 1 km cells.
+    Case("polyfill_2x2", PF, (SQ2, 3), "cell_set", SQ2_CELLS),
+    Case("polyfill_named_res", PF, (SQ2, "1km"), "cell_set", SQ2_CELLS),
+    Case("polyfill_digit_res", PF, (SQ2, "3"), "cell_set", SQ2_CELLS),
+    Case("polyfill_null", PF, (None, 3), "null"),
+    Case("polyfill_bad_geom", PF, ("not a geometry", 3), "null"),
+    # The one resolution contract, on an array function.
+    Case("bng_res_3_5_raises_array", PF, (SQ2, 3.5), "raises", "3.5"),
+    Case("polyfill_res_null", PF, (SQ2, None), "null"),
+    # A point inside TQ3080 covers that cell; one ring of dilation adds its eight neighbours (mode boundary-out).
+    Case(
+        "geomkring_point_k1",
+        GKR,
+        (POINT, 3, 1),
+        "cell_set",
+        _square(530, 180, 1, False),
+    ),
+    Case(
+        "geomkring_mode_coverage",
+        GKR,
+        (POINT, 3, 1, "boundary-out", "coveras"),
+        "cell_set",
+        _square(530, 180, 1, False),
+    ),
+    Case(
+        "geomkring_digit_res",
+        GKR,
+        (POINT, "3", 1),
+        "cell_set",
+        _square(530, 180, 1, False),
+    ),
+    Case("geomkring_bad_mode", GKR, (POINT, 3, 1, "sideways"), "raises", "sideways"),
+    Case("geomkring_null", GKR, (None, 3, 1), "null"),
+    Case(
+        "geomkloop_point_k1", GKL, (POINT, 3, 1), "cell_set", _square(530, 180, 1, True)
+    ),
+    Case("geomkloop_null", GKL, (POINT, 3, None), "null"),
+    Case("geomkloop_bad_mode", GKL, (POINT, 3, 1, "sideways"), "raises", "sideways"),
+    Case("geomkloop_res_3_5", GKL, (POINT, 3.5, 1), "raises", "3.5"),
+    # A non-finite point has no cell: NULL on every level.
+    Case("bng_inf_point_array", GKR, (INF_POINT, 3, 1), "null"),
+)
+
+
+# ---------------------------------------------------------------------------------------------- quadbin
+# The 3x3 tiles around tile (163, 395) at zoom 10, ids from quadbin.tile_to_cell.
+QB_RING1 = [
+    5233961826827370495,
+    5233961835417305087,
+    5233961929906585599,
+    5233961831122337791,
+    QB_C,
+    5233961934201552895,
+    5233961878366978047,
+    5233961886956912639,
+    5233961981446193151,
+]
+QB_LOOP1 = [c for c in QB_RING1 if c != QB_C]
+QB_LOOP2 = [  # exactly two tiles away: the 5x5 block's outer ring
+    5233961788172664831,
+    5233961813942468607,
+    5233961822532403199,
+    5233961917021683711,
+    5233961925611618303,
+    5233961801057566719,
+    5233961938496520191,
+    5233961805352534015,
+    5233961942791487487,
+    5233961852597174271,
+    5233961990036127743,
+    5233961856892141567,
+    5233961882661945343,
+    5233961891251879935,
+    5233961985741160447,
+    5233961994331095039,
+]
+QB_SOUTH = 5233961934201552895  # tile (163, 396)
+# A rectangle inside tile (163, 395); one across tiles 163 and 164 of row 395; and a triangle whose long side
+# (from (-122.2, 37.9) to (-122.5, 37.6)) passes north-west of tile (164, 396), so it touches three of the four
+# tiles its bounding box covers.
+QB_IN = "POLYGON((-122.6 37.8, -122.5 37.8, -122.5 37.9, -122.6 37.9, -122.6 37.8))"
+QB_SPAN = "POLYGON((-122.5 37.8, -122.3 37.8, -122.3 37.9, -122.5 37.9, -122.5 37.8))"
+QB_TRIANGLE = "POLYGON((-122.5 37.9, -122.2 37.9, -122.5 37.6, -122.5 37.9))"
+
+QKR, QKL, QPF, QTS = (
+    "gbx_quadbin_kring",
+    "gbx_quadbin_kloop",
+    "gbx_quadbin_polyfill",
+    "gbx_quadbin_tessellate",
+)
+QGKR, QGKL = "gbx_quadbin_geomkring", "gbx_quadbin_geomkloop"
+
+GRID_ARRAY += (
+    Case("qb_kring_k1", QKR, (QB_C, 1), "cell_set", QB_RING1),
+    Case("qb_kring_k0", QKR, (QB_C, 0), "cell_set", [QB_C]),
+    Case("qb_kring_null", QKR, (None, 1), "null", variants=((QB_C, None),)),
+    Case("qb_kring_negative_k", QKR, (QB_C, -1), "raises", "-1"),
+    Case("qb_kloop_k1", QKL, (QB_C, 1), "cell_set", QB_LOOP1),
+    Case("qb_kloop_k2", QKL, (QB_C, 2), "cell_set", QB_LOOP2),
+    Case("qb_kloop_k0", QKL, (QB_C, 0), "cell_set", [QB_C]),
+    Case("qb_kloop_null", QKL, (None, 1), "null"),
+    Case("qb_polyfill_inside", QPF, (QB_IN, 10), "cell_set", [QB_C]),
+    Case("qb_polyfill_span", QPF, (QB_SPAN, 10), "cell_set", [QB_C, QB_E]),
+    Case("qb_polyfill_null", QPF, (None, 10), "null"),
+    Case("qb_polyfill_bad_geom", QPF, ("not a geometry", 10), "null"),
+    Case("quadbin_res_null_array", QPF, (QB_IN, None), "null"),
+    Case("quadbin_res_3_5_raises_array", QPF, (QB_IN, 3.5), "raises", "3.5"),
+    Case("quadbin_res_digit_string_array", QPF, (QB_IN, "10"), "cell_set", [QB_C]),
+    # The chips are the cells the geometry really touches: the bounding box covers four tiles, the triangle three.
+    Case(
+        "qb_tessellate_triangle",
+        QTS,
+        (QB_TRIANGLE, 10),
+        "cell_set",
+        [QB_C, QB_E, QB_SOUTH],
+    ),
+    Case("qb_tessellate_null", QTS, (None, 10), "null"),
+    Case("qb_geomkring_point_k1", QGKR, (QB_PT, 10, 1), "cell_set", QB_RING1),
+    Case(
+        "qb_geomkring_mode_coverage",
+        QGKR,
+        (QB_PT, 10, 1, "boundary-out", "coveras"),
+        "cell_set",
+        QB_RING1,
+    ),
+    Case(
+        "qb_geomkring_bad_mode", QGKR, (QB_PT, 10, 1, "sideways"), "raises", "sideways"
+    ),
+    Case("qb_geomkring_null", QGKR, (None, 10, 1), "null"),
+    Case("qb_geomkloop_point_k1", QGKL, (QB_PT, 10, 1), "cell_set", QB_LOOP1),
+    Case("qb_geomkloop_null", QGKL, (QB_PT, 10, None), "null"),
+    Case(
+        "qb_geomkloop_bad_mode", QGKL, (QB_PT, 10, 1, "sideways"), "raises", "sideways"
+    ),
+    Case("qb_geomkloop_res_3_5", QGKL, (QB_PT, 3.5, 1), "raises", "3.5"),
+    Case("quadbin_res_null_geomk", QGKR, (QB_PT, None, 1), "null"),
+    Case("quadbin_res_3_5_raises_geomk", QGKR, (QB_PT, 3.5, 1), "raises", "3.5"),
+    Case(
+        "quadbin_res_digit_string_geomk", QGKR, (QB_PT, "10", 1), "cell_set", QB_RING1
+    ),
+    Case("quadbin_inf_point_geomk", QGKR, (INF_POINT, 10, 1), "null"),
+)
+
+# ---------------------------------------------------------------------------------------------- custom grid
+# Cell (530, 180) of resolution 0 (1 km cells) holds POINT(530500 180500); (529..531, 179..181) is its 3x3 block.
+CG0 = cg_id(530, 180, 0)
+CG0_PT = "POINT(530500 180500)"
+CG_RING1 = [cg_id(c, r, 0) for c in (529, 530, 531) for r in (179, 180, 181)]
+CG_LOOP1 = [c for c in CG_RING1 if c != CG0]
+# The 2 km square (530000..532000, 180000..182000) holds the centres of four 1 km cells.
+CG_SQ2 = "POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))"
+CG_SQ2_CELLS = [cg_id(c, r, 0) for c in (530, 531) for r in (180, 181)]
+
+CKR, CKL, CPF = "gbx_custom_kring", "gbx_custom_kloop", "gbx_custom_polyfill"
+CGKR, CGKL = "gbx_custom_geomkring", "gbx_custom_geomkloop"
+
+GRID_ARRAY += (
+    Case("cg_kring_k1", CKR, (CG0, G, 1), "cell_set", CG_RING1),
+    Case("cg_kring_k0", CKR, (CG0, G, 0), "cell_set", [CG0]),
+    Case("cg_kring_null", CKR, (None, G, 1), "null", variants=((CG0, G, None),)),
+    Case("cg_kloop_k1", CKL, (CG0, G, 1), "cell_set", CG_LOOP1),
+    Case("cg_kloop_k0", CKL, (CG0, G, 0), "cell_set", [CG0]),
+    Case("cg_kloop_null", CKL, (None, G, 1), "null", variants=((CG0, G, None),)),
+    Case("cg_polyfill_2x2", CPF, (CG_SQ2, G, 0), "cell_set", CG_SQ2_CELLS),
+    Case("cg_polyfill_null", CPF, (None, G, 0), "null"),
+    Case("cg_polyfill_bad_geom", CPF, ("not a geometry", G, 0), "null"),
+    Case("custom_res_null_array", CPF, (CG_SQ2, G, None), "null"),
+    Case("custom_res_3_5_raises_array", CPF, (CG_SQ2, G, 3.5), "raises", "3.5"),
+    Case(
+        "custom_res_digit_string_array", CPF, (CG_SQ2, G, "0"), "cell_set", CG_SQ2_CELLS
+    ),
+    Case("cg_geomkring_point_k1", CGKR, (CG0_PT, G, 0, 1), "cell_set", CG_RING1),
+    Case(
+        "cg_geomkring_bad_mode",
+        CGKR,
+        (CG0_PT, G, 0, 1, "sideways"),
+        "raises",
+        "sideways",
+    ),
+    Case("cg_geomkring_null", CGKR, (None, G, 0, 1), "null"),
+    Case("cg_geomkloop_point_k1", CGKL, (CG0_PT, G, 0, 1), "cell_set", CG_LOOP1),
+    Case("cg_geomkloop_null", CGKL, (CG0_PT, G, 0, None), "null"),
+    Case(
+        "cg_geomkloop_bad_mode",
+        CGKL,
+        (CG0_PT, G, 0, 1, "sideways"),
+        "raises",
+        "sideways",
+    ),
+    Case("cg_geomkloop_res_3_5", CGKL, (CG0_PT, G, 3.5, 1), "raises", "3.5"),
+    Case("custom_res_null_geomk", CGKR, (CG0_PT, G, None, 1), "null"),
+    Case("custom_res_3_5_raises_geomk", CGKR, (CG0_PT, G, 3.5, 1), "raises", "3.5"),
+    Case(
+        "custom_res_digit_string_geomk", CGKR, (CG0_PT, G, "0", 1), "cell_set", CG_RING1
+    ),
+    Case("custom_inf_point", CGKR, (INF_POINT, G, 0, 1), "null"),
+)
+
+# ---------------------------------------------------------------------------------------------- H3
+# h3.latlng_to_cell(37.7749, -122.4194, 8), its h3.grid_disk(.., 1) and h3.grid_ring(.., 1), as integers.
+H3_RING1 = [
+    613196570331971583,
+    613196570334068735,
+    613196570336165887,
+    613196570338263039,
+    613196570340360191,
+    613196570342457343,
+    613196570344554495,
+]
+H3_LOOP1 = H3_RING1[1:]
+HGKR, HGKL = "gbx_h3_geomkring", "gbx_h3_geomkloop"
+
+GRID_ARRAY += (
+    Case("h3_geomkring_point_k1", HGKR, (QB_PT, 8, 1), "cell_set", H3_RING1),
+    Case(
+        "h3_geomkring_bad_mode", HGKR, (QB_PT, 8, 1, "sideways"), "raises", "sideways"
+    ),
+    Case("h3_geomkring_null", HGKR, (None, 8, 1), "null"),
+    Case("h3_geomkloop_point_k1", HGKL, (QB_PT, 8, 1), "cell_set", H3_LOOP1),
+    Case("h3_geomkloop_null", HGKL, (QB_PT, 8, None), "null"),
+    Case(
+        "h3_geomkloop_bad_mode", HGKL, (QB_PT, 8, 1, "sideways"), "raises", "sideways"
+    ),
+    Case("h3_geomkloop_res_3_5", HGKL, (QB_PT, 3.5, 1), "raises", "3.5"),
+    Case("h3_res_null", HGKR, (QB_PT, None, 1), "null"),
+    Case("h3_res_3_5_raises", HGKR, (QB_PT, 3.5, 1), "raises", "3.5"),
+    Case("h3_res_digit_string", HGKR, (QB_PT, "8", 1), "cell_set", H3_RING1),
+    Case("h3_inf_point", HGKR, (INF_POINT, 8, 1), "null"),
+)
+
+# The `coverage` argument of the geometry rings and loops, on every grid: it picks which cells of the geometry's own
+# covering a ring starts from, and for a POINT every value gives the same cells (a point covers one cell and the
+# outward ring of k = 1 is the same eight cells). Each of the three values is accepted on each grid, and an unknown
+# one is refused naming it.
+_COVERAGE_ARGS = (
+    # (grid, ring fn, loop fn, leading args, ring cells, loop cells)
+    (
+        "bng",
+        GKR,
+        GKL,
+        (POINT, 3),
+        _square(530, 180, 1, False),
+        _square(530, 180, 1, True),
+    ),
+    ("qb", QGKR, QGKL, (QB_PT, 10), QB_RING1, QB_LOOP1),
+    ("cg", CGKR, CGKL, (CG0_PT, G, 0), CG_RING1, CG_LOOP1),
+    ("h3", HGKR, HGKL, (QB_PT, 8), H3_RING1, H3_LOOP1),
+)
+GRID_ARRAY += tuple(
+    Case(
+        f"{grid}_geomk{kind}_coverage_{cov}",
+        fn,
+        (*lead, 1, "boundary-out", cov),
+        "cell_set",
+        cells,
+    )
+    for grid, ring_fn, loop_fn, lead, ring_cells, loop_cells in _COVERAGE_ARGS
+    for kind, fn, cells in (
+        ("ring", ring_fn, ring_cells),
+        ("loop", loop_fn, loop_cells),
+    )
+    for cov in ("coveras", "polyfill", "core")
+) + tuple(
+    Case(
+        f"{grid}_geomkring_bad_coverage",
+        ring_fn,
+        (*lead, 1, "boundary-out", "sideways"),
+        "raises",
+        "sideways",
+    )
+    for grid, ring_fn, loop_fn, lead, ring_cells, loop_cells in _COVERAGE_ARGS
+)
+
+# Geometries that are not a polygon, or smaller than a cell, and the custom grid's edges.
+LINE = "LINESTRING(530500 180400, 532500 180400)"  # across three 1 km cells, clear of every cell centre
+LINE_CELLS = [_tq(530, 180), _tq(531, 180), _tq(532, 180)]
+SUB_CELL = "POLYGON((530100 180100, 530400 180100, 530400 180400, 530100 180400, 530100 180100))"
+GRID_ARRAY += (
+    # k = 0 is the cells the geometry crosses; a polygon inside one cell covers just that cell, at any resolution.
+    Case("geomkring_line_k0", GKR, (LINE, 3, 0), "cell_set", LINE_CELLS),
+    Case("geomkring_sub_cell_coarse", GKR, (SUB_CELL, 1, 0), "cell_set", ["TQ"]),
+    Case("geomkring_sub_cell_1km", GKR, (SUB_CELL, 3, 0), "cell_set", [_tq(530, 180)]),
+    # One ring around the line's cells is the block one cell wider each way (5 x 3), the loop that block without them.
+    Case(
+        "geomkloop_line_k1",
+        GKL,
+        (LINE, 3, 1),
+        "cell_set",
+        [
+            _tq(e, n)
+            for e in range(529, 534)
+            for n in range(179, 182)
+            if _tq(e, n) not in LINE_CELLS
+        ],
+    ),
+    # The custom grid's ring is a square block: 5 x 5 at k = 2 inside the grid, and clamped at the corner where it
+    # would leave it (the 2 x 2 block at (0, 0) for k = 1). A negative k is refused.
+    Case(
+        "cg_kring_k2",
+        CKR,
+        (CG0, G, 2),
+        "cell_set",
+        [cg_id(c, r, 0) for c in range(528, 533) for r in range(178, 183)],
+    ),
+    Case(
+        "cg_kloop_k2",
+        CKL,
+        (CG0, G, 2),
+        "cell_set",
+        [
+            cg_id(c, r, 0)
+            for c in range(528, 533)
+            for r in range(178, 183)
+            if max(abs(c - 530), abs(r - 180)) == 2
+        ],
+    ),
+    Case(
+        "cg_kring_corner_clamped",
+        CKR,
+        (cg_id(0, 0, 0), G, 1),
+        "cell_set",
+        [cg_id(c, r, 0) for c in (0, 1) for r in (0, 1)],
+    ),
+    Case("cg_kring_negative_k", CKR, (CG0, G, -1), "raises", "k"),
+    Case("cg_kloop_negative_k", CKL, (CG0, G, -1), "raises", "k"),
+)
+
+
+def _cg_block(cols, rows, centre=None):
+    """The resolution-0 cells of the block cols x rows, without ``centre`` (a loop)."""
+    return [cg_id(c, r, 0) for c in cols for r in rows if (c, r) != centre]
+
+
+# At the grid's edges (1000 x 1000 cells at resolution 0, columns and rows 0 to 999) a ring holds only the cells of the
+# grid: at the east edge none wraps into the next row (column 1000 of row r is column 0 of row r + 1), and at the north
+# edge none is past the last row. The geometry-aware rings walk the same neighbours, so they keep to the grid as well.
+CG_EAST, CG_NORTH, CG_CORNER = (999, 500), (500, 999), (999, 999)
+CG_EAST_PT, CG_NORTH_PT, CG_CORNER_PT = (
+    "POINT(999500 500500)",
+    "POINT(500500 999500)",
+    "POINT(999500 999500)",
+)
+GRID_ARRAY += (
+    Case("cg_kring_east_edge", CKR, (cg_id(*CG_EAST, 0), G, 1), "cell_set", _cg_block((998, 999), (499, 500, 501))),
+    Case("cg_kring_north_edge", CKR, (cg_id(*CG_NORTH, 0), G, 1), "cell_set", _cg_block((499, 500, 501), (998, 999))),
+    Case("cg_kring_ne_corner", CKR, (cg_id(*CG_CORNER, 0), G, 1), "cell_set", _cg_block((998, 999), (998, 999))),
+    Case("cg_kring_ne_corner_k2", CKR, (cg_id(*CG_CORNER, 0), G, 2), "cell_set", _cg_block((997, 998, 999), (997, 998, 999))),
+    Case("cg_kloop_east_edge", CKL, (cg_id(*CG_EAST, 0), G, 1), "cell_set", _cg_block((998, 999), (499, 500, 501), CG_EAST)),
+    Case("cg_kloop_north_edge", CKL, (cg_id(*CG_NORTH, 0), G, 1), "cell_set", _cg_block((499, 500, 501), (998, 999), CG_NORTH)),
+    Case("cg_kloop_ne_corner", CKL, (cg_id(*CG_CORNER, 0), G, 1), "cell_set", _cg_block((998, 999), (998, 999), CG_CORNER)),
+    Case(
+        "cg_kloop_ne_corner_k2", CKL, (cg_id(*CG_CORNER, 0), G, 2), "cell_set",
+        [c for c in _cg_block((997, 998, 999), (997, 998, 999)) if c not in _cg_block((998, 999), (998, 999))],
+    ),
+    Case("cg_geomkring_east_edge", CGKR, (CG_EAST_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (499, 500, 501))),
+    Case("cg_geomkring_north_edge", CGKR, (CG_NORTH_PT, G, 0, 1), "cell_set", _cg_block((499, 500, 501), (998, 999))),
+    Case("cg_geomkring_ne_corner", CGKR, (CG_CORNER_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (998, 999))),
+    Case("cg_geomkloop_east_edge", CGKL, (CG_EAST_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (499, 500, 501), CG_EAST)),
+    Case("cg_geomkloop_north_edge", CGKL, (CG_NORTH_PT, G, 0, 1), "cell_set", _cg_block((499, 500, 501), (998, 999), CG_NORTH)),
+    Case("cg_geomkloop_ne_corner", CGKL, (CG_CORNER_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (998, 999), CG_CORNER)),
+)  # fmt: skip
+
+# --- Unity Catalog rows: a grid is defined in one SRID, and a geometry in another is refused with a Fix:.
+
+GRID_ARRAY = uc_view(
+    GRID_ARRAY,
+    {
+        "gbx_bng_polyfill": 27700,
+        "gbx_bng_geomkring": 27700,
+        GKL: 27700,
+        CPF: 27700,
+        CGKR: 27700,
+        CGKL: 27700,
+    },
+    session_only=(
+        "polyfill_bad_geom",
+        "qb_polyfill_bad_geom",
+        "bng_inf_point_array",
+        "h3_inf_point",
+        "quadbin_inf_point_geomk",
+        "cg_polyfill_bad_geom",
+        "custom_inf_point",
+    ),
+)
+
+GRID_ARRAY += (
+    Case(
+        "uc_polyfill_wrong_srid",
+        "gbx_bng_polyfill",
+        (SQ2, 3),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_geomkring_wrong_srid",
+        "gbx_bng_geomkring",
+        (POINT, 3, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_qb_polyfill_wrong_srid",
+        "gbx_quadbin_polyfill",
+        (
+            "POLYGON((-122.6 37.8, -122.5 37.8, -122.5 37.9, -122.6 37.9, -122.6 37.8))",
+            10,
+        ),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_h3_geomkring_wrong_srid",
+        HGKR,
+        (QB_PT, 8, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+)
+
+# --- quadbin on UC: a cell that is no cell is NULL, a geometry in another SRID is refused, an array over the cap is refused.
+GRID_ARRAY += (
+    Case("uc_qb_kring_not_a_cell", QKR, (0, 1), "null", None, ("uc",)),
+    Case("uc_qb_kloop_not_a_cell", QKL, (0, 1), "null", None, ("uc",)),
+    # 2001 x 2001 tiles at zoom 26 is 4M cells, past the 64 MiB an array may hold
+    Case("uc_qb_kring_over_cap", QKR, (QB_Z26, 1000), "uc_refused", None, ("uc",)),
+    Case("uc_qb_kloop_over_cap", QKL, (QB_Z26, 1000), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_qb_geomkring_wrong_srid",
+        QGKR,
+        (QB_PT, 10, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_qb_geomkloop_wrong_srid",
+        QGKL,
+        (QB_PT, 10, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_qb_tessellate_wrong_srid",
+        QTS,
+        (QB_TRIANGLE, 10),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    # a zoom the quadbin tessellation does not serve is a parameter error
+    Case("uc_qb_tessellate_zoom_21", QTS, (QB_IN, 21), "raises", "21", ("uc",)),
+)
+
+# --- polyfill and tessellate on UC refuse a result they cannot return (the kernel's own limit of a million cells, the 64 MiB
+# an array may hold) with a Fix:, never NULL: NULL is for data a function cannot read, not for data it will not return.
+QB_WORLD = "POLYGON((-100 20, -50 20, -50 50, -100 50, -100 20))"  # tens of millions of tiles at zoom 20
+GRID_ARRAY += (
+    Case(
+        "uc_qb_polyfill_over_cap",
+        QPF,
+        (QB_WORLD, 20),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_qb_tessellate_over_cap",
+        QTS,
+        (QB_WORLD, 20),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case("uc_kring_over_cap", KR, ("TQ3080", 10_000_000), "uc_refused", None, ("uc",)),
+)
+
+# --- a geometry array is judged BEFORE the kernel builds it where its size can be estimated from the geometry's boxes,
+# lengths and the cell size (never under the real count): a fine resolution over a large geometry is refused with a Fix.
+GB_UK = "POLYGON((0 0, 700000 0, 700000 1300000, 0 1300000, 0 0))"
+GB_LINE = "LINESTRING(0 0, 700000 1300000)"
+GRID_ARRAY += (
+    Case(
+        "uc_bng_polyfill_over_cap",
+        PF,
+        (GB_UK, 6),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_bng_geomkring_over_cap",
+        GKR,
+        (GB_LINE, 6, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_bng_geomkloop_over_cap",
+        GKL,
+        (GB_LINE, 6, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_h3_geomkring_over_cap",
+        HGKR,
+        (QB_WORLD, 12, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_h3_geomkloop_over_cap",
+        HGKL,
+        (QB_WORLD, 12, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    # the 2000 m square at the finest resolution the custom grid serves is billions of cells
+    Case(
+        "uc_cg_polyfill_over_cap",
+        CPF,
+        (CG_SQ2, G, 15),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_cg_geomkring_over_cap",
+        CGKR,
+        (CG_SQ2, G, 20, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_cg_geomkloop_over_cap",
+        CGKL,
+        (CG_SQ2, G, 20, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+)
+
+# --- custom grid on UC: a cell that is no cell is NULL, a wrong k raises, a geometry in another SRID is refused, an array
+# over the cap is refused. A grid with no CRS takes a geometry with SRID 0.
+GRID_ARRAY += (
+    Case("uc_cg_kring_not_a_cell", CKR, (CG_NOT_A_CELL, G, 1), "null", None, ("uc",)),
+    Case("uc_cg_kloop_not_a_cell", CKL, (CG_NOT_A_CELL, G, 1), "null", None, ("uc",)),
+    Case("uc_cg_kring_negative_k", CKR, (CG0, G, -1), "raises", "-1", ("uc",)),
+    Case("uc_cg_kloop_negative_k", CKL, (CG0, G, -1), "raises", "-1", ("uc",)),
+    # the 500 m cells of resolution 1 are 2000 x 2000: a ring of 5000 is the whole grid, 4M cells
+    Case("uc_cg_kring_over_cap", CKR, (CG_CELL, G, 5000), "uc_refused", None, ("uc",)),
+    Case("uc_cg_kloop_over_cap", CKL, (CG_CELL, G, 5000), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_cg_polyfill_wrong_srid",
+        CPF,
+        (CG_SQ2, G, 0),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkring_wrong_srid",
+        CGKR,
+        (CG0_PT, G, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkloop_wrong_srid",
+        CGKL,
+        (CG0_PT, G, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkring_no_crs_srid0",
+        CGKR,
+        (CG0_PT, GN, 0, 1),
+        "cell_set",
+        CG_RING1,
+        ("uc",),
+        geom_srid=0,
+    ),
+    Case(
+        "uc_cg_geomkring_no_crs_wrong_srid",
+        CGKR,
+        (CG0_PT, GN, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+)
+
+# --- BNG loops on UC: a cell id that is no cell is NULL, a wrong k raises, a geometry outside SRID 27700 is refused, a
+# loop over the cap is refused.
+GRID_ARRAY += (
+    Case("uc_kloop_bad_cell", KL, ("XX9999", 1), "null", None, ("uc",)),
+    Case("uc_kloop_negative_k", KL, ("TQ3080", -1), "raises", "-1", ("uc",)),
+    Case("uc_kloop_over_cap", KL, ("TQ3080", 10_000_000), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_geomkloop_wrong_srid",
+        GKL,
+        (POINT, 3, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+)
+
+# --- H3 loops on UC: a geometry outside SRID 4326 is refused with a Fix:.
+GRID_ARRAY += (
+    Case(
+        "uc_h3_geomkloop_wrong_srid",
+        HGKL,
+        (QB_PT, 8, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+)

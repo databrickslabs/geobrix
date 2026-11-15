@@ -20,10 +20,10 @@ def test_register_packages_python(spark):
     assert callable(overview.register_packages_python)
 
 
-def test_sql_show_functions():
-    """Test SQL SHOW FUNCTIONS constant."""
-    assert isinstance(overview.SQL_SHOW_FUNCTIONS, str)
-    assert "SHOW FUNCTIONS" in overview.SQL_SHOW_FUNCTIONS
+def test_sql_describe_function():
+    """Test SQL DESCRIBE FUNCTION constant."""
+    assert isinstance(overview.SQL_DESCRIBE_FUNCTION, str)
+    assert "DESCRIBE FUNCTION" in overview.SQL_DESCRIBE_FUNCTION
 
 
 def test_pattern_import_register(spark):

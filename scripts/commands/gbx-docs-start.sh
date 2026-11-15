@@ -61,6 +61,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --port)
+            if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "--port needs a port number (got: ${2:-nothing})" >&2
+                (show_help) >&2
+                exit 2
+            fi
             PORT="$2"
             shift 2
             ;;
@@ -90,7 +95,7 @@ print_banner "📚 GeoBrix: Start Documentation Server"
 # Check if server already running
 if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
     echo -e "${RED}❌ Port $PORT is already in use!${NC}"
-    echo -e "${YELLOW}   Stop the existing server with: gbx:docs:stop${NC}"
+    echo -e "${YELLOW}   Stop the existing server with: gbx:docs:stop --port $PORT${NC}"
     exit 1
 fi
 
@@ -123,7 +128,9 @@ echo -e "${CYAN}   Port: ${YELLOW}$PORT${NC}"
 print_separator
 
 # Start the server in the background
-nohup npm run serve -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 &
+# The server outlives this script: detach it from every inherited descriptor (stdin, and fd 3, where
+# setup_log_file saves the caller's stdout), or a caller piping this command waits on it forever.
+nohup npm run serve -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 < /dev/null 3>&- &
 SERVER_PID=$!
 
 # Store PID for stop command

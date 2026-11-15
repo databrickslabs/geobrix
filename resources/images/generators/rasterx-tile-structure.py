@@ -59,8 +59,8 @@ class Field:
     tint: str
 
 FIELDS = [
-    Field("cellid", "bigint", True, "IDENTITY",
-          "Grid cell id — null unless tessellated", A_IDENT, T_IDENT),
+    Field("cellid", "bigint", False, "IDENTITY",
+          "Grid cell id — -1 unless tessellated", A_IDENT, T_IDENT),
     Field("raster", "binary", True, "PAYLOAD",
           "Encoded raster bytes — null when virtual", A_RASTER, T_RASTER),
     Field("path", "string", True, "REFERENCE",
@@ -81,7 +81,7 @@ FIELDS = [
 
 # Example tiles: materialized vs virtual
 MATERIALIZED_EXAMPLE = [
-    ("cellid", "null"),
+    ("cellid", "-1"),
     ("raster", "<GeoTIFF · 184 KB>"),
     ("path", "null"),
     ("path_mode", "null"),
@@ -92,7 +92,7 @@ MATERIALIZED_EXAMPLE = [
     ("metadata", '{driver→"GTiff", size→"188416"}'),
 ]
 VIRTUAL_EXAMPLE = [
-    ("cellid", "null"),
+    ("cellid", "-1"),
     ("raster", "null            ← bytes-free"),
     ("path", "/Vol/…/scene.cog"),
     ("path_mode", '"external"'),
@@ -240,9 +240,9 @@ def render():
     parts.append(text(PAD, PAD + 28, "GeoBrix · Tile Structure", size=30, weight=800, fill=C_INK))
     sub = ('A RasterX <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
            f'font-weight="700" fill="{C_INK}">tile</tspan> is one typed struct — shared by both '
-           'tiers — carrying raster bytes (or a bytes-free reference) with grid, clip, CRS and format metadata')
+           'levels — carrying raster bytes (or a bytes-free reference) with grid, clip, CRS and format metadata')
     parts.append(f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="{C_MUTED}">{sub}</text>')
-    pill_text = "v0.5.2"
+    pill_text = "v0.6.0"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{CANVAS_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" width="{pw}" height="26" fill="{C_INK}"/>'
@@ -282,7 +282,7 @@ def render():
         accent=A_RASTER, tint=T_RASTER, rows=MATERIALIZED_EXAMPLE, virtual=False))
     parts.append(render_example_tile(
         PAD + col_w + CARD_GAP, cmp_y, col_w, cmp_card_h,
-        label="Virtual", sublabel="cog_gbx reader (virtualTiles) — lightweight tier",
+        label="Virtual", sublabel="cog_gbx reader (virtualTiles) — Python level",
         accent=A_REF, tint=T_REF, rows=VIRTUAL_EXAMPLE, virtual=True))
 
     # ---- Footer ----

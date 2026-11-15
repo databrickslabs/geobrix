@@ -16,7 +16,7 @@ show_help() {
     cat << EOF
 $(print_banner "🐳 GeoBrix: Attach to Docker Container")
 
-Attach to running geobrix-dev container with interactive bash shell
+Attach to the running dev container with interactive bash shell
 
 USAGE:
     bash scripts/commands/gbx-docker-attach.sh [OPTIONS]
@@ -68,16 +68,16 @@ done
 check_docker
 
 # Check if container is running
-if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
-    echo -e "${RED}❌ Container 'geobrix-dev' is not running${NC}"
+if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+    echo -e "${RED}❌ Container '$GBX_DEV_CONTAINER' is not running${NC}"
     echo -e "${YELLOW}   Start with: gbx:docker:start${NC}"
     exit 1
 fi
 
 # Print info (before attaching to keep terminal clean)
-echo -e "${CYAN}🔗 Attaching to geobrix-dev container...${NC}"
+echo -e "${CYAN}🔗 Attaching to $GBX_DEV_CONTAINER container...${NC}"
 echo -e "${YELLOW}   (Exit with Ctrl+D or type 'exit')${NC}"
 echo ""
 
 # Attach to container
-docker exec -it -u $USER geobrix-dev bash
+docker exec -it -u $USER "$GBX_DEV_CONTAINER" bash

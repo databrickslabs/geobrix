@@ -1,0 +1,580 @@
+---
+title: Unity Catalog functions
+sidebar_label: Unity Catalog functions
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ucExamples from '!!raw-loader!../../tests/python/api/uc_functions_examples.py';
+
+# Unity Catalog functions
+
+Unity Catalog (UC) functions give governed, persistent SQL for SQL warehouses, dashboards, Genie and agent tools. They use the same `gbx_` names as session SQL, called with a three-level name: `<catalog>.<schema>.gbx_*`.
+
+UC carries a slice of GeoBrix, not the whole set. Session SQL and the Python API keep the full range: every CRS form, every tile, aggregates and the select-list generators. The [availability matrix](./availability) shows the surfaces of each function.
+
+To try the functions with ready-made queries, see the [Unity Catalog SQL examples](../examples/uc-functions).
+
+## Install
+
+Run `gbx.uc.install` from an env 6 notebook or job. It needs Serverless env 6 or DBR 19. It creates the functions in one schema. The raster functions install the same way, with the same call.
+
+<CodeFromTest code={ucExamples} language="python" functionName="INSTALL_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The install folder is a Volume folder. Keep these rules for it:
+
+- It holds exactly one env 6 wheel of the same version as the wheel that runs the install.
+- It holds one folder per environment. A wheel for another environment in the folder is refused.
+- It holds only the current version. Install a new version into a clean folder.
+
+The creator needs `USE CATALOG` on the catalog, `USE SCHEMA` and `CREATE FUNCTION` on the schema, and `READ VOLUME` on the Volume. A caller needs `EXECUTE` on the functions.
+
+The install runs `CREATE OR REPLACE FUNCTION` for each function. Run it again after you update the wheel. Each function carries a COMMENT of the form `geobrix <version>: <summary>`, so the schema records which version made it.
+
+### Preview the statements
+
+A dry run returns the statements and sends none. It reads no folder.
+
+<CodeFromTest code={ucExamples} language="python" functionName="preview_install" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Pass `only=` to install some functions. A table function also installs the function it calls.
+
+<CodeFromTest code={ucExamples} language="python" functionName="install_only_the_bng_cells" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Check the schema
+
+`register` with `target="uc"` checks that every UC function exists and was made by this wheel's version. It raises when one is missing or older. It registers no session function.
+
+<CodeFromTest code={ucExamples} language="python" functionName="VERIFY_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A plain `register(spark, catalog="main", schema="geobrix")` registers the session functions. It also says once when the schema holds functions from another version. Session functions win over UC functions for unqualified names, so the line tells you that the schema is behind or ahead of the wheel.
+
+### Packages and start-up time
+
+By default every Python function in the schema declares the same package list. A statement that calls several GeoBrix functions then starts one sandbox and installs the packages once.
+
+The list pins `h3` and `quadbin` only. The env wheel carries its own rasterio, pyproj, shapely and morecantile, and the sandbox has scipy.
+
+This costs time at install. The first create takes longer, once. The gain comes at query time. On Serverless, a statement with three functions took 33 s with a package list per function and 2.7 s with the shared list. A warehouse measured 28 s against 17 s. A statement with one function runs the same either way.
+
+Pass `deps="per-function"` to give each function only the packages it imports. The install is smaller and faster. A statement that calls several functions with different package lists pays one sandbox start for each list.
+
+<CodeFromTest code={ucExamples} language="python" functionName="install_with_each_function_its_own_packages" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Install without PyPI access
+
+The sandbox installs the packages from PyPI. When it cannot reach PyPI, the create fails, and the error names the fix. Stage the wheels on a Volume with `gbx.stage_deps`, then pass `deps="volume"`. See [Install without PyPI access](../installation.mdx#offline-install).
+
+## Where UC functions run
+
+UC functions run on:
+
+- Serverless and pro SQL warehouses;
+- Serverless env 6 notebooks and jobs;
+- dedicated and standard clusters on DBR 19.
+
+They do not run on clusters that use a [Databricks Container Service](../installation/dcs.mdx) image. They do not run on classic SQL warehouses.
+
+A warehouse reads rasters and vector files through the session readers. Ingest the files into a Delta table, then query the table with UC functions. UC has no function that reads a raw file.
+
+## What UC provides
+
+| Family | Functions |
+|---|---|
+| BNG cells | `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_kloop`, `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_cellarea`, `gbx_bng_aswkb`, `gbx_bng_aswkt`, `gbx_bng_centroid`, `gbx_bng_distance`, `gbx_bng_euclideandistance`, `gbx_bng_cellunion`, `gbx_bng_cellintersection`, `gbx_bng_cellunion_array`, `gbx_bng_cellintersection_array`, `gbx_bng_cellfill_array` |
+| Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill`, `gbx_quadbin_tessellate`, `gbx_quadbin_resolution`, `gbx_quadbin_kring`, `gbx_quadbin_kloop`, `gbx_quadbin_geomkring`, `gbx_quadbin_geomkloop`, `gbx_quadbin_aswkb`, `gbx_quadbin_centroid`, `gbx_quadbin_distance`, `gbx_quadbin_cellunion`, `gbx_quadbin_cellfill_array` |
+| H3 cells | `gbx_h3_geomkring`, `gbx_h3_geomkloop`, `gbx_h3_cell_bbox`, `gbx_h3_cellfill_array` |
+| Custom grid cells | `gbx_custom_grid`, `gbx_custom_pointascell`, `gbx_custom_polyfill`, `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_cellaswkb`, `gbx_custom_cellaswkt`, `gbx_custom_centroid`, `gbx_custom_distance`, `gbx_custom_cellfill_array` |
+| Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb`, `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints`, `gbx_st_shiftlongitude`, `gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array`, `gbx_st_coverageinvalidedges_array` |
+| Raster | See [Raster functions](#raster-functions) |
+| Table functions | `gbx_bng_kringexplode`, `gbx_bng_kloopexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_geomkloopexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_h3_geomkloopexplode`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode`, `gbx_st_asmvt_pyramid`, `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, `gbx_st_interpolateelevationgeom` |
+
+A function with default arguments installs as a SQL wrapper over a private function named `gbx__<name>`. Call the public name.
+
+A table function is a SQL body over the array function, and you call it in `FROM`. `gbx_st_asmvt_pyramid` reads its attributes as a JSON object text, for example `to_json(struct(name, id))`, because UC has no struct of any fields. It refuses a feature whose tiles total more than 64 MiB.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_KRINGEXPLODE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Geometry in, SRID out
+
+A UC function takes a geometry as `GEOMETRY(ANY)` and reads its integer SRID. The grid fixes the SRID it accepts:
+
+- BNG functions take SRID 27700.
+- Quadbin and H3 functions take SRID 4326.
+- Custom grid functions take the SRID of the grid. A grid made with no SRID takes SRID 0.
+
+A geometry in another SRID is refused with a `Fix:` that names `st_transform`. GeoBrix never reads coordinates as the wrong unit.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_BNG_POINTASCELL_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A WKB `BINARY` is not a `GEOMETRY`. Build the geometry first.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_WKB_TO_GEOMETRY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The geometry functions `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` and the seven cleaners below return a `GEOMETRY` that keeps its SRID. `gbx_bng_aswkb` and `gbx_bng_centroid` return `BINARY`. On UC that value is little-endian EWKB with SRID 27700, and a BNG cell polygon starts at its south-west corner. The bytes are the same whether the install folder holds the JAR or not.
+
+### Grid functions
+
+These rules hold for the BNG, quadbin, H3 and custom grid functions.
+
+- **A cell id that is no cell gives `NULL`.** That covers a text that is no BNG cell and a number that is no cell of the grid.
+- **A geometry result is little-endian EWKB with the SRID of the grid.** A custom grid made with no SRID gives plain WKB.
+- **A result over 64 MiB is refused with a `Fix:`.** This covers the ring and loop functions, and the BNG and quadbin fills and tessellations. The ring and loop `Fix:` says to lower `k`, split the input, or call the session function. The fill `Fix:` says to use a coarser resolution or split the geometry.
+- **A geometry that cannot be read, or has a coordinate that is not finite, gives `NULL`.** A bad `mode`, `coverage`, `k` or resolution raises with a `Fix:` before any row is read.
+
+A custom grid is a struct. Build it once with `gbx_custom_grid` and pass it to the other `gbx_custom_*` functions. `gbx_custom_grid` raises for bounds or sizes that make no grid.
+
+`gbx_quadbin_distance` raises for two cells of different zooms. Compare cells of one zoom, and read a zoom with `gbx_quadbin_resolution`.
+
+`gbx_h3_cell_bbox` takes its CRS as an integer SRID, `EPSG:<n>` or `ESRI:<n>`. UC refuses WKT. `out_crs`, when set, wins over `srid`. A `mode` other than `centroids` or `spatial_envelope` raises, and so does a negative `kring_pad`.
+
+### Functions that run as SQL
+
+`gbx_quadbin_resolution`, `gbx_custom_grid` and `gbx_rst_memsize` run as SQL functions with no Python. They give the same answers as the session functions. `gbx_rst_memsize` returns the length of the tile's pixel bytes and refuses a virtual tile with a `Fix:`.
+
+`gbx_bng_cellarea` and `gbx_bng_eastnorthasbng` also run as SQL functions. On a SQL warehouse over 10 million rows they took about 1 s. The answers match the session functions.
+
+- `gbx_bng_cellarea` raises for a cell finer than 1 m, as the session function does.
+- `gbx_bng_cellarea` gives `NULL` for an id whose digits carry a sign, spaces or underscores. Such an id is no cell.
+- `gbx_bng_eastnorthasbng` trims every white-space character from a resolution text.
+- `gbx_bng_eastnorthasbng` reads coordinates from 100 km west or south of the grid origin up to 10 000 km. Beyond that range, use the session function.
+
+`gbx_quadbin_distance`, `gbx_quadbin_kring` and `gbx_quadbin_kloop` run as SQL functions too. They give `NULL` for an id that is no cell and refuse a bad `k` or an oversize ring with the same `Fix:` text as the session functions. Near the edge of the world the session ring functions fail. The SQL functions return the cells that exist.
+
+### CRS arguments
+
+A UC function takes a CRS argument in three forms:
+
+- an integer SRID, such as `4326`;
+- `EPSG:<n>`;
+- `ESRI:<n>`.
+
+Any other form is refused with a `Fix:` that names the session function. That covers WKT, PROJJSON, PROJ strings and custom definitions.
+
+<CodeFromTest code={ucExamples} language="python" functionName="crs_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_rst_transformcrs` takes a tile that carries its pixels. A virtual tile is refused.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_TRANSFORMCRS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Numbers as arguments
+
+The SQL engine casts an argument to the parameter type before GeoBrix runs. A string passed as an easting becomes a number there. With ANSI mode off, a string that is no number becomes `NULL` before GeoBrix sees it.
+
+### Raster functions
+
+The raster functions take the arguments of their session functions and give the same answers. These rules apply on UC.
+
+**A tile must be materialized.** A materialized tile carries its pixels. A virtual tile holds a path and no pixels, and UC refuses it. The `Fix:` names the session function.
+
+<CodeFromTest code={ucExamples} language="python" functionName="virtual_tile_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+**A function that reads pixels refuses a tile larger than 64 MiB decoded.** The `Fix:` says to retile first with `gbx_rst_retile`, or to run the session function in a notebook or job. A header accessor reads no pixel, so it answers a tile of any size. `gbx_rst_tryopen` does the same.
+
+<CodeFromTest code={ucExamples} language="python" functionName="tile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+**The GDAL functions run the session's GDAL call.** These are the terrain functions, the spectral indices, `gbx_rst_index`, `gbx_rst_threshold`, `gbx_rst_mapalgebra`, the warp and resample functions, `gbx_rst_fillnodata`, `gbx_rst_viewshed`, `gbx_rst_color_relief`, `gbx_rst_summary`, `gbx_rst_contour` and `gbx_rst_polygonize`. Each gives the tile, lines or JSON its session function gives. These rules apply on top:
+
+- The input and the result of one call together must fit 64 MiB decoded. Over that, the call is refused with the session's `Fix:`, before GDAL runs.
+- A tile with no CRS, given to a function that reprojects, gives `NULL`, as a corrupt tile does. A session gives an error tile for both.
+- The `gbx_rst_viewshed` observer is a `GEOMETRY`. Its SRID wins over `crs`.
+- `gbx_rst_polygonize` is a table function. A result over 64 MiB is refused with a `Fix:`.
+
+**A merge or a combine checks its size before it reads a pixel.** It adds up the tiles in the array and the result. Over the limit, the `Fix:` names a session route:
+
+- `gbx_rst_merge` points to `rasterx.helpers.mint_vrt` or `merge_by_key(method="vrt")`, which keep the tiles as files.
+- The `gbx_rst_combine*` functions point to `combine_by_key`, or to retiling first.
+- `gbx_rst_frombands` and `gbx_rst_mapalgebra` point to the session function.
+
+**A data error gives `NULL`. A bad argument raises.** Corrupt tile bytes give `NULL`. A band outside the tile or a bad expression raises with a `Fix:`. Two functions answer differently. `gbx_rst_tilexyz` gives a transparent image for a tile with nothing to render. `gbx_rst_fromcontent` refuses bytes that GDAL cannot open and gives the reason.
+
+A CRS argument takes an integer SRID, `EPSG:<n>` or `ESRI:<n>`, as in [CRS arguments](#crs-arguments).
+
+A tile function takes a tile column. An array function takes an `ARRAY` of tiles, so it needs no aggregate.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_HEADER_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_TILE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_MERGE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+| Family | Functions |
+|---|---|
+| Header accessors: size and type | `gbx_rst_width`, `gbx_rst_height`, `gbx_rst_numbands`, `gbx_rst_memsize`, `gbx_rst_format`, `gbx_rst_type`, `gbx_rst_getnodata` |
+| Header accessors: CRS and bounds | `gbx_rst_srid`, `gbx_rst_crs`, `gbx_rst_boundingbox`, `gbx_rst_georeference` |
+| Header accessors: geotransform | `gbx_rst_pixelwidth`, `gbx_rst_pixelheight`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_rotation` |
+| Header accessors: metadata | `gbx_rst_metadata`, `gbx_rst_bandmetadata`, `gbx_rst_subdatasets` |
+| Header accessors: pixel and world coordinates | `gbx_rst_rastertoworldcoord`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy`, `gbx_rst_worldtorastercoord`, `gbx_rst_worldtorastercoordx`, `gbx_rst_worldtorastercoordy` |
+| Pixel statistics | `gbx_rst_avg`, `gbx_rst_min`, `gbx_rst_max`, `gbx_rst_median`, `gbx_rst_pixelcount`, `gbx_rst_summary`, `gbx_rst_histogram`, `gbx_rst_isempty`, `gbx_rst_sample`, `gbx_rst_tryopen` |
+| Tile operations: warp and edit | `gbx_rst_transform`, `gbx_rst_transformcrs`, `gbx_rst_to_webmercator`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_resample`, `gbx_rst_resample_to_size`, `gbx_rst_resample_to_res`, `gbx_rst_clip`, `gbx_rst_align_to`, `gbx_rst_updatetype`, `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_band`, `gbx_rst_asformat`, `gbx_rst_getsubdataset`, `gbx_rst_filter`, `gbx_rst_convolve`, `gbx_rst_fillnodata` |
+| Tile operations: terrain | `gbx_rst_slope`, `gbx_rst_aspect`, `gbx_rst_hillshade`, `gbx_rst_tpi`, `gbx_rst_tri`, `gbx_rst_roughness`, `gbx_rst_color_relief`, `gbx_rst_viewshed` |
+| Tile operations: indices | `gbx_rst_ndvi`, `gbx_rst_ndwi`, `gbx_rst_nbr`, `gbx_rst_savi`, `gbx_rst_evi`, `gbx_rst_index` |
+| Tile operations: other | `gbx_rst_chm`, `gbx_rst_land_cover`, `gbx_rst_percentile_stretch`, `gbx_rst_proximity` |
+| Tile operations: files | `gbx_rst_buildoverviews`, `gbx_rst_cog_convert` |
+| Tile arrays: combiners | `gbx_rst_combineavg`, `gbx_rst_combinecount`, `gbx_rst_combinemax`, `gbx_rst_combinemedian`, `gbx_rst_combinemin`, `gbx_rst_combinestddev`, `gbx_rst_combinesum` |
+| Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
+| Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize`, `gbx_rst_custom_rasterize`, `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` |
+| Tile splitting (table functions) | `gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles`, `gbx_rst_separatebands` |
+| Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmedian`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance`, `gbx_rst_quadbin_rastertogrid_partial`, `gbx_rst_quadbin_rastertogridavg`, `gbx_rst_quadbin_rastertogridcount`, `gbx_rst_quadbin_rastertogridmax`, `gbx_rst_quadbin_rastertogridmedian`, `gbx_rst_quadbin_rastertogridmin`, `gbx_rst_quadbin_rastertogridstddev`, `gbx_rst_quadbin_rastertogridsum`, `gbx_rst_quadbin_rastertogridvariance`, `gbx_rst_bng_rastertogrid_partial`, `gbx_rst_bng_rastertogridavg`, `gbx_rst_bng_rastertogridcount`, `gbx_rst_bng_rastertogridmax`, `gbx_rst_bng_rastertogridmedian`, `gbx_rst_bng_rastertogridmin`, `gbx_rst_bng_rastertogridstddev`, `gbx_rst_bng_rastertogridsum`, `gbx_rst_bng_rastertogridvariance`, `gbx_rst_custom_rastertogrid_partial`, `gbx_rst_custom_rastertogridavg`, `gbx_rst_custom_rastertogridcount`, `gbx_rst_custom_rastertogridmax`, `gbx_rst_custom_rastertogridmedian`, `gbx_rst_custom_rastertogridmin`, `gbx_rst_custom_rastertogridstddev`, `gbx_rst_custom_rastertogridsum`, `gbx_rst_custom_rastertogridvariance` |
+| Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband`, `gbx_rst_polygonize` (table function) |
+| From file bytes | `gbx_rst_fromcontent` |
+| Tessellation (table functions) | `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate`, `gbx_rst_custom_tessellate` |
+| Web tiles | `gbx_rst_tilexyz`, `gbx_rst_xyzpyramid` (table function) |
+
+### Points as geometries
+
+`gbx_rst_dtmfromgeoms` and `gbx_rst_gridfrompoints` take their points, and the break lines of the terrain function, as `ARRAY<GEOMETRY(ANY)>`.
+The session functions take an array of WKB or WKT. On UC a `BINARY` is not a geometry, so collect `GEOMETRY` values.
+The Z of each point is kept. A point with no Z is refused by `gbx_rst_dtmfromgeoms` with a `Fix:`. A NULL element is dropped with its value.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_DTM_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The points are taken to be in the output CRS, so the SRID of a point is not read.
+
+<CodeFromTest code={ucExamples} language="python" functionName="dtm_from_geometry_points" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Array and partial forms
+
+A SQL warehouse function cannot be an aggregate. These functions replace the session aggregates.
+
+| Function | How to call it |
+|---|---|
+| `gbx_h3_cellfill_array`, `gbx_quadbin_cellfill_array`, `gbx_bng_cellfill_array`, `gbx_custom_cellfill_array` | `GROUP BY` the group key, and pass `collect_list(struct(cellid, value))`. |
+| `gbx_bng_cellunion_array`, `gbx_bng_cellintersection_array` | `GROUP BY` the cell, and pass `collect_list(struct(cellid, core, chip))`. |
+| `gbx_st_coverageisvalid_array`, `gbx_st_coverageinvalidedges_array` | `GROUP BY` the district, and pass `collect_list(st_asewkb(geom))`. |
+| `gbx_st_asmvt_array` | `GROUP BY` the tile key, and pass `collect_list(struct(st_asbinary(geom) AS geom, to_json(attrs) AS attrs))`. |
+| `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize`, `gbx_rst_custom_rasterize` | `GROUP BY` the raster key, and pass `collect_list(struct(cellid, value))`. To keep the array small, take `max(value)` for each cell in a first step. |
+| `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` | Call `gbx_rst_binpoints_partial(x, y, ...)` for each point, then `GROUP BY` the `(col, row)` key and reduce `z` with `max`, `min`, `avg`, `median` or `percentile`. Pass `collect_list(struct(col, row, value))` to `gbx_rst_binpoints_finalize`. |
+| `gbx_rst_stats_partial` | Call it once for each tile, then `GROUP BY` the band and merge the rows as for the raster-to-grid partials: sum `count` and `sum`, take the least `min` and greatest `max`, and add the squared distance of each tile's mean to `m2`. |
+| `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_quadbin_rastertogrid_partial`, `gbx_rst_bng_rastertogrid_partial`, `gbx_rst_custom_rastertogrid_partial` | Call it once for each tile, then `GROUP BY` the band and cell. See [Raster to grid](#raster-to-grid). |
+
+An array form takes the whole group in one call, and a UC function limits an array to 64 MiB. A larger array is refused with a `Fix:`. The binpoints pair has no such limit on the number of points, because the points never reach Python. The finalize input has one entry for each occupied pixel. The [binpoints page](./raster-functions#rst_binpoints_partial) has the full statement.
+
+### Raster to grid
+
+A table function such as `gbx_rst_h3_rastertogridavg(tile, 7)` gives one statistic for each cell of one tile.
+Every grid has eight of them on UC: `avg`, `count`, `max`, `median`, `min`, `stddev`, `sum` and `variance`. The grids are H3, quadbin, BNG and custom.
+Each computes only its own statistic, so a sum or a count costs about half of what the full state costs.
+Each grid also has a partial, such as `gbx_rst_bng_rastertogrid_partial`. Use it for several statistics from one pass, or one statistic across many tiles.
+The BNG partial and the BNG table functions give the cell as its `STRING`. A custom grid function takes the grid after the tile, as in the session.
+
+To get a statistic across many tiles, call the partial once for each tile and merge the rows with `GROUP BY`. The average of the per-tile averages is not the average of the cell.
+Sum `count` and `sum` instead. The variance also needs the squared distance of each tile's mean from the merged mean.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_TO_GRID_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The statement gives the statistics of the whole raster when you cut it into tiles. A cell on the seam of two tiles holds pixels of both, and the merge counts each pixel once.
+Tiles must not overlap. A pixel in two tiles counts twice, as it does in the output of `gbx_rst_tooverlappingtiles`.
+
+The partial has default arguments, so its public name is a SQL function. UC refuses a SQL function inside a generator, so call the partial in a subquery and explode the column, as the statement does.
+A partial over 64 MiB is refused with a `Fix:` that says to use a coarser resolution or to retile first. A virtual tile is refused.
+
+### Cleaning geometries and building vector tiles
+
+Seven geometry cleaners take `GEOMETRY(ANY)` and return a `GEOMETRY` in the SRID of the first argument: `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints` and `gbx_st_shiftlongitude`. The product has no function for any of them.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_SNAP_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_st_snap` and `gbx_st_split` take two geometries. They must share an SRID, as the product's own functions require. Two SRIDs are refused with a `Fix:`.
+
+<CodeFromTest code={ucExamples} language="python" functionName="snap_across_srids_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A distance or grid size that is negative or not finite raises with a `Fix:`. So does a form the operation cannot take, such as splitting a point. A geometry GEOS cannot process, such as an invalid polygon given to `gbx_st_reduceprecision`, gives `NULL`. A session raises for it.
+
+Three array forms replace the session aggregates for a query that groups first. The coverage forms take the polygons of one group as an array of WKB. Pass EWKB to keep the SRID on the edges. A member that is no geometry gives `NULL`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_COVERAGE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_st_asmvt_array` makes one vector tile layer from the features of one tile. The geometry is WKB in tile coordinates. Use `gbx_st_asmvt_pyramid` first to cut a feature into the tiles it touches.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_MVT_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The attributes are a JSON object text, because UC has no struct of any fields. Any other text raises with a `Fix:`.
+
+<CodeFromTest code={ucExamples} language="python" functionName="feature_attributes_must_be_json" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+An array over 64 MiB, attributes included, is refused with a `Fix:` that names the session aggregate. The size is checked before any member is read.
+
+### Overviews and Cloud Optimized GeoTIFF
+
+`gbx_rst_buildoverviews` and `gbx_rst_cog_convert` write the tile to `/tmp` while GDAL builds the pyramid, then return the tile.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_FILES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Both refuse a tile over 64 MiB decoded before they read a pixel. They also refuse a result that is more than a third over 64 MiB, because a pyramid adds a third. The `Fix:` names the session function. A wrong argument raises with a `Fix:`. That covers a level below 2, an unknown resampling, a block size that is not a multiple of 16 and an unknown codec. A tile that already holds an error comes out as itself, whatever the arguments.
+
+<CodeFromTest code={ucExamples} language="python" functionName="overview_levels_must_be_2_or_more" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Cutting a tile into tiles
+
+Four table functions cut one tile into many: `gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles` and `gbx_rst_separatebands`.
+They give the columns of the session functions and the same sub-tiles in the same order. Call them in `FROM` with `LATERAL`, one row for each sub-tile.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_RETILE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Each sub-tile records the pixel window it was cut from in `window`. A band tile from `gbx_rst_separatebands` records its band number in `metadata['band']`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_BANDS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Three limits keep the work inside the memory of a UC function:
+
+- **The input tile is refused over 256 MiB decoded.** `gbx_rst_retile`, `gbx_rst_maketiles` and `gbx_rst_tooverlappingtiles` read the tile one window at a time, so they take a tile four times the size a pixel function takes. `gbx_rst_separatebands` reads a whole band at once and keeps the 64 MiB limit. A window is never read over 64 MiB. A session has no such limit, so cut a larger tile there and store the pieces in a table.
+- **The result is sized before any window is cut.** The estimate is the decoded size of all the tiles, plus 1 percent for the codec and a header for each tile. It is never under the real size, so it can refuse a result that would have fitted.
+- **Each tile made, and the total so far, is checked again.** Nothing is truncated. Over the limit, the `Fix:` says to use larger tiles, a smaller overlap, or the session function.
+
+<CodeFromTest code={ucExamples} language="python" functionName="retile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A tile between 64 and 256 MiB decoded is cut by these functions. A pixel function such as `gbx_rst_avg` refuses it, so retile it first.
+
+<CodeFromTest code={ucExamples} language="python" functionName="retile_a_tile_over_the_pixel_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A tile that cannot be read gives no rows, and so does a NULL size. The session gives one error tile for each. An error tile goes out as itself. A virtual tile is refused.
+A window below one pixel, or an overlap outside 0 to below 100, raises with a `Fix:`, also for a tile with nothing to read.
+
+### Tessellating a tile and rendering its web tiles
+
+`gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate` and `gbx_rst_custom_tessellate` cut one tile into the tile of each grid cell it covers.
+`gbx_rst_xyzpyramid` renders the web tiles a tile touches across a range of zoom levels.
+All five are table functions with the columns of the session functions. They give the same cells and the same tiles in the same order. Call them in `FROM` with `LATERAL`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_TESSELLATE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_PYRAMID_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+These functions keep the 64 MiB limit of a pixel function, not the 256 MiB of the window readers. A tessellation holds one label for every pixel of the tile, and the BNG function warps the whole tile first. The pyramid renders through the same code as `gbx_rst_tilexyz`.
+
+- **The tiles are counted as they are made.** A tessellation or a pyramid that passes 64 MiB stops there and is refused with a `Fix:`. Nothing is truncated.
+- **A bad argument raises with a `Fix:`.** That covers an unknown assignment or coverage word, a resolution the grid does not define, and a bad zoom range, format or size.
+- **A tile that cannot be read gives no rows.** So does a NULL tile or resolution. The session gives one error tile for an unreadable tile. An error tile goes out as itself, and a virtual tile is refused.
+
+### Triangulating points
+
+`gbx_st_triangulate`, `gbx_st_interpolateelevationbbox` and `gbx_st_interpolateelevationgeom` are table functions over a surface of points and break lines. The points and break lines are `ARRAY<GEOMETRY(ANY)>`, so the Z of each point is kept. The session functions take WKB or WKT arrays.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_TRIANGULATE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Each triangle comes out as 2D WKB and each elevation point as WKB with its Z. Wrap a column in `st_geomfromwkb` to get a `GEOMETRY`. The bytes carry no SRID, as in the session. Both modes, `'constrained'` and `'conforming'`, run here.
+
+The result is sized before the surface is built. A triangulation can have at most two triangles for each point, and an elevation grid has one point for each cell. The grid estimate is never under the real size, so it can refuse a grid with cells outside the surface. The elevation functions also build a surface, so they check the same triangle estimate before they build it. The `'conforming'` mode can add points, so it checks the estimate again as it adds them, before it builds any triangle. Past 64 MiB the `Fix:` says to use fewer points, a coarser grid, or the session function.
+
+## Python and Scala handlers
+
+Three functions can run as UC Scala functions: `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` are always [SQL functions](#functions-that-run-as-sql), with or without the JAR, because the SQL form is faster.
+
+The install makes them Scala functions when the install folder also holds `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. Without that JAR, or with `only=` that selects none of them, they are Python functions. The names, signatures and answers are the same.
+
+<CodeFromTest code={ucExamples} language="python" functionName="preview_install_with_jar" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The install uses that exact JAR, even when the folder holds other files. It refuses a folder that holds other GeoBrix JARs and not that one, and it names the JAR to stage. Pass `jar=` to use a JAR in another Volume folder. It must be a Volume path that ends in `.jar`.
+
+Scala functions on UC have been run on a SQL warehouse only. They are not verified on Serverless notebooks or on standard clusters. To get Python functions there, keep the JAR out of the install folder.
+
+No raster function runs as a Scala function on UC. Raster functions run as Python functions.
+
+## Session functions on UC
+
+Some session functions have no UC function of the same name. The table says what to call on UC instead.
+
+{/* BEGIN GENERATED uc-routes: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Session function | Kind | On Unity Catalog |
+|---|---|---|
+| `gbx_bng_cellfill` | aggregate | GROUP BY the key and call `gbx_bng_cellfill_array` on `collect_list(struct(cellid, value))`. |
+| `gbx_bng_cellintersection_agg` | aggregate | GROUP BY the cell and call `gbx_bng_cellintersection_array` on `collect_list(struct(cellid, core, chip))`. |
+| `gbx_bng_cellunion_agg` | aggregate | GROUP BY the cell and call `gbx_bng_cellunion_array` on `collect_list(struct(cellid, core, chip))`. |
+| `gbx_custom_cellfill` | aggregate | GROUP BY the key and call `gbx_custom_cellfill_array` on `collect_list(struct(cellid, value))`. |
+| `gbx_h3_cellfill` | aggregate | GROUP BY the key and call `gbx_h3_cellfill_array` on `collect_list(struct(cellid, value))`. For a large table, fill the holes with a join over `h3_kringdistances`. |
+| `gbx_pmtiles_agg` | aggregate | UC cannot write a file. Build the tiles table with `gbx_features_to_mvt`, then run `gbx_pmtiles_agg` in a notebook or job session. |
+| `gbx_quadbin_cellfill` | aggregate | GROUP BY the key and call `gbx_quadbin_cellfill_array` on `collect_list(struct(cellid, value))`. |
+| `gbx_quadbin_cellunion_agg` | aggregate | GROUP BY the key and call `gbx_quadbin_cellunion` on `collect_list(cell)`. For a very large group, use `st_union_agg` over the cell polygons. |
+| `gbx_rst_binpoints_agg` | aggregate | Call `gbx_rst_binpoints_partial` for each point, GROUP BY the pixel, then pass the rows to `gbx_rst_binpoints_finalize`. |
+| `gbx_rst_bng_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_bng_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_bng_rasterize_tvf` | table function | UC has no partitioned table function for this. Call `gbx_rst_bng_rasterize` on the collected cells of each group. |
+| `gbx_rst_combineavg_agg` | aggregate | GROUP BY the key and call `gbx_rst_combineavg` on `collect_list(tile)`. For many tiles, use the `gbx_combine_by_key` procedure. |
+| `gbx_rst_custom_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_custom_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_derivedband` | scalar | UC does not run caller-supplied Python. Run `gbx_rst_derivedband` in a notebook or job session, or call `gbx_rst_mapalgebra` or `gbx_rst_index` on UC. |
+| `gbx_rst_derivedband_agg` | aggregate | UC does not run caller-supplied Python. Run the aggregate in a notebook or job session. |
+| `gbx_rst_dtmfromgeoms_agg` | aggregate | GROUP BY the key and call `gbx_rst_dtmfromgeoms` on `collect_list(CAST(geom AS GEOMETRY(ANY)))`. |
+| `gbx_rst_frombands_agg` | aggregate | GROUP BY the key and call `gbx_rst_frombands` on `collect_list(tile)`. |
+| `gbx_rst_fromfile` | scalar | UC reads no raw path. Ingest the file in a notebook or job session into a Delta table, or read its bytes with `read_files` in `binaryFile` format and call `gbx_rst_fromcontent`. |
+| `gbx_rst_gridfrompoints_agg` | aggregate | GROUP BY the key and call `gbx_rst_gridfrompoints` on the collected points and the collected values. |
+| `gbx_rst_h3_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_h3_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_merge_agg` | aggregate | GROUP BY the key and call `gbx_rst_merge` on `collect_list(tile)`. For many tiles, use the `gbx_mosaic_by_key` procedure. |
+| `gbx_rst_merge_tvf` | table function | UC has no partitioned table function for this. Call `gbx_rst_merge` on `collect_list(tile)`, or use the `gbx_mosaic_by_key` procedure. |
+| `gbx_rst_quadbin_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_quadbin_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_rasterize_agg` | aggregate | UC has no aggregate that burns a group of geometries. Run it in a notebook or job session, or rasterize grid cells with a grid rasterize function. |
+| `gbx_st_asmvt` | aggregate | GROUP BY the tile key and call `gbx_st_asmvt_array` on `collect_list(struct(st_asbinary(geom) AS geom, to_json(attrs) AS attrs))`. |
+| `gbx_st_coverageinvalidedges` | aggregate | GROUP BY the district and call `gbx_st_coverageinvalidedges_array` on `collect_list(st_asewkb(geom))`. |
+| `gbx_st_coverageisvalid` | aggregate | GROUP BY the district and call `gbx_st_coverageisvalid_array` on `collect_list(st_asewkb(geom))`. |
+| `gbx_st_crs` | scalar | Call the built-in `st_srid(geom)` on UC. It returns the SRID as an INT, not EPSG text. |
+| `gbx_st_setcrs` | scalar | Call the built-in `st_setsrid(geom, srid)` on UC. The SRID is an INT. |
+| `gbx_st_transformcrs` | scalar | Call the built-in `st_transform(geom, srid)` on UC. The target is an INT SRID. |
+{/* END GENERATED uc-routes */}
+
+UC has no user-defined aggregate, so a group goes to an array function: `GROUP BY` the key, then `collect_list` the members.
+
+`gbx.uc.install(..., stubs=True)` also creates a raising function for each scalar in the table: `gbx_st_crs`, `gbx_st_setcrs`, `gbx_st_transformcrs`, `gbx_rst_fromfile` and `gbx_rst_derivedband`. A call to a stub fails with the route in its message, not with a missing-function error. Stubs are off by default. A session function wins for an unqualified name, so a stub never hides it.
+
+## Recipes on UC
+
+These statements replace a session aggregate or a session step. Each is plain SQL that runs on a warehouse.
+
+### Fill empty H3 cells in a large table
+
+The join needs no array and has no size limit. It is faster than `gbx_h3_cellfill_array` from about 1M cells. For a small group, the array function is simpler.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_H3_FILL_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Union the cells of a large group
+
+The built-in `st_union_agg` does the union. The GeoBrix function gives only the polygon of each cell.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_QUADBIN_UNION_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_BNG_CHIP_UNION_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Turn points into a raster
+
+`gbx_rst_binpoints_partial` gives each point its pixel. A `GROUP BY` reduces the points of a pixel with `max`, `min`, `avg`, `count`, `median` or `percentile`. The finalize makes the tile. No point reaches Python.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_BINPOINTS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The array function `gbx_rst_binpoints` refuses a large input. This route is the one that scales.
+
+### Merge or combine many tiles for each key
+
+The two procedures take any number of tiles for each key. They work in levels, so no array limit applies. See [Procedures](#procedures).
+
+<CodeFromTest code={ucExamples} language="sql" functionName="CALL_MOSAIC_BY_KEY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="CALL_COMBINE_BY_KEY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Statistics of a cell across many tiles
+
+Call the raster-to-grid partial once for each tile and merge the rows with `GROUP BY`. See [Raster to grid](#raster-to-grid).
+
+### Read the header of a tile once
+
+Header functions are cheap, but a dashboard should not call them on every refresh. Compute the header in the ingest job, which is a session, and save it as columns. The dashboard then reads the columns.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="HEADERS_AT_INGEST_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Read a small raster file
+
+`read_files` with `format => 'binaryFile'` gives the bytes of each file, and `gbx_rst_fromcontent` turns the bytes into a tile. A warehouse needs no session for this.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_READ_FILES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The route works for files up to 64 MiB. Files of 1, 16 and 64 MiB were tested. A larger file is over the 64 MiB limit of a UC function. Ingest it in a notebook or job session, or cut it into smaller files first.
+
+## Cost
+
+Measured on an X-Small pro serverless warehouse. Treat the figures as orders of magnitude.
+
+| Measure | Result |
+|---|---|
+| A `SELECT 1` statement | 0.53 to 0.63 s |
+| A call to a trivial SQL function | about 0.5 s |
+| A UC Python function over 1M rows | about 10 to 11 s per statement |
+| The sandbox start of a Python function on a warehouse | 8 to 30 s for each statement |
+| BNG point to cell over 1M rows, Python handler | about 15.4 s |
+| BNG point to cell over 1M rows, Scala handler | 10.7 to 11.6 s |
+| `gbx_bng_eastnorthasbng` over 10M rows: SQL, Scala, Python | 1.0 s, 15.3 s, 33.2 s |
+| Three GeoBrix Python functions in one statement: one package list for each, then shared | 28.3 s, then 16.8 s |
+| H3 cell fill over 1M cells: the join, then `gbx_h3_cellfill_array` | 1.4 s, then 8.6 s |
+| Points to a raster with the partial and finalize: 100 thousand, 1M and 10M points | 21.8 s, 24.3 s and 174.7 s |
+| Raster to grid, one statistic over 1000 tiles | about 305 s |
+| `gbx_mosaic_by_key` over 10, 50 and 200 tiles | 34.9 s, 23.8 s and 34.0 s |
+| A `CALL` of `gbx_polygons_to_bng`: first, second, and after 10 minutes idle | 35 s, 24 s and 28 s |
+
+On Serverless, the raster-to-grid partial that gives every statistic costs about twice one statistic. On a warehouse it costs the same as one. If you need one statistic, call its table function.
+
+Two forms were measured and not built. The ring functions `gbx_bng_kring` and `gbx_bng_kloop` stay Python or Scala, because a SQL form was 2.6 to 2.9 times slower over 1M rows in a local test. No procedure computes every raster-to-grid statistic in one call: call the partial and merge, as shown above.
+
+The per-statement cost is high next to a session function, and UC functions suit BI and governed use. For bulk transforms use session SQL or the Python API.
+
+A UC Python function holds about 10 tiles of 512 by 512 pixels, at 4.2 MB each. A function that received 50 tiles ran out of memory. UC has no aggregate over tiles, so use `gbx_mosaic_by_key` or `gbx_combine_by_key`, or a session aggregate.
+
+### Sizes
+
+| What | Limit |
+|---|---|
+| A tile read by a pixel function | 64 MiB decoded |
+| A header function | any size |
+| A tile cut by `gbx_rst_retile`, `gbx_rst_maketiles` or `gbx_rst_tooverlappingtiles` | 256 MiB decoded, in windows of at most 64 MiB |
+| A tile cut by `gbx_rst_separatebands` | 64 MiB decoded |
+| A tile from `read_files` and `gbx_rst_fromcontent` | a file of 64 MiB |
+| An array argument, or a merged or combined tile | 64 MiB |
+| A tile sent between SQL and a UC function | tested up to 256 MiB |
+
+## Errors on UC
+
+A UC function has no error tile. It follows one rule for each kind of problem:
+
+- **Corrupt data gives `NULL`.** An unreadable geometry, a text that is no cell id and a point that is not finite give `NULL`.
+- **Input the function cannot serve gives an error with a `Fix:`.** A geometry in the wrong SRID, a CRS form UC does not take and a virtual tile fall here. The `Fix:` names the session function.
+- **A wrong parameter raises with a `Fix:`.** A bad resolution, mode, coverage, zoom or `k` is checked before any row is read.
+
+<CodeFromTest code={ucExamples} language="python" functionName="bad_data_is_null" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="python" functionName="bad_parameter_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_quadbin_polyfill` on a geometry that covers more than 1,000,000 cells is refused with a `Fix:` that says to use a lower zoom. The [error contract](./error-handling) describes the session behavior.
+
+## Procedures
+
+Procedures run a whole ETL step inside Unity Catalog. Each one reads a table, calls GeoBrix functions and merges the result into another table. A procedure adds flow only: it computes nothing itself and writes no file.
+
+Install them with the functions. A procedure is created after the functions it calls, and `SQL SECURITY INVOKER` runs it with the privileges of the caller. With `only=`, a procedure is created only when every function it calls is installed. Install prints one line for each procedure it skips.
+
+<CodeFromTest code={ucExamples} language="python" functionName="INSTALL_PROCEDURES_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A caller needs `EXECUTE` on the procedure and `SELECT` and `MODIFY` on the tables it names. Table names are parameters, as `catalog.schema.table`. Each procedure reads fixed column names, listed in its comment. A procedure creates the target table when it is missing and merges into it on later calls.
+
+| Procedure | Reads | Writes |
+|---|---|---|
+| `gbx_polygons_to_bng` | `id`, `geom` in SRID 27700 | `id`, `cellid`, `core`, `chip` |
+| `gbx_clean_geometries` | `id`, `geom` | the valid geometries, and a rejects table with the reason |
+| `gbx_migrate_mosaic_geometry` | `id`, a legacy Mosaic `geom` of one SRID | the same table with a `GEOMETRY` column of that SRID |
+| `gbx_points_to_h3_surface` | `longitude`, `latitude`, `value` | one GeoTIFF surface per name, with the empty cells filled |
+| `gbx_features_to_mvt` | `geom` in EPSG:4326, `attrs` as a struct | `z`, `x`, `y`, `mvt` |
+| `gbx_mosaic_by_key` | `tile_key`, `tile` | one merged tile per key |
+| `gbx_combine_by_key` | `tile_key`, `tile`, and an `op` | one tile per key, each pixel the `avg`, `sum`, `count`, `min`, `max` or `stddev` of the key's tiles |
+| `gbx_zonal_stats` | zones with `zone_id`, `geom`; tiles with `tile_id`, `tile`, `bbox` | `zone_id`, `tile_id`, `summary` |
+| `gbx_zarr_tag_version`, `gbx_zarr_untag_version`, `gbx_zarr_version_history` | a Zarr store's manifest table | a tag, its removal, or the list of commits |
+
+Most procedures upsert. A row already in the target that the source no longer has stays there, so a procedure never deletes stale rows. Delete them yourself when the source drops a feature.
+
+The `id` of the source must be unique for `gbx_polygons_to_bng`, `gbx_clean_geometries` and `gbx_migrate_mosaic_geometry`. A repeated `id` makes the merge fail. In `gbx_zonal_stats`, each `zone_id` must be unique in the zones and each `tile_id` in the tiles.
+
+`gbx_clean_geometries` keeps each `id` in one table per call. A geometry that is valid now is merged into the target and removed from the rejects. One that is invalid now goes to the rejects and is removed from the target. A row whose `id` is NULL is matched like any other. The four writes are not one transaction. They hold when the call succeeds. If it fails part-way, a re-run repairs it.
+
+`gbx_points_to_h3_surface` adds the cells within `fill_rings` of a point's cell, with no value, before it fills. A cell no point fell in then takes the mean of the neighbours that have a value. So `fill_rings` fills gaps, not only the cells you gave with no value.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="CALL_POLYGONS_TO_BNG_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_mosaic_by_key` and `gbx_combine_by_key` take any number of tiles per key. A call to a UC function holds a bounded number of tiles. The limit is eight to merge and six to combine, because the partial tiles of a combine are Float64. So each procedure works in levels. It merges or combines the tiles of a key in groups of that size into a scratch table beside the target. It repeats on the results until a key has one tile. The scratch table is dropped when the call ends, also when it fails. A key with one tile goes to the target as it is.
+
+Tiles of a key should not overlap in `gbx_mosaic_by_key`: which of two overlapping tiles shows is not defined. The tiles of a key in `gbx_combine_by_key` must be aligned (same size, extent and CRS), as for the `gbx_rst_combine*` functions. Pixels with no data are left out of the statistic. `avg` and `stddev` return Float32 tiles, and `stddev` is the population standard deviation. The `median` op is refused with a `Fix:`: it does not split into partial tiles, so combine at most 10 tiles per key with `gbx_rst_combinemedian`. Any other unknown `op` is refused too.
+
+A merged or combined tile over 64 MiB is refused, because a UC function returns no more. The `Fix:` of `gbx_mosaic_by_key` names `mint_vrt` for a mosaic that large (see [VRT & Mosaics](./vrt-mosaic)). The `Fix:` of `gbx_combine_by_key` says to combine that key with the session aggregate, or to split the key. A key that needs more than 10 levels of 8 tiles is refused: split the key. The H3 surface and vector tile procedures refuse an array over 64 MiB and name the session function.
+
+The vector tile procedure writes tiles to a table. A `.pmtiles` archive is built outside Unity Catalog.
+
+## Names and the path
+
+A three-level name always runs the UC function. An unqualified `gbx_` name runs the session function when one is registered. On a warehouse there is no session function, so an unqualified name needs `USE` or `SET PATH`.
+
+`SET PATH` is your choice. GeoBrix never runs it. `register(target="uc")` prints the statement for your schema:
+
+<CodeFromTest code={ucExamples} language="sql" functionName="SET_PATH_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Keep `system.session` in the path. Later statements fail without it.
+
+To see which implementation answers, run `DESCRIBE FUNCTION EXTENDED gbx_bng_kring`. A three-part name is the UC function, and a bare name is the session function.
+
+## Reproduce a warehouse in a notebook
+
+`register(spark, target="uc", catalog=..., schema=...)` registers no session function. Call the functions with three-level names, and a notebook gives the answers a warehouse gives. Use it to test the behavior of a UC function, such as its `NULL` for corrupt data.
+
+To list the installed functions and their versions, query the schema:
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_ROUTINES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />

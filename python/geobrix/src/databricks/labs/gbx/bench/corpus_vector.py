@@ -1,13 +1,11 @@
 """Scaled vector benchmark corpus generator. Mints a 1M-polygon seed in the light
 vector-writer schema, transcodes it to each format via the *_gbx writers, and
 replicates each seed into a per-format directory on the bench Volume. Runs locally
-(small scale) and on the bench cluster (full scale). FileGDB writing needs the
-heavyweight GDAL natives (native osgeo) -- cluster only.
+(small scale) and on the bench cluster (full scale).
 
 Shapefile and FileGDB seeds+copies are stored as self-contained zip archives
-(.shp.zip / .gdb.zip) so both the light (*_gbx) and heavy (*_ogr) readers can read
-a directory of copies -- the heavy OGR dir-read requires each entry to be a single
-self-contained file."""
+(.shp.zip / .gdb.zip) so the light (*_gbx) readers can read
+a directory of copies."""
 
 from __future__ import annotations
 
@@ -120,8 +118,7 @@ def _zip_gdb(gdb_path: str) -> str:
 
 def transcode_vector_seed(spark, seed_df, formats: List[str], out_base: str) -> dict:
     """Write the seed DataFrame to each format's seed file via the *_gbx writers.
-    Returns {fmt: seed_path}. The seed is cached so each write reuses it. FileGDB
-    requires the native osgeo (heavyweight GDAL natives).
+    Returns {fmt: seed_path}. The seed is cached so each write reuses it.
 
     Shapefile and FileGDB outputs are zipped into self-contained archives (.shp.zip
     and .gdb.zip respectively) so both the light and heavy readers can dir-read a
@@ -318,7 +315,7 @@ def generate_legacy_structs(n_rows: int):
 
 
 # ---------------------------------------------------------------------------------------------
-# Quadbin (light pygx vs heavy gridx.quadbin) corpus builders.  Plain-Python, deterministic.
+# Quadbin (lightweight pygx) corpus builders.  Plain-Python, deterministic.
 # Each returns (rows, schema) for ``spark.createDataFrame(rows, schema)``.  Shapes mirror the
 # benched quadbin functions:
 #   * points        -> quadbin_pointascell (scalar lon/lat -> cell)
@@ -732,9 +729,9 @@ def build_vector_corpus(
 ) -> dict:
     """Full pipeline: generate the polygon seed -> transcode to each format ->
     replicate ×copies. Returns {fmt: {"seed": path, "copies": [paths]}}."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     seed_df = generate_polygon_seed(spark, rows, srid=srid)
     seeds = transcode_vector_seed(spark, seed_df, formats, out_base)
     result: dict = {}

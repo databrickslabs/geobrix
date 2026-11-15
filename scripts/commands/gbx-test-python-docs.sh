@@ -13,13 +13,14 @@ show_help() {
     echo ""
     echo -e "${CYAN}Targeting (run pinpointed tests; full suite is 10+ min):${NC}"
     echo -e "  ${GREEN}--test <nodeid>${NC}        Single test: file::testname (e.g. quickstart/test_examples.py::test_exec_sql_read_and_use_snippet)"
-    echo -e "  ${GREEN}--suite <name>${NC}         Subset: quickstart|api|readers|rasterx|advanced|setup|integration (see table below)"
-    echo -e "  ${GREEN}--path <path>${NC}          Directory or file (relative to docs/tests/python/)"
+    echo -e "  ${GREEN}--suite <name>${NC}         Subset: quickstart|api|readers|ingestion|rasterx|advanced|setup|integration (see table below)"
+    echo -e "  ${GREEN}--path <path>${NC}          Directory or file (relative to docs/tests/python/); one target per run"
     echo ""
     echo -e "${CYAN}Suites (approx time with --skip-build):${NC}"
     echo -e "  ${YELLOW}quickstart${NC}  ~1–2 min   quickstart/"
     echo -e "  ${YELLOW}api${NC}          ~3–5 min   api/"
     echo -e "  ${YELLOW}readers${NC}      ~2–4 min   readers/"
+    echo -e "  ${YELLOW}ingestion${NC}    ~1–2 min   ingestion/"
     echo -e "  ${YELLOW}rasterx${NC}      ~1–2 min   rasterx/"
     echo -e "  ${YELLOW}advanced${NC}     ~1 min     advanced/"
     echo -e "  ${YELLOW}setup${NC}         ~0.5 min   setup/"
@@ -29,15 +30,21 @@ show_help() {
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (use timestamp for tracking: python-docs-\$(date +%Y%m%d-%H%M%S).log)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
     echo -e "  ${GREEN}--filter <expr>${NC}        Pytest -k expression: run ONLY matching tests (whole dir still collected so api/ _fixtures resolves). Use with --path api/ to test just the changed functions, e.g. --path api/ --filter 'st_triangulate or st_interpolate'"
+    echo -e "  ${GREEN}--timeout <seconds>${NC}     Per-test deadline (default 600): a test still running after this many seconds fails with a timeout"
+    echo -e "                           instead of blocking the run (tests marked @pytest.mark.deadline(n) keep their own limit)"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}            Skip Maven/Python build (use when already built)"
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
+    echo -e "  ${GREEN}--sample-data-root <dir>${NC} Container path for GBX_SAMPLE_DATA_ROOT (default /Volumes/main/default/test-data;"
+    echo -e "                           /Volumes/main/default/geobrix_samples runs against the complete bundle)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 This help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:test:python-docs --suite quickstart --skip-build --log quickstart.log${NC}"
     echo -e "  ${YELLOW}gbx:test:python-docs --test quickstart/test_examples.py::test_sql_constants_are_valid_strings --skip-build${NC}"
     echo -e "  ${YELLOW}gbx:test:python-docs --path api/test_rasterx_functions_sql.py --skip-build${NC}"
+    echo -e "  ${YELLOW}gbx:test:python-docs --path readers/ --skip-build --timeout 900${NC}   # slow suite: 900 s per test"
     echo -e "  ${YELLOW}gbx:test:python-docs --log test-logs/python-docs-\$(date +%Y%m%d-%H%M%S).log${NC}   # full suite with timestamped log"
     echo ""
 }
@@ -45,6 +52,16 @@ show_help() {
 # Parse arguments
 BASE="/root/geobrix/docs/tests/python"
 TEST_PATH="${BASE}/"
+TARGET_GIVEN=""
+# One target per run: a second --path/--test/--suite used to replace the first silently, so a run that named
+# two files tested only the last one and reported green for both.
+set_target() {
+    if [ -n "$TARGET_GIVEN" ]; then
+        echo -e "${RED}❌ One target per run: $TARGET_GIVEN was given, then $1 $2. Fix: run the command once per file, or pass their directory.${NC}"
+        exit 1
+    fi
+    TARGET_GIVEN="$1 $2"
+}
 LOG_PATH=""
 MARKERS="-m 'not integration'"
 FILTER=""
@@ -52,17 +69,23 @@ INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
 SET_SAMPLE_DATA_ROOT=true
+SAMPLE_DATA_ROOT="/Volumes/main/default/test-data"
+EXPLICIT_SAMPLE_DATA_ROOT=false
+# Per-test deadline for the container's pytest (GBX_DOC_TEST_TIMEOUT_S); empty = its default (600 s)
+DOC_TEST_TIMEOUT_S=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --test)
             # Single test: path relative to docs/tests/python, e.g. quickstart/test_examples.py::test_foo
+            set_target "$1" "$2"
             TEST_PATH="${BASE}/$2"
             shift 2
             ;;
         --suite)
+            set_target "$1" "$2"
             case "$2" in
-                quickstart|api|readers|rasterx|advanced|setup)
+                quickstart|api|readers|ingestion|rasterx|advanced|setup)
                     TEST_PATH="${BASE}/$2/"
                     ;;
                 integration)
@@ -72,13 +95,14 @@ while [[ $# -gt 0 ]]; do
                     ;;
                 *)
                     echo -e "${RED}❌ Invalid suite: $2${NC}"
-                    echo "Must be: quickstart, api, readers, rasterx, advanced, setup, integration"
+                    echo "Must be: quickstart, api, readers, ingestion, rasterx, advanced, setup, integration"
                     exit 1
                     ;;
             esac
             shift 2
             ;;
         --path)
+            set_target "$1" "$2"
             TEST_PATH="${BASE}/$2"
             shift 2
             ;;
@@ -97,6 +121,14 @@ while [[ $# -gt 0 ]]; do
             FILTER="-k '$2'"
             shift 2
             ;;
+        --timeout)
+            if ! [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo -e "${RED}❌ --timeout needs a positive whole number of seconds (got: '${2:-}')${NC}"
+                exit 1
+            fi
+            DOC_TEST_TIMEOUT_S="$2"
+            shift 2
+            ;;
         --include-integration)
             INCLUDE_INTEGRATION=true
             MARKERS=""
@@ -108,6 +140,16 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-sample-data-root)
             SET_SAMPLE_DATA_ROOT=false
+            shift
+            ;;
+        --sample-data-root)
+            SET_SAMPLE_DATA_ROOT=true
+            EXPLICIT_SAMPLE_DATA_ROOT=true
+            SAMPLE_DATA_ROOT="${2%/}"
+            shift 2
+            ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
             shift
             ;;
         --help|-h)
@@ -122,6 +164,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# One spelling of the target for every comparison below: a "." or "./" segment names the same
+# directory (`--path .` is the whole suite, `--path ./readers` is readers/), and pytest collects it
+# alike, so the api/ exclusion and the Zarr gate must not read them as other paths.
+TEST_PATH="$(printf '%s' "$TEST_PATH" | sed -E 's#/(\./)+#/#g; s#/\.$#/#')"
 
 # When running the default full suite (entire docs/tests/python/), exclude api/
 # so gbx:test:python-docs and gbx:test:sql-docs stay isolated. Use --suite api to run SQL/API tests.
@@ -139,17 +186,26 @@ cd "$PROJECT_ROOT"
 show_banner "📚 GeoBrix: Python Documentation Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 # Ensure sample-data Volumes structure exists on host (mount target for start_docker_with_volumes.sh)
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
 
 # Volumes must be mounted so tests can use sample data (minimal bundle in-repo or full at geobrix_samples)
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
     echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
     echo ""
     echo "Then run this command again so tests can run."
     exit 1
+fi
+
+# The Zarr doc tests (formats/, plus the Zarr examples of readers/, writers/ and api/) keep a store's
+# manifest in a Delta table: they need the zarr extra and the delta-spark jars (fetched and sha256-
+# checked, a no-op when they are there), as every command that runs a Zarr test arranges
+# (ensure_zarr_test_env in common.sh). Only a target that covers a Zarr doc test pays for it.
+if zarr_doc_tests_selected "$TEST_PATH" "$BASE"; then
+    ensure_zarr_test_env "the Zarr doc tests"
 fi
 
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
@@ -164,17 +220,46 @@ fi
 if [ "$SKIP_BUILD" = true ]; then
     echo -e "${CYAN}⏭️  Skipping Maven and Python build (--skip-build)${NC}"
 fi
+# The container's pytest reads the deadline from this variable (docs/tests/python/deadline_guard.py)
+DOCKER_ENV_ARGS=()
+if [ -n "$DOC_TEST_TIMEOUT_S" ]; then
+    DOCKER_ENV_ARGS=(-e "GBX_DOC_TEST_TIMEOUT_S=$DOC_TEST_TIMEOUT_S")
+    echo -e "${CYAN}⏱️  Per-test deadline: ${YELLOW}${DOC_TEST_TIMEOUT_S} s${NC}"
+fi
 echo ""
 
 # Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
 SAMPLE_DATA_ROOT_EXPORT=""
-[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+if [ "$SET_SAMPLE_DATA_ROOT" = true ]; then
+    if [ "$EXPLICIT_SAMPLE_DATA_ROOT" = true ]; then
+        if ! docker exec "$GBX_DEV_CONTAINER" test -d "$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then
+            echo -e "${RED}❌ Sample data root not found in container: $SAMPLE_DATA_ROOT/geobrix-examples${NC}"
+            exit 1
+        fi
+        echo -e "${CYAN}📦 Sample data root: ${YELLOW}$SAMPLE_DATA_ROOT${NC}"
+    fi
+    SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=$SAMPLE_DATA_ROOT"
+fi
+
+# A single-file target (--path x/test_y.py, --test x/test_y.py::name) must import its
+# sibling example modules (`from _fixtures import ...`) as it does when its whole directory is
+# collected. Collecting the directory runs other test modules' `sys.path.insert(<their dir>)`
+# first; a lone file never does, so the import fails. Put the file's directory (and its parent,
+# for the `from . import ...` / `from api import ...` forms) on PYTHONPATH.
+PYTHONPATH_EXPORT=""
+TEST_FILE="${TEST_PATH%%::*}"
+if [[ "$TEST_FILE" == *.py ]]; then
+    TEST_FILE_DIR="$(dirname "$TEST_FILE")"
+    PYTHONPATH_EXPORT="export PYTHONPATH=$TEST_FILE_DIR:$(dirname "$TEST_FILE_DIR")\${PYTHONPATH:+:\$PYTHONPATH}"
+    echo -e "${CYAN}🧩 Single-file target: ${YELLOW}$TEST_FILE_DIR${NC}${CYAN} added to PYTHONPATH${NC}"
+fi
 
 # Run pre-steps and pytest inside Docker (single bash -c so env and cwd carry through)
 RUN_CMD="set -e
 unset JAVA_TOOL_OPTIONS
 export JUPYTER_PLATFORM_DIRS=1
 $SAMPLE_DATA_ROOT_EXPORT
+$PYTHONPATH_EXPORT
 cd /root/geobrix
 
 # 1) Ensure Volumes/sample-data is mounted (doc tests use /Volumes/main/default/geobrix_samples/... or test-data)
@@ -212,7 +297,7 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS $FILTER --tb=short --color=yes $IGNORE_API_ARG
 "
 
-docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
+docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

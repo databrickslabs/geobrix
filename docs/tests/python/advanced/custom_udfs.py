@@ -25,10 +25,11 @@ def eval_method_standard_usage(spark):
     Standard GeoBrix usage with eval methods.
     Uses Spark expressions registered as functions.
     """
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    rasters = spark.read.format("gdal").load(
+    gbx.register(spark)
+    rasters = spark.read.format("raster_gbx").load(
         _RASTER_PATH
     )
     df = rasters.select(rx.rst_boundingbox("tile").alias("bbox"))
@@ -72,9 +73,9 @@ def basic_python_udf_example(spark):
             
             # Use execute methods
             metadata = {}
-            # metadata["format"] = accessors.RST_Format.execute(dataset)
-            # metadata["width"] = str(accessors.RST_Width.execute(dataset))
-            # metadata["height"] = str(accessors.RST_Height.execute(dataset))
+            # metadata["format"] = dataset.GetDriver().ShortName
+            # metadata["width"] = str(dataset.RasterXSize)
+            # metadata["height"] = str(dataset.RasterYSize)
             
             # Add custom logic
             metadata["aspect_ratio"] = "1.0"  # Placeholder
@@ -86,7 +87,7 @@ def basic_python_udf_example(spark):
         except Exception as e:
             return {"error": str(e)}
     
-    rasters = spark.read.format("gdal").load(
+    rasters = spark.read.format("raster_gbx").load(
         _RASTER_PATH
     )
     enriched = rasters.withColumn("custom_metadata", extract_custom_metadata("tile"))
@@ -114,10 +115,11 @@ def conditional_processing_example(spark):
     Common pattern: conditional processing based on raster properties.
     Branch logic (e.g. multispectral vs RGB) using GeoBrix accessors.
     """
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    rasters = spark.read.format("gdal").load(_RASTER_PATH)
+    gbx.register(spark)
+    rasters = spark.read.format("raster_gbx").load(_RASTER_PATH)
     # Branch by band count: different path for multiband vs single band
     with_band_count = rasters.select(
         rx.rst_numbands("tile").alias("num_bands"),
@@ -143,10 +145,11 @@ def chained_processing_example(spark):
     Common pattern: chain multiple operations (metadata -> validate -> process).
     Single dataset load, multiple execute-style steps via Spark expressions.
     """
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    rasters = spark.read.format("gdal").load(_RASTER_PATH)
+    gbx.register(spark)
+    rasters = spark.read.format("raster_gbx").load(_RASTER_PATH)
     # Step 1: metadata; Step 2: dimensions; Step 3: optional clip/transform
     result = rasters.select(
         rx.rst_boundingbox("tile").alias("bbox"),
@@ -182,7 +185,7 @@ def integration_test_example():
         # spark.udf.register("custom_stats", custom_raster_stats)
         
         # Load test data
-        rasters = spark.read.format("gdal").load("/test/data")
+        rasters = spark.read.format("raster_gbx").load("/test/data")
         
         # Apply UDF
         # result = rasters.selectExpr("custom_stats(tile) as stats")

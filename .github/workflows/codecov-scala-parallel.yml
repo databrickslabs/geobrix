@@ -15,9 +15,21 @@ permissions:
   contents: read
 
 jobs:
+  # The x86_64 native build the JVMs below load their GDAL from (the JAR's GDAL Java classes refuse any other JNI);
+  # cached, see .github/workflows/build-gdal-native.yml.
+  native-payload:
+    uses: ./.github/workflows/build-gdal-native.yml
+    with:
+      cache: true
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
+      id-token: write
+
   coverage-package:
     name: Coverage ${{ matrix.package }}
-    # Heavy per matrix shard: mvn scoverage:test for one package + GDAL native install. 6 shards in parallel; per-shard fan-out keeps wall-clock down.
+    needs: native-payload
+    # Heavy per matrix shard: mvn scoverage:test for one package + GDAL native install. 5 shards in parallel; per-shard fan-out keeps wall-clock down.
     runs-on:
       group: larger-runners
       labels: larger
@@ -32,9 +44,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [rasterx, gridx, vectorx, ds, expressions, util]
+        package: [rasterx, gridx, vectorx, expressions, util]
         python: [3.12.3]
-        pytest: [8.4.2]
+        pytest: [9.1.1]
         numpy: [2.1.3]
         gdal: [3.11.4]
         spark: [4.0.0]
@@ -54,9 +66,14 @@ jobs:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml') }}
 
+      - name: Fetch the x86_64 native payload
+        id: native
+        uses: ./.github/actions/native_payload
+
       - name: Build Scala with coverage (one package)
         uses: ./.github/actions/scala_build
         with:
+          native_root: ${{ steps.native.outputs.root }}
           skip_tests: "false"
           enable_coverage: "true"
           fail_on_scalastyle: "false"

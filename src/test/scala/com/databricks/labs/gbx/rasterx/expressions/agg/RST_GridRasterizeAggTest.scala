@@ -47,8 +47,7 @@ class RST_GridRasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
     private case class RasterRead(gt: Array[Double], width: Int, height: Int, data: Array[Double])
 
     private def readRaster(tileRow: Any): RasterRead = {
-        val ir    = tileRow.asInstanceOf[InternalRow]
-        val bytes = ir.getBinary(1)
+        val bytes = tileRow.asInstanceOf[Array[Byte]]  // the aggregate returns the GeoTIFF bytes
         bytes should not be null
         val tmp = s"/vsimem/grid_ragg_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
         gdal.FileFromMemBuffer(tmp, bytes)
@@ -233,5 +232,43 @@ class RST_GridRasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         val r = readRaster(agg.eval(buf).asInstanceOf[AnyRef])
         val noDataPixels = r.data.count(_ == -9999.0)
         noDataPixels should be > 0
+    }
+
+    test("an out_crs digit string past the Int range is refused with the Fix, not a NumberFormatException") {
+        val e = intercept[IllegalArgumentException](
+            RasterizeBurn.outSrid("rst_h3_rasterize_agg", Some("99999999999999"), None, 4326))
+        e.getMessage should include("Fix:")
+        // WKT and ESRI codes are not read at this level: refused with the Fix, never burned into the wrong CRS
+        for (text <- Seq("ESRI:102100", "GEOGCS[\"WGS 84\"]")) {
+            val refused = intercept[IllegalArgumentException](
+                RasterizeBurn.outSrid("rst_h3_rasterize_agg", Some(text), None, 4326))
+            refused.getMessage should include("Fix:")
+        }
+        RasterizeBurn.outSrid("f", Some("EPSG:3857"), None, 4326) shouldBe 3857
+        RasterizeBurn.outSrid("f", None, None, 4326) shouldBe 4326
+    }
+
+    test("out_srid and out_crs set together raise, naming both, with the Fix: set one") {
+        for (crs <- Seq("EPSG:3857", "3857")) {
+            val e = intercept[IllegalArgumentException](
+                RasterizeBurn.outSrid("gbx_rst_h3_rasterize_agg", Some(crs), Some(4326), 4326))
+            e.getMessage should include("out_srid")
+            e.getMessage should include("out_crs")
+            e.getMessage should include("Fix: set one")
+        }
+        // a blank out_crs is unset, so the out_srid alone is the answer
+        RasterizeBurn.outSrid("f", Some("  "), Some(3857), 4326) shouldBe 3857
+    }
+
+    test("NULL canvas arguments derive the Python level's canvas") {
+        // the cells of the oracle row h3r_derived_canvas; the canvas the Python level (h3 v4) derives for them
+        val cells = Seq(613196570331971583L, 613196570340360191L, 613196570344554495L, 613196570336165887L)
+        val (xmin, ymin, xmax, ymax, w, h) =
+            RST_H3_RasterizeAgg.computeGridspec(cells.iterator, 4326, None, "centroids", 1, 8)
+        (w, h) shouldBe ((7, 5))
+        xmin shouldBe -122.43741257861514 +- 1e-9
+        ymin shouldBe 37.7566688093865 +- 1e-9
+        xmax shouldBe -122.39513863720987 +- 1e-9
+        ymax shouldBe 37.786864481818824 +- 1e-9
     }
 }

@@ -1,0 +1,14 @@
+[package]
+name = "gbx_rust_smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Proves the pinned Rust toolchain builds an abi3 PyO3 module offline in the manylinux_2_28 build container."
+license = "LicenseRef-Databricks-Proprietary"
+
+[lib]
+name = "gbx_rust_smoke"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.30.1", features = ["extension-module", "abi3-py312"] }

@@ -12,8 +12,14 @@ Covers:
   - kind="ingest" differs: "error" over cap, "stream" at/below cap
 """
 
+import os
+import subprocess
+import sys
+from types import SimpleNamespace
+
 import pytest
 
+from databricks.labs.gbx.ds import file_gbx
 from databricks.labs.gbx.ds.file_gbx import materialize_decision, report_detected_cap
 
 # ---------------------------------------------------------------------------
@@ -267,3 +273,49 @@ class TestReportDetectedCap:
         cap = report_detected_cap(spark=None)
         assert materialize_decision(cap, kind="read") == "stream"
         assert materialize_decision(cap + 1, kind="read") == "fuse"
+
+
+class TestSessionForCap:
+    """Looking up the cap must not leave a Spark session behind.
+
+    It used to fall back to ``SparkSession.builder.getOrCreate()``, which in a process with no
+    session started a JVM and a process-wide ``local[*]`` session. The next
+    ``builder.master("local[2]").getOrCreate()`` of that process then returned it with its
+    master and settings ignored: a bench test that ran after a test that called
+    ``rst_fromfile(materialize=True)`` read another session's metrics.
+    """
+
+    def test_a_lookup_without_a_session_creates_none(self):
+        code = (
+            "from pyspark import SparkContext\n"
+            "from databricks.labs.gbx.ds.file_gbx import report_detected_cap\n"
+            "print(report_detected_cap(), SparkContext._active_spark_context)\n"
+        )
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+        env.pop("GBX_STREAM_MAX_BYTES", None)
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        assert out.stdout.split() == [str(_256MiB), "None"], out.stderr
+
+    @pytest.mark.parametrize("remote, builder_asked", [(True, True), (False, False)])
+    def test_the_builder_is_asked_only_when_connect_is_configured(
+        self, monkeypatch, remote, builder_asked
+    ):
+        asked = []
+        session = object()
+        builder = SimpleNamespace(getOrCreate=lambda: asked.append(1) or session)
+        monkeypatch.setattr(
+            file_gbx.SparkSession, "getActiveSession", staticmethod(lambda: None)
+        )
+        monkeypatch.setattr(file_gbx.SparkSession, "builder", builder)
+        monkeypatch.setattr(file_gbx, "_remote_configured", lambda: remote)
+
+        got = file_gbx._resolve_session_for_cap()
+
+        assert bool(asked) is builder_asked
+        assert got is (session if builder_asked else None)

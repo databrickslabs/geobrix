@@ -18,7 +18,8 @@ trait SilentSparkSession extends SharedSparkSession {
     "rpc-boss.*",
     "Cleaner-.*",
     "ForkJoinPool\\.commonPool-worker.*",
-    ".*NativeObjectsCleaner"
+    ".*NativeObjectsCleaner",
+    "gbx-node-file-cache-evictor"
   )
 
   private var ourThreadSnapshot: Set[String] = Set.empty

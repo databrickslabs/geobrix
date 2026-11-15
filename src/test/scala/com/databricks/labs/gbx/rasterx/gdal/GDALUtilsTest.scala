@@ -6,155 +6,6 @@ import org.scalatest.matchers.should.Matchers._
 
 class GDALUtilsTest extends AnyFunSuite {
 
-    // ====== Padding ======
-
-    test("Padding case class should store all four sides") {
-        val padding = Padding(left = true, right = false, top = true, bottom = false)
-        padding.left shouldBe true
-        padding.right shouldBe false
-        padding.top shouldBe true
-        padding.bottom shouldBe false
-    }
-
-    test("Padding NoPadding should have all sides false") {
-        val noPadding = Padding.NoPadding
-        noPadding.left shouldBe false
-        noPadding.right shouldBe false
-        noPadding.top shouldBe false
-        noPadding.bottom shouldBe false
-    }
-
-    test("Padding horizontalStrides should return 2 for left and right") {
-        val padding = Padding(left = true, right = true, top = false, bottom = false)
-        padding.horizontalStrides shouldBe 2
-    }
-
-    test("Padding horizontalStrides should return 1 for left only") {
-        val padding = Padding(left = true, right = false, top = false, bottom = false)
-        padding.horizontalStrides shouldBe 1
-    }
-
-    test("Padding horizontalStrides should return 1 for right only") {
-        val padding = Padding(left = false, right = true, top = false, bottom = false)
-        padding.horizontalStrides shouldBe 1
-    }
-
-    test("Padding horizontalStrides should return 0 for none") {
-        val padding = Padding.NoPadding
-        padding.horizontalStrides shouldBe 0
-    }
-
-    test("Padding verticalStrides should return 2 for top and bottom") {
-        val padding = Padding(left = false, right = false, top = true, bottom = true)
-        padding.verticalStrides shouldBe 2
-    }
-
-    test("Padding verticalStrides should return 1 for top only") {
-        val padding = Padding(left = false, right = false, top = true, bottom = false)
-        padding.verticalStrides shouldBe 1
-    }
-
-    test("Padding verticalStrides should return 1 for bottom only") {
-        val padding = Padding(left = false, right = false, top = false, bottom = true)
-        padding.verticalStrides shouldBe 1
-    }
-
-    test("Padding verticalStrides should return 0 for none") {
-        val padding = Padding.NoPadding
-        padding.verticalStrides shouldBe 0
-    }
-
-    test("Padding newOffset should adjust for left padding") {
-        val padding = Padding(left = true, right = false, top = false, bottom = false)
-        val (x, y) = padding.newOffset(10, 20, 5)
-        x shouldBe 15
-        y shouldBe 20
-    }
-
-    test("Padding newOffset should adjust for top padding") {
-        val padding = Padding(left = false, right = false, top = true, bottom = false)
-        val (x, y) = padding.newOffset(10, 20, 5)
-        x shouldBe 10
-        y shouldBe 25
-    }
-
-    test("Padding newOffset should adjust for both left and top") {
-        val padding = Padding(left = true, right = false, top = true, bottom = false)
-        val (x, y) = padding.newOffset(10, 20, 5)
-        x shouldBe 15
-        y shouldBe 25
-    }
-
-    test("Padding newOffset should not adjust with no padding") {
-        val padding = Padding.NoPadding
-        val (x, y) = padding.newOffset(10, 20, 5)
-        x shouldBe 10
-        y shouldBe 20
-    }
-
-    test("Padding newSize should reduce width for left and right") {
-        val padding = Padding(left = true, right = true, top = false, bottom = false)
-        val (w, h) = padding.newSize(100, 80, 5)
-        w shouldBe 90 // 100 - 2*5
-        h shouldBe 80
-    }
-
-    test("Padding newSize should reduce width for left only") {
-        val padding = Padding(left = true, right = false, top = false, bottom = false)
-        val (w, h) = padding.newSize(100, 80, 5)
-        w shouldBe 95 // 100 - 5
-        h shouldBe 80
-    }
-
-    test("Padding newSize should reduce height for top and bottom") {
-        val padding = Padding(left = false, right = false, top = true, bottom = true)
-        val (w, h) = padding.newSize(100, 80, 5)
-        w shouldBe 100
-        h shouldBe 70 // 80 - 2*5
-    }
-
-    test("Padding newSize should not change size with no padding") {
-        val padding = Padding.NoPadding
-        val (w, h) = padding.newSize(100, 80, 5)
-        w shouldBe 100
-        h shouldBe 80
-    }
-
-    test("Padding removePadding should remove left padding") {
-        val padding = Padding(left = true, right = false, top = false, bottom = false)
-        val array = Array(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-        val result = padding.removePadding(array, 3, 1)
-        result shouldBe Array(2.0, 3.0, 5.0, 6.0)
-    }
-
-    test("Padding removePadding should remove right padding") {
-        val padding = Padding(left = false, right = true, top = false, bottom = false)
-        val array = Array(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-        val result = padding.removePadding(array, 3, 1)
-        result shouldBe Array(1.0, 2.0, 4.0, 5.0)
-    }
-
-    test("Padding removePadding should remove top padding") {
-        val padding = Padding(left = false, right = false, top = true, bottom = false)
-        val array = Array(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-        val result = padding.removePadding(array, 3, 1)
-        result shouldBe Array(4.0, 5.0, 6.0)
-    }
-
-    test("Padding removePadding should remove bottom padding") {
-        val padding = Padding(left = false, right = false, top = false, bottom = true)
-        val array = Array(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-        val result = padding.removePadding(array, 3, 1)
-        result shouldBe Array(1.0, 2.0, 3.0)
-    }
-
-    test("Padding removePadding should not modify with no padding") {
-        val padding = Padding.NoPadding
-        val array = Array(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-        val result = padding.removePadding(array, 3, 1)
-        result shouldBe array
-    }
-
     // ====== FormatLookup ======
 
     test("FormatLookup should contain GTiff format") {
@@ -247,29 +98,6 @@ class GDALUtilsTest extends AnyFunSuite {
         GDAL.getNoDataConstant(GDT_Float64) shouldBe Double.MinValue
     }
 
-    test("GDAL toWorldCoord should convert pixel to geographic coordinates") {
-        // Simple identity transform with 1-degree resolution
-        val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 10, 20)
-        xGeo shouldBe 10.5 +- 0.01
-        yGeo shouldBe 20.5 +- 0.01
-    }
-
-    test("GDAL toWorldCoord should handle offset geotransform") {
-        // Start at (100, 200) with 0.1-degree resolution
-        val gt = Array(100.0, 0.1, 0.0, 200.0, 0.0, 0.1)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 10, 20)
-        xGeo shouldBe 101.05 +- 0.01
-        yGeo shouldBe 202.05 +- 0.01
-    }
-
-    test("GDAL toWorldCoord should handle rotated geotransform") {
-        val gt = Array(0.0, 1.0, 0.5, 0.0, 0.5, 1.0)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 10, 20)
-        xGeo shouldBe 20.75 +- 0.01 // 0 + (10.5)*1 + (20.5)*0.5
-        yGeo shouldBe 25.75 +- 0.01 // 0 + (10.5)*0.5 + (20.5)*1
-    }
-
     test("GDAL fromWorldCoord should convert geographic to pixel coordinates") {
         val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
         val (x, y) = GDAL.fromWorldCoord(gt, 10.5, 20.5)
@@ -284,9 +112,17 @@ class GDALUtilsTest extends AnyFunSuite {
         y shouldBe 20
     }
 
-    test("GDAL fromWorldCoord should invert toWorldCoord") {
+    test("GDAL fromWorldCoord should floor a point just outside the origin edge") {
+        val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        val (x, y) = GDAL.fromWorldCoord(gt, -0.5, -0.5)
+        x shouldBe -1
+        y shouldBe -1
+    }
+
+    test("GDAL fromWorldCoord should give the pixel whose centre it is given") {
         val gt = Array(50.0, 0.5, 0.0, 100.0, 0.0, 0.5)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 15, 25)
+        // the centre of pixel (15, 25)
+        val (xGeo, yGeo) = (50.0 + 15.5 * 0.5, 100.0 + 25.5 * 0.5)
         val (xPix, yPix) = GDAL.fromWorldCoord(gt, xGeo, yGeo)
         xPix shouldBe 15
         yPix shouldBe 25

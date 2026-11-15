@@ -1,0 +1,453 @@
+"""The runtime of the generated Python API (the rasterx, gridx, vectorx and pmtiles ``functions`` modules).
+
+Every generated function calls the SQL function GeoBrix registers under the same manifest name, so the
+Python API and SQL run one implementation at one level. The first call of a name in a session registers
+it through the manager; later calls are a set lookup. In a Lakeflow pipeline the first call in each flow registers
+(see ``_flow``). Nothing here calls into the JVM.
+"""
+
+from __future__ import annotations
+
+import math
+import weakref
+from typing import Any, Dict, Iterable, Set
+
+_DONE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_DONE_BY_ID: Dict[int, Dict[tuple, Set[str]]] = {}
+_CHOSEN: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_CHOSEN_BY_ID: Dict[int, Dict[str, tuple]] = {}
+
+
+def _active():
+    from pyspark.sql import SparkSession
+
+    return SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+
+
+_PIPELINE_CONTEXT = ".PipelineAnalysisContext"
+
+
+def _client(spark):
+    """The Spark Connect client of ``spark``; None for a classic session (its ``client`` raises)."""
+    try:
+        return getattr(spark, "client", None)
+    except Exception:  # noqa: BLE001 - a classic session raises
+        return None
+
+
+def thread_extensions(spark) -> list:
+    """The user-context extensions the calling thread's Spark Connect requests carry (thread-local ones only).
+
+    Lakeflow runs each dataset function under one: a ``PipelineAnalysisContext`` naming the flow. A classic session,
+    or a Connect client without the extensions API, has none. Reads client state only; no round trip.
+    """
+    local = getattr(_client(spark), "thread_local", None)
+    return [ext for _id, ext in getattr(local, "user_context_extensions", None) or ()]
+
+
+def _flow(spark) -> tuple:
+    """The Lakeflow flow whose analysis a registration made now belongs to, ``()`` outside a pipeline.
+
+    A pipeline runs every dataset function on one session object. A function registered while one flow's body ran does
+    not resolve in another flow's analysis, so the cache of ``ensure`` is kept per flow too. A Databricks pipeline
+    session is classic: each run of a dataset function has its own JVM session behind the one Python object, so the
+    key is that JVM session's py4j id (a plain classic session has one, so a notebook keeps one cache). A Spark
+    Connect pipeline carries the flow as a thread-local ``PipelineAnalysisContext``. Both reads stay in process.
+    """
+    client = _client(spark)
+    if client is None:
+        from databricks.labs.gbx.manager.capabilities import is_connect
+
+        if is_connect(spark):  # a Connect session without a client: never read the JVM
+            return ()
+        try:
+            tid = getattr(spark._jsparkSession, "_target_id", None)
+        except Exception:  # noqa: BLE001 - no JVM session to read: one cache
+            return ()
+        return (("jvm", tid),) if tid else ()
+    exts = [
+        e for _id, e in getattr(client, "global_user_context_extensions", None) or ()
+    ]
+    exts += thread_extensions(spark)
+    return tuple(
+        (e.type_url, e.value)
+        for e in exts
+        if str(getattr(e, "type_url", "")).endswith(_PIPELINE_CONTEXT)
+    )
+
+
+def _done(spark) -> Set[str]:
+    """The names registered in ``spark``, in the Lakeflow flow the calling thread runs (see ``_flow``)."""
+    try:
+        by_flow = _DONE.setdefault(spark, {})
+    except TypeError:  # a session object that cannot be weakly referenced
+        by_flow = _DONE_BY_ID.setdefault(id(spark), {})
+    return by_flow.setdefault(_flow(spark), set())
+
+
+def chosen(spark) -> Dict[str, tuple]:
+    """``{sql_name: (level, variant)}`` for every name the manager registered in ``spark``, as it installed it."""
+    try:
+        return _CHOSEN.setdefault(spark, {})
+    except TypeError:  # a session object that cannot be weakly referenced
+        return _CHOSEN_BY_ID.setdefault(id(spark), {})
+
+
+def mark_registered(spark, names: Iterable[str], choices=None) -> None:
+    """Called by the manager after it registers names, so a later Python call costs nothing. ``choices`` (the
+    manager's ``{name: Choice}``) also records the level each name was installed at."""
+    _done(spark).update(names)
+    if choices:
+        chosen(spark).update({n: (c.level, c.variant) for n, c in choices.items()})
+
+
+def ensure(spark, sql_name: str) -> None:
+    """Register ``sql_name`` in ``spark`` once, at the level the manager picks."""
+    if sql_name in _done(spark):
+        return
+    from databricks.labs.gbx import manager
+
+    choices = manager.register(spark, only=[sql_name])
+    if sql_name not in choices:
+        raise RuntimeError(
+            f"{sql_name} cannot run on this compute (the line above says why). "
+            "Fix: install the env wheel for this runtime, or see the availability page."
+        )
+    _done(spark).add(sql_name)
+
+
+def _fn(sql_name: str):
+    from databricks.labs.gbx import manifest
+
+    return manifest.load().functions[sql_name]
+
+
+def _arg(value: Any, param):
+    from pyspark.sql import Column
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.manifest import sql_type
+
+    if isinstance(value, Column):
+        return value
+    if value is None:
+        if (
+            param.py == "col_null"
+        ):  # the untyped NULL is the meaning (a presence mask), not a typed missing value
+            return F.lit(None)
+        return F.lit(None).cast(sql_type(param.session[0]))
+    if isinstance(value, str):
+        return F.lit(value) if param.py == "lit" else F.col(value)
+    return F.lit(value)
+
+
+def _check_str_only(sql_name: str, param, value: Any) -> None:
+    """A parameter that declares ``str_only`` takes a Python str (or None); a Column is refused here, before any SQL
+    runs."""
+    from pyspark.sql import Column
+
+    if param.str_only and isinstance(value, Column):
+        raise TypeError(
+            f"{sql_name}: {param.name} must be a Python str, not a Column. "
+            f"Fix: pass the function's source as a Python string, not a column."
+        )
+
+
+def _columns(fn, values, fill_all: bool):
+    """Columns for ``values``. A trailing optional left as None is not sent (the SQL default applies); an
+    optional left as None before one that is set gets the manifest's SQL default, never a shifted value.
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.manifest import sql_type
+
+    if len(values) > fn.max_args:
+        raise TypeError(
+            f"{fn.sql_name} takes at most {fn.max_args} arguments ({len(values)} given)"
+        )
+    vals = list(values) + [None] * (fn.max_args - len(values))
+    set_at = [i for i, v in enumerate(vals) if v is not None]
+    last = fn.max_args - 1 if fill_all else max(set_at + [fn.min_args - 1])
+    cols = []
+    for i in range(last + 1):
+        p, v = fn.params[i], vals[i]
+        if v is None and i >= fn.min_args:
+            cols.append(F.expr(f"CAST({p.default} AS {sql_type(p.session[0])})"))
+        else:
+            _check_str_only(fn.sql_name, p, v)
+            cols.append(_arg(v, p))
+    return cols
+
+
+def call(sql_name: str, *values):
+    """The Column for ``sql_name(values...)``, the name registered in the active session first."""
+    from pyspark.sql import functions as F
+
+    cols = _columns(_fn(sql_name), values, fill_all=False)
+    ensure(_active(), sql_name)
+    return F.call_function(sql_name, *cols)
+
+
+def forced(virtualize_dir, virtualize_prefix, materialize) -> bool:
+    """A force-output keyword is set: ``materialize=False`` is the natural (unforced) form, not a force."""
+    return (
+        virtualize_dir is not None or virtualize_prefix is not None or bool(materialize)
+    )
+
+
+def force_output(
+    sql_name: str, virtualize_dir, virtualize_prefix, materialize, *values
+):
+    """The Python-only force-output path: the row's ``extra_impl`` (a light UDF, run directly, as the light
+    Column API does today) with every SQL argument (defaults filled) and the three force-output literals.
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx import _gdal_policy, manifest
+    from databricks.labs.gbx.pyrx.functions import _validate_force_output
+
+    _validate_force_output(virtualize_dir, materialize)
+    fn = _fn(sql_name)
+    impl = manifest.resolve_ref(fn.python.extra_impl)
+    if fn.python.extra_factory_args == "engine":
+        # an engine row: the force-output UDF of the GDAL spec engine, built for this row with the driver's PROJ
+        # grid directories and its connect-aware read cap (a worker cannot measure either)
+        from databricks.labs.gbx.manager.l3 import _factory_args
+
+        impl = impl(
+            fn.sql_name,
+            *_factory_args("proj_grid_dirs"),
+            *_factory_args("read_cap", _active()),
+        )
+    elif fn.python.extra_factory_args:
+        from databricks.labs.gbx.manager.l3 import _factory_args
+
+        impl = impl(*_factory_args(fn.python.extra_factory_args))
+    cols = _columns(fn, values, fill_all=True)
+    # the driver's remote-path switch goes to the workers, as a registration carries it (`carrying_session`)
+    impl = _gdal_policy.carrying_call(impl)
+    return impl(
+        *cols, F.lit(virtualize_dir), F.lit(virtualize_prefix), F.lit(materialize)
+    )
+
+
+def given(*extras) -> bool:
+    """A Python-only keyword is set (``None`` is unset; ``False`` is a value)."""
+    return any(e is not None for e in extras)
+
+
+def extra_call(sql_name: str, extras, *values):
+    """The Python-only keyword path of a row whose keywords are not the force-output trio: the row's ``extra_impl``
+    (a function of the SQL arguments, defaults filled, then one literal Column per keyword).
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx import manifest
+
+    fn = _fn(sql_name)
+    impl = manifest.resolve_ref(fn.python.extra_impl)
+    cols = _columns(fn, values, fill_all=True)
+    return impl(*cols, *[F.lit(e) for e in extras])
+
+
+def _sql_literal(value: Any, param) -> str:
+    """``value`` as SQL text, for DISPLAY only (the doc examples). Nothing the Python API runs is built with it: a
+    call binds its values as named parameters (``_Bound``), so a value is never part of the statement's text.
+    """
+    from databricks.labs.gbx.manifest import sql_type
+
+    if type(value).__module__ == "numpy" and hasattr(value, "item"):
+        value = value.item()  # a numpy scalar is its Python value (a 0-d array too)
+    if value is None:
+        if param.py == "col_null":
+            return "NULL"
+        return f"CAST(NULL AS {sql_type(param.session[0])})"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value!r}D" if math.isfinite(value) else f"CAST('{value}' AS DOUBLE)"
+    if isinstance(value, (bytes, bytearray)):
+        return "X'" + bytes(value).hex() + "'"
+    if isinstance(value, str):
+        return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+    raise TypeError(f"{param.name}: a {type(value).__name__} is not a SQL literal")
+
+
+def _check_choice(sql_name: str, param, value: Any) -> None:
+    """A text parameter that declares ``choices`` takes one of them (any case) or NULL; anything else is refused here,
+    before any SQL runs."""
+    if not param.choices or value is None:
+        return
+    if not isinstance(value, str) or value.strip().lower() not in param.choices:
+        wanted = ", ".join(repr(c) for c in param.choices)
+        raise ValueError(
+            f"{sql_name}: {param.name} {value!r} is not one of {wanted}. "
+            f"Fix: pass one of them, or None for the default."
+        )
+
+
+class _Bound:
+    """The named parameters of one statement: ``bind`` gives the marker (``:a0``) for a value and keeps the value for
+    ``spark.sql(..., args=...)``, so no value is ever spelled into the statement. Only the manifest's own text (a
+    function name, a default expression, a type) and a column name quoted by ``quote`` are in the statement.
+    """
+
+    def __init__(self, sql_name: str):
+        self.sql_name = sql_name
+        self.values: Dict[str, Any] = {}
+
+    def bind(self, value: Any, param) -> str:
+        from databricks.labs.gbx.manifest import sql_type
+
+        if type(value).__module__ == "numpy" and hasattr(value, "item"):
+            value = value.item()  # a numpy scalar is its Python value (a 0-d array too)
+        if value is None:
+            if param.py == "col_null":
+                return "NULL"
+            return f"CAST(NULL AS {sql_type(param.session[0])})"
+        _check_choice(self.sql_name, param, value)
+        if isinstance(value, bytearray):
+            value = bytes(value)
+        if not isinstance(value, (bool, int, float, str, bytes)):
+            raise TypeError(
+                f"{param.name}: a {type(value).__name__} is not a SQL literal"
+            )
+        key = f"a{len(self.values)}"
+        self.values[key] = value
+        return f":{key}"
+
+    @property
+    def args(self):
+        return self.values or None
+
+
+def quote(name: str) -> str:
+    """A column name as a quoted identifier."""
+    return "`" + name.replace("`", "``") + "`"
+
+
+def table(df, sql_name: str, *values):
+    """``df`` LATERAL-joined with the table function ``sql_name(values...)``: one output row per generated
+    row, beside the input row's columns. A str is a column of ``df`` where the parameter reads columns.
+    """
+    from pyspark.sql import Column
+
+    from databricks.labs.gbx.manifest import sql_type
+
+    fn = _fn(sql_name)
+    if len(values) > fn.max_args:
+        raise TypeError(
+            f"{sql_name} takes at most {fn.max_args} arguments ({len(values)} given)"
+        )
+    taken = {c.lower() for c in df.columns}
+    clash = [n for n, _ in fn.columns if n.lower() in taken]
+    if clash:
+        raise ValueError(
+            f"{sql_name} returns the column(s) {clash}, which the input DataFrame already has. "
+            f"Fix: rename them first, e.g. df = df.withColumnRenamed('{clash[0]}', '{clash[0]}_in')."
+        )
+    vals = list(values) + [None] * (fn.max_args - len(values))
+    set_at = [i for i, v in enumerate(vals) if v is not None]
+    last = max(set_at + [fn.min_args - 1])
+    args, bound = [], _Bound(sql_name)
+    for i in range(last + 1):
+        p, v = fn.params[i], vals[i]
+        if isinstance(v, Column):
+            raise TypeError(
+                f"{sql_name}: pass the column name of {p.name!r} as a str, not a Column. "
+                f"Fix: df = df.withColumn('{p.name}', <expression>) first, then pass '{p.name}'."
+            )
+        if v is None and i >= fn.min_args:
+            # an optional left out before one that is set takes its SQL default, never a shifted value
+            args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
+        elif isinstance(v, str) and p.py != "lit":
+            args.append("gbx_in." + quote(v))
+        else:
+            args.append(bound.bind(v, p))
+    spark = df.sparkSession
+    ensure(spark, sql_name)
+    # spark.sql formats the text with str.format, so braces in a column name are escaped
+    call_args = ", ".join(args).replace("{", "{{").replace("}", "}}")
+    return spark.sql(
+        f"SELECT gbx_in.*, gbx_out.* FROM {{gbx_in}} AS gbx_in, LATERAL {sql_name}({call_args}) AS gbx_out",
+        args=bound.args,
+        gbx_in=df,
+    )
+
+
+def source(sql_name: str, *values):
+    """The table function ``sql_name`` called with no input row: ``SELECT * FROM sql_name(values...)`` on the active
+    session. ``values`` are plain Python values (the function's arguments are constants of the call). A trailing
+    optional left as None is not sent (the SQL default applies); one left as None before a value that is set takes
+    its SQL default, never a shifted value.
+    """
+    from databricks.labs.gbx.manifest import sql_type
+
+    fn = _fn(sql_name)
+    if len(values) > fn.max_args:
+        raise TypeError(
+            f"{sql_name} takes at most {fn.max_args} arguments ({len(values)} given)"
+        )
+    vals = list(values) + [None] * (fn.max_args - len(values))
+    set_at = [i for i, v in enumerate(vals) if v is not None]
+    last = max(set_at + [fn.min_args - 1])
+    args, bound = [], _Bound(sql_name)
+    for i in range(last + 1):
+        p, v = fn.params[i], vals[i]
+        if v is None and i >= fn.min_args:
+            args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
+        else:
+            args.append(bound.bind(v, p))
+    spark = _active()
+    ensure(spark, sql_name)
+    return spark.sql(f"SELECT * FROM {sql_name}({', '.join(args)})", args=bound.args)
+
+
+def table_by(df, sql_name: str, *values):
+    """The table function ``sql_name`` over ``df`` as its table argument, partitioned by the function's key:
+    ``SELECT * FROM sql_name(TABLE(SELECT <its columns> FROM df) PARTITION BY (<key>), values...)``.
+
+    ``df`` needs the columns the function's table argument names (others are left out); each is cast to the type
+    the function declares. ``values`` are the function's constants after the table argument, plain Python values
+    (a Column is not constant; a numpy scalar is its value). One output row per partition, as the function gives it.
+    """
+    from pyspark.sql import Column
+
+    from databricks.labs.gbx.manifest import sql_type
+
+    fn = _fn(sql_name)
+    ti = fn.table_input
+    constants = fn.params[1:]  # the first parameter is the table argument itself
+    if len(values) > len(constants):
+        raise TypeError(
+            f"{sql_name} takes at most {len(constants)} arguments after the DataFrame ({len(values)} given)"
+        )
+    if len(values) < fn.min_args - 1:
+        raise TypeError(
+            f"{sql_name} needs {fn.min_args - 1} arguments after the DataFrame ({len(values)} given)"
+        )
+    args, bound = [], _Bound(sql_name)
+    for p, v in zip(constants, values):
+        if isinstance(v, Column):
+            raise TypeError(
+                f"{sql_name}: {p.name!r} is a constant of the call, not a column. "
+                f"Fix: pass a Python value for {p.name!r}."
+            )
+        args.append(bound.bind(v, p))
+    # each column as the type the function declares (a key of INT reaches a `key string` as a string); a TILE
+    # column is a struct the function reads as it is
+    cols = ", ".join(
+        quote(n) if t == "TILE" else f"CAST({quote(n)} AS {sql_type(t)}) AS {quote(n)}"
+        for n, t in ti.columns
+    )
+    keys = ", ".join(quote(k) for k in ti.partition_by)
+    spark = df.sparkSession
+    ensure(spark, sql_name)
+    call_args = "".join(", " + a for a in args).replace("{", "{{").replace("}", "}}")
+    return spark.sql(
+        f"SELECT * FROM {sql_name}(TABLE(SELECT {cols} FROM {{gbx_in}}) PARTITION BY ({keys}){call_args})",
+        args=bound.args,
+        gbx_in=df,
+    )

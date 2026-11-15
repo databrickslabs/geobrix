@@ -2,6 +2,8 @@
 layouts (== full-read slice), multi-block window, clip, and a WarpedVRT probe.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -115,12 +117,11 @@ def test_materialize_returns_array_transform_profile(layouts):
 
 def test_open_tile_windowless_reads_full_extent(tmp_path):
     """window=None resolves to full extent (0,0,W,H) — identical pixels to explicit window."""
-    import rasterio
 
     file_w, file_h = 6, 4
     data = np.arange(file_w * file_h, dtype="uint8").reshape(file_h, file_w)
     p = str(tmp_path / "src.tif")
-    with rasterio.open(
+    with open_raster(
         p, "w", driver="GTiff", height=file_h, width=file_w, count=1, dtype="uint8"
     ) as ds:
         ds.write(data[np.newaxis])
@@ -140,7 +141,7 @@ def test_open_tile_windowless_reads_full_extent(tmp_path):
 def test_tile_to_bytes_windowless_virtual_reads_full_extent(tmp_path):
     """_tile_to_bytes on a window=None virtual tile reads the full file extent.
 
-    Task 2 changed the behavior: window=None is now resolved to the full source
+    window=None is resolved to the full source
     extent rather than raising ValueError.  A deferred whole-file virtual tile
     (emitted by read() without an eager header open) must materialise correctly.
     """
@@ -149,7 +150,7 @@ def test_tile_to_bytes_windowless_virtual_reads_full_extent(tmp_path):
 
     p = str(tmp_path / "src.tif")
     data = np.arange(16, dtype="uint8").reshape(4, 4)
-    with rasterio.open(
+    with open_raster(
         p, "w", driver="GTiff", height=4, width=4, count=1, dtype="uint8"
     ) as ds:
         ds.write(data, 1)

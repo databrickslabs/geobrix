@@ -1,8 +1,7 @@
 """Interactive (MapLibre GL) map rendering for gbx.vizx.
 
 ``plot_interactive`` is the multi-layer interactive entry point. It coerces
-``layers`` via ``as_layers``, runs the budget ladder via ``prepare_layers``
-(Tasks 5/6), then either builds a MapLibre GL HTML page via ``build_html`` or
+``layers`` via ``as_layers``, runs the budget ladder via ``prepare_layers``, then either builds a MapLibre GL HTML page via ``build_html`` or
 delegates to ``plot_static`` when the embed budget is exceeded. No folium.
 
 Requires the [vizx] extra.
@@ -126,7 +125,7 @@ def plot_interactive(
                               :func:`~databricks.labs.gbx.vizx._layers.as_layers`
                               (GeoDataFrame, bytes pmtiles archive, etc.).
         basemap:              ``"carto-positron"`` (default) or ``"none"``.
-        simplify_tiles_spec:  Optional simplification spec (Task 11, not yet
+        simplify_tiles_spec:  Optional simplification spec (not yet
                               implemented — pass ``None``).
         max_embed_mb:         Maximum HTML embed size in mebibytes. Default
                               ``None`` resolves to 6 MB when ``set_cell_max_output``

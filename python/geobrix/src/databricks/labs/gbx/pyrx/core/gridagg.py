@@ -2,24 +2,29 @@
 
 Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
 
-* Per band, every valid pixel (non-zero mask) is mapped to a grid cell id by
+* Per band, every valid pixel is mapped to a grid cell id by
   the pixel-centroid world coordinate (0.5-pixel offset through the
-  geotransform). For H3/quadbin the raster is interpreted as EPSG:4326 lon/lat
-  -- no reprojection (callers reproject upstream via ``rst_transform``). BNG has
-  no lon/lat path, so the raster is warped to EPSG:27700 (nearest) up front and
-  pixels outside GB are dropped via ``pygx._bng.is_valid``.
+  geotransform). H3/quadbin work in EPSG:4326 lon/lat: a raster in another CRS is
+  warped to EPSG:4326 (nearest) up front, and one with no CRS (and no ``crs``
+  override) is taken as 4326 already. BNG has no lon/lat path, so the raster is
+  warped to EPSG:27700 (nearest) up front and pixels outside GB are dropped via
+  ``pygx._bng.is_valid``.
+  A pixel is valid for a band when the band's own mask says so (NoData, the raster's
+  own mask band) and, for a raster with an alpha band, its alpha is above 0
+  (``_nodata.band_valid_mask``): every band is judged alone, and a transparent pixel
+  counts for none of them, however many bands the raster has.
 * Pixel values are accumulated per cell, then reduced by the chosen aggregate.
 * BNG cell math is the single source of truth in ``pygx._bng`` (no numpy codec);
   H3/quadbin ids are ``int`` (Long) but BNG ids are rendered to ``str`` via
   ``pygx._bng.format`` at the output boundary.
 
-Two new parameters (Stage 2, Task 7):
+Two parameters shape the result:
 
 * ``coverage``: ``"sparse"`` (emit only cells with at least one valid pixel) or
   ``"complete"`` (default, matches heavy) -- also emit covering-but-empty cells
   carrying ``None`` (or ``0.0`` for ``count``).
 * ``assignment``: ``"centroid"`` (default) -- bin each valid pixel to the cell
-  containing its centroid (pre-Stage-2 behaviour); ``"covering"`` -- distribute
+  containing its centroid (the original behaviour); ``"covering"`` -- distribute
   each pixel's value across every cell that overlaps its rectangular footprint,
   weighted by the intersection-area fraction. Weighted reducers mirror the heavy
   tier exactly (see ``_weighted_reduce``).
@@ -27,24 +32,29 @@ Two new parameters (Stage 2, Task 7):
 count is now Double/float in all modes (centroid count = n as float; covering
 count = Sigma-w; covered-but-empty count = 0.0).
 
-Backed by the best-in-class libs ``h3`` (v4) and ``quadbin`` (CARTO v0).
+Backed by the best-in-class lib ``h3`` (v4); quadbin and BNG cell math is the
+shared ``pygx`` core.
 
 Hot path (centroid) is vectorized: valid pixels are gathered once, mapped to
-cell ids, and grouped/reduced with numpy. The quadbin encoder ``_quadbin_cells``
-is a numpy reimplementation of ``quadbin.point_to_cell`` that is BIT-EXACT with
-the upstream lib (the lib's per-call Python is otherwise ~20x slower than H3's
-C-backed encoder); the H3 encoder stays a scalar comprehension over valid pixels
-because ``h3.latlng_to_cell`` is C-backed and exposes no array API.
+cell ids, and grouped/reduced with numpy. The quadbin encoder is
+``pygx._quadbin.point_as_cell_vec`` -- the same floor-and-clamp point->cell rule
+as heavy ``Quadbin.pointToCellID`` and light tessellate, so a pixel centre at
+longitude 180 or on a tile edge lands in the same cell in every function and
+tier. The H3 encoder stays a scalar comprehension over valid pixels because
+``h3.latlng_to_cell`` is C-backed and exposes no array API.
 
 The covering path is intentionally NOT vectorized (it iterates per-pixel,
 matching the heavy tier's O(pixels) design).  Use small/coarse rasters; this
 path is not intended for large tiles.
 """
 
-import h3
+import math
+
 import numpy as np
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pygx import _bng
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = 20
@@ -60,14 +70,16 @@ QUADBIN_MAX_RES = 20
 _COVERING_FAST_PATH_EXACT = frozenset({"custom", "quadbin", "bng"})
 
 _AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
+# The statistics that split: each is a plain function of one cell's partial state (see ``measure_of``), so ONE pass over the
+# pixels gives all seven. The median does not split (it needs the values), and keeps its own per-cell pass.
+PARTIAL_STATS = tuple(a for a in _AGGS if a != "median")
+_PARTIAL = "partial"  # the internal agg word: the reducers return the partial state tuple instead of one measure
+# The partial state of one cell, in this order: the number of valid pixels (the sum of the weights when pixels are
+# shared out), the sum of the values, M2 (the sum of the squared deviations from the cell's mean), the minimum, the maximum.
+PARTIAL_FIELDS = ("count", "sum", "m2", "min", "max")
+_EMPTY_STATE = (0.0, None, None, None, None)  # a covered cell that holds no valid pixel
 _COVERAGES = ("sparse", "complete")
 _ASSIGNMENTS = ("centroid", "covering")
-
-# quadbin 64-bit cell layout constants (see quadbin.main / quadbin.utils).
-_QB_HEADER = np.uint64(0x4000000000000000)
-_QB_FOOTER = np.uint64(0xFFFFFFFFFFFFF)
-_QB_MODE = np.uint64(1) << np.uint64(59)
-_QB_MAX_LAT = 89.0  # web-mercator clip bound used by clip_latitude
 
 
 def _validate_resolution(resolution: int, grid: str) -> None:
@@ -100,6 +112,8 @@ def _validate_resolution(resolution: int, grid: str) -> None:
 
 def _h3_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
     """Per-valid-pixel H3 cell ids (uint64). Scalar lib call; no array API."""
+    import h3  # lazy: stats_partial and the BNG paths run without h3 installed
+
     cells = [
         h3.str_to_int(h3.latlng_to_cell(float(la), float(lo), resolution))
         for lo, la in zip(lon, lat)  # vectorscan: ok (h3 no array API)
@@ -117,67 +131,6 @@ def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
     return _bng.point_to_cell_id_vec(e, n, resolution)
 
 
-def _quadbin_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
-    """Vectorized ``quadbin.point_to_cell`` -- bit-exact with the upstream lib.
-
-    Reproduces, in numpy: longitude/latitude clipping, the web-mercator
-    ``point_to_tile_fraction`` (+ floor), the tile-x wrap, and ``tile_to_cell``
-    (the 32-bit shift, Morton bit-interleave, header/mode/zoom assembly, footer).
-    """
-    z = int(resolution)
-    lon = np.asarray(lon, dtype="float64")
-    lat = np.asarray(lat, dtype="float64")
-
-    # clip_longitude / clip_latitude
-    lon = np.clip(lon, -180.0, 180.0)
-    lat = np.clip(lat, -_QB_MAX_LAT, _QB_MAX_LAT)
-
-    z2 = float(1 << z)
-    sinlat = np.sin(lat * np.pi / 180.0)
-    xf = z2 * (lon / 360.0 + 0.5)
-    yfraction = 0.5 - 0.25 * np.log((1.0 + sinlat) / (1.0 - sinlat)) / np.pi
-    yf = np.clip(z2 * yfraction, 0.0, z2 - 1.0)
-
-    # Wrap tile x: x %= z2; x += z2 if x < 0 (Python % on the float, then floor).
-    xf = np.mod(xf, z2)
-    xf = np.where(xf < 0.0, xf + z2, xf)
-
-    x = np.floor(xf).astype("uint64")
-    y = np.floor(yf).astype("uint64")
-
-    shift = np.uint64(32 - z)
-    x = x << shift
-    y = y << shift
-
-    # Morton spread (matches tile_to_cell's interleave masks/shifts exactly).
-    b = [
-        np.uint64(0x5555555555555555),
-        np.uint64(0x3333333333333333),
-        np.uint64(0x0F0F0F0F0F0F0F0F),
-        np.uint64(0x00FF00FF00FF00FF),
-        np.uint64(0x0000FFFF0000FFFF),
-        np.uint64(0x00000000FFFFFFFF),
-    ]
-    s = [np.uint64(1), np.uint64(2), np.uint64(4), np.uint64(8), np.uint64(16)]
-
-    x = (x | (x << s[4])) & b[4]
-    y = (y | (y << s[4])) & b[4]
-    x = (x | (x << s[3])) & b[3]
-    y = (y | (y << s[3])) & b[3]
-    x = (x | (x << s[2])) & b[2]
-    y = (y | (y << s[2])) & b[2]
-    x = (x | (x << s[1])) & b[1]
-    y = (y | (y << s[1])) & b[1]
-    x = (x | (x << s[0])) & b[0]
-    y = (y | (y << s[0])) & b[0]
-
-    interleaved = (x | (y << np.uint64(1))) >> np.uint64(12)
-    footer = _QB_FOOTER >> np.uint64(z * 2)
-    return (
-        _QB_HEADER | _QB_MODE | (np.uint64(z) << np.uint64(52)) | interleaved | footer
-    )
-
-
 def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
     """Group ``vals`` by ``cids`` and reduce -> (unique_cids, measures).
 
@@ -189,6 +142,22 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
     uniq, inv = np.unique(cids, return_inverse=True)
     inv = inv.astype(np.intp)
     counts = np.bincount(inv, minlength=uniq.size)
+
+    if agg == _PARTIAL:
+        vals = np.asarray(vals, dtype="float64")
+        sums = np.bincount(inv, weights=vals, minlength=uniq.size)
+        # the two-pass M2 of the variance below: the mean first, then the squared deviations from it
+        m2 = np.bincount(
+            inv, weights=(vals - (sums / counts)[inv]) ** 2, minlength=uniq.size
+        )
+        lo = np.full(uniq.size, np.inf)
+        np.minimum.at(lo, inv, vals)
+        hi = np.full(uniq.size, -np.inf)
+        np.maximum.at(hi, inv, vals)
+        return uniq, [
+            (float(n), float(s), float(m), float(a), float(b))
+            for n, s, m, a, b in zip(counts, sums, m2, lo, hi)
+        ]
 
     if agg == "count":
         measures = [float(c) for c in counts]  # float for heavy-tier parity
@@ -249,6 +218,16 @@ def _weighted_reduce(pairs: list, agg: str) -> float:
       median:   cumulative-weight interpolated weighted median
     """
     sw = sum(p[1] for p in pairs)
+    if agg == _PARTIAL:
+        sv = sum(v * w for v, w in pairs)
+        mean = sv / sw
+        return (
+            float(sw),
+            float(sv),
+            float(sum(w * (v - mean) ** 2 for v, w in pairs)),
+            float(min(p[0] for p in pairs)),
+            float(max(p[0] for p in pairs)),
+        )
     if agg == "count":
         return float(sw)
     if agg == "sum":
@@ -304,7 +283,7 @@ def _covering_band(
     matches the heavy tier's O(pixels) loop and is suitable for small/coarse
     tiles only.
 
-    Interior fast-path (O(boundary) optimisation, mirrors heavy Task 15):
+    Interior fast-path (O(boundary) optimisation, mirrors the heavy tier):
     For exact-geometry grids (``_COVERING_FAST_PATH_EXACT``: custom, quadbin,
     bng), a pixel whose four corners all encode to the SAME cell is unambiguously
     interior -- its intersection area equals the pixel area, so the weight is
@@ -454,7 +433,7 @@ def _complete_coverage_pass(
     west, south, east, north = work_ds.bounds
     bbox_poly = _box(west, south, east, north)
 
-    empty_value = 0.0 if agg == "count" else None
+    empty_value = _EMPTY_STATE if agg == _PARTIAL else (0.0 if agg == "count" else None)
     existing_ids = {r["cellID"] for r in band_result}
 
     extra = []
@@ -473,15 +452,26 @@ def _complete_coverage_pass(
 
 def _stamp_crs_bytes(ds, target_crs) -> bytes:
     """Return GTiff bytes identical to ``ds`` but with ``target_crs`` stamped —
-    used to give a CRS-less-but-known raster its source CRS before warping."""
+    used to give a CRS-less-but-known raster its source CRS before warping. A
+    source's own (per-dataset, non-alpha) mask band is written with it, so the
+    warp still masks its pixels."""
+    import rasterio
     from rasterio.io import MemoryFile
 
-    profile = ds.profile.copy()
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+    from databricks.labs.gbx.pyrx.core.compression import match_alpha, source_profile
+
+    own_mask = has_own_mask(ds)
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff", crs=target_crs)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(ds.read())
-        return mf.read()
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                match_alpha(dst, ds.colorinterp)
+                dst.write(ds.read())
+                if own_mask:
+                    dst.write_mask(ds.read_masks(1))
+            return mf.read()
 
 
 def _warp_to_4326_if_needed(ds, crs):
@@ -489,7 +479,9 @@ def _warp_to_4326_if_needed(ds, crs):
     needed (already 4326, or CRS-less with no override -> assume grid-native).
 
     The embedded raster CRS wins as the source; else the ``crs`` override (int
-    SRID or CRS string) for a CRS-less raster; else None (never errors)."""
+    SRID or CRS string) for a CRS-less raster; else None (never errors). The
+    warp fill is NoData, so the reducers never aggregate it, and a source's own
+    mask band still masks (``warp.reproject_to_crs(..., mark_fill_nodata=True)``)."""
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import warp
@@ -500,7 +492,9 @@ def _warp_to_4326_if_needed(ds, crs):
     if ds.crs is not None:
         if ds.crs == _WGS84:
             return None  # already grid-native
-        return warp.reproject_to_crs(ds, "EPSG:4326", resampling="nearest")
+        return warp.reproject_to_crs(
+            ds, "EPSG:4326", resampling="nearest", mark_fill_nodata=True
+        )
 
     # CRS-less raster: use the override if given, else assume grid-native (4326).
     if crs is None:
@@ -509,11 +503,149 @@ def _warp_to_4326_if_needed(ds, crs):
     if override == _WGS84:
         return None  # override says it is already 4326
     stamped = _stamp_crs_bytes(ds, override)
-    with MemoryFile(stamped) as mf, mf.open() as stamped_ds:
-        return warp.reproject_to_crs(stamped_ds, "EPSG:4326", resampling="nearest")
+    with MemoryFile(stamped) as mf, open_bytes(mf) as stamped_ds:
+        return warp.reproject_to_crs(
+            stamped_ds, "EPSG:4326", resampling="nearest", mark_fill_nodata=True
+        )
+
+
+def check_arguments(
+    resolution, grid: str, agg: str, coverage: str, assignment: str, grid_conf=None
+) -> None:
+    """Raise, naming the value, for an argument ``raster_to_grid`` cannot take. A function calls this before it
+    opens the tile, so a parameter error never hides behind a tile that is empty or cannot be read.
+    """
+    _validate_resolution(resolution, grid)
+    if agg not in _AGGS:
+        raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
+    if coverage not in _COVERAGES:
+        raise ValueError(f"coverage must be one of {_COVERAGES}; got {coverage!r}")
+    if assignment not in _ASSIGNMENTS:
+        raise ValueError(
+            f"assignment must be one of {_ASSIGNMENTS}; got {assignment!r}"
+        )
+    if grid == "custom":
+        from databricks.labs.gbx.pygx import _custom
+
+        max_res = _custom.conf_from_row(grid_conf).max_resolution
+        if resolution < 0 or resolution > max_res:
+            raise ValueError(
+                f"raster->custom: resolution ({resolution}) is outside "
+                f"[0, {max_res}] for this grid conf"
+            )
+
+
+def measure_of(stat: str, state: tuple):
+    """The measure of ONE cell for ``stat``, from its partial state ``(count, sum, m2, min, max)``: the sum over the
+    count, M2 over the count (the population variance), its square root, or a field as it is. A covered cell that holds no
+    valid pixel (a ``None`` sum) is NULL for every statistic but ``count``, which is 0.0. The SQL projection of the
+    Unity Catalog table functions (the manifest's ``tvf_select``) is this function, and a test holds them equal.
+    """
+    n, s, m2, lo, hi = state
+    if stat == "count":
+        return n
+    if s is None:
+        return None
+    if stat == "avg":
+        return s / n
+    if stat == "sum":
+        return s
+    if stat == "variance":
+        return m2 / n
+    if stat == "stddev":
+        return math.sqrt(m2 / n)
+    if stat == "min":
+        return lo
+    if stat == "max":
+        return hi
+    raise ValueError(f"{stat!r} does not split; expected one of {PARTIAL_STATS}")
 
 
 def raster_to_grid(
+    ds,
+    resolution: int,
+    grid: str,
+    agg: str,
+    coverage: str = "complete",
+    assignment: str = "centroid",
+    crs=None,
+    grid_conf=None,
+) -> list:
+    """Aggregate raster pixel values into discrete-global-grid cells, per band: :func:`raster_to_grid_partial`'s pass
+    with the statistic taken from each cell's state (:func:`measure_of`), or, for the median, its own pass. The rest of
+    this note is :func:`_raster_to_grid`'s.
+
+    Returns one list per band of ``{"cellID", "measure"}``.
+    """
+    check_arguments(resolution, grid, agg, coverage, assignment, grid_conf)
+    if agg == "median":
+        return _raster_to_grid(
+            ds, resolution, grid, agg, coverage, assignment, crs, grid_conf
+        )
+    return [
+        [{"cellID": c["cellID"], "measure": measure_of(agg, c["state"])} for c in band]
+        for band in _partial_states(
+            ds, resolution, grid, coverage, assignment, crs, grid_conf
+        )
+    ]
+
+
+def raster_to_grid_single(
+    ds,
+    resolution: int,
+    grid: str,
+    stat: str,
+    coverage: str = "complete",
+    assignment: str = "centroid",
+    crs=None,
+    grid_conf=None,
+) -> list:
+    """ONE statistic of every cell, per band, computed on its own: the pass of ``stat`` alone, with no count, sum, M2, minimum
+    or maximum made for the others. It returns what :func:`raster_to_grid` returns (a test holds the two equal, bit for bit,
+    for every statistic, coverage and assignment); the Unity Catalog table functions call this one, because a statistic read
+    from the partial state costs the whole state, about twice a sum or a count.
+    """
+    check_arguments(resolution, grid, stat, coverage, assignment, grid_conf)
+    return _raster_to_grid(
+        ds, resolution, grid, stat, coverage, assignment, crs, grid_conf
+    )
+
+
+def _partial_states(ds, resolution, grid, coverage, assignment, crs, grid_conf):
+    """One list per band of ``{"cellID", "state"}`` (the state is the tuple of :data:`PARTIAL_FIELDS`)."""
+    return [
+        [{"cellID": c["cellID"], "state": c["measure"]} for c in band]
+        for band in _raster_to_grid(
+            ds, resolution, grid, _PARTIAL, coverage, assignment, crs, grid_conf
+        )
+    ]
+
+
+def raster_to_grid_partial(
+    ds,
+    resolution: int,
+    grid: str,
+    coverage: str = "complete",
+    assignment: str = "centroid",
+    crs=None,
+    grid_conf=None,
+) -> list:
+    """The mergeable state of every cell, per band, in one pass over the pixels: one list per band of ``{"cellID",
+    "count", "sum", "m2", "min", "max"}`` (see :data:`PARTIAL_FIELDS`). The arguments are those of
+    :func:`raster_to_grid`. Two tiles of one grid merge by summing ``count`` and ``sum``, taking the least ``min`` and
+    greatest ``max``, and adding to the ``m2`` of each tile the count times the squared distance of its mean from the merged
+    mean (Chan's parallel update), so a statistic over many tiles needs no pixel.
+    """
+    check_arguments(resolution, grid, "count", coverage, assignment, grid_conf)
+    return [
+        [{"cellID": c["cellID"], **dict(zip(PARTIAL_FIELDS, c["state"]))} for c in band]
+        for band in _partial_states(
+            ds, resolution, grid, coverage, assignment, crs, grid_conf
+        )
+    ]
+
+
+def _raster_to_grid(
     ds,
     resolution: int,
     grid: str,
@@ -544,7 +676,7 @@ def raster_to_grid(
                     ``"median"``, ``"sum"``, ``"variance"``, ``"stddev"``.
         coverage:   ``"complete"`` (default) -- also emit covered-but-empty
                     cells (measure=None, or 0.0 for count); ``"sparse"`` -- emit
-                    only cells with at least one valid pixel (pre-Stage-2
+                    only cells with at least one valid pixel (the original
                     behaviour).
         assignment: ``"centroid"`` (default) -- bin each valid pixel to the cell
                     containing its centroid; ``"covering"`` -- distribute each
@@ -564,16 +696,6 @@ def raster_to_grid(
         H3/quadbin/custom and a formatted BNG ``str`` (e.g. ``"TQ3080"``) for
         BNG.
     """
-    _validate_resolution(resolution, grid)
-    if agg not in _AGGS:
-        raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
-    if coverage not in _COVERAGES:
-        raise ValueError(f"coverage must be one of {_COVERAGES}; got {coverage!r}")
-    if assignment not in _ASSIGNMENTS:
-        raise ValueError(
-            f"assignment must be one of {_ASSIGNMENTS}; got {assignment!r}"
-        )
-
     if grid == "custom":
         return _raster_to_custom(
             ds,
@@ -595,14 +717,21 @@ def raster_to_grid(
         )
 
     resolution = int(resolution)
-    encode = _h3_cells if grid == "h3" else _quadbin_cells
+    if grid == "h3":
+        encode = _h3_cells
+    else:
+        from databricks.labs.gbx.pygx import (
+            _quadbin,  # lazy: only the quadbin grid needs it
+        )
+
+        encode = _quadbin.point_as_cell_vec
 
     def _run(work_ds):
         gt = work_ds.transform.to_gdal()  # (c, a, b, f, d, e) GDAL geotransform
         out = []
         for bi in range(1, work_ds.count + 1):
             band = work_ds.read(bi).astype("float64")
-            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+            mask = band_valid_mask(work_ds, bi)  # False = NoData, masked or transparent
 
             if assignment == "centroid":
                 ys, xs = np.nonzero(mask)  # valid pixels only (matches mask==0 skip)
@@ -643,7 +772,7 @@ def raster_to_grid(
         return _run(ds)
     from rasterio.io import MemoryFile
 
-    with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
+    with MemoryFile(warped_bytes) as mf, open_bytes(mf) as work_ds:
         return _run(work_ds)
 
 
@@ -683,7 +812,7 @@ def _raster_to_bng(
         from databricks.labs.gbx.pyrx.core.crs import resolve_crs
 
         stamped = _stamp_crs_bytes(ds, resolve_crs(crs))
-        with MemoryFile(stamped) as _mf, _mf.open() as _stamped_ds:
+        with MemoryFile(stamped) as _mf, open_bytes(_mf) as _stamped_ds:
             return _raster_to_bng(
                 _stamped_ds,
                 resolution,
@@ -705,7 +834,7 @@ def _raster_to_bng(
         out = []
         for bi in range(1, work_ds.count + 1):
             band = work_ds.read(bi).astype("float64")
-            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+            mask = band_valid_mask(work_ds, bi)  # False = NoData, masked or transparent
 
             if assignment == "centroid":
                 ys, xs = np.nonzero(mask)  # valid pixels only
@@ -749,8 +878,11 @@ def _raster_to_bng(
 
     if already_bng:
         return _run(ds)
-    warped_bytes = warp.reproject_to_srid(ds, 27700, resampling="nearest")
-    with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
+    # The warp fill is NoData and a source's own mask still masks (as for h3/quadbin).
+    warped_bytes = warp.reproject_to_srid(
+        ds, 27700, resampling="nearest", mark_fill_nodata=True
+    )
+    with MemoryFile(warped_bytes) as mf, open_bytes(mf) as work_ds:
         return _run(work_ds)
 
 
@@ -779,10 +911,10 @@ def _raster_to_custom(
     conf = _custom.conf_from_row(grid_conf)
 
     # Validate resolution against the conf-derived maximum.
-    if resolution > conf.max_resolution:
+    if resolution < 0 or resolution > conf.max_resolution:
         raise ValueError(
-            f"raster->custom: resolution ({resolution}) exceeds max "
-            f"{conf.max_resolution} for this grid conf"
+            f"raster->custom: resolution ({resolution}) is outside "
+            f"[0, {conf.max_resolution}] for this grid conf"
         )
 
     def _run(work_ds):
@@ -790,7 +922,7 @@ def _raster_to_custom(
         out = []
         for bi in range(1, work_ds.count + 1):
             band = work_ds.read(bi).astype("float64")
-            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+            mask = band_valid_mask(work_ds, bi)  # False = NoData, masked or transparent
 
             if assignment == "centroid":
                 ys, xs = np.nonzero(mask)

@@ -6,9 +6,9 @@ title: Serving GeoSAM
 # Serving GeoSAM
 
 `gbx.models.serving` takes a loaded GeoSAM model from a notebook call to a queryable GPU
-endpoint: wrap it as an MLflow pyfunc, register it to the Unity Catalog model registry
-("Unity Gateway"), stand up a GPU Model Serving endpoint, and query it. Every step is a
-thin wrapper over MLflow / Databricks Model Serving — `mlflow` itself is imported lazily
+endpoint. Wrap it as an MLflow pyfunc. Register it to the Unity Catalog model registry
+("Unity Gateway"). Stand up a GPU Model Serving endpoint. Query it. Every step is a
+thin wrapper over MLflow / Databricks Model Serving. `mlflow` itself is imported lazily
 inside each function, so `databricks.labs.gbx.models.serving` imports cleanly even where
 `mlflow` is not installed.
 
@@ -31,9 +31,9 @@ from databricks.labs.gbx.models import serving
 pyfunc = serving.build_geosam_pyfunc(model_type="vit_h")
 ```
 
-The input/output contract is plain data — one string column in
-(`serving.PREDICT_INPUT_COLUMNS`, `image_b64:string`), one string column out
-(`serving.PREDICT_OUTPUT_COLUMNS`, `geojson:string`) — and `geosam_signature()` converts
+The input/output contract is plain data: one string column in
+(`serving.PREDICT_INPUT_COLUMNS`, `image_b64:string`) and one string column out
+(`serving.PREDICT_OUTPUT_COLUMNS`, `geojson:string`). The helper `geosam_signature()` converts
 that contract into a real MLflow `ModelSignature` lazily, for use at registration time.
 
 ## Registering to Unity Catalog — usage affiliation
@@ -42,30 +42,40 @@ that contract into a real MLflow `ModelSignature` lazily, for use at registratio
 model_version = serving.register_to_unity_gateway(
     pyfunc,
     "catalog.schema.geosam_model",
-    profile="oauth-fe",
+    profile="my-profile",
 )
 ```
 
-`register_to_unity_gateway(pyfunc, name, *, profile, signature=None, pip_reqs=None)` logs
+`register_to_unity_gateway(pyfunc, name, *, profile, signature=None, wheel_path=None, pip_reqs=None)` logs
 `pyfunc` to the Unity Catalog model registry under the three-level UC name `name`
 (`catalog.schema.model`) and returns the resulting model version as a string.
 
 `profile` selects the `DATABRICKS_CONFIG_PROFILE` used for the registry call — this
 function never auto-selects a profile; the caller chooses it explicitly.
 
-`pip_reqs` defaults to `serving.DEFAULT_PIP_REQS`:
+The env wheel is bundled into the model (`code_paths`). By default (`wheel_path=None`) it is the
+wheel the running GeoBrix was installed from, such as the one a notebook installs from a Volume with
+`%pip`. MLflow records the logging environment's Python and MLflow version for the endpoint, so the
+wheel's pins match them. If GeoBrix was not installed from a local wheel file, pass `wheel_path=`.
+The call fails before MLflow runs if that wheel does not exist. The `pip_reqs` argument defaults
+to the bundled copy plus the GeoSAM packages (`serving.MODEL_DEPS`). The Model Serving build cannot
+reach a Volume, and the env wheels have no models extra. For an env6 wheel the defaults are:
 
 ```python
-DEFAULT_PIP_REQS = (
-    "geobrix[models_gpu_env5] @ file:///Volumes/.../geobrix-0.5.2-py3-none-any.whl",
+pip_reqs = [
+    "code/geobrix-0.6.0+env6-py3-none-any.whl",
+    "torch==2.9.0",
+    "torchvision==0.24.0",
     "segment-geospatial",
-)
+    "opencv-python-headless==4.11.0.86",
+]
 ```
 
 This is a deliberate **usage-affiliation** choice: the served model's logged environment
-carries the GeoBrix light wheel alongside `segment-geospatial`, not just the raw
-segmentation backend. Override `pip_reqs=` with the actual staged wheel path/version for
-your workspace.
+carries the GeoBrix wheel alongside `segment-geospatial`, not just the raw
+segmentation backend. Pass `pip_reqs=` to replace the defaults.
+
+The bundled wheel is about 90 MB, which the model artifact then carries. GeoBrix has not tested the served model on an endpoint.
 
 ## Creating a GPU endpoint
 
@@ -73,7 +83,7 @@ your workspace.
 endpoint = serving.create_endpoint(
     "catalog.schema.geosam_model",
     model_version,
-    profile="oauth-fe",
+    profile="my-profile",
     endpoint_name="geosam-endpoint",
     workload_type="GPU_MEDIUM",
     scale_to_zero=True,
@@ -83,13 +93,13 @@ endpoint = serving.create_endpoint(
 `create_endpoint(name, model_version, *, profile, endpoint_name, workload_type="GPU_MEDIUM", scale_to_zero=True)`
 assembles a served-entity/traffic config for UC model `name`@`model_version` and creates a
 Model Serving endpoint named `endpoint_name`. It polls until the endpoint is genuinely
-ready — both `state.ready == "READY"` **and** `state.config_update == "NOT_UPDATING"` —
-since `state.ready` alone can read `READY` mid version-swap while the previous version is
+ready, meaning both `state.ready == "READY"` **and** `state.config_update == "NOT_UPDATING"`.
+This is because `state.ready` alone can read `READY` mid version-swap while the previous version is
 still the one actually serving traffic.
 
-`create_endpoint` is **create-only** — it calls the deployment client's create API, not
+`create_endpoint` is **create-only**. It calls the deployment client's create API, not
 an update. Rolling a new `model_version` onto an endpoint that already exists needs a
-separate update call (not implemented in this module); calling `create_endpoint` again
+separate update call, which this module does not implement. Calling `create_endpoint` again
 against an existing `endpoint_name` is not the way to deploy a new version.
 
 ### Scale-to-zero vs. provisioned
@@ -108,7 +118,7 @@ against an existing `endpoint_name` is not the way to deploy a new version.
 ## Querying the endpoint
 
 ```python
-result = serving.query("geosam-endpoint", raw_image_bytes, profile="oauth-fe")
+result = serving.query("geosam-endpoint", raw_image_bytes, profile="my-profile")
 ```
 
 `query(endpoint_name, image, *, profile)` base64-encodes `image` (raw image/GeoTIFF
@@ -132,9 +142,9 @@ prediction response (an MLflow deployments-client dict), with the `geojson` stri
   installs GeoBrix at startup — factor that into cold-start time for a scale-to-zero
   endpoint.
 - **`mlflow` is not part of the light CI environment.** All of `mlflow`'s imports in this
-  module are lazy and scoped to the function that needs it; only code paths that call
-  `register_to_unity_gateway`, `create_endpoint`, or `query` — or `build_geosam_pyfunc` /
-  `geosam_signature` — require `mlflow` to be installed.
+  module are lazy and scoped to the function that needs it. Only code paths that call
+  `register_to_unity_gateway`, `create_endpoint`, `query`, `build_geosam_pyfunc` or
+  `geosam_signature` require `mlflow` to be installed.
 
 ## See also
 

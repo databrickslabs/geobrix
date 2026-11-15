@@ -36,7 +36,7 @@ import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expressio
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
-import org.locationtech.jts.geom.{Geometry, LineString}
+import org.locationtech.jts.geom.Geometry
 
 case class ST_InterpolateElevationBBox(
     pointsArray: Expression,
@@ -75,17 +75,17 @@ case class ST_InterpolateElevationBBox(
         val ptsElemType = pointsArray.dataType.asInstanceOf[org.apache.spark.sql.types.ArrayType].elementType
         val pts = geomsFromArrayData(pointsVal.asInstanceOf[ArrayData], ptsElemType)
         if (pts.isEmpty) return Iterator.empty
+        // a NULL argument (a NULL mode too; a mode left out is 'constrained') gives no rows, as explode(NULL) does
+        if (Seq(mergeTolerance, snapTolerance, splitPointFinder, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, modeExpr)
+                .exists(_.eval(input) == null)) return Iterator.empty
 
-        val breaklines: Seq[LineString] = {
+        // each break line is split into parts as gbx_st_triangulate splits it (InterpolateElevation.prepareSites)
+        val breaklines: Seq[Geometry] = {
             val bVal = breaklinesArray.eval(input)
             if (bVal == null) Seq.empty
             else {
                 val bElemType = breaklinesArray.dataType.asInstanceOf[org.apache.spark.sql.types.ArrayType].elementType
-                geomsFromArrayData(bVal.asInstanceOf[ArrayData], bElemType).toSeq.map {
-                    case l: LineString => l
-                    case other => throw new IllegalArgumentException(
-                        s"st_interpolateelevationbbox: breaklines must be LineString geometries; got ${other.getClass.getName}")
-                }
+                geomsFromArrayData(bVal.asInstanceOf[ArrayData], bElemType).toSeq
             }
         }
 
@@ -104,8 +104,6 @@ case class ST_InterpolateElevationBBox(
         val modeStr = modeExpr.eval(input) match {
             case s: UTF8String => s.toString
             case s: String     => s
-            case null          => throw new IllegalArgumentException(
-                "gbx_st_interpolateelevationbbox: mode must not be null")
             case other         => other.toString
         }
 

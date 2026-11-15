@@ -49,7 +49,7 @@ def test_point_to_cell_id_vec_equals_scalar(res):
 
 @pytest.mark.parametrize("res", _RESOLUTIONS)
 def test_scalar_matches_frozen_reference(res):
-    # Reference = an inlined copy of the ORIGINAL scalar body, proving the
+    # Reference = an inlined copy of the scalar body, proving the
     # refactor introduced no regression. (Kept local so it can't drift with
     # the module under test.)
     import math
@@ -76,7 +76,8 @@ def test_scalar_matches_frozen_reference(res):
         e_shift = 10**n_positions
         n_shift = 10
         if resolution == -1:
-            val = (id_placeholder + e_letter * e_letter_shift) / 100 + quadrant
+            # a 500 km square: the 100 km letter indices of its south-west corner, 1(##)(##)
+            val = 10000 + (e_letter // 5) * 5 * 100 + (n_letter // 5) * 5
         else:
             val = (
                 id_placeholder
@@ -134,3 +135,18 @@ def test_is_valid_vec_equals_scalar(res):
 
 def test_is_valid_vec_empty():
     assert _bng.is_valid_vec(np.array([], dtype=np.int64), 3).tolist() == []
+
+
+@pytest.mark.parametrize("res", _RESOLUTIONS)
+@pytest.mark.parametrize(
+    "point",
+    [(530000.0, 180000.0), (450000.0, 950000.0), (0.0, 0.0), (651234.0, 1209876.0)],
+)
+def test_a_cell_name_parses_back_to_its_cell(res, point):
+    """format -> parse -> format is stable at every resolution, over cells in several 100 km squares; the 500 km
+    cell is one letter, and a 100 km cell of the NE/NW/SE/SW squares is a cell, not a quadrant.
+    """
+    cid = _bng.point_to_cell_id(*point, res)
+    name = _bng.format(cid)
+    assert _bng.format(_bng.parse(name)) == name
+    assert _bng.get_resolution(_bng.cell_digits(_bng.parse(name))) == res

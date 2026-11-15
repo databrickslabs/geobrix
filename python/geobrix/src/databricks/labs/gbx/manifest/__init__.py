@@ -1,0 +1,1146 @@
+"""Per-surface function manifest: the source of truth for each function's names,
+signatures and implementation levels on every surface.
+
+Pure Python (no pyspark), so the UC DDL emitter, the docs generators and the tests
+read it anywhere. JSON lives next to this module and ships as package data. The loaded
+manifest is immutable (read-only mappings, tuples), so the cached copy cannot be edited
+by a caller.
+"""
+
+from __future__ import annotations
+
+import functools
+import importlib
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Mapping, Optional, Tuple
+
+SCHEMA_VERSION = 2
+
+# The closed vocabulary of keys a function's per-level spec may carry. A mistyped key
+# would be read with `.get` and silently drop a guard, so a contract test rejects any key
+# outside this table; add a key here in the same change that first uses it.
+# `dispatch` (L1) names how the SQL wrapper of a tile function splits the tiles between the JVM and light: absent, a virtual
+# tile goes to light and a NULL or error tile gives NULL (or itself); `"bytes_to_jvm"`, only a tile with bytes goes to the
+# JVM and light answers every other tile, NULL and error tiles included (see manager/sqlwrap.bytes_dispatch).
+# `engine` marks a light (L3) level that runs the row's `gdal` block on the GDAL spec engine where that engine can
+# serve, and its own implementation (the other keys) elsewhere. The engine has no JVM level (L1).
+LEVEL_KEYS = {
+    "L0": frozenset({"sql", "sql_helpers"}),
+    "L1": frozenset({"companion", "needs_gdal", "session_returns", "dispatch"}),
+    "L3": frozenset(
+        {
+            "register",
+            "variants",
+            "factory",
+            "factory_args",
+            "callable",
+            "udtf",
+            "returns",
+            "needs",
+            "engine",
+            "file_ref",
+            "arrow",
+        }
+    ),
+    "L4": frozenset(
+        {
+            "handler",
+            "deps",
+            "tvf_over",
+            "tvf_select",
+            "engine",
+            "scala",
+            "jar",
+            "sql",
+            "sql_helpers",
+            "stub",
+        }
+    ),
+}
+# `tvf_select` (with `tvf_over`) is the SELECT list of a UC table function that is a PROJECTION of the rows the function
+# it is over returns: `RETURN SELECT <tvf_select> FROM (SELECT inline(<tvf_over>(...)))`. It reads the fields of the
+# partial's struct (a raster-to-grid statistic is `try_divide(sum, count)` of the cell's state), so one kernel serves every
+# statistic. Without it the table function is the plain `inline(...)` of the rows.
+# `scala` (a UC Scala handler, `<class>.<method>` in the JAR) and `jar` go together: `jar: "volume"` says the JAR is read from
+# the Volume folder `gbx.uc.install` is given. The row keeps its Python `handler`, which `install` creates when that
+# folder holds no JAR.
+# L0 is a SQL kernel the SESSION installs as a temporary SQL function (no UDF, no JVM, no Python): `sql` is the body
+# (the text after RETURN) and `sql_helpers` the private SQL functions it calls. L4 `sql` is the same kind of body for the
+# Unity Catalog function; the string "L0" says "the L0 body" so one text serves both surfaces (one kernel per function).
+# In a body, `{q}` is the place a helper's qualifier goes (`{q}gbx__x(...)`): the 3-level schema prefix on UC, nothing in
+# the session (which inlines its helpers). A helper is {"name": "gbx__<x>", "params": [[name, type], ...], "returns": type,
+# "sql": body, "summary": text (optional)}. `stub` (an L4 spec with no other key) is the Fix text of a function that has no
+# UC form: `gbx.uc.install(..., stubs=True)` makes it a SQL function that raises, and the row has no UC level otherwise.
+# Keys every spec of that level must carry.
+LEVEL_REQUIRED = {
+    "L0": frozenset({"sql"}),
+    "L3": frozenset({"register"}),
+}
+# Levels whose spec must carry at least one of these keys.
+LEVEL_REQUIRED_ANY = {
+    "L1": frozenset({"companion"}),
+    "L4": frozenset({"handler", "tvf_over", "sql", "stub"}),
+}
+
+# The closed vocabulary of a row's `gdal` block (the GDAL spec engine's spec): what `parse_gdal_spec` accepts.
+GDAL_KEYS = frozenset(
+    {
+        "alg",
+        "in",
+        "out",
+        "write",
+        "args",
+        "needs_crs",
+        "gdal_min",
+        "in_read",
+        "same_crs",
+        "per_band",
+    }
+)
+# `in_read: "factor"`: a virtual tile of the row is read at the size its `size_from_factor` argument asks for (an overview
+# serves it where the file has one). `in_read: "path"`: a virtual tile that is a whole file is handed to GDAL by its path, read-only,
+# and never materialized (for an algorithm that reads its raster block by block).
+GDAL_IN_READS = frozenset({"factor", "path"})
+# `same_crs: "keep"`: a tile already in the CRS the row asks for comes back as it is (its bytes, not a warp of them).
+GDAL_SAME_CRS = frozenset({"keep"})
+GDAL_ARG_KEYS = frozenset(
+    {
+        "arg",
+        "const",
+        "from",
+        "type",
+        "map",
+        "null",
+        "with",
+        "bad",
+        "formula",
+        "formulas",
+        "and",
+        "when_empty",
+    }
+)
+GDAL_IN_KINDS = frozenset({"raster", "rasters", "text"})
+GDAL_OUT_KINDS = frozenset({"raster", "features", "json"})
+# The SQL types of a features output's fields, and the pyspark type each is.
+GDAL_FIELD_TYPES = frozenset({"DOUBLE", "INT", "BIGINT", "STRING"})
+GDAL_BINDERS = frozenset(
+    {
+        "double",
+        "nonneg_double",
+        "int",
+        "bool",
+        "choice",
+        "crs",
+        "geom_wkt",
+        "double_list",
+        "count",
+        "band",
+        "flag_choice",
+        "positive_double",
+        "checked_name",
+        "calc_envelope",
+        "calc_formula",
+        "calc_named",
+        "text_vsimem",
+        "table_alpha",
+        "observer_xy",
+        "size_from_factor",
+        "int_pair",
+        "double_pair",
+        "command",
+    }
+)
+GDAL_NULL = frozenset({"omit", "null_result", "raise"})
+GDAL_BAD = frozenset({"raise", "data"})
+# Write profiles: `tile` is a GTiff with the engine's creation options; `command` is the same with no predictor (a
+# pipeline's output type is known only after it runs, and a type-specific predictor could be invalid for it). No profile
+# writes VRT or GDALG.
+GDAL_WRITE = frozenset({"tile", "command"})
+# The kinds of value a `gdal.command_allow` argument takes (`engine/command.py` holds the grammar of each).
+GDAL_COMMAND_KINDS = frozenset(
+    {
+        "flag",
+        "integer",
+        "number",
+        "integers",
+        "numbers",
+        "word",
+        "words",
+        "sizes",
+        "expr",
+        "crs",
+        "wkt",
+    }
+)
+
+# The v2 tile struct as a SQL type (== V2_TILE_SCHEMA.simpleString(); a contract test pins it).
+TILE_SQL = (
+    "struct<cellid:bigint,raster:binary,path:string,path_mode:string,"
+    "window:struct<col_off:int,row_off:int,width:int,height:int>,"
+    "clip_polygon:binary,clip_crs:string,crs:string,metadata:map<string,string>>"
+)
+
+
+# The generated Python API: one module per SQL prefix (gbx_<prefix>_...).
+PACKAGE_OF_PREFIX = {
+    "rst": "rasterx",
+    "bng": "gridx.bng",
+    "quadbin": "gridx.quadbin",
+    "custom": "gridx.custom",
+    "h3": "gridx.h3",
+    "st": "vectorx",
+    "pmtiles": "pmtiles",
+    "drivers": "drivers",
+}
+# How the Python API reads a bare str for a parameter: a column name, or a literal (a CRS, a unit, a mode).
+# `col_null` reads a str as a column too, and sends None as an UNTYPED NULL: where a typed NULL and an untyped one mean
+# different things (the cell rasterizers' `value`: a typed NULL burns NaN, an untyped one is the presence mask).
+PY_MODES = frozenset({"col", "lit", "col_null"})
+# Python-only keyword groups a generated entry may carry (per-surface signatures may differ).
+# `materialize` alone is the constructor's keyword: the Python entry always runs the row's `extra_impl` with the value
+# (unset or `False` is a virtual tile of the file; `True` reads the pixels now, as the SQL name does).
+PY_EXTRAS = {
+    "force_output": ("virtualize_dir", "virtualize_prefix", "materialize"),
+    "materialize": ("materialize",),
+}
+STATUSES = frozenset({"stable"})
+DATASOURCE_KINDS = frozenset({"reader", "writer", "reader_writer"})
+DATASOURCE_IMPLS = frozenset({"python", "scala"})
+
+
+def package_of(sql_name: str) -> str:
+    """The Python API module of a SQL name: gbx_rst_x -> rasterx, gbx_bng_x -> gridx.bng."""
+    return PACKAGE_OF_PREFIX[sql_name.split("_")[1]]
+
+
+@dataclass(frozen=True)
+class Param:
+    name: str
+    session: Tuple[str, ...]
+    uc: str
+    default: Optional[str] = None
+    uc_crs: bool = False
+    doc: str = ""
+    py: str = "col"  # a key of PY_MODES
+    # The values a text parameter takes (compared without case): the Python API refuses any other before it calls SQL.
+    choices: Tuple[str, ...] = ()
+    # The Python API takes this parameter as a Python str only and refuses a Column (SQL is unchanged): the source of
+    # code that runs in the session, which a caller writes as a literal rather than reads from a column.
+    str_only: bool = False
+
+
+@dataclass(frozen=True)
+class PrivateRoutine:
+    """A UC routine with no public name (``gbx__<x>``): a Python function a table function or a procedure calls.
+
+    It has no session surface and no oracle row of its own; the public row that reads it (``tvf_over``), or the
+    procedure that calls it, is where it is tested.
+    """
+
+    name: str
+    handler: str
+    deps: Tuple[str, ...]
+    params: Tuple[Tuple[str, str], ...]  # (name, UC type)
+    returns: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class Doc:
+    summary: str
+    returns: str = ""
+    page: str = ""  # docs/docs/<page>.mdx holds the section "### <python name>"
+
+
+@dataclass(frozen=True)
+class PythonEntry:
+    name: str
+    module: str  # "rasterx" -> databricks.labs.gbx.rasterx.functions
+    extras: Optional[str] = None  # a key of PY_EXTRAS
+    extra_impl: Optional[str] = (
+        None  # "pkg.mod:attr", run when one of the extras is set
+    )
+    extra_factory_args: Optional[str] = (
+        None  # extra_impl is a factory called with these (as L3's factory_args)
+    )
+
+    @property
+    def ref(self) -> str:
+        return f"databricks.labs.gbx.{self.module}.functions:{self.name}"
+
+
+@dataclass(frozen=True)
+class TableInput:
+    """The table argument of a table function called as `fn(TABLE(<query>) PARTITION BY (<keys>), <constants>)`: the
+    columns the query must have, in order (name, SQL type), and the ones the partitions are made by. The other columns
+    are a partition's members; the function's first parameter (session type `TABLE`) stands for the whole argument.
+    """
+
+    columns: Tuple[Tuple[str, str], ...]
+    partition_by: Tuple[str, ...]
+
+    @property
+    def members(self) -> Tuple[Tuple[str, str], ...]:
+        return tuple(c for c in self.columns if c[0] not in self.partition_by)
+
+
+@dataclass(frozen=True)
+class DataSource:
+    """A reader or writer format: spark.read/write.format(name)."""
+
+    name: str
+    kind: str
+    impl: str
+    ref: str
+    page: str
+    since: str
+    status: str = "stable"
+
+
+@dataclass(frozen=True)
+class GdalArg:
+    """One argument of a spec's template: a fixed value (`const`; True is a bare flag) or a param bound
+    through a binder (`source`, `type`)."""
+
+    arg: str
+    const: Any = None
+    source: Optional[str] = None
+    type: Optional[str] = None
+    map: Mapping[str, str] = MappingProxyType({})
+    null: str = "null_result"
+    with_: Optional[str] = None
+    bad: str = "raise"
+    # `calc_formula`: a muparser template whose `{param}` placeholders take the call's values. `calc_named`: `formulas`
+    # maps a lower-case name (the value of `source`) to (template, band names), each `{band}` written as `A[n]` from
+    # the band map the param `and` holds.
+    formula: Optional[str] = None
+    formulas: Mapping[str, Tuple[str, Tuple[str, ...]]] = MappingProxyType({})
+    and_: Optional[str] = None
+    # `when_empty`: the name of a list parameter; the argument is bound only when that list is NULL or empty (an interval
+    # that the fixed levels replace).
+    when_empty: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class GdalSpec:
+    """A row's `gdal` block: the algorithm, its inputs and output, the write profile and the argument
+    template. Both tiers turn it into the same argv."""
+
+    alg: str
+    inputs: Tuple[Tuple[str, str], ...]  # (param, input kind)
+    out_kind: str
+    out_dtype: str  # a GDAL type name, or "input" (the first input's band type)
+    write: str
+    args: Tuple[GdalArg, ...]
+    needs_crs: bool = (
+        False  # the input must carry a CRS (a tile without one is a data error)
+    )
+    gdal_min: Optional[str] = None
+    # How a virtual tile of this row is read: "factor" reads the window at the target size of the row's factor.
+    in_read: Optional[str] = None
+    # "keep": a tile already in the target CRS (`--output-crs`) is the result, as its GeoTIFF bytes.
+    same_crs: Optional[str] = None
+    # A features output: (struct field, SQL type, layer field) for each value read from the output layer beside the
+    # geometry; the output is `ARRAY<STRUCT<geom_wkb BINARY, <fields>>>`, one element per feature in layer order.
+    out_fields: Tuple[Tuple[str, str, str], ...] = ()
+    # A features output read back from a file on the worker's local disk, one feature at a time, not from GDAL's in-memory
+    # layer (`out.stream`): for an algorithm whose features are as many as its regions.
+    out_stream: bool = False
+    # The algorithm reads and writes one band (its `band` argument, a const of 1): the engine runs it once for each band of
+    # the input and writes every result into the output's band of the same number.
+    per_band: bool = False
+
+
+@dataclass(frozen=True)
+class GdalSection:
+    """The manifest's top-level `gdal` section: the GDAL release the specs are checked against, the
+    arguments no spec or caller may set, and the algorithms (with their arguments) the engine runs.
+    """
+
+    pin: str
+    deny: frozenset
+    allow: Mapping[str, Tuple[str, ...]]
+    # The driver classification, design section 4: EVERY raster driver the payload's GDAL registers is in `allowed` (a
+    # GeoBrix reader can read it) or in `refused`. A test enumerates the payload and fails on an unclassified driver.
+    # Opens are restricted to `allowed`; `refused` is skipped at GDAL's registration (deregistered where it is not).
+    #
+    # The remote-fetch audit of the classification, GDAL 3.13.3's source (frmts/<driver>, gcore, port, ogr, and
+    # ogr/ogrsf_frmts for GPKG, OpenFileGDB and CAD). One line per driver, the verdict first:
+    #   fetch  the driver turns a URL read from the file into a network request, with no path scheme in the data.
+    #   write  the driver writes files the data names when it is read.
+    #   path   the driver's source handles a remote name itself (a /vsicurl/ or http(s) name, a URL-valued href).
+    #   none   none of the markers below is in its source.
+    # The markers: /vsicurl, /vsicurl_streaming, CPLHTTP*, VSICurl*, http(s) literals in code, and SetFromUserInput on
+    # a value read from the file without SET_FROM_USER_INPUT_LIMITATIONS (OGRSpatialReference fetches an http(s) CRS
+    # definition: ogrspatialreference.cpp:4252-4257, 4543). Every driver that opens a file the data names (a VRT
+    # source, a header's data file, a manifest's href) opens it through GDAL's file layer, so a /vsicurl/ name there is
+    # fetched: that is the path-scheme question, which this classification does not decide, for "none" as for "path".
+    #   KMLSUPEROVERLAY: fetch (refused). A NetworkLink or Icon href starting with http is opened as
+    #     /vsicurl_streaming/<href> (kmlsuperoverlaydataset.cpp:1315-1317, 1771-1772, 1838-1840, 2701-2702).
+    #   ESRIC: fetch (refused). The conf.xml SpatialReference.WKT goes to SetFromUserInput with no limitations
+    #     (esric_dataset.cpp:315-317), so an http(s) value is fetched at open. No GeoBrix reader needs ESRIC.
+    #   MRF: write (refused). A CachedSource.Source the file names (marfa_dataset.cpp:1519) is opened with
+    #     GDALOpenShared (1669), and a read of a missing tile fetches it from that source (mrf_band.cpp:1061-1065) and
+    #     writes it to the DataFile and IndexFile the file names (mrf_band.cpp:871; marfa_dataset.cpp:1033-1039,
+    #     1104-1131, 1196, 1243-1275: opened for append or created, folders made). No GeoBrix reader needs MRF.
+    #   AAIGrid: none.
+    #   ACE2: none.
+    #   ADRG: none.
+    #   AIG: none.
+    #   AirSAR: none.
+    #   BAG: none.
+    #   BIGGIF: none.
+    #   BMP: none.
+    #   BSB: none.
+    #   BT: none.
+    #   BYN: none.
+    #   CAD: none.
+    #   CALS: none.
+    #   CEOS: none.
+    #   COASP: none.
+    #   COG: none.
+    #   COSAR: none.
+    #   CPG: none.
+    #   CTG: none.
+    #   DERIVED: none.
+    #   DIMAP: path. DATA_FILE_PATH.href and COMPONENT_PATH.href name the files it opens (dimapdataset.cpp:624, 657,
+    #     715, 825, 1197).
+    #   DOQ1: none.
+    #   DOQ2: none.
+    #   DTED: none.
+    #   E57: none.
+    #   ECRGTOC: none.
+    #   EHdr: none.
+    #   EIR: none.
+    #   ENVI: none.
+    #   ERS: none.
+    #   ESAT: none.
+    #   FAST: none.
+    #   GFF: none.
+    #   GIF: none.
+    #   GPKG: path. a GPKG:/vsicurl/ subdataset name is opened (ogrgeopackagedatasource.cpp:1339-1340); metadata
+    #     URIs are compared only.
+    #   GRASSASCIIGrid: none.
+    #   GRIB: none.
+    #   GS7BG: none.
+    #   GSAG: none.
+    #   GSBG: none.
+    #   GSC: none.
+    #   GTX: none.
+    #   GTiff: none.
+    #   GXF: none.
+    #   GenBin: none.
+    #   HDF5: path. a /vsicurl/ subdataset name is opened (hdf5drivercore.cpp:203-206).
+    #   HDF5Image: none.
+    #   HF2: none.
+    #   HFA: none.
+    #   ILWIS: none.
+    #   IRIS: none.
+    #   ISCE: none.
+    #   ISG: none.
+    #   ISIS2: none.
+    #   ISIS3: none.
+    #   JAXAPALSAR: none.
+    #   JDEM: none.
+    #   JP2OpenJPEG: none.
+    #   JPEG: none.
+    #   JPEGXL: none.
+    #   KRO: none.
+    #   L1B: none.
+    #   LAN: none.
+    #   LCP: none.
+    #   LIBERTIFF: none.
+    #   LOSLAS: none.
+    #   Leveller: none.
+    #   MAP: none.
+    #   MBTiles: path. a /vsicurl/ name only switches a read cache on (mbtilesdataset.cpp:2769, 2918).
+    #   MEM: none.
+    #   MFF: none.
+    #   MFF2: none.
+    #   MSGN: none.
+    #   MiraMonRaster: none.
+    #   NDF: none.
+    #   NGSGEOID: none.
+    #   NITF: none.
+    #   NOAA_B: none.
+    #   NSIDCbin: none.
+    #   NTv2: none.
+    #   NUMPY: none.
+    #   NWT_GRC: none.
+    #   NWT_GRD: none.
+    #   OpenFileGDB: path. a /vsicurl/ directory name is probed for its table files
+    #     (ogropenfilegdbdrivercore.cpp:40-46).
+    #   PAux: none.
+    #   PCIDSK: none.
+    #   PCRaster: none.
+    #   PDF: none.
+    #   PDS: none.
+    #   PDS4: path. a PDS4:/vsicurl/ subdataset name is opened (pds4dataset.cpp:1742-1743); an http TEMPLATE is a
+    #     creation option (4526-4529).
+    #   PNG: none.
+    #   PNM: none.
+    #   PRF: none.
+    #   RCM: none.
+    #   RIK: none.
+    #   RMF: none.
+    #   ROI_PAC: none.
+    #   RPFTOC: none.
+    #   RRASTER: none.
+    #   RS2: none.
+    #   RST: none.
+    #   S102: none.
+    #   S104: none.
+    #   S111: none.
+    #   SAFE: path. byteStream.fileLocation.href names the files it opens (safedataset.cpp:1077, 1110, 1117).
+    #   SAGA: none.
+    #   SAR_CEOS: none.
+    #   SENTINEL2: none.
+    #   SIGDEM: none.
+    #   SNAP_TIFF: none.
+    #   SNODAS: none.
+    #   SRP: none.
+    #   SRTMHGT: none.
+    #   TGA: none.
+    #   TIL: none.
+    #   TSX: none.
+    #   Terragen: none.
+    #   USGSDEM: none.
+    #   VICAR: none.
+    #   VRT: path. a SourceFilename names a file GDAL opens (vrtsources.cpp:206-207, 347-349).
+    #   WEBP: none.
+    #   XYZ: none.
+    #   ZMap: none.
+    #   Zarr: path. a plain http(s) name is refused by the driver (zarrdriver.cpp:373-377); a /vsicurl/ name is
+    #     opened.
+    #   netCDF: path. a plain http(s) or /vsicurl/ name opens through libnetcdf's DAP client
+    #     (netcdfdrivercore.cpp:269-273, netcdfdataset.cpp:8187-8188). It also fetches: a variable's crs attribute
+    #     that is an http(s) URL (and contains GEOGCS, PROJCS or EPSG:) goes to SetFromUserInput with no limitations
+    #     (netcdfdataset.cpp:3530-3538), whose http branch fetches it (ogrspatialreference.cpp:4252-4257, 4543). Kept
+    #     allowed: GeoBrix's netCDF readers need it.
+    allowed_drivers: Tuple[str, ...] = ()
+    refused_drivers: Tuple[str, ...] = ()
+    # `bytes`: the allowed drivers the spec engine opens a materialized tile's bytes with (bytes without the TIFF
+    # magic, translated to GeoTIFF before the run; engine/run.py and the JVM's tile-bytes reader, `TileBytes`, read
+    # this one list). A
+    # tile's bytes have no directory of their own, so the class is the drivers whose dataset is the bytes alone: no
+    # name, href or URL read from the data is opened or fetched, and no header or data file beside it is needed
+    # (the sidecars GDAL may look for, .aux.xml, .msk, .ovr or a world file, would sit in the call's /vsimem prefix,
+    # which holds none). It is an allowlist: every other driver is refused for bytes, with a Fix (store the tile as a
+    # GeoTIFF, or pass it as a virtual tile, a path, which the virtual-tile policy judges). In the class:
+    #   GTiff, COG, LIBERTIFF: one TIFF file (the engine sends TIFF bytes straight to GTiff).
+    #   PNG, JPEG, GIF, BMP, WEBP, JPEGXL, PNM: one image file; no tag or box of theirs names another file.
+    # Refused for bytes, by why (the drivers named are the allowed ones that look most like tile formats):
+    #   names a file or dataset GDAL opens: VRT (SourceFilename), DERIVED (a DERIVED_SUBDATASET: name), DIMAP and
+    #     SAFE (hrefs), GPKG, HDF5 and PDS4 (a subdataset name, /vsicurl/ included), ECRGTOC, RPFTOC and TIL (the
+    #     frames or tiles a table of contents lists), MEM and NUMPY (a pointer to memory, not bytes);
+    #   a label or header that names its data file, or a data file beside the header: PDS, ISIS2, ISIS3 and VICAR
+    #     (detached labels), ENVI, EHdr, GenBin, ERS, PAux, MFF, MFF2, RST, ILWIS, SAGA, ISCE, ROI_PAC, and the
+    #     product directories (CEOS, SAR_CEOS, AirSAR, RS2, RCM, TSX, COSAR, SENTINEL2, AIG, DOQ1/DOQ2, FAST, ESAT);
+    #   a library with its own reads or a fetch: netCDF (a DAP URL, and an http(s) crs attribute it fetches, above),
+    #     HDF5Image, BAG and S102/S104/S111 (HDF5, whose external links the HDF5 library follows), Zarr (a store of
+    #     many files), MBTiles;
+    #   names files inside the file, not judged here: HFA (its spill .ige and dependent .rrd files), PCIDSK (external
+    #     channels), JP2OpenJPEG (GMLJP2 boxes may hold xlink references), NITF, PDF;
+    #   the rest: not audited for bytes; refused until one is added here with its reason.
+    # The refused class (GTI, STACIT, STACTA, WMS, WMTS ...) is never registered where the engine runs.
+    bytes_drivers: Tuple[str, ...] = ()
+    # `bytes_refused_light`: the allowed drivers the lightweight tier refuses for a tile's bytes (`open_bytes` in
+    # `_gdal_policy`, so every caller that opens tile bytes). It is a refusal list, narrower than the `bytes`
+    # allowlist above: the common single-file formats a light function can hold as bytes (netCDF, HDF5, HFA,
+    # JP2OpenJPEG, GPKG, and the other drivers not named here) stay readable, and only a driver that can name or need
+    # another file is refused. The driver is identified from the bytes first and refused before it is opened, with a
+    # Fix (store the tile as a GeoTIFF, or pass it as a virtual tile, a path, which the virtual-tile policy judges).
+    # Why each is in the class:
+    #   names a file or dataset GDAL opens: VRT (SourceFilename, /vsicurl/ included), DERIVED (a DERIVED_SUBDATASET:
+    #     name), DIMAP and SAFE (hrefs), PDS4 (a subdataset name), ECRGTOC, RPFTOC and TIL (the frames or tiles a
+    #     table of contents lists), MEM and NUMPY (a pointer to memory, not bytes);
+    #   a label or header that names its data file, or a data file beside the header: PDS, ISIS2, ISIS3 and VICAR
+    #     (detached labels), ENVI, EHdr, GenBin, ERS, PAux, MFF, MFF2, RST, ILWIS, SAGA, ISCE, ROI_PAC;
+    #   a product directory (its files are the dataset): CEOS, SAR_CEOS, AirSAR, RS2, RCM, TSX, COSAR, SENTINEL2,
+    #     AIG, DOQ1, DOQ2, FAST, ESAT.
+    # Not in the class, by the same ruling: netCDF, HDF5, HFA, JP2OpenJPEG and GPKG.
+    bytes_refused_light_drivers: Tuple[str, ...] = ()
+    # `gbx_rst_gdal`'s allowlist: each `gdal raster` step a caller may name (its words, not GDAL's whole list), with the
+    # arguments it takes and the kind of value each takes (``GDAL_COMMAND_KINDS``). A step or an argument not here is
+    # refused. No argument here is on the deny list except `geometry`, which only takes a WKT polygon the engine writes
+    # again itself.
+    command_allow: Mapping[str, Mapping[str, str]] = MappingProxyType({})
+
+    @property
+    def command_crs_args(self) -> frozenset:
+        """The arguments of the allowed steps whose value is a CRS: each is rewritten through the canonical CRS
+        resolver, so a CRS value never names a file or a URL."""
+        return frozenset(
+            arg
+            for args in self.command_allow.values()
+            for arg, kind in args.items()
+            if kind == "crs"
+        )
+
+
+def _closed(raw: Mapping, keys: frozenset, what: str) -> None:
+    extra = sorted(set(raw) - keys)
+    if extra:
+        raise ValueError(f"gdal spec: unknown {what} key(s) {extra}")
+
+
+def _one_of(value, allowed: frozenset, what: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"gdal spec: {what} {value!r} is not one of {sorted(allowed)}")
+    return value
+
+
+def _parse_gdal_arg(raw: Mapping) -> GdalArg:
+    _closed(raw, GDAL_ARG_KEYS, "argument")
+    name = raw.get("arg")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"gdal spec: an argument needs a name ({dict(raw)})")
+    if ("const" in raw) == ("from" in raw):
+        raise ValueError(
+            f"gdal spec: argument {name!r} needs exactly one of const and from"
+        )
+    if "from" in raw:
+        _one_of(raw.get("type"), GDAL_BINDERS, f"binder of {name!r}")
+    kind = raw.get("type")
+    if (kind == "calc_formula") != isinstance(raw.get("formula"), str) or (
+        kind == "calc_named"
+    ) != (bool(raw.get("formulas")) and isinstance(raw.get("and"), str)):
+        raise ValueError(
+            f"gdal spec: argument {name!r}: calc_formula takes a formula, calc_named takes formulas and and, and "
+            "no other binder takes any of them"
+        )
+    return GdalArg(
+        arg=name,
+        const=raw.get("const"),
+        source=raw.get("from"),
+        type=raw.get("type"),
+        map=MappingProxyType(dict(raw.get("map", {}))),
+        null=_one_of(
+            raw.get("null", "null_result"), GDAL_NULL, f"null rule of {name!r}"
+        ),
+        with_=raw.get("with"),
+        bad=_one_of(raw.get("bad", "raise"), GDAL_BAD, f"bad rule of {name!r}"),
+        formula=raw.get("formula"),
+        formulas=MappingProxyType(
+            {
+                str(k): (str(v[0]), tuple(str(b) for b in v[1]))
+                for k, v in dict(raw.get("formulas", {})).items()
+            }
+        ),
+        and_=raw.get("and"),
+        when_empty=raw.get("when_empty"),
+    )
+
+
+def parse_gdal_spec(raw: Mapping) -> GdalSpec:
+    """A row's `gdal` block -> GdalSpec. Refuses any key or word outside the closed vocabulary, so a
+    mistyped key can never be read as absent."""
+    _closed(raw, GDAL_KEYS, "block")
+    out = raw.get("out") or {}
+    _closed(out, frozenset({"kind", "dtype", "fields", "stream"}), "out")
+    inputs = tuple(
+        (p, _one_of(k, GDAL_IN_KINDS, f"input kind of {p!r}"))
+        for p, k in (raw.get("in") or {}).items()
+    )
+    kind = _one_of(out.get("kind"), GDAL_OUT_KINDS, "output kind")
+    fields = tuple(
+        (
+            str(n),
+            _one_of(t, GDAL_FIELD_TYPES, f"field type of {n!r}"),
+            str(src),
+        )
+        for n, t, src in out.get("fields", ())
+    )
+    if (kind == "features") != bool(fields):
+        raise ValueError(
+            "gdal spec: a features output declares at least one field, and no other output declares any"
+        )
+    if bool(out.get("stream", False)) and kind != "features":
+        raise ValueError("gdal spec: only a features output can be streamed")
+    if (kind == "raster") != ("write" in raw):
+        raise ValueError(
+            "gdal spec: a raster output needs a write profile, and a features or JSON output has none"
+        )
+    return GdalSpec(
+        alg=str(raw.get("alg", "")),
+        inputs=inputs,
+        out_kind=kind,
+        out_dtype=str(out.get("dtype", "input")),
+        write=(
+            _one_of(raw["write"], GDAL_WRITE, "write profile")
+            if kind == "raster"
+            else ""
+        ),
+        args=tuple(_parse_gdal_arg(a) for a in raw.get("args", ())),
+        needs_crs=bool(raw.get("needs_crs", False)),
+        gdal_min=raw.get("gdal_min"),
+        in_read=(
+            _one_of(raw["in_read"], GDAL_IN_READS, "in_read")
+            if "in_read" in raw
+            else None
+        ),
+        same_crs=(
+            _one_of(raw["same_crs"], GDAL_SAME_CRS, "same_crs")
+            if "same_crs" in raw
+            else None
+        ),
+        out_fields=fields,
+        out_stream=bool(out.get("stream", False)),
+        per_band=bool(raw.get("per_band", False)),
+    )
+
+
+def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
+    if raw is None:
+        return None
+    _closed(
+        raw,
+        frozenset({"pin", "deny", "allow", "raster_drivers", "command_allow"}),
+        "section",
+    )
+    drivers = raw.get("raster_drivers", {})
+    _closed(
+        drivers,
+        frozenset({"allowed", "refused", "bytes", "bytes_refused_light"}),
+        "raster_drivers",
+    )
+    allowed = tuple(drivers.get("allowed", ()))
+    refused = tuple(drivers.get("refused", ()))
+    in_bytes = tuple(drivers.get("bytes", ()))
+    light_refused = tuple(drivers.get("bytes_refused_light", ()))
+    if not set(in_bytes) <= set(allowed) or len(set(in_bytes)) != len(in_bytes):
+        raise ValueError(
+            "gdal spec: the bytes drivers must be allowed drivers, free of repeats "
+            f"(not allowed: {sorted(set(in_bytes) - set(allowed))})"
+        )
+    if (
+        not set(light_refused) <= set(allowed)
+        or len(set(light_refused)) != len(light_refused)
+        or set(light_refused) & set(in_bytes)
+    ):
+        raise ValueError(
+            "gdal spec: the bytes_refused_light drivers must be allowed drivers, free of repeats, and none of "
+            f"the bytes drivers (not allowed: {sorted(set(light_refused) - set(allowed))})"
+        )
+    both = sorted(set(allowed) & set(refused))
+    if both or len(set(allowed)) != len(allowed) or len(set(refused)) != len(refused):
+        raise ValueError(
+            f"gdal spec: the raster driver lists must be disjoint and free of repeats (both: {both})"
+        )
+    return GdalSection(
+        pin=str(raw["pin"]),
+        deny=frozenset(raw.get("deny", ())),
+        allow=MappingProxyType(
+            {alg: tuple(args) for alg, args in raw.get("allow", {}).items()}
+        ),
+        allowed_drivers=allowed,
+        refused_drivers=refused,
+        bytes_drivers=in_bytes,
+        bytes_refused_light_drivers=light_refused,
+        command_allow=MappingProxyType(
+            {
+                step: MappingProxyType(
+                    {
+                        arg: _one_of(kind, GDAL_COMMAND_KINDS, f"kind of {step}/{arg}")
+                        for arg, kind in args.items()
+                    }
+                )
+                for step, args in raw.get("command_allow", {}).items()
+            }
+        ),
+    )
+
+
+SQL_FROM_L0 = "L0"  # the value of an L4 `sql` key that means "the body of the L0 spec"
+_HELPER_KEYS = frozenset({"name", "params", "returns", "sql", "summary"})
+
+
+def _check_sql_helpers(name: str, level: str, helpers) -> None:
+    seen = set()
+    for h in helpers:
+        extra = set(h) - _HELPER_KEYS
+        missing = {"name", "params", "returns", "sql"} - set(h)
+        if extra or missing:
+            raise ValueError(
+                f"{name} {level}.sql_helpers: unknown key(s) {sorted(extra)}, missing {sorted(missing)}"
+            )
+        hn = h["name"]
+        if not isinstance(hn, str) or not re.fullmatch(r"gbx__[a-z0-9_]+", hn):
+            raise ValueError(
+                f"{name} {level}.sql_helpers: helper name {hn!r} must be gbx__<name>"
+            )
+        if hn in seen:
+            raise ValueError(f"{name} {level}.sql_helpers: {hn} is declared twice")
+        seen.add(hn)
+        if not (isinstance(h["sql"], str) and h["sql"].strip()):
+            raise ValueError(f"{name} {level}.sql_helpers: {hn} has an empty body")
+
+
+def _check_shared_l0_signature(
+    name: str, params, returns_session: str, returns_uc
+) -> None:
+    """One L0 body serves the session and Unity Catalog only where both signatures are the same types."""
+    for p in params:
+        if not p.session:
+            raise ValueError(
+                f"{name}: parameter {p.name} has no session type, so its L0 and L4 signatures cannot be compared. "
+                f"Fix: give it a session type."
+            )
+    pairs = [(f"parameter {p.name}", p.session[0], p.uc) for p in params]
+    pairs.append(("the result", returns_session, returns_uc or ""))
+    differ = [
+        f"{what}: {sql_type(a)} in the session, {sql_type(b) or '-'} in UC"
+        for what, a, b in pairs
+        if sql_type(a).lower() != sql_type(b).lower()
+    ]
+    if differ:
+        raise ValueError(
+            f"{name}: L4 sql is {SQL_FROM_L0!r} (one body for the session and UC) but the types differ "
+            f"({'; '.join(differ)}). Fix: give L4 its own sql body."
+        )
+
+
+def _check_sql_param_case(name: str, params, levels: Mapping) -> None:
+    """A SQL body spells each parameter as declared: Spark identifiers are case-insensitive, the inliner's renaming is not.
+
+    A function body is read against the function's parameters, a helper body against the helper's own.
+    """
+    from databricks.labs.gbx.uc.sqlbody import case_mismatches
+
+    def check(where: str, body, names) -> None:
+        if not isinstance(body, str) or body == SQL_FROM_L0:
+            return
+        for declared, found in case_mismatches(body, names):
+            raise ValueError(
+                f"{name} {where}: parameter {declared!r} is spelled {found!r}. "
+                f"Fix: spell it {declared!r}; the SQL body is matched to parameters case-sensitively."
+            )
+
+    for level, spec in levels.items():
+        check(f"{level}.sql", spec.get("sql"), [p.name for p in params])
+        for h in spec.get("sql_helpers", ()):
+            check(
+                f"{level}.sql_helpers {h['name']}",
+                h.get("sql"),
+                [hp[0] for hp in h.get("params", ())],
+            )
+
+
+def _check_sql_levels(name: str, levels: Mapping, kind: str = "scalar") -> None:
+    """The rules of the SQL keys: a body is non-empty text; "L0" in L4 needs an L0 body (and no helpers of its own: they
+    live with the body); helpers need a body; a table function has no body of its own; only a scalar has a UC SQL body.
+    """
+    l0, l4 = levels.get("L0", {}), levels.get("L4", {})
+    for level, spec in (("L0", l0), ("L4", l4)):
+        if "sql_helpers" in spec and "sql" not in spec:
+            raise ValueError(f"{name} {level}: sql_helpers without sql")
+        if "sql" in spec and not (isinstance(spec["sql"], str) and spec["sql"].strip()):
+            raise ValueError(f"{name} {level}: sql must be non-empty text")
+        _check_sql_helpers(name, level, spec.get("sql_helpers", ()))
+    if l4.get("sql") == SQL_FROM_L0:
+        if "sql" not in l0:
+            raise ValueError(
+                f"{name}: L4 sql is {SQL_FROM_L0!r} but there is no L0 sql"
+            )
+        if "sql_helpers" in l4:
+            raise ValueError(
+                f"{name}: L4 sql is {SQL_FROM_L0!r}; its helpers belong to the L0 spec"
+            )
+    if "sql" in l4 and "tvf_over" in l4:
+        raise ValueError(
+            f"{name}: a table function (tvf_over) has no sql body of its own"
+        )
+    if "tvf_select" in l4:
+        if "tvf_over" not in l4:
+            raise ValueError(
+                f"{name}: tvf_select needs tvf_over (the rows it projects)"
+            )
+        if not (isinstance(l4["tvf_select"], str) and l4["tvf_select"].strip()):
+            raise ValueError(f"{name} L4: tvf_select must be non-empty text")
+    if "sql" in l4 and kind != "scalar":
+        raise ValueError(
+            f"{name}: an L4 sql body makes a scalar SQL function, and this row's kind is {kind}"
+        )
+
+
+@dataclass(frozen=True)
+class Helper:
+    """A top-level DataFrame helper (not a SQL function): where it lives, and how settled it is."""
+
+    name: str
+    module: str
+    status: str
+
+
+# eq=False keeps identity hashing: the level specs are mappings, which do not hash.
+@dataclass(frozen=True, eq=False)
+class Function:
+    sql_name: str
+    family: str
+    kind: str  # scalar | generator | aggregate
+    params: Tuple[Param, ...]
+    min_args: int
+    returns_session: str
+    returns_uc: Optional[str]
+    accepts_virtual_tile: bool
+    levels: Mapping[str, Mapping[str, Any]]
+    oracle: str
+    # A generator's output columns as (name, SQL type): what its UC table function RETURNS.
+    columns: Tuple[Tuple[str, str], ...] = ()
+    # The GDAL spec engine's spec for this row (its `gdal` block), when the row has one.
+    gdal: Optional[GdalSpec] = None
+    # A key of STATUSES.
+    status: str = "stable"
+    doc: Doc = Doc("")
+    python: Optional[PythonEntry] = None
+    since: str = ""
+    # The cid of the oracle row the generated doc-test example comes from.
+    example: Optional[str] = None
+    # A generator that reads a table argument (`TABLE(...) PARTITION BY`) instead of being joined laterally to a row.
+    table_input: Optional[TableInput] = None
+    # The Fix text of a row with no UC function (an L4 spec holding only `stub`): the row has no L4 level, so no UC
+    # surface; `gbx.uc.install(..., stubs=True)` makes a raising SQL function of it (scalars only).
+    stub: Optional[str] = None
+    # A generator that reads no input row: it is called as `SELECT * FROM fn(args)`, and the Python entry takes the
+    # arguments alone (no DataFrame). Its arguments are constants.
+    source: bool = False
+
+    @property
+    def max_args(self) -> int:
+        return len(self.params)
+
+    @property
+    def surfaces(self) -> Tuple[str, ...]:
+        """Where this name exists: session SQL always (every function has a light level), UC SQL with an L4
+        level, Python with a Python entry, Scala where a Catalyst companion (and its Scala wrapper) is kept.
+        """
+        out = ["session"]
+        if "L4" in self.levels:
+            out.append("uc")
+        if self.python is not None:
+            out.append("python")
+        if "companion" in self.levels.get("L1", {}):
+            out.append("scala")
+        return tuple(out)
+
+
+def usage_args(fn: "Function") -> str:
+    """The DESCRIBE / docs argument list: optional parameters in brackets (Style B)."""
+    return ", ".join(
+        p.name if i < fn.min_args else f"[{p.name}]" for i, p in enumerate(fn.params)
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class Manifest:
+    functions: Mapping[str, Function]
+    uc_dependencies: Mapping[str, str]
+    level_table_version: str
+    helpers: Tuple[Helper, ...] = ()
+    gdal: Optional[GdalSection] = None
+    datasources: Tuple[DataSource, ...] = ()
+    private: Mapping[str, PrivateRoutine] = MappingProxyType({})
+    # The names a UC handler imports that its ENVIRONMENT does not pin: "vendored" (the env wheel serves its own build
+    # from _vendor, which shadows a PyPI copy) or "base" (the env 6 sandbox preinstalls it). uc_dependencies pins the rest.
+    uc_provided: Mapping[str, str] = MappingProxyType({})
+
+
+UC_PROVIDED_KINDS = ("vendored", "base")
+
+
+def _check_uc_deps(raw: Mapping) -> None:
+    """Every name a UC handler or private routine declares is pinned (uc_dependencies) or provided (uc_provided), never
+    both, and a provided name is vendored or in the base."""
+    pinned, provided = set(raw["uc_dependencies"]), dict(raw.get("uc_provided", {}))
+    bad_kind = sorted(n for n, k in provided.items() if k not in UC_PROVIDED_KINDS)
+    if bad_kind:
+        raise ValueError(
+            f"uc_provided {bad_kind}: the kind must be one of {UC_PROVIDED_KINDS}"
+        )
+    if pinned & set(provided):
+        raise ValueError(
+            f"{sorted(pinned & set(provided))} are both pinned (uc_dependencies) and uc_provided"
+        )
+    declared = [
+        (r["sql_name"], d)
+        for r in raw["functions"]
+        for d in r["levels"].get("L4", {}).get("deps", ())
+    ] + [(r["name"], d) for r in raw.get("uc_private", []) for d in r["deps"]]
+    unknown = sorted(
+        {f"{n}: {d}" for n, d in declared if d not in pinned and d not in provided}
+    )
+    if unknown:
+        raise ValueError(
+            f"UC deps neither pinned (uc_dependencies) nor provided (uc_provided): {unknown}"
+        )
+
+
+def sql_type(t: str) -> str:
+    """Symbolic manifest type -> SQL type text."""
+    if t == "ARRAY<TILE>":
+        return f"array<{TILE_SQL}>"
+    if (
+        t == "STRUCT"
+    ):  # a struct of any fields (a feature's attributes): NULL casts to the empty struct
+        return "struct<>"
+    return TILE_SQL if t == "TILE" else t
+
+
+def _freeze(obj: Any) -> Any:
+    """Deep read-only copy: dict -> mappingproxy, list -> tuple."""
+    if isinstance(obj, dict):
+        return MappingProxyType({k: _freeze(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return tuple(_freeze(v) for v in obj)
+    return obj
+
+
+@functools.lru_cache(maxsize=1)
+def load() -> Manifest:
+    return parse(json.loads((Path(__file__).with_name("functions.json")).read_text()))
+
+
+def parse(raw: Mapping) -> Manifest:
+    """The manifest a ``functions.json`` document describes (``load`` reads the packaged one; a test parses a changed copy)."""
+    if raw.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"functions.json schema_version {raw.get('schema_version')!r}, expected {SCHEMA_VERSION}"
+        )
+    _check_uc_deps(raw)
+    fns = {}
+    for r in raw["functions"]:
+        params = tuple(
+            Param(
+                p["name"],
+                tuple(p["session"]),
+                p.get("uc", ""),
+                p.get("default"),
+                bool(p.get("uc_crs")),
+                p.get("doc", ""),
+                p.get("py", "col"),
+                tuple(p.get("choices", ())),
+                bool(p.get("str_only")),
+            )
+            for p in r["params"]
+        )
+        py = r.get("python", "derive")
+        short = r["sql_name"][len("gbx_") :]
+        if py is None:  # a probe row: no Python entry
+            python = None
+        elif py == "derive":
+            python = PythonEntry(short, package_of(r["sql_name"]))
+        else:
+            python = PythonEntry(
+                py.get("name", short),
+                py.get("module", package_of(r["sql_name"])),
+                py.get("extras"),
+                py.get("extra_impl"),
+                py.get("extra_factory_args"),
+            )
+        doc = r.get("doc", {})
+        levels_raw = r["levels"]
+        stub = None
+        if "stub" in levels_raw.get("L4", {}):
+            l4_raw = levels_raw["L4"]
+            if set(l4_raw) != {"stub"} or not (
+                isinstance(l4_raw["stub"], str) and l4_raw["stub"].strip()
+            ):
+                raise ValueError(
+                    f"{r['sql_name']}: an L4 stub is the Fix text alone (a row with a UC function has no stub)"
+                )
+            stub = l4_raw["stub"]
+            levels_raw = {k: v for k, v in levels_raw.items() if k != "L4"}
+        _check_sql_levels(r["sql_name"], levels_raw, r["kind"])
+        _check_sql_param_case(r["sql_name"], params, levels_raw)
+        if levels_raw.get("L4", {}).get("sql") == SQL_FROM_L0:
+            _check_shared_l0_signature(
+                r["sql_name"],
+                params,
+                r["returns"]["session"],
+                r["returns"].get("uc"),
+            )
+        fns[r["sql_name"]] = Function(
+            r["sql_name"],
+            r["family"],
+            r["kind"],
+            params,
+            int(r["min_args"]),
+            r["returns"]["session"],
+            r["returns"].get("uc"),
+            bool(r.get("accepts_virtual_tile")),
+            _freeze(levels_raw),
+            r["oracle"],
+            tuple((c[0], c[1]) for c in r.get("columns", [])),
+            parse_gdal_spec(r["gdal"]) if "gdal" in r else None,
+            r.get("status", "stable"),
+            Doc(doc.get("summary", ""), doc.get("returns", ""), doc.get("page", "")),
+            python,
+            r.get("since", ""),
+            r.get("example"),
+            (
+                TableInput(
+                    tuple((c[0], c[1]) for c in r["table_input"]["columns"]),
+                    tuple(r["table_input"]["partition_by"]),
+                )
+                if r.get("table_input")
+                else None
+            ),
+            stub,
+            bool(r.get("source")),
+        )
+        if fns[r["sql_name"]].source and (
+            r["kind"] != "generator" or r.get("table_input")
+        ):
+            raise ValueError(
+                f"{r['sql_name']}: source applies to a generator with no table_input"
+            )
+    return Manifest(
+        MappingProxyType(fns),
+        MappingProxyType(dict(raw["uc_dependencies"])),
+        raw["level_table_version"],
+        tuple(
+            Helper(h["name"], h["module"], h["status"]) for h in raw.get("helpers", [])
+        ),
+        _parse_gdal_section(raw.get("gdal")),
+        tuple(
+            DataSource(
+                d["name"],
+                d["kind"],
+                d["impl"],
+                d["ref"],
+                d["page"],
+                d["since"],
+                d.get("status", "stable"),
+            )
+            for d in raw.get("datasources", [])
+        ),
+        MappingProxyType(
+            {
+                r["name"]: PrivateRoutine(
+                    r["name"],
+                    r["handler"],
+                    tuple(r["deps"]),
+                    tuple((p[0], p[1]) for p in r["params"]),
+                    r["returns"],
+                    r["summary"],
+                )
+                for r in raw.get("uc_private", [])
+            }
+        ),
+        MappingProxyType(dict(raw.get("uc_provided", {}))),
+    )
+
+
+def datasource_classes() -> Tuple[type, ...]:
+    """The DataSource classes of the manifest's ``impl: python`` rows, in manifest order (each row's ``ref``)."""
+    return tuple(resolve_ref(d.ref) for d in load().datasources if d.impl == "python")
+
+
+def resolve_ref(ref: str) -> Any:
+    """'pkg.module:attr' -> the object (imports the module)."""
+    mod, _, attr = ref.partition(":")
+    return getattr(importlib.import_module(mod), attr)

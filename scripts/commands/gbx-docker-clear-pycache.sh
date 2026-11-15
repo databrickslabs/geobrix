@@ -17,7 +17,7 @@ show_help() {
     cat << EOF
 $(print_banner "🧹 GeoBrix: Clear Python Cache")
 
-Clear Python bytecode cache in geobrix-dev Docker container
+Clear Python bytecode cache in the dev Docker container
 
 USAGE:
     bash scripts/commands/gbx-docker-clear-pycache.sh [OPTIONS]
@@ -94,8 +94,8 @@ print_banner "🧹 GeoBrix: Clear Python Cache"
 check_docker
 
 # Check if container is running
-if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
-    echo -e "${RED}❌ Container 'geobrix-dev' is not running${NC}"
+if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+    echo -e "${RED}❌ Container '$GBX_DEV_CONTAINER' is not running${NC}"
     echo -e "${YELLOW}   Start with: gbx:docker:start${NC}"
     exit 1
 fi
@@ -116,34 +116,34 @@ fi
 # Clear cache from docs/tests/python
 echo -e "${CYAN}📂 Clearing cache in docs/tests/python/...${NC}"
 if [ "$VERBOSE" = true ]; then
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type f -name '*.pyc' $FIND_FLAGS"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type d -name '__pycache__' $FIND_FLAGS"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type d -name '.pytest_cache' $FIND_FLAGS"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type f -name '*.pyc' $FIND_FLAGS"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type d -name '__pycache__' $FIND_FLAGS"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type d -name '.pytest_cache' $FIND_FLAGS"
     
     # Now delete them
     echo -e "${YELLOW}   Deleting files...${NC}"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type f -name '*.pyc' -delete"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type f -name '*.pyc' -delete"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true"
 else
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type f -name '*.pyc' -delete 2>/dev/null || true"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find docs/tests/python -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type f -name '*.pyc' -delete 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find docs/tests/python -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true"
 fi
 
 # Clear cache from python/geobrix
 echo -e "${CYAN}📂 Clearing cache in python/geobrix/...${NC}"
 if [ "$VERBOSE" = true ]; then
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find python/geobrix -type f -name '*.pyc' $FIND_FLAGS"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find python/geobrix -type d -name '__pycache__' $FIND_FLAGS"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find python/geobrix -type f -name '*.pyc' $FIND_FLAGS"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find python/geobrix -type d -name '__pycache__' $FIND_FLAGS"
     
     # Now delete them
     echo -e "${YELLOW}   Deleting files...${NC}"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find python/geobrix -type f -name '*.pyc' -delete"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find python/geobrix -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find python/geobrix -type f -name '*.pyc' -delete"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find python/geobrix -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
 else
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find python/geobrix -type f -name '*.pyc' -delete 2>/dev/null || true"
-    docker exec geobrix-dev bash -c "cd /root/geobrix && find python/geobrix -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find python/geobrix -type f -name '*.pyc' -delete 2>/dev/null || true"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "cd /root/geobrix && find python/geobrix -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true"
 fi
 
 print_separator

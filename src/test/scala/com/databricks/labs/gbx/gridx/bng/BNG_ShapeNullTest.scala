@@ -41,4 +41,26 @@ class BNG_ShapeNullTest extends AnyFunSuite {
     test("Tessellate still RAISES for an unsupported resolution (parameter)") {
         assertThrows[Exception](BNG_Tessellate.eval(u("POLYGON ((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))"), u("bogus-res"), true))
     }
+
+    // a coverage, like a mode or a resolution, is an argument: a bad one raises and names the value, never a NULL result
+    private val POLY = "POLYGON ((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))"
+    private val BOGUS = u("sideways")
+    private val MODE = u("boundary-out")
+    private def polyWkb = com.databricks.labs.gbx.vectorx.jts.JTS.toWKB(com.databricks.labs.gbx.vectorx.jts.JTS.fromWKT(POLY))
+
+    test("GeometryKRing RAISES for an unknown coverage, naming it (parameter)") {
+        val e = intercept[IllegalArgumentException](BNG_GeometryKRing.eval(u(POLY), 3, 1, MODE, BOGUS))
+        assert(e.getMessage.contains("sideways"))
+        val eb = intercept[IllegalArgumentException](BNG_GeometryKRing.eval(polyWkb, 3, 1, MODE, BOGUS))
+        assert(eb.getMessage.contains("sideways"))
+    }
+    test("GeometryKLoop RAISES for an unknown coverage, naming it (parameter)") {
+        val e = intercept[IllegalArgumentException](BNG_GeometryKLoop.eval(u(POLY), 3, 1, MODE, BOGUS))
+        assert(e.getMessage.contains("sideways"))
+        val eb = intercept[IllegalArgumentException](BNG_GeometryKLoop.eval(polyWkb, 3, 1, MODE, BOGUS))
+        assert(eb.getMessage.contains("sideways"))
+    }
+    test("Tessellate RAISES for a resolution BNG does not define, as an INT too (parameter)") {
+        assertThrows[IllegalStateException](BNG_Tessellate.eval(u(POLY), 9, true))
+    }
 }

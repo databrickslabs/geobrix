@@ -1,6 +1,6 @@
 package tests.docs.scala.advanced
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_GeoReference}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -30,18 +30,6 @@ class OverviewDocTest extends AnyFunSuite with BeforeAndAfterAll {
     override def afterAll(): Unit = {
         if (testDataset != null) testDataset.delete()
         super.afterAll()
-    }
-
-    test("RST_GeoReference execute method") {
-        val geoRef = RST_GeoReference.execute(testDataset)
-
-        geoRef should not be null
-        geoRef should contain key "scaleX"
-        geoRef should contain key "scaleY"
-        geoRef should contain key "upperLeftX"
-        geoRef should contain key "upperLeftY"
-        geoRef should contain key "skewX"
-        geoRef should contain key "skewY"
     }
 
     test("RST_BoundingBox execute method (OverviewExamples.EXECUTE_METHODS_EXAMPLE)") {

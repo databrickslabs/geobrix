@@ -27,9 +27,11 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      CI phase skips it (otherwise its module-level light imports -- e.g.
      ``from pmtiles.reader import ...`` / ``import pandas`` -- raise
      ``ModuleNotFoundError`` at collection and fail the heavy build).
-  2. Add the new light test dir to the explicit pytest dir list in the LIGHT CI
-     phase (``.github/actions/pyrx_build/action.yml``), so it is actually RUN.
+  2. Add the new light test dir to ONE shard of the ``light`` job in
+     ``.github/workflows/build_main.yml`` (and to the unsharded fallback line of
+     ``.github/actions/pyrx_build/action.yml``), so it is actually RUN.
      The light tier is exercised ONLY in the light phase; the heavy phase skips it.
+     scripts/ci/test_ci_light_shards.py fails when a test file runs in no shard or in two.
   3. Add the new light test dir to the explicit ``--ignore`` list in the HEAVY CI
      phase (``.github/actions/python_build/action.yml``, ``LIGHT_IGNORES``). That
      list MUST stay identical to ``_LIGHT_TEST_DIRS``. The collect_ignore fallback
@@ -38,19 +40,30 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      even if the heavy env drifts (gains rasterio) or a caller targets a light dir
      directly.
 Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, earthdata, vizx,
-sample, models, plus bench + ds + core (the tier-neutral gbx.core.crs resolver
-imports rasterio, so test/core is light-tier too).
+sample, models, zarr, manager (contracts generated from the per-surface function
+manifest, plus the oracle tables), engine (the GDAL spec engine), drivers_extended (the extended driver tests), plus bench + ds + core (the tier-neutral
+gbx.core.crs resolver imports rasterio, so test/core is light-tier too).
 
 ``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
-bench harness) and satisfies all three conditions: (1) it is in ``_LIGHT_TEST_DIRS``
-below; (2) it RUNS in the light phase -- listed in the pyrx_build action pytest dir
-list; (3) it is skipped in the heavy phase -- present in the heavy action's
-``LIGHT_IGNORES`` (--ignore=test/bench). Its unit tests guard the light bench FnSpec
-registry and the cross-tier coverage/count invariants (previously CI ran none of
-test/bench, so bench-spec drift went uncaught).
+bench harness) and meets all three: it is in ``_LIGHT_TEST_DIRS`` below, in the light
+run list, and in the heavy ``LIGHT_IGNORES``. Its unit tests guard the light bench
+FnSpec registry and the cross-tier coverage/count invariants.
+
+The light phase runs every light dir in ONE pytest process, so process-global state
+a test leaves behind (env vars, registries, GDAL/PROJ search paths) reaches the dirs
+after it. A test that changes such state must restore it (see the ``_isolate`` /
+``_isolate_gdal_env`` fixtures in test/pyvx, test/pyrx and test/ds).
 """
 
+import functools
 import importlib.util
+import os
+import re
+import shlex
+import zlib
+from pathlib import Path
+
+import pytest
 
 # Every test dir whose modules import light-tier-only deps. Ignored in the
 # heavyweight CI env (no rasterio); collected + run in the light env.
@@ -67,8 +80,344 @@ _LIGHT_TEST_DIRS = [
     "vizx",
     "sample",
     "models",
+    "zarr",
+    "manager",
+    "engine",
+    "drivers_extended",
 ]
 
 # Skip the light-tier suites when their dependencies are not installed.
 if importlib.util.find_spec("rasterio") is None:
     collect_ignore = list(_LIGHT_TEST_DIRS)
+
+# On Databricks the session is the platform's: the `spark` fixtures of every dir get it instead of starting a local one
+# (test/_provided_spark.py). Off Databricks nothing changes.
+from test._provided_spark import install as _use_provided_spark  # noqa: E402
+
+_use_provided_spark()
+
+# Local Spark workers run the interpreter the tests run under, not whatever `python3` is first on PATH.
+from test._spark_python import pin as _pin_spark_python  # noqa: E402
+
+_pin_spark_python()
+
+# The driver policy before any rasterio import. Importing the package serves the env wheel's payload and sets the
+# policy's registration-time part (databricks/labs/gbx/__init__.py), so every session that collects a light dir has
+# them before a test module imports rasterio. A rasterio imported first is the PyPI one (another GDAL: partial mode),
+# and the policy rows would skip; the meta-row in test/engine/test_driver_policy.py fails if that happens where the
+# payload is present.
+if importlib.util.find_spec("rasterio") is not None:
+    import databricks.labs.gbx  # noqa: E402,F401
+
+
+# ---------------------------------------------------------------------------
+# Local Delta Lake for test/zarr (the transactional manifest is a Delta table).
+#
+# PySpark applies spark.jars only when it LAUNCHES the JVM, so the OSS delta-spark jars
+# must be on PYSPARK_SUBMIT_ARGS before the first SparkSession in the process. The light
+# phase runs every light dir in ONE process and several dirs start a plain session, so
+# the spark_delta fixture cannot add the jars later. They are added here instead, at the
+# end of collection and only if test/zarr tests were collected: the heavy phase ignores
+# test/zarr, so it never sees them.
+#
+#   * only when both jars exist locally -- nothing is downloaded here. gbx:test:python
+#     and the light CI action fetch them with scripts/ci/fetch-delta-test-jars.sh;
+#   * never overrides a PYSPARK_SUBMIT_ARGS the caller already set.
+#
+# Without the jars the spark_delta fixture fails loudly (see test/zarr/conftest.py).
+# ---------------------------------------------------------------------------
+# Keep in step with DELTA_VERSION in scripts/ci/fetch-delta-test-jars.sh.
+_DELTA_VERSION = "4.0.1"  # Delta 4.0.x runs on Spark 4.0.x
+
+
+def _delta_jars():
+    """delta-spark + delta-storage jars from the first Maven repo holding both, else []."""
+    v = _DELTA_VERSION
+    repos = [
+        os.environ.get("GBX_M2_REPO"),
+        # the repo checkout's persistent Maven cache (mounted at /root/geobrix in Docker)
+        Path(__file__).resolve().parents[3] / "scripts" / "docker" / "m2",
+        Path.home() / ".m2" / "repository",  # CI runners
+    ]
+    for repo in filter(None, repos):
+        jars = [
+            Path(repo) / "io/delta/delta-spark_2.13" / v / f"delta-spark_2.13-{v}.jar",
+            Path(repo) / "io/delta/delta-storage" / v / f"delta-storage-{v}.jar",
+        ]
+        if all(j.is_file() for j in jars):
+            return jars
+    return []
+
+
+def pytest_collection_finish(session):
+    """Put the Delta jars on PYSPARK_SUBMIT_ARGS when a test will run on a Delta session.
+
+    That is every test/zarr test, and any other test marked ``delta``.
+    """
+    if "PYSPARK_SUBMIT_ARGS" in os.environ:
+        return
+    zarr_dir = Path(__file__).resolve().parent / "zarr"
+    if not any(
+        zarr_dir in Path(item.path).resolve().parents
+        or item.get_closest_marker("delta")
+        for item in session.items
+    ):
+        return
+    jars = _delta_jars()
+    if jars:
+        # --driver-class-path, not --jars: --jars sets spark.jars, which the pyrx
+        # "no GeoBrix JAR in the session" guardrail (and the pyvx parity JAR check)
+        # read. Local mode runs the executors in the driver JVM, so the driver
+        # classpath is enough. PySpark shlex-splits this string, so quote the paths.
+        classpath = shlex.quote(os.pathsep.join(map(str, jars)))
+        os.environ["PYSPARK_SUBMIT_ARGS"] = (
+            f"--driver-class-path {classpath} pyspark-shell"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Local Spark Connect: the plan shapes a Connect client sends, with no cluster.
+#
+# `SparkSession.builder.remote("local[2]")` starts a Connect server inside a regular local
+# PySpark session of THIS process and returns a Connect client for it. Two consequences:
+#
+#   * the process cannot already hold a classic SparkContext (PySpark raises
+#     SESSION_ALREADY_EXIST), so the fixture skips when one is active; and
+#   * while the session lives, SparkSession.builder.getOrCreate() hands out Connect
+#     sessions (SPARK_CONNECT_MODE_ENABLED), so classic tests must not run after it. The
+#     tests that use the fixture are therefore ordered LAST in a run.
+#
+# The tests that use the fixture are marked `connect` (pytest_collection_modifyitems below), and
+# gbx:test:pyrx / gbx:test:light run them in a second pytest process by themselves:
+#   gbx:test:pyrx --path python/geobrix/test/test_spark_connect_local.py
+# The client deps are opt-in: gbx:venv:sync --connect (the CI lock does not carry them).
+# ---------------------------------------------------------------------------
+def _importable(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ImportError:
+        return False
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Keep the outcome of each GDAL driver-policy row on the item (``gbx_policy_outcome``, and a skip's reason in
+    ``gbx_policy_skip_reason``) for the meta-row."""
+    outcome = yield
+    rep = outcome.get_result()
+    if "gdal_policy" in item.keywords and (
+        rep.when == "call" or (rep.when == "setup" and rep.skipped)
+    ):
+        item.gbx_policy_outcome = rep.outcome
+        if rep.skipped and isinstance(
+            rep.longrepr, tuple
+        ):  # (path, line, "Skipped: <reason>")
+            item.gbx_policy_skip_reason = str(rep.longrepr[2])
+
+
+def shard_of(relpath, n):
+    """The shard (0..n-1) a test file belongs to when a run is split n ways: a stable hash of its path from
+    python/geobrix ('test/pyrx/test_x.py'). CI's guard (scripts/ci/test_ci_light_shards.py) reads this function.
+    """
+    return zlib.crc32(relpath.encode()) % n
+
+
+def _split_run(config, items):
+    """GBX_SHARD=<i>/<n>: keep only the test files that belong to part i of n (every file to exactly one part, so
+    the n parts together are the whole run). Whole files, never single tests, so a module's fixtures and state stay
+    in one process. CI splits its longest light dirs this way; unset, nothing changes.
+    """
+    spec = os.environ.get("GBX_SHARD")
+    if not spec:
+        return
+    i, n = (int(x) for x in spec.split("/"))
+    assert 0 <= i < n, f"GBX_SHARD={spec}: want <i>/<n> with 0 <= i < n"
+    root = Path(__file__).resolve().parent
+    keep, dropped = [], []
+    for item in items:
+        rel = "test/" + Path(item.path).resolve().relative_to(root).as_posix()
+        (keep if shard_of(rel, n) == i else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = keep
+
+
+# A test file that imports netCDF4 and writes with it leaves the process with GDAL's HDF5Image driver identifying
+# netCDF-4 bytes from memory ahead of the netCDF driver: a netCDF raster the same process reads afterwards from bytes
+# opens without its georeference (the manager's `bytes_class_netcdf_translated` rows fail). The driver order cannot
+# be put back from a fixture, so those files run after every other test of the process.
+_IMPORTS_NETCDF4 = re.compile(r"^[ \t]*(?:import netCDF4|from netCDF4 import)\b", re.M)
+
+
+@functools.lru_cache(maxsize=None)
+def _uses_netcdf4(path):
+    """Whether the test file at ``path`` imports netCDF4 (top level or inside a test)."""
+    return bool(_IMPORTS_NETCDF4.search(Path(path).read_text()))
+
+
+def _collection_rank(item):
+    """Where a test runs in the process: 0 the rest, 1 the netCDF4 files, 2 the policy meta-row (after the policy
+    rows), 3 the local-Connect rows (a classic session must not follow them)."""
+    if "spark_connect_local" in getattr(item, "fixturenames", ()):
+        return 3
+    if "policy_meta" in item.keywords:
+        return 2
+    return 1 if _uses_netcdf4(item.path) else 0
+
+
+def pytest_collection_modifyitems(config, items):
+    """Mark the tests that use the local Connect session `connect`, and order the process (stable for the rest).
+
+    The marker is what lets gbx:test:pyrx / gbx:test:light run them in a pytest process of their own and
+    gbx:test:parity leave them out (the container has no gRPC client): no test carries it by hand. The policy meta-row
+    (marker `policy_meta`) runs after the policy rows and before the Connect rows, so it sees their outcomes. The
+    netCDF4 files run last of the rest (see `_IMPORTS_NETCDF4`).
+    """
+    _split_run(config, items)
+    for item in items:
+        if "spark_connect_local" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.connect)
+
+    items.sort(key=_collection_rank)
+
+
+@pytest.fixture
+def volume_like_tmp(tmp_path, monkeypatch):
+    """``tmp_path`` as it is under the Serverless test runner, where it is on the run's Volume folder: a GDAL write
+    there (rasterio or pyogrio) is refused, as a Volume refuses an update in place. A test input is built with
+    ``test._volume_safe`` (on local disk, then copied over in one pass) and passes."""
+    import rasterio
+
+    root = str(tmp_path)
+    real_open = rasterio.open
+
+    def _refuse(fp):
+        try:
+            path = os.fspath(fp)
+        except TypeError:
+            return
+        if str(path).startswith(root):
+            raise rasterio.errors.RasterioIOError(
+                f"Volume-like tmp_path: GDAL cannot write {path} in place"
+            )
+
+    def guarded_open(fp, mode="r", *a, **k):
+        if mode != "r":
+            _refuse(fp)
+        return real_open(fp, mode, *a, **k)
+
+    monkeypatch.setattr(rasterio, "open", guarded_open)
+    if _importable("pyogrio"):
+        import pyogrio
+        import pyogrio.raw
+
+        for mod, name in (
+            (pyogrio, "write_dataframe"),
+            (pyogrio, "write_arrow"),
+            (pyogrio.raw, "write"),
+            (pyogrio.raw, "write_arrow"),
+        ):
+            real = getattr(mod, name, None)
+            if real is None:
+                continue
+
+            def guarded(df, path, *a, _real=real, **k):
+                _refuse(path)
+                return _real(df, path, *a, **k)
+
+            monkeypatch.setattr(mod, name, guarded)
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _no_path_recorded_missing():
+    """Each test starts with no path recorded missing: ``core._retry`` tries a path once for a minute after its retries
+    ran out on it, and tests reuse paths (``/tmp/gbx_v1.tif``), so one test's missing file would cut another's retries.
+    """
+    from databricks.labs.gbx.core import _retry
+
+    _retry._MISSING.clear()
+
+
+@pytest.fixture
+def no_backoff_sleep(monkeypatch):
+    """The retry back-offs of the code under test without the waiting.
+
+    ``core._retry`` (the FUSE transient-miss retry: linear back-off, 10 attempts, ~22 s on a file
+    that is not there) and tenacity (the STAC search retry: exponential from 4 s) sleep with
+    ``time.sleep`` for real. The tests need the retries, not the wait; only the modules' own
+    ``time`` is replaced, so no other sleep changes. Use it with
+    ``pytestmark = pytest.mark.usefixtures("no_backoff_sleep")``.
+    """
+    import types
+
+    from databricks.labs.gbx.core import _retry
+
+    quick = types.SimpleNamespace(sleep=lambda seconds: None)
+    monkeypatch.setattr(_retry, "time", quick)
+    if _importable("tenacity"):
+        import tenacity.nap
+
+        monkeypatch.setattr(tenacity.nap, "time", quick)
+
+
+@pytest.fixture
+def named_raster_reads(monkeypatch):
+    """The paths of the rasters read by name while the test runs (a list, filled as they open).
+
+    GeoBrix reads a raster through the driver policy (``_gdal_policy.open_data``). In its full mode that ends in
+    ``rasterio.open``; in its partial mode (a PyPI rasterio: CI's light phase, the dev image) it ends in rasterio's
+    ``DatasetReader`` with the allowed drivers, so a spy on ``rasterio.open`` alone sees no read there. This counts
+    the restricted open both modes share, and a read-mode ``rasterio.open`` made outside it (the policy switched
+    off), once each. A write is not a read, and an open of bytes (a ``MemoryFile``) is not an open by name: neither
+    is counted, so a test may write its fixture rasters after asking for this.
+    """
+    import threading
+
+    import rasterio
+
+    from databricks.labs.gbx import _gdal_policy
+
+    calls, inside = [], threading.local()
+    real_restricted, real_open = _gdal_policy._open_restricted, rasterio.open
+
+    def _record(fp):
+        if isinstance(fp, (str, os.PathLike)):
+            calls.append(os.fspath(fp))
+
+    def restricted(fp, *args, **kwargs):
+        _record(fp)
+        inside.depth = getattr(inside, "depth", 0) + 1
+        try:
+            return real_restricted(fp, *args, **kwargs)
+        finally:
+            inside.depth -= 1
+
+    def opened(fp, mode="r", *args, **kwargs):
+        if not getattr(inside, "depth", 0) and str(mode).startswith("r"):
+            _record(fp)
+        return real_open(fp, mode, *args, **kwargs)
+
+    monkeypatch.setattr(_gdal_policy, "_open_restricted", restricted)
+    monkeypatch.setattr(rasterio, "open", opened)
+    return calls
+
+
+@pytest.fixture(scope="session")
+def spark_connect_local():
+    """A local Spark Connect session (`remote("local[2]")`), started once per session."""
+    missing = [m for m in ("grpc", "grpc_status", "google.rpc") if not _importable(m)]
+    if missing:
+        pytest.skip(
+            f"Spark Connect client deps missing ({', '.join(missing)}): run gbx:venv:sync --connect"
+        )
+    from pyspark import SparkContext
+    from pyspark.sql import SparkSession
+
+    if SparkContext._active_spark_context is not None:
+        pytest.skip(
+            "a classic SparkContext is already active in this process; run the Connect tests alone"
+        )
+    spark = SparkSession.builder.remote("local[2]").getOrCreate()
+    yield spark
+    spark.stop()  # also stops the local server and clears the Connect-mode environment

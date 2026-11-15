@@ -1,6 +1,6 @@
 """Tests for lidar_gbx DataSource — metadata mode (header-only, one row per file).
 
-Task 2 of the v0.5.2 LiDAR feature: LAS/LAZ header scanning without reading points.
+LAS/LAZ header scanning without reading points.
 """
 
 import numpy as np

@@ -8,6 +8,7 @@ decoded size (w*h*bands*itemsize), never encoded bytes.
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 from dataclasses import dataclass
@@ -27,6 +28,15 @@ _MIB = 1024 * 1024
 # typical instances — very large tiles carry a ~10x encode-peak multiplier, so small
 # classic executors may need a smaller sizeInMB override.
 _BUDGETS = {"serverless": 64 * _MIB, "classic": 1536 * _MIB, "none": 0}
+# A Unity Catalog function decodes a tile within the Serverless worker's cap whatever the compute: the sandbox's own
+# memory is not published, and 64 MiB is what a Serverless task has been measured to hold. One value for every UC tile
+# function (uc.tier_b); a tile decoded over it is refused with a Fix, never truncated.
+UC_DECODED_CAP = _BUDGETS["serverless"]
+# The Unity Catalog functions that read a tile in windows (gbx_rst_retile, gbx_rst_maketiles, gbx_rst_tooverlappingtiles)
+# decode it up to this size: they hold one window, never the whole raster. Measured on Serverless and a SQL warehouse: a
+# retile of 16, 64 and 256 MiB decoded passes. A function that decodes a whole tile or a whole band (avg, clip,
+# separatebands) keeps UC_DECODED_CAP; a window is held to UC_DECODED_CAP too (uc.forms).
+UC_WINDOWED_DECODED_CAP = 256 * _MIB
 _MAX_TILES = 512
 
 # cgroup memory-limit paths (worker-safe: readable from any Spark task on Linux)
@@ -70,12 +80,17 @@ def _cgroup_task_limit_bytes() -> Optional[int]:
     return None
 
 
+# The environment keys a classic cluster sets and Serverless does not. Tests that fake a compute kind read
+# these names from here, so the names stay in this one file.
+CLASSIC_MEMORY_ENV = ("SPARK_WORKER_MEMORY", "SPARK_EXECUTOR_MEMORY")
+
+
 def runtime_kind() -> str:
     """Driver-side runtime probe (NO Spark API). Defaults to 'serverless' (safe)."""
     if os.environ.get("IS_SERVERLESS", "").lower() in ("true", "1"):
         return "serverless"
     # Classic clusters expose an executor/worker memory env; Serverless does not.
-    if os.environ.get("SPARK_WORKER_MEMORY") or os.environ.get("SPARK_EXECUTOR_MEMORY"):
+    if any(os.environ.get(k) for k in CLASSIC_MEMORY_ENV):
         return "classic"
     return "serverless"
 
@@ -91,6 +106,12 @@ def resolve_strategy(strategy: str) -> str:
     return s
 
 
+# The session key of the read cap: the decoded size, in bytes, a materialized tile may have where a function reads its
+# bytes (the JVM's RasterDriver.readFromBytes and the light _serde.open_tile). It lives here, not in ds, so the heavy
+# tier's registrar can name it without importing the light readers (rasterio).
+READ_CAP_KEY = "spark.databricks.labs.gbx.read_cap"
+
+
 def decoded_budget_bytes(strategy: str) -> int:
     s = resolve_strategy(strategy)
     if s == "serverless":
@@ -99,6 +120,194 @@ def decoded_budget_bytes(strategy: str) -> int:
             return max(int(limit * 0.15), 32 * _MIB)
         return _BUDGETS["serverless"]
     return _BUDGETS[s]
+
+
+# A Zarr read cuts its work into units (one task each). The decoded budget above is the most a task may hold, not
+# the size to cut by: on a classic cluster (1536 MiB) it put a 1 GB read in one task and a 10 GB read in seven. A
+# unit is cut to this decoded size instead, and to no more than the budget. MEASURED locally on a 100 MB county
+# read: one task 0.81 s, 16 MiB tasks (7) 0.57 s, 4 MiB tasks (35) 1.21 s.
+ZARR_READ_UNIT_TARGET = 16 * _MIB
+# A read too small for every slot to get a 16 MiB unit is spread over the slots, but never into units below this:
+# under it a task costs more to start than to run.
+ZARR_READ_UNIT_FLOOR = 4 * _MIB
+
+
+def read_unit_bytes(budget: int, total: int, slots: int = 1) -> int:
+    """Decoded bytes a Zarr read unit may hold: the target, lowered towards ``total / slots`` (so each of ``slots``
+    task slots gets a unit) but not below the floor, and never above ``budget``, the memory cap of a task.
+    ``total`` is the decoded bytes of everything the read touches."""
+    even = -(-max(0, int(total)) // max(1, int(slots)))
+    want = min(ZARR_READ_UNIT_TARGET, max(ZARR_READ_UNIT_FLOOR, even))
+    return max(1, min(int(budget), want))
+
+
+# rasterio's names for GDAL's complex integer types, which numpy has no dtype of
+_COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
+
+
+def grid_bytes(width: int, height: int, dtypes) -> int:
+    """The decoded size of a raster of this grid, one entry of ``dtypes`` per band: width x height x the type size."""
+    import numpy as np
+
+    pixels = int(width) * int(height)
+    return sum(
+        pixels * (_COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize)
+        for name in dtypes
+    )
+
+
+def decoded_bytes(ds) -> int:
+    """The decoded size of an open raster, from its header: width x height x the type size of each band."""
+    return grid_bytes(ds.width, ds.height, ds.dtypes)
+
+
+def size_text(n: int) -> str:
+    """A byte count as the refusal texts print it: whole MiB, or KiB under one MiB."""
+    return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
+
+
+def tile_read_cap() -> int:
+    """Worker side: the decoded size, in bytes, a materialized tile may have where its bytes are read: the cap the
+    registration carried (:func:`session_read_cap`), else this process's decoded budget (``decoded_budget_bytes``).
+    It lives here, free of pyspark, so a function that runs in a Unity Catalog sandbox can read it.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else process_read_cap()
+
+
+def _worker_knows_its_memory() -> bool:
+    """Whether this process has a memory signal of its own: a classic worker's memory environment, the Serverless flag,
+    or a task cgroup limit. A worker of standard access mode (Spark Connect over classic compute) has none.
+    """
+    return (
+        any(os.environ.get(k) for k in CLASSIC_MEMORY_ENV)
+        or os.environ.get("IS_SERVERLESS", "").lower() in ("true", "1")
+        or _cgroup_task_limit_bytes() is not None
+    )
+
+
+def call_decoded_budget() -> int:
+    """Worker side: the decoded bytes one call may hold, its inputs and its output together (the GDAL spec engine's
+    budget): the cap the registration carried (:func:`session_read_cap`), no more than this process's decoded budget
+    (``decoded_budget_bytes("auto")``) where it has a memory signal of its own; that budget where nothing is carried. A
+    worker of standard access mode (Spark Connect over classic compute) reads neither ``SPARK_WORKER_MEMORY`` nor a
+    cgroup limit, so its own budget would be Serverless's 64 MiB: the carried cap, the classic budget there, is the one
+    that holds. Where the worker can tell its own budget, a read cap lowered on the driver lowers what one call may hold,
+    and one raised there does not raise it.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    if carried is None:
+        return decoded_budget_bytes("auto")
+    if _worker_knows_its_memory():
+        return min(carried, decoded_budget_bytes("auto"))
+    return carried
+
+
+def carried_or(cap: Optional[int]) -> Optional[int]:
+    """Worker side: the cap the registration carried (:func:`session_read_cap`) when one is carried, else *cap* (a cap the
+    function was built with on the driver). A virtual tile's window is judged by the same read cap as a tile's bytes.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else cap
+
+
+@functools.lru_cache(maxsize=1)
+def process_read_cap() -> int:
+    """This process's decoded budget, read once (it reads the task's cgroup limit on Serverless)."""
+    return decoded_budget_bytes("auto")
+
+
+def read_cap_refusal(decoded: int, cap: int) -> str:
+    """The reason of a tile decoded over the read cap, the same text on every level (the JVM's TileBytes)."""
+
+    return (
+        f"the tile is {size_text(decoded)} decoded, over this compute's read cap ({size_text(cap)}). "
+        "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+    )
+
+
+class WindowOverReadCap(ValueError):
+    """A window of a virtual tile would be decoded over the read cap (the reason and Fix every level gives)."""
+
+
+def refuse_window_over_cap(width: int, height: int, dtypes) -> None:
+    """Raise :class:`WindowOverReadCap` when a window of ``width`` x ``height`` pixels, one entry of ``dtypes`` per band,
+    is about to be decoded into memory over the read cap (:func:`tile_read_cap`). The gate of a virtual tile, which
+    carries no bytes for ``_serde.open_tile`` to judge: it is called where the window is read out of its file, from the
+    header alone, before a pixel is read.
+    """
+    decoded, cap = grid_bytes(width, height, dtypes), tile_read_cap()
+    if decoded > cap:
+        raise WindowOverReadCap(read_cap_refusal(decoded, cap))
+
+
+def over_read_cap(ds) -> Optional[str]:
+    """The refusal (reason and Fix, the text every level gives) when ``ds`` is decoded over the read cap, else None."""
+    decoded, cap = decoded_bytes(ds), tile_read_cap()
+    return read_cap_refusal(decoded, cap) if decoded > cap else None
+
+
+# GDAL's raster block cache, for the sites that cap it (the raster reader's opens, the STAC window
+# download, the COG file conversion; all through ``_env.capped_block_cache``). Left alone it is a
+# share of the machine's RAM, which on a Serverless task is far more than the task may hold.
+# Those sites take a share of the tile budget instead: sequential reads of one window need to keep a
+# few blocks, not the window, so 1/16 of the decoded bytes a tile may take, and never more than
+# _BLOCK_CACHE_MAX. The streaming COG copy passes a lower ceiling (STREAMING_BLOCK_CACHE_MAX):
+# the memory of that copy, and of the streamed merge built on it, grows with its cache.
+_BLOCK_CACHE_SHARE = 16
+_BLOCK_CACHE_MAX = 128 * _MIB
+STREAMING_BLOCK_CACHE_MAX = 4 * _MIB
+# GDAL's cache holds a block at a time at the least: a block of a 512-pixel float32 tile is 1 MiB, and a cache smaller
+# than the block being read thrashes (the same block read again for each of its rows). A fold within a tiny budget (the
+# rows that lower the cap to a few hundred bytes) still gets this much.
+_BLOCK_CACHE_MIN = 1 * _MIB
+
+
+def block_cache_bytes(
+    strategy: str = "auto", *, ceiling: int = _BLOCK_CACHE_MAX
+) -> int:
+    """Size in bytes for GDAL's block cache in a block of work that reads one tile.
+
+    ``strategy`` is the one :func:`decoded_budget_bytes` takes. ``none`` (no tile splitting)
+    says nothing about memory, so it is sized for the runtime it runs on (``auto``).
+    """
+    s = resolve_strategy(strategy)
+    if s == "none":
+        s = runtime_kind()
+    return block_cache_for(decoded_budget_bytes(s), ceiling=ceiling)
+
+
+def streaming_cache_bytes(budget_bytes: int, held_bytes: int) -> int:
+    """Size in bytes for GDAL's block cache in a GDAL spec engine call that streams its raster (a file read by its path,
+    or a reprojection over its decoded budget): what the call's budget leaves after what it holds (``held_bytes``),
+    under ``_BLOCK_CACHE_MAX``, and never less than :func:`block_cache_bytes`. A budget of 0 (none) gets the ceiling.
+
+    GDAL's line-at-a-time algorithms (the viewshed) read across the whole window, so one line touches a row of the
+    source's blocks. A cache smaller than that row decodes each block again for each of its lines: a 4393-pixel-wide
+    window of 512-pixel float32 blocks needs 10 MiB, and the 4 MiB share took minutes on Serverless where it fits
+    in seconds.
+    """
+    spare = (
+        _BLOCK_CACHE_MAX
+        if not budget_bytes
+        else max(0, int(budget_bytes) - int(held_bytes))
+    )
+    return max(block_cache_bytes(), min(_BLOCK_CACHE_MAX, spare))
+
+
+def block_cache_for(budget_bytes: int, *, ceiling: int = _BLOCK_CACHE_MAX) -> int:
+    """Size in bytes for GDAL's block cache in a fold that works within ``budget_bytes`` (the same share of it as
+    :func:`block_cache_bytes` takes of a tile budget): the many members a fold keeps open are read a window at a
+    time, and their blocks must not pile up to the machine's default cache. Never less than one block of a large tile
+    (1 MiB), whatever the budget, unless the ceiling is lower."""
+    share = max(_BLOCK_CACHE_MIN, int(budget_bytes) // _BLOCK_CACHE_SHARE)
+    return min(int(ceiling), share)
 
 
 @dataclass(frozen=True)
@@ -180,7 +389,7 @@ def plan_layout(
 
 
 # ---------------------------------------------------------------------------
-# Budget authority — driver_merge (Phase 1) + dense_alloc (Phase 2) intents
+# Budget authority — driver_merge + dense_alloc intents
 # ---------------------------------------------------------------------------
 
 _MERGE_FALLBACK_BYTES = 512 * _MIB  # conservative floor if the RAM probe fails
@@ -225,7 +434,7 @@ def _probe_infra():
     """(host_ram_available_mb, gpu_count) via gpu_infra(); (0, 0) on any failure.
     DRIVER-ONLY (see _assert_driver)."""
     try:
-        from databricks.labs.gbx.pyrx.mvs import gpu_infra
+        from databricks.labs.gbx.rasterx.mvs import gpu_infra
 
         infra = gpu_infra()
         avail = int(infra.get("host_ram_available_mb") or infra.get("host_ram_mb") or 0)
@@ -266,9 +475,10 @@ def _driver_merge_budget(override_mb, infra=None):
 def budget_for(intent, est_bytes=None, *, override_mb=None, infra=None):
     """Driver-side RAM-measured budget authority (driver_merge, dense_alloc only).
 
-    worker_read and cog_write are intentionally NOT budget_for intents: a Serverless
-    worker cannot RAM-probe its ~1 GB task quota (/proc/meminfo reports node total),
-    so those use the empirically bisected binary cap in materialize_decision (file_gbx.py).
+    Worker-side reads, writes, ingests and COG writes (the kinds of materialize_decision) are
+    intentionally NOT budget_for intents: a Serverless worker cannot RAM-probe its ~1 GB task
+    quota (/proc/meminfo reports node total), so those use the empirically bisected binary cap
+    in materialize_decision (file_gbx.py).
     tile_split uses decoded_budget_bytes(strategy) in this module instead.
 
     Both implemented intents are _assert_driver-guarded. Returns a BudgetDecision.
@@ -328,5 +538,62 @@ def budget_for(intent, est_bytes=None, *, override_mb=None, infra=None):
         f"budget_for: unknown intent {intent!r}. "
         f"RAM-measured driver intents: driver_merge, dense_alloc. "
         f"Worker-side binary caps: use materialize_decision (file_gbx.py) for "
-        f"worker_read/cog_write. Tile splitting: use decoded_budget_bytes(strategy)."
+        f"a read, write, ingest or cog_write. Tile splitting: use decoded_budget_bytes(strategy)."
     )
+
+
+def session_read_cap(spark) -> Optional[int]:
+    """Driver side: the read cap a registration, or a Column-API call, carries to its workers.
+
+    On a classic session it is the session's :data:`READ_CAP_KEY` when set, else the classic decoded budget (the cap the
+    JVM reads there). On a Spark Connect session, whose configuration is not read here, it is the classic budget when the
+    DRIVER's compute is not Serverless (standard access mode is Connect too, and its workers can read neither
+    ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so their own budget would be Serverless's 64 MiB), else None: a
+    Serverless worker then uses its own budget (``pyrx.core.budget.tile_read_cap``), which is the right one there.
+
+    The light tier keeps the cap it was registered with: it is read here, once per registration, and travels with the
+    function. Changing :data:`READ_CAP_KEY` afterwards does not reach a function already registered (the JVM reads
+    the key per query): call ``register()`` again after changing it.
+    """
+    if spark is None:
+        return None
+    if "connect" in type(spark).__module__:
+        return None if session_on_serverless(spark) else decoded_budget_bytes("classic")
+    try:
+        value = spark.conf.get(READ_CAP_KEY, None)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a session without a readable configuration carries the default
+        value = None
+    try:
+        cap = int(str(value).strip()) if value is not None else 0
+    except ValueError:
+        cap = 0
+    return cap if cap > 0 else decoded_budget_bytes("classic")
+
+
+def session_on_serverless(spark) -> bool:
+    """Driver side: True for a Spark Connect session on Serverless compute, the one kind of session whose tasks hold
+    Serverless's memory. A classic session is not, nor is a Connect session of standard access mode: its driver has
+    the classic memory environment and a runtime version that is not Serverless's (read on DBR 19.15:
+    ``SPARK_WORKER_MEMORY=26985m``, ``DATABRICKS_RUNTIME_VERSION=19.15``), and its workers run on classic executors.
+    Every connect-aware cap (``ds.file_gbx._connect_aware_lru_sizing``, :func:`session_read_cap`) keys on this.
+    """
+    from databricks.labs.gbx import _gdal_policy
+
+    spark = _gdal_policy.real_session(spark)
+    return (
+        spark is not None
+        and "connect" in type(spark).__module__
+        and not _driver_compute_is_classic()
+    )
+
+
+def _driver_compute_is_classic() -> bool:
+    """True when the driver's compute is not Serverless, by the two probes the rest of the package uses (the runtime
+    version the manager keys on, and the budget's own ``runtime_kind``, which defaults to Serverless when it sees
+    nothing). Reads the environment only: no Spark call, so it is safe on a Connect session.
+    """
+    from databricks.labs.gbx.manager import capabilities
+
+    return not capabilities.is_serverless() and runtime_kind() == "classic"

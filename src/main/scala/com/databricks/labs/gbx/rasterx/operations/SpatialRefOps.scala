@@ -5,8 +5,7 @@ import org.gdal.osr.{CoordinateTransformation, SpatialReference}
 
 /** Forwarder — the real implementation lives in `com.databricks.labs.gbx.operations.SpatialRefOps`
   * (tier-neutral). This object re-exposes every public member so that the ~12 rasterx importers
-  * (RST_Clip, RST_Sample, RST_Viewshed, RST_SetSrid, RST_SetCrs, RST_TransformCrs,
-  * RST_Crs, RST_H3_CellBBox, RST_GridFromPoints, VectorRasterBridge, GDAL_Batch,
+  * (RST_Sample, VectorRasterBridge, GDAL_Batch,
   * GDALRasterize) compile unchanged. */
 object SpatialRefOps {
 

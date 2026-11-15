@@ -3,78 +3,83 @@ sidebar_position: 1
 title: Readers & Writers
 ---
 
+import Link from '@docusaurus/Link';
+
 # Readers & Writers
 
-GeoBrix provides Spark DataSource V2 **readers** and **writers** for geospatial file formats,
-across both execution tiers — lightweight (`pyrx`, pure-Python, no JAR) and heavyweight
-(`rasterx`, GDAL/OGR-backed). Both tiers scale by partitioning work across the cluster rather
-than reading or writing sequentially on a single node.
+GeoBrix provides Spark DataSource V2 **readers** and **writers** for geospatial file formats.
+They are pure Python and need no JAR, so one set serves every compute. They scale by
+partitioning work across the cluster rather than reading or writing on a single node.
 
-Each lightweight `*_gbx` format pairs with a heavyweight counterpart (`*_ogr` / `gdal` /
-`gtiff_gdal`), and the two tiers are held to **row-count / byte parity** as a hard gate in
-benchmarking.
+:::tip Which formats can this runtime read and write?
+Call [`gbx_drivers()`](./api/general-functions#drivers) in SQL, or `drivers()` in Python, to list the drivers of the current environment. Each row says whether the driver reads, writes and is allowed by GeoBrix. It also says if the driver works as shipped, and what it still needs. Pass `'raster'` or `'vector'` to keep one kind. The `tested` column marks the drivers that GeoBrix's driver tests cover, and `guidance` points to a built-in reader where one exists. The result reflects the environment as it runs now, so adding or removing packages changes it. See the [drivers in the env wheel](./gdal-drivers) for the shipped list.
+
+```sql
+SELECT driver, description, requires FROM gbx_drivers() WHERE write AND allowed
+```
+:::
 
 ## Readers
 
-Load geospatial files into a distributed DataFrame. The lightweight raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) return **[virtual tiles](./api/virtual-tiles)** by default — bytes-free `(path, window)` references; pass `.option("virtualTiles", "false")` to get materialized bytes instead. See the **[Readers Overview](./readers/overview)**
-for the full list, tier differences, output schemas, and options.
+Load geospatial files into a distributed DataFrame. The raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) return **[virtual tiles](./api/virtual-tiles)** by default — bytes-free `(path, window)` references; pass `.option("virtualTiles", "false")` to get materialized bytes instead. See the **[Readers Overview](./readers/overview)**
+for the full list, output schemas, and options.
 
 _Parenthetical `(x.y.z)` is the GeoBrix release each reader/writer first shipped (its "since" version)._
 
-| Format | Lightweight | Heavyweight |
-|---|---|---|
-| [Raster (generic)](./readers/raster) | `raster_gbx` (0.4.0) | `gdal` (0.2.0) |
-| [GeoTIFF](./readers/geotiff) | `gtiff_gbx` (0.4.0) | `gtiff_gdal` (0.2.0) |
-| [COG](./readers/cog) | `cog_gbx` (0.5.0) | — (light-only) |
-| [NetCDF](./readers/netcdf) | `netcdf_gbx` (0.4.1) | `netcdf_gdal` / `netcdf_ogr` (0.4.3) |
-| [PMTiles](./readers/pmtiles) | `pmtiles_gbx` (0.4.0) | — (light-only) |
-| [File lister](./readers/file) | `file_gbx` (0.5.0) | — (light-only) |
-| [LiDAR (LAS/LAZ)](./readers/lidar) | `lidar_gbx` (0.5.2) | — (light-only) |
-| [EXIF/GPS (images)](./readers/exif) | `exif_gbx` (0.5.2) | — (light-only) |
-| [Vector (generic)](./readers/vector) | `vector_gbx` (0.4.0) | `ogr` (0.2.0) |
-| [Shapefile](./readers/shapefile) | `shapefile_gbx` (0.4.0) | `shapefile_ogr` (0.2.0) |
-| [GeoJSON](./readers/geojson) | `geojson_gbx` (0.4.0) | `geojson_ogr` (0.2.0) |
-| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` (0.4.0) | — (light-only reader) |
-| [GeoPackage](./readers/geopackage) | `gpkg_gbx` (0.4.0) | `gpkg_ogr` (0.2.0) |
-| [File Geodatabase](./readers/filegdb) | `file_gdb_gbx` (0.4.0) | `file_gdb_ogr` (0.2.0) |
+| Format | Reader |
+|---|---|
+| [Raster (generic)](./readers/raster) | `raster_gbx` (0.4.0) |
+| [GeoTIFF](./readers/geotiff) | `gtiff_gbx` (0.4.0) |
+| [COG](./readers/cog) | `cog_gbx` (0.5.0) |
+| [NetCDF](./readers/netcdf) | `netcdf_gbx` (0.4.1) |
+| [Zarr](./readers/zarr) | `zarr_gbx` (0.6.0) |
+| [PMTiles](./readers/pmtiles) | `pmtiles_gbx` (0.4.0) |
+| [File lister](./readers/file) | `file_gbx` (0.5.0) |
+| [LiDAR (LAS/LAZ)](./readers/lidar) | `lidar_gbx` (0.5.2) |
+| [EXIF/GPS (images)](./readers/exif) | `exif_gbx` (0.5.2) |
+| [Vector (generic)](./readers/vector) | `vector_gbx` (0.4.0) |
+| [Shapefile](./readers/shapefile) | `shapefile_gbx` (0.4.0) |
+| [GeoJSON](./readers/geojson) | `geojson_gbx` (0.4.0) |
+| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` (0.4.0) |
+| [GeoPackage](./readers/geopackage) | `gpkg_gbx` (0.4.0) |
+| [File Geodatabase](./readers/filegdb) | `file_gdb_gbx` (0.4.0) |
 
 ## Writers
 
 Write DataFrames back out to geospatial files. See the **[Writers Overview](./writers/overview)**
 for the column contract, single-file vs sharded trade-offs, and per-format details.
 
-| Format | Lightweight | Heavyweight |
-|---|---|---|
-| [Raster (generic)](./writers/raster) | `raster_gbx` (0.4.0) | `gdal` (0.2.0) |
-| [GeoTIFF](./writers/geotiff) | `gtiff_gbx` (0.4.0) | `gtiff_gdal` (0.2.0) |
-| [COG](./writers/cog) | `cog_gbx` (0.5.0) | — (light-only) |
-| [PMTiles](./writers/pmtiles) | `pmtiles_gbx` (0.4.0) | `pmtiles` (0.4.0) |
-| [NetCDF](./writers/netcdf) | `netcdf_gbx` (0.4.1) | — (light-only) |
-| [LiDAR (LAS/LAZ)](./writers/lidar) | `lidar_gbx` (0.5.2) | — (light-only) |
-| [Vector (generic)](./writers/vector) | `vector_gbx` (0.4.0) | — (light-only) |
-| [Shapefile](./writers/shapefile) | `shapefile_gbx` (0.4.0) | — (light-only) |
-| [GeoJSON](./writers/geojson) | `geojson_gbx` (0.4.0) | — (light-only) |
-| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` (0.4.0) | `geojsonl_ogr` (0.4.0) |
-| [GeoPackage](./writers/geopackage) | `gpkg_gbx` (0.4.0) | — (light-only) |
-| [File Geodatabase](./writers/filegdb) | `file_gdb_gbx` (0.4.0) | — (hybrid; needs native GDAL) |
+| Format | Writer |
+|---|---|
+| [Raster (generic)](./writers/raster) | `raster_gbx` (0.4.0) |
+| [GeoTIFF](./writers/geotiff) | `gtiff_gbx` (0.4.0) |
+| [COG](./writers/cog) | `cog_gbx` (0.5.0) |
+| [Zarr](./writers/zarr) | `gbx_zarr_write` (0.6.0) |
+| [PMTiles](./writers/pmtiles) | `pmtiles_gbx` (0.4.0) |
+| [NetCDF](./writers/netcdf) | `netcdf_gbx` (0.4.1) |
+| [LiDAR (LAS/LAZ)](./writers/lidar) | `lidar_gbx` (0.5.2) |
+| [Vector (generic)](./writers/vector) | `vector_gbx` (0.4.0) |
+| [Shapefile](./writers/shapefile) | `shapefile_gbx` (0.4.0) |
+| [GeoJSON](./writers/geojson) | `geojson_gbx` (0.4.0) |
+| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` (0.4.0) |
+| [GeoPackage](./writers/geopackage) | `gpkg_gbx` (0.4.0) |
+| [File Geodatabase](./writers/filegdb) | `file_gdb_gbx` (0.4.0) |
 
-## Registering the lightweight tier
+## Registering the readers and writers
 
-Heavyweight readers and writers are auto-discovered from the JAR. The lightweight Python
-DataSources are **not** auto-registered — call `register(spark)` once per session before using
-any `*_gbx` format:
+The Python DataSources are **not** auto-registered. Call `register(spark)` once per session
+before using any `*_gbx` format. The same call registers the `gbx_*` functions:
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 
 ## Shared file-access base {#file-gbx}
 
-All lightweight (`*_gbx`) readers and writers share a common **file-access base** — the
+All `*_gbx` readers and writers share a common **file-access base** — the
 `file_gbx` module — that centralises FILE and FUSE routing, directory enumeration, and
-write-mode selection. This is a light-tier concern; the heavyweight (JAR-backed) readers
-and writers use their own GDAL/OGR access paths.
+write-mode selection.
 
 ### Capability tiers
 
@@ -88,46 +93,47 @@ and writers use their own GDAL/OGR access paths.
 
 ### Read-options matrix
 
-Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall-clock.
+| Source | Read mechanism | Runtime | Per-tile cost | Default / when |
+|---|---|---|---|---|
+| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | None. The scan resolves the reference. | default for a table source (`vector_file_read(table)`, raster `read_tiles_table`) |
+| **FILE-column table** | Delta scan of FILE `.uri` (MANAGED) | DBR 13.3+ | None. The scan resolves the reference. | auto when the table is MANAGED |
+| **Directory** | `read_files(format=>'file')` — enumerate + FILE refs + size | DBR 13.3+ | Listing only (metadata). | auto dir default on 13.3+ |
+| **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | Listing only (metadata). | used when `read_files` is unavailable |
+| **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | One file open per tile, on the worker. | fallback tile read (no FILE tier) |
 
-| Source | Read mechanism | Runtime | Serverless | Classic | Default / when |
-|---|---|---|---|---|---|
-| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | **~2 s** | ~2 s | default for a table source (`vector_file_read(table)`, raster `tilesTable`) |
-| **FILE-column table** | Delta scan of FILE `.uri` (MANAGED) | DBR 13.3+ | **~2 s** | ~2 s | auto when the table is MANAGED |
-| **Directory** | `read_files(format=>'file')` — enumerate + FILE refs + size | DBR 13.3+ | ~10 s / 10k *(enumerate)* | ~same | auto dir default on 13.3+ |
-| **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |
-| **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | **~30 s / 1k** ⚠️ | ~20 s / 1k | fallback tile read (no FILE tier); slower than the Delta-table path on all runtimes |
+The `read_files` and `list_files` rows list files. They do not open them. The DataSource row opens each tile on the worker, which costs a Volume round trip on Serverless. The FILE-column table path opens no tile in the scan. **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps and a full guide to memory-safe pipelines. The cap is 64 MiB on Serverless and 256 MiB on classic compute, standard access mode included.
 
-The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic and **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
-
-The **no-gating rule**: the auto default (`access="auto"` on readers, `file_mode="auto"` on
-writers) silently downgrades to the best available tier and never errors. Explicitly requesting
+The **no-gating rule**: `access="auto"` on readers and `file_mode="auto"` on writers silently
+downgrade to the best available tier and never error. Explicitly requesting
 `"managed"` or `"external"` on a FUSE-only runtime raises a clear, actionable error
-describing the upgrade path. Your pipelines run on any runtime without code changes; you
-only need to opt in to FILE when you want the governance and lifecycle benefits.
+describing the upgrade path. Readers default to `access="auto"`; writers default to
+`file_mode="fuse"`, a plain Delta table that reads on every compute. Your pipelines run on any
+runtime without code changes; you only need to opt in to FILE (`file_mode="auto"`) when you
+want the governance and lifecycle benefits.
 
 ### Read resolver
 
-When a lightweight reader opens a source file it calls `open_for_read(source, access="auto")`.
+When a `*_gbx` reader opens a source file it calls `open_for_read(source, access="auto")`.
 The resolver checks the tier and picks a strategy:
 
 - **FILE-capable runtime (DBR 13.3+):** routes to the FILE API. Files at or under
-  `GBX_STREAM_MAX_BYTES` (default **64 MiB on Serverless/Connect**, 256 MiB on classic)
-  open a byte-range **stream** — one round-trip, no FUSE, no local copy, and the fastest
-  path for typical tile sizes. Files over the cap fall through to `as_local_file()` — a
-  lazy local-file reference backed by the FILE handle — which pages bytes from the Volume
+  `GBX_STREAM_MAX_BYTES` (default **64 MiB on Serverless**, 256 MiB on classic compute, standard access mode included)
+  open a byte-range **stream**. The stream is one round-trip, no FUSE, no local copy, and the fastest
+  path for typical tile sizes. Files over the cap fall through to `as_local_file()`, a
+  lazy local-file reference backed by the FILE handle. It pages bytes from the Volume
   on demand and is a **memory-safety mechanism, not a performance optimization**. A blanket
   FUSE-direct path for small files is slower, not faster; the streaming path is preferred
   whenever the file fits in the cap. Open dataset handles are held in a per-partition LRU
   cache keyed by source path, amortising the open cost across all windows of the same source.
 - **FUSE fallback (OSS / DBR < 13):** resolves to the bare `/Volumes/…` path and uses a
-  probe-then-stage strategy — tries random-access directly; falls back to a sequential
+  probe-then-stage strategy. It tries random-access directly and falls back to a sequential
   copy only if the probe fails.
 
 ### Write committer
 
-Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…, layout=…)`.
-`file_mode="auto"` resolves as follows:
+Writers call `open_for_write(spark, df, target, file_mode="fuse", filespace=…, layout=…)`.
+The default, `file_mode="fuse"`, is a plain Delta write. `file_mode="auto"` opts in to FILE and
+resolves as follows:
 
 | Condition | Effective mode | Mechanism |
 |---|---|---|
@@ -135,7 +141,7 @@ Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…,
 | FILE available, no `filespace` | `"external"` | `try_to_file` — EXTERNAL FILE column |
 | No FILE (fuse tier) | `"fuse"` | Plain Delta write, path STRING / raster BINARY |
 
-Explicit modes (`"managed"`, `"external"`, `"fuse"`) override auto-selection. Requesting
+Explicit modes (`"managed"`, `"external"`) override auto-selection. Requesting
 `"managed"` or `"external"` on a fuse-only runtime raises a clear error.
 
 ### Layout options
@@ -153,8 +159,8 @@ The `layout` parameter controls row ordering in the output Delta table:
 ### File enumeration
 
 `enumerate_files(path, *, recursive=True, include_hidden=False, extensions=None, path_glob_filter=None)`
-lists files in a directory and returns a Spark DataFrame (FILE-capable tiers) or a Python list (FUSE tier),
-with columns `path`, `size`, and `file` (a FILE reference when available, `None` on FUSE).
+lists files in a directory and returns a Spark DataFrame (FILE-capable tiers) or a Python list (FUSE tier).
+The result has columns `path`, `size`, and `file` (a FILE reference when available, `None` on FUSE).
 
 By default, files whose names start with `_` or `.` (Spark/Hadoop metadata files such as
 `_SUCCESS`, `_committed_*`, `.crc`) are **skipped**. Pass `include_hidden=True` to include them.
@@ -165,12 +171,46 @@ The two filters are **mutually exclusive** and are ANDed with `include_hidden`: 
 `include_hidden=True` + `path_glob_filter="[!.]*"` returns underscore-named files such as
 `_data.tif` but still excludes dot-named files such as `.crc`.
 
-### Light-tier FILE flow
+<Link id="light-tier-file-flow"></Link>
 
-![file_gbx access flow — the READ lane resolves a source (path, directory, or FILE ref) through open_for_read, a once-per-session capability-tier probe (read_files on DBR 13.3+, list_files on DBR 18+, FUSE floor), and size-adaptive routing (FILE byte-range stream, FUSE-of-FILE for large or striped files, or a probe-then-stage copy) into the rasterio / pyogrio reader, where a per-partition open-LRU amortizes the open cost across a source’s windows; the WRITE lane resolves writer output through open_for_write into MANAGED (create_file), EXTERNAL (try_to_file), or FUSE (plain Delta) modes and their targets — a FILE-column Delta table or a Volume path — with ORDER BY path by default and opt-in CLUSTER BY plus OPTIMIZE; access="auto" downgrades to FUSE gracefully while an explicit FILE mode on a FUSE-only runtime raises a clear error](../../resources/images/diagrams/rasterx/file-gbx-flow.png)
+### The FILE flow {#the-file-flow}
+
+![file_gbx access flow — the READ lane resolves a source (path, directory, or FILE ref) through open_for_read. A once-per-session capability-tier probe (read_files on DBR 13.3+, list_files on DBR 18+, FUSE floor) picks the access. Size-adaptive routing (FILE byte-range stream, FUSE-of-FILE for large or striped files, or a probe-then-stage copy) feeds the rasterio / pyogrio reader. There, a per-partition open-LRU amortizes the open cost across a source’s windows. The WRITE lane resolves writer output through open_for_write into FUSE (plain Delta, the default). With file_mode="auto" or an explicit choice, it writes in MANAGED (create_file) or EXTERNAL (try_to_file) mode instead. The targets are a FILE-column Delta table or a Volume path. The default order is ORDER BY path, with opt-in CLUSTER BY plus OPTIMIZE. access="auto" downgrades to FUSE gracefully. An explicit FILE mode on a FUSE-only runtime raises a clear error](../../resources/images/diagrams/rasterx/file-gbx-flow.png)
 
 See [`file_gbx` Reader](./readers/file) for enumeration and read-mode details, and
 [`file_gbx` Writer](./writers/file) for write-mode and ingest options.
+
+## Delta-indexed collections
+
+Two parts of GeoBrix keep a Delta table as the **index** of a collection of files and leave the bytes in
+the files:
+
+- a **FILE-column table** has one row per raster or vector file on a Volume, with a `FILE` reference (a path
+  string where FILE is not available). The `*_gbx` writers make one through `file_gbx` and readers scan it
+  (see [Read-options matrix](#read-options-matrix)). A **tile index** (`tilesTable`) is the same idea with an
+  optional pixel window on each row, read with [`read_tiles_table`](./readers/raster#read-tiles-table);
+- the **manifest table of a [Zarr store](./api/zarr-stores)** has one row per chunk or shard, per array and group
+  document, and one `commit` row for each write. A row records the file, offset and length that hold it.
+
+It is one pattern, and in both the collection is a table. SQL, Unity Catalog grants and Delta's own tools work
+on it. A reader plans from the table rather than from a directory listing, so it never walks the files to find
+them. The table has versions that you can read as they were: `versionAsOf` and `timestampAsOf` on
+`read_tiles_table`, `version_as_of` and `timestamp_as_of` on [`gbx_zarr_read`](./readers/zarr#choosing-the-source).
+
+What differs is who looks after the files. A Zarr store comes in two kinds: one you create, whose
+files GeoBrix writes, and one you register in place, whose files other tools own.
+
+| | FILE-column table or tile index | Zarr store you create | Zarr store you register |
+|---|---|---|---|
+| Made by | The `*_gbx` writers; you, for a tile index | `gbx_zarr_write` with `mode="create"` | `gbx_zarr_register` |
+| One row is | A file, or a window of one | A chunk or shard at an offset in a pack file that GeoBrix wrote | A chunk or shard at an offset in the store's own objects; for a writable registration, a pack file in its overlay is the same as in the previous column |
+| Files | Referenced. An earlier version of the table lists the files it listed, but a file replaced since is replaced for every version | Written only by GeoBrix, each into a new pack file that is never changed. An earlier version reads the bytes it did, while it is within `retain` or tagged | The store's objects belong to the tools that wrote them. GeoBrix copies nothing and writes nothing in the store (an explicit publish aside), records each object's identity, and a read stops with `ZarrStoreDrift` if another tool changed one |
+| Writes | A Delta transaction on the table | One Delta transaction for each write, with a compare-and-swap on every key it replaces, so concurrent writers either land or get a clear conflict error | None through GeoBrix for a read-only registration. A writable one writes new pack files to its overlay, in the same transactions |
+| Cleaning up | Yours | `gbx_zarr_vacuum` deletes the files that no readable version needs | `gbx_zarr_vacuum` deletes only the packs GeoBrix wrote to the overlay; it never touches the store's own objects |
+
+A FILE-column table suits files that other tools produce and own. A Zarr store suits a cube that jobs also
+write back to, and that needs all-or-nothing writes and versions. [Choosing a Format](./choosing-a-format) shows where each
+format fits.
 
 ## Next Steps
 

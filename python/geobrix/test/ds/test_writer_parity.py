@@ -2,9 +2,7 @@
 
 Reads a real raster via the light reader, writes it via the light writer, and
 re-reads — asserting the written tile decodes to the same pixels as the source.
-The source raster is the pixel ground truth that both tiers must match (a live
-side-by-side vs the heavy ``gtiff_gdal`` writer is skipped because the heavy GDAL
-path does not run in the local dev container; the cluster is where heavy runs).
+The source raster is the pixel ground truth the written tile must match.
 
 Runs in Docker only: needs the geobrix JAR for the light DS register + sample
 data mounted at ``/Volumes``. Marked ``integration``; execute with::
@@ -36,6 +34,8 @@ _JARS = sorted((_HERE.parents[3] / "lib").glob("geobrix-*-jar-with-dependencies.
 
 @pytest.fixture(scope="module")
 def spark_with_jar():
+    from databricks.labs.gbx import manager as gbx_manager
+
     if not _JARS:
         pytest.skip("no geobrix JAR staged")
     if not os.path.exists(SAMPLE):
@@ -54,9 +54,8 @@ def spark_with_jar():
         .config("spark.jars", str(_JARS[-1]))
         .getOrCreate()
     )
-    from databricks.labs.gbx.ds.register import register
 
-    register(session)
+    gbx_manager.register_sources(session)
     yield session
 
 

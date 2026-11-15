@@ -5,10 +5,13 @@ import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.util.AffineTransformation
 import org.locationtech.jts.geom._
-import org.locationtech.jts.io.{WKBReader, WKBWriter, WKTReader, WKTWriter}
+import org.locationtech.jts.io.{ByteOrderValues, ParseException, WKBReader, WKBWriter, WKTReader, WKTWriter}
+import org.locationtech.jts.operation.union.UnaryUnionOp
 import org.locationtech.jts.simplify.DouglasPeuckerSimplifier
 
+import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 /**
   * JTS geometry factory and serialization helpers; thread-safe per-thread caches for readers/writers.
@@ -18,16 +21,75 @@ import scala.collection.mutable
   */
 object JTS {
 
-    // Per-thread caches: JTS readers/writers are not thread-safe and this object is shared across tasks.
-    private val geometryFactories = mutable.Map[Long, GeometryFactory]()
-    private val wkbReaders = mutable.Map[Long, WKBReader]()
-    private val wkbWriters = mutable.Map[Long, WKBWriter]()
-    private val wkb3Writers = mutable.Map[Long, WKBWriter]()
-    private val ewkbWriters = mutable.Map[Long, WKBWriter]()
-    private val ewkb3Writers = mutable.Map[Long, WKBWriter]()
-    private val wtkWriters = mutable.Map[Long, WKTWriter]()
-    private val wtk3Writers = mutable.Map[Long, WKTWriter]()
-    private val wtkReaders = mutable.Map[Long, WKTReader]()
+    /** Collection-aware intersection. Ordinary geometries retain JTS overlay semantics;
+      * mixed collections are intersected member by member, including nested collections.
+      * Lower-dimensional results are retained, not filtered to the input dimension. */
+    def intersection(left: Geometry, right: Geometry): Geometry = {
+        val result = if (!isMixedCollection(left) && !isMixedCollection(right)) left.intersection(right)
+        else {
+            val parts = for {
+                a <- collectionMembers(left)
+                b <- collectionMembers(right)
+            } yield a.intersection(b)
+            compactOverlay(parts, left)
+        }
+        result.setSRID(left.getSRID)
+        result
+    }
+
+    /** Collection-aware left-minus-right difference. A collection on the left is
+      * processed member by member; members on the right are subtracted sequentially.
+      * In particular, operands are never swapped: difference is not commutative. */
+    def difference(left: Geometry, right: Geometry): Geometry = {
+        val result = if (!isMixedCollection(left) && !isMixedCollection(right)) left.difference(right)
+        else {
+            val subtractors = collectionMembers(right)
+            val parts = collectionMembers(left).map { member =>
+                subtractors.foldLeft(member) { (remaining, subtractor) =>
+                    // A difference can itself produce a mixed collection.
+                    difference(remaining, subtractor)
+                }
+            }
+            compactOverlay(parts, left)
+        }
+        result.setSRID(left.getSRID)
+        result
+    }
+
+    // MultiPoint/MultiLineString/MultiPolygon inherit GeometryCollection too, but
+    // JTS supports their overlay operations directly. Only split mixed collections.
+    private def isMixedCollection(geometry: Geometry): Boolean =
+        geometry.getGeometryType == "GeometryCollection"
+
+    private def collectionMembers(geometry: Geometry): Seq[Geometry] = {
+        if (isMixedCollection(geometry)) {
+            (0 until geometry.getNumGeometries).flatMap(i => collectionMembers(geometry.getGeometryN(i)))
+        } else Seq(geometry)
+    }
+
+    private def compactOverlay(parts: Seq[Geometry], source: Geometry): Geometry = {
+        val nonEmpty = parts.filterNot(_.isEmpty)
+        val factory = source.getFactory
+        val result =
+            if (nonEmpty.isEmpty) factory.createGeometryCollection(Array.empty[Geometry])
+            else UnaryUnionOp.union(nonEmpty.asJava, factory)
+        result.setSRID(source.getSRID)
+        result
+    }
+
+    // Every WKB/EWKB writer here is little-endian (NDR), the byte order the light level, GDAL and
+    // Databricks st_asbinary write, so one call returns the same bytes on every compute.
+    // Per-thread caches: JTS readers/writers are not thread-safe and this object is shared across tasks,
+    // so the caches are concurrent maps (two threads can add their entries at the same moment).
+    private val geometryFactories = TrieMap[Long, GeometryFactory]()
+    private val wkbReaders = TrieMap[Long, WKBReader]()
+    private val wkbWriters = TrieMap[Long, WKBWriter]()
+    private val wkb3Writers = TrieMap[Long, WKBWriter]()
+    private val ewkbWriters = TrieMap[Long, WKBWriter]()
+    private val ewkb3Writers = TrieMap[Long, WKBWriter]()
+    private val wtkWriters = TrieMap[Long, WKTWriter]()
+    private val wtk3Writers = TrieMap[Long, WKTWriter]()
+    private val wtkReaders = TrieMap[Long, WKTReader]()
 
     /** Creates a JTS Point at (x, y); uses per-thread GeometryFactory. */
     def point(x: Double, y: Double): Point = {
@@ -134,6 +196,9 @@ object JTS {
         reader.read(bytes)
     }
 
+    /** [[fromWKB]], with NULL bytes read as an empty polygon (a chip that an empty intersection left without a geometry). */
+    def fromWKBOrEmpty(bytes: Array[Byte]): Geometry = if (bytes eq null) emptyPolygon else fromWKB(bytes)
+
     /** Builds a MultiLineString from a sequence of LineString geometries; uses per-thread factory. */
     def multiLineString(breaklines: Seq[Geometry]): MultiLineString = {
         val tid = Thread.currentThread().getId
@@ -160,14 +225,14 @@ object JTS {
       * Use [[toEWKB]] when you need to preserve SRID across the encoding. */
     def toWKB(intersection: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = wkbWriters.getOrElseUpdate(tid, new WKBWriter())
+        val writer = wkbWriters.getOrElseUpdate(tid, new WKBWriter(2, ByteOrderValues.LITTLE_ENDIAN))
         writer.write(intersection)
     }
 
     /** Encode a JTS Geometry to OGC WKB preserving Z (3 dimensions); per-thread WKBWriter(3). */
     def toWKB3(geom: org.locationtech.jts.geom.Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = wkb3Writers.getOrElseUpdate(tid, new WKBWriter(3))
+        val writer = wkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, ByteOrderValues.LITTLE_ENDIAN))
         writer.write(geom)
     }
 
@@ -178,18 +243,18 @@ object JTS {
       * built-in `st_*` functions) may not accept EWKB — use [[toWKB]] for those. */
     def toEWKB(geom: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = ewkbWriters.getOrElseUpdate(tid, new WKBWriter(2, true))
+        val writer = ewkbWriters.getOrElseUpdate(tid, new WKBWriter(2, ByteOrderValues.LITTLE_ENDIAN, true))
         writer.write(geom)
     }
 
     /** Encodes a JTS Geometry to PostGIS EWKB preserving Z (3 dimensions); embeds SRID when set.
       *
       * Use this instead of [[toEWKB]] when the input geometry may carry Z coordinates and
-      * Z preservation is required (e.g. st_setcrs, which stamps a CRS without touching
+      * Z preservation is required (e.g. stamping a CRS without touching
       * coordinates). Per-thread writer. */
     def toEWKB3(geom: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = ewkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, true))
+        val writer = ewkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, ByteOrderValues.LITTLE_ENDIAN, true))
         writer.write(geom)
     }
 
@@ -272,9 +337,76 @@ object JTS {
         val tid = Thread.currentThread().getId
         val reader = wtkReaders.getOrElseUpdate(tid, new WKTReader())
         val (srid, body) = splitEWKT(wkt)
-        val geom = reader.read(body)
+        val geom =
+            try reader.read(body)
+            catch {
+                case e: ParseException =>
+                    // A text whose parts disagree about dimensionality (a Z on one vertex only) is no
+                    // geometry to the reader. Read it as uniform 3D instead: the Z values that exist stay,
+                    // the missing ones are NaN. Text that is still unreadable raises the original error.
+                    if (!isMixedDimension(body)) throw e
+                    val padded = padMixedDimension(body)
+                    if (padded == body) throw e
+                    try reader.read(padded)
+                    catch { case _: ParseException => throw e }
+            }
         if (srid > 0) geom.setSRID(srid)
         geom
+    }
+
+    private val wktOrdinate =
+        java.util.regex.Pattern.compile("[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?|[-+]?nan|[-+]?inf(?:inity)?", java.util.regex.Pattern.CASE_INSENSITIVE)
+    private val wktDimTag = java.util.regex.Pattern.compile("\\s+\\b(?:ZM|Z|M)\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+    private val wktEmpty = java.util.regex.Pattern.compile("\\bEMPTY\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+
+    /** True when a WKT body mixes dimensionalities, the only text [[padMixedDimension]] may repair: coordinates
+      * with different ordinate counts, or an `EMPTY` component beside coordinates. Text whose coordinates all
+      * agree but contradict the tag (`POINT Z (1 2)`) is malformed, not mixed. Mirrors the lightweight level. */
+    private[jts] def isMixedDimension(wkt: String): Boolean = {
+        val counts = wkt.split("[(),]").iterator.map(c => {
+            val m = wktOrdinate.matcher(c)
+            var n = 0
+            while (m.find()) n += 1
+            n
+        }).filter(_ >= 2).toSet
+        counts.size > 1 || (counts.nonEmpty && wktEmpty.matcher(wkt).find())
+    }
+
+    /** Rewrites a WKT body whose parts disagree about dimensionality to uniform 3D: every coordinate gets
+      * exactly three ordinates and every geometry is tagged `Z`.
+      *
+      * Only meaningful for a body the reader has refused: applied to clean 2D text it would turn a 2D
+      * geometry 3D, so [[fromWKT]] calls it after a failed read only. A missing Z becomes `NaN` (the
+      * absence of a Z, never a made-up elevation); a measure is dropped, as the readers are XYZ-only.
+      * Mirrors the lightweight level's normalisation so both levels read such text the same way. */
+    private[jts] def padMixedDimension(wkt: String): String = {
+        val out = new StringBuilder
+        val chunk = new StringBuilder
+        def flush(): Unit = {
+            if (chunk.nonEmpty) {
+                val text = chunk.toString()
+                val m = wktOrdinate.matcher(text)
+                val nums = mutable.ArrayBuffer.empty[String]
+                while (m.find()) nums += m.group()
+                if (nums.size < 2) {
+                    // a keyword chunk (POINT, GEOMETRYCOLLECTION, EMPTY ...): drop its tag, then tag it Z
+                    val bare = wktDimTag.matcher(text).replaceAll("")
+                    if (wktEmpty.matcher(bare).find()) out.append(wktEmpty.matcher(bare).replaceAll("Z EMPTY"))
+                    else if (bare.exists(_.isLetter)) out.append(bare.stripTrailing()).append(" Z ")
+                    else out.append(bare)
+                } else {
+                    val ords = nums.take(3) ++ Seq.fill(math.max(0, 3 - nums.size))("NaN")
+                    out.append(" ").append(ords.mkString(" ")).append(" ")
+                }
+                chunk.clear()
+            }
+        }
+        wkt.foreach { c =>
+            if (c == '(' || c == ')' || c == ',') { flush(); out.append(c) }
+            else chunk.append(c)
+        }
+        flush()
+        out.toString()
     }
 
     /** Splits an optional `SRID=<int>;` prefix off a WKT/EWKT string. Returns (srid, wkt-body).

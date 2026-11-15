@@ -3,8 +3,7 @@ Python code examples for the light (pyvx) tier of VectorX functions.
 
 Single source of truth for the Python (light) tab in
 docs/docs/api/vectorx-functions.mdx. Consumed by the FunctionExamples
-component (``pythonLight`` prop) and by the generate-function-info.py
-``_TIER_SCANS`` binding detector.
+component (``pythonLight`` prop).
 
 All examples use the shared canonical fixtures from ``_fixtures.py``
 so every function's four tabs show the SAME example — the same fixture,
@@ -42,11 +41,6 @@ these functions uses::
 This is identical in behavior to the SQL tab; the Column API form is
 heavyweight-only for these generators.
 """
-
-try:
-    from databricks.labs.gbx.pyvx import functions as vx
-except ImportError:
-    vx = None
 
 
 # ---------------------------------------------------------------------------
@@ -90,9 +84,9 @@ def vectorx_light_setup_example(spark):
     After this call, all ``gbx_st_*`` SQL functions and the ``pyvx``
     Python Column API are available in the current Spark session.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs import gbx
 
-    vx.register(spark)
+    gbx.register(spark)
     return None
 
 
@@ -109,8 +103,7 @@ VectorX (light) registered. You can now use gbx_st_* SQL functions via the pyvx 
 #   <base>_python_light_example_output = """..."""
 #
 # where <base> is the function's base name (e.g. st_asmvt, st_triangulate).
-# The generate-function-info.py _TIER_SCANS scanner detects these by their
-# def signature; the FunctionExamples MDX component renders the source text.
+# The FunctionExamples MDX component renders the source text.
 # ---------------------------------------------------------------------------
 
 
@@ -135,25 +128,25 @@ VectorX (light) registered. You can now use gbx_st_* SQL functions via the pyvx 
 _WKB_POINT_0_0 = "010100000000000000000000000000000000000000"
 
 
-def st_asmvt_python_light_example(spark):
+def st_asmvt_python_example(spark):
     """Aggregate tile-local features into an MVT protobuf blob per tile (light pyvx tier).
 
     Reads the ``mvt_features`` setup view (2 tile-local WKB POINTs in z=0/x=0/y=0)
     and groups by ``(z, x, y)`` before aggregating.  The aggregator encodes all
     features in each group into one MVT blob.
     """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
 
     df = spark.table("mvt_features")
     result = df.groupBy("z", "x", "y").agg(
-        vx.st_asmvt("geom_wkb", f.col("attrs"), "layer").alias("mvt")
+        vectorx_api.st_asmvt("geom_wkb", f.col("attrs"), "layer").alias("mvt")
     )
     row = result.first()
     return row["mvt"]
 
 
-st_asmvt_python_light_example_output = """
+st_asmvt_python_example_output = """
 +---+---+---+---------+
 |  z|  x|  y|      mvt|
 +---+---+---+---------+
@@ -163,7 +156,40 @@ st_asmvt_python_light_example_output = """
 """
 
 
-def st_asmvt_pyramid_python_light_example(spark):
+def st_asmvt_array_python_example(spark):
+    """Encode each tile's features from an array of (geom, attrs) structs (light pyvx tier).
+
+    Reads the ``mvt_features`` setup view (2 tile-local WKB POINTs in z=0/x=0/y=0).
+    ``collect_list(struct(...))`` gathers each tile's features into one array after the
+    ``groupBy`` of the tile key, and ``st_asmvt_array`` encodes the array as one layer. The
+    attributes are JSON object text (``to_json``). The layer is the one ``st_asmvt`` builds
+    from the same rows.
+    """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = spark.table("mvt_features")
+    features = f.collect_list(
+        f.struct(f.col("geom_wkb").alias("geom"), f.to_json("attrs").alias("attrs"))
+    )
+    result = df.groupBy("z", "x", "y").agg(
+        vectorx_api.st_asmvt_array(features, "layer").alias("mvt")
+    )
+    row = result.first()
+    return row["mvt"]
+
+
+st_asmvt_array_python_example_output = """
++---+---+---+---------+
+|  z|  x|  y|      mvt|
++---+---+---+---------+
+|  0|  0|  0|[binary] |
++---+---+---+---------+
+... (MVT binary)
+"""
+
+
+def st_asmvt_pyramid_python_example(spark):
     """Explode a WGS-84 feature into per-tile MVT rows via SQL LATERAL (light pyvx tier).
 
     The lightweight pyramid is a Python UDTF with no Python DataFrame Column form —
@@ -183,7 +209,7 @@ def st_asmvt_pyramid_python_light_example(spark):
     return rows[0]["mvt_bytes"] if rows else None
 
 
-st_asmvt_pyramid_python_light_example_output = """
+st_asmvt_pyramid_python_example_output = """
 +---+---+---+-----------+
 |  z|  x|  y|  mvt_bytes|
 +---+---+---+-----------+
@@ -206,8 +232,7 @@ st_asmvt_pyramid_python_light_example_output = """
 # the registered UDTF via SQL LATERAL (identical in behavior to the SQL tab,
 # just wrapped in spark.sql()).
 #
-# mode='constrained' is the default and is available in BOTH tiers.
-# mode='conforming' is HEAVYWEIGHT-ONLY (NotImplementedError in pyvx).
+# mode='constrained' is the default; it and mode='conforming' run in BOTH tiers.
 # ---------------------------------------------------------------------------
 
 # WKB POINT(0, 10) — plain 2D, used as grid_origin for st_interpolateelevationgeom.
@@ -215,14 +240,14 @@ st_asmvt_pyramid_python_light_example_output = """
 _WKB_POINT_0_10 = "010100000000000000000000000000000000002440"
 
 
-def st_triangulate_python_light_example(spark):
+def st_triangulate_python_example(spark):
     """Build a Delaunay TIN and emit one triangle polygon per row (light pyvx tier).
 
     The lightweight tier exposes ``gbx_st_triangulate`` as a registered SQL UDTF
     (no Python DataFrame Column form).  Reads the ``tin_survey`` setup view — 4
     WKB POINT Z corners of a 10×10 m square — and materialises the 2-triangle
     Delaunay mesh via SQL ``LATERAL``.  Returns the first triangle's WKB bytes.
-    ``mode='constrained'`` is both-tier; ``mode='conforming'`` is heavyweight-only.
+    ``mode='constrained'`` and ``mode='conforming'`` run in both tiers.
     """
     result = spark.sql("""
         SELECT t.triangle
@@ -232,7 +257,7 @@ def st_triangulate_python_light_example(spark):
     return rows[0]["triangle"] if rows else None
 
 
-st_triangulate_python_light_example_output = """
+st_triangulate_python_example_output = """
 +--------+
 |triangle|
 +--------+
@@ -243,7 +268,7 @@ st_triangulate_python_light_example_output = """
 """
 
 
-def st_interpolateelevationbbox_python_light_example(spark):
+def st_interpolateelevationbbox_python_example(spark):
     """Sample TIN elevation on a regular bounding-box grid (light pyvx tier).
 
     The lightweight tier exposes ``gbx_st_interpolateelevationbbox`` as a
@@ -261,7 +286,7 @@ def st_interpolateelevationbbox_python_light_example(spark):
     return rows[0]["elevation_point"] if rows else None
 
 
-st_interpolateelevationbbox_python_light_example_output = """
+st_interpolateelevationbbox_python_example_output = """
 +---------------+
 |elevation_point|
 +---------------+
@@ -273,7 +298,7 @@ st_interpolateelevationbbox_python_light_example_output = """
 """
 
 
-def st_interpolateelevationgeom_python_light_example(spark):
+def st_interpolateelevationgeom_python_example(spark):
     """Sample TIN elevation on a grid anchored to a geometry origin (light pyvx tier).
 
     The lightweight tier exposes ``gbx_st_interpolateelevationgeom`` as a
@@ -292,7 +317,7 @@ def st_interpolateelevationgeom_python_light_example(spark):
     return rows[0]["elevation_point"] if rows else None
 
 
-st_interpolateelevationgeom_python_light_example_output = """
+st_interpolateelevationgeom_python_example_output = """
 +---------------+
 |elevation_point|
 +---------------+
@@ -312,16 +337,16 @@ st_interpolateelevationgeom_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_crs_python_light_example(spark):
+def st_crs_python_example(spark):
     """Return the canonical CRS string for a geometry's embedded SRID (light pyvx tier)."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("vector_geoms")
     result = df.select(vx.st_crs("geom").alias("crs")).first()
     return result["crs"]
 
 
-st_crs_python_light_example_output = """
+st_crs_python_example_output = """
 +---------+
 |crs      |
 +---------+
@@ -330,16 +355,16 @@ st_crs_python_light_example_output = """
 """
 
 
-def st_setcrs_python_light_example(spark):
+def st_setcrs_python_example(spark):
     """Stamp a CRS on a geometry without reprojecting (light pyvx tier)."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("vector_geoms")
     result = df.select(vx.st_setcrs("geom", "EPSG:4326").alias("stamped")).first()
     return result["stamped"]
 
 
-st_setcrs_python_light_example_output = """
+st_setcrs_python_example_output = """
 +---------+
 |stamped  |
 +---------+
@@ -349,16 +374,16 @@ st_setcrs_python_light_example_output = """
 """
 
 
-def st_transformcrs_python_light_example(spark):
+def st_transformcrs_python_example(spark):
     """Reproject a geometry to a target CRS (light pyvx tier)."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("vector_geoms")
     result = df.select(vx.st_transformcrs("geom", "EPSG:32633").alias("utm33n")).first()
     return result["utm33n"]
 
 
-st_transformcrs_python_light_example_output = """
+st_transformcrs_python_example_output = """
 +--------+
 |utm33n  |
 +--------+
@@ -377,7 +402,7 @@ st_transformcrs_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_legacyaswkb_python_light_example(spark):
+def st_legacyaswkb_python_example(spark):
     """Convert a legacy Mosaic geometry struct to standard WKB (light pyvx tier).
 
     Uses the ``legacy_geoms`` setup view — one row with a Mosaic InternalGeometry
@@ -385,14 +410,14 @@ def st_legacyaswkb_python_light_example(spark):
     ``st_legacyaswkb`` is a scalar function in both tiers (same name, same output
     bytes); the only difference between tiers is the import path.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("legacy_geoms")
     result = df.select(vx.st_legacyaswkb("geom_legacy").alias("wkb")).first()
     return result["wkb"]
 
 
-st_legacyaswkb_python_light_example_output = """
+st_legacyaswkb_python_example_output = """
 +--------+
 |wkb     |
 +--------+
@@ -411,14 +436,14 @@ st_legacyaswkb_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_shiftlongitude_python_light_example(spark):
+def st_shiftlongitude_python_example(spark):
     """Shift longitude from [-180,180] to [0,360] (light pyvx tier).
 
     Creates a WKB POINT(-170, 10) inline via shapely and passes it through
     ``st_shiftlongitude``.  Negative x coordinates are moved by +360, so
     x=-170 becomes x=190.  Returns the shifted WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import Point  # noqa: PLC0415
 
@@ -426,7 +451,7 @@ def st_shiftlongitude_python_light_example(spark):
     return df.select(vx.st_shiftlongitude("geom").alias("shifted")).first()["shifted"]
 
 
-st_shiftlongitude_python_light_example_output = """
+st_shiftlongitude_python_example_output = """
 +--------+
 |shifted |
 +--------+
@@ -436,7 +461,7 @@ st_shiftlongitude_python_light_example_output = """
 """
 
 
-def st_wrapx_python_light_example(spark):
+def st_wrapx_python_example(spark):
     """Wrap X coordinates back into [-180,180] (light pyvx tier).
 
     Creates a WKB POINT(190, 10) inline — a coordinate in [0,360] longitude
@@ -445,7 +470,7 @@ def st_wrapx_python_light_example(spark):
     x=-170.  Returns the wrapped WKB bytes.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import Point  # noqa: PLC0415
 
@@ -455,7 +480,7 @@ def st_wrapx_python_light_example(spark):
     ).first()["wrapped"]
 
 
-st_wrapx_python_light_example_output = """
+st_wrapx_python_example_output = """
 +--------+
 |wrapped |
 +--------+
@@ -465,7 +490,7 @@ st_wrapx_python_light_example_output = """
 """
 
 
-def st_split_python_light_example(spark):
+def st_split_python_example(spark):
     """Split a polygon by the 180° meridian; returns a GEOMETRYCOLLECTION (light pyvx tier).
 
     Creates a WKB polygon that straddles the antimeridian (x range 170 to 190)
@@ -473,7 +498,7 @@ def st_split_python_light_example(spark):
     GeometryCollection — one polygon on each side of the cut.  Returns the
     GeometryCollection WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import LineString, Polygon  # noqa: PLC0415
 
@@ -488,7 +513,7 @@ def st_split_python_light_example(spark):
     ).first()["pieces"]
 
 
-st_split_python_light_example_output = """
+st_split_python_example_output = """
 +--------+
 |pieces  |
 +--------+
@@ -506,14 +531,14 @@ st_split_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_makevalid_python_light_example(spark):
-    """Repair an invalid geometry to OGC-SFS validity (light pyvx tier).
+def st_makevalid_python_example(spark):
+    """Repair an invalid geometry to OGC-SFS validity.
 
     Creates a WKB bowtie self-intersecting polygon inline via shapely and
     repairs it with ``st_makevalid``.  The default ``linework`` level nodes the
     self-intersection into a valid multi-polygon.  Returns the repaired WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     bowtie = from_wkt("POLYGON((0 0,1 1,1 0,0 1,0 0))")
@@ -521,7 +546,7 @@ def st_makevalid_python_light_example(spark):
     return df.select(vx.st_makevalid("geom").alias("clean")).first()["clean"]
 
 
-st_makevalid_python_light_example_output = """
+st_makevalid_python_example_output = """
 +--------+
 |clean   |
 +--------+
@@ -531,7 +556,7 @@ st_makevalid_python_light_example_output = """
 """
 
 
-def st_explainvalidity_python_light_example(spark):
+def st_explainvalidity_python_example(spark):
     """Diagnose SFS validity as JSON {valid, reason, code, location} (light pyvx tier).
 
     Creates a WKB bowtie self-intersecting polygon inline and calls
@@ -539,7 +564,7 @@ def st_explainvalidity_python_light_example(spark):
     the GEOS reason string, ``code=10`` (self-intersection), and
     ``POINT(0.5 0.5)`` as the location where the violation occurs.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     bowtie = from_wkt("POLYGON((0 0,1 1,1 0,0 1,0 0))")
@@ -547,7 +572,7 @@ def st_explainvalidity_python_light_example(spark):
     return df.select(vx.st_explainvalidity("geom").alias("detail")).first()["detail"]
 
 
-st_explainvalidity_python_light_example_output = """
+st_explainvalidity_python_example_output = """
 +----------------------------------------------------------------------+
 |detail                                                                |
 +----------------------------------------------------------------------+
@@ -565,7 +590,7 @@ st_explainvalidity_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_simplifypreservetopology_python_light_example(spark):
+def st_simplifypreservetopology_python_example(spark):
     """Simplify a polygon while preserving topology (light pyvx tier).
 
     Creates an inline near-collinear polygon and simplifies it with tolerance=1.0.
@@ -573,7 +598,7 @@ def st_simplifypreservetopology_python_light_example(spark):
     vertex without collapsing or splitting the polygon.  Returns the simplified
     WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -584,7 +609,7 @@ def st_simplifypreservetopology_python_light_example(spark):
     ).first()["simplified"]
 
 
-st_simplifypreservetopology_python_light_example_output = """
+st_simplifypreservetopology_python_example_output = """
 +----------+
 |simplified|
 +----------+
@@ -594,14 +619,14 @@ st_simplifypreservetopology_python_light_example_output = """
 """
 
 
-def st_removerepeatedpoints_python_light_example(spark):
+def st_removerepeatedpoints_python_example(spark):
     """Remove consecutive duplicate vertices from a linestring (light pyvx tier).
 
     Creates a WKB linestring with repeated consecutive vertices inline and removes
     the exact duplicates with the default tolerance=0.0.  Returns the deduplicated
     WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     geom = from_wkt("LINESTRING(0 0,0 0,1 1,1 1,2 2)")
@@ -611,7 +636,7 @@ def st_removerepeatedpoints_python_light_example(spark):
     ).first()["deduped"]
 
 
-st_removerepeatedpoints_python_light_example_output = """
+st_removerepeatedpoints_python_example_output = """
 +--------+
 |deduped |
 +--------+
@@ -621,14 +646,14 @@ st_removerepeatedpoints_python_light_example_output = """
 """
 
 
-def st_reduceprecision_python_light_example(spark):
+def st_reduceprecision_python_example(spark):
     """Snap coordinates to a precision grid (light pyvx tier).
 
     Creates a WKB POINT(1.234, 5.678) inline and snaps it to a grid of size 1.0.
     The coordinates are rounded to the nearest integer grid lines: x=1.234 -> 1.0,
     y=5.678 -> 6.0.  Returns the snapped WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -639,7 +664,7 @@ def st_reduceprecision_python_light_example(spark):
     ).first()["snapped"]
 
 
-st_reduceprecision_python_light_example_output = """
+st_reduceprecision_python_example_output = """
 +--------+
 |snapped |
 +--------+
@@ -649,14 +674,14 @@ st_reduceprecision_python_light_example_output = """
 """
 
 
-def st_node_python_light_example(spark):
+def st_node_python_example(spark):
     """Node linework: split at all self-intersections (light pyvx tier).
 
     Creates a self-intersecting figure-eight linestring inline and nodes it.
     The self-intersection at (5, 5) is resolved by splitting the linework, returning
     a MultiLineString with clean non-overlapping segments.  Returns the noded WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     geom = from_wkt("LINESTRING(0 0,10 10,0 10,10 0)")
@@ -664,7 +689,7 @@ def st_node_python_light_example(spark):
     return df.select(vx.st_node("geom").alias("noded")).first()["noded"]
 
 
-st_node_python_light_example_output = """
+st_node_python_example_output = """
 +--------+
 |noded   |
 +--------+
@@ -674,7 +699,7 @@ st_node_python_light_example_output = """
 """
 
 
-def st_snap_python_light_example(spark):
+def st_snap_python_example(spark):
     """Snap geometry vertices onto a reference within a tolerance (light pyvx tier).
 
     Creates a WKB linestring that misses a reference by 0.4 units and snaps it
@@ -682,7 +707,7 @@ def st_snap_python_light_example(spark):
     onto the reference (y=0), aligning the two geometries.  Returns the snapped
     WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -694,7 +719,7 @@ def st_snap_python_light_example(spark):
     ).first()["snapped"]
 
 
-st_snap_python_light_example_output = """
+st_snap_python_example_output = """
 +--------+
 |snapped |
 +--------+
@@ -721,17 +746,17 @@ st_snap_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_coverageisvalid_python_light_example(spark):
+def st_coverageisvalid_python_example(spark):
     """Check polygon-coverage validity via grouped-agg Column wrapper (light pyvx tier).
 
     Builds two adjacent unit squares sharing the edge x=5 in coverage group
     ``cov_id=1``.  Uses shapely ``box`` (alias for ``from_shapely_bounds``) to
     produce WKB bytes for each polygon, creates a two-row DataFrame, and calls
-    ``vx.st_coverageisvalid("geom", 0.0)`` inside ``groupBy().agg()``.
+    ``vectorx_api.st_coverageisvalid("geom", 0.0)`` inside ``groupBy().agg()``.
     The two squares do not overlap and share a clean edge → ``is_valid = True``.
     ``gap_width=0.0`` detects only overlaps (no gap tolerance).
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
@@ -745,12 +770,12 @@ def st_coverageisvalid_python_light_example(spark):
         ["cov_id", "geom"],
     )
     result = df.groupBy("cov_id").agg(
-        vx.st_coverageisvalid("geom", 0.0).alias("is_valid")
+        vectorx_api.st_coverageisvalid("geom", 0.0).alias("is_valid")
     )
     return result.first()["is_valid"]
 
 
-st_coverageisvalid_python_light_example_output = """
+st_coverageisvalid_python_example_output = """
 +------+--------+
 |cov_id|is_valid|
 +------+--------+
@@ -760,16 +785,16 @@ st_coverageisvalid_python_light_example_output = """
 """
 
 
-def st_coverageinvalidedges_python_light_example(spark):
+def st_coverageinvalidedges_python_example(spark):
     """Return invalid edge segments of an overlapping coverage (light pyvx tier).
 
     Builds two overlapping squares in coverage group ``cov_id=1``: polygon 1
     covers [0,6]×[0,6] and polygon 2 covers [4,10]×[4,10], overlapping in
-    [4,6]×[4,6].  ``vx.st_coverageinvalidedges("geom", 0.0)`` aggregates the
+    [4,6]×[4,6].  ``vectorx_api.st_coverageinvalidedges("geom", 0.0)`` aggregates the
     group and returns the BINARY union of the boundary segments that violate
     the coverage.  Returns non-empty BINARY (WKB/EWKB) because of the overlap.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
@@ -783,12 +808,86 @@ def st_coverageinvalidedges_python_light_example(spark):
         ["cov_id", "geom"],
     )
     result = df.groupBy("cov_id").agg(
-        vx.st_coverageinvalidedges("geom", 0.0).alias("bad_edges")
+        vectorx_api.st_coverageinvalidedges("geom", 0.0).alias("bad_edges")
     )
     return result.first()["bad_edges"]
 
 
-st_coverageinvalidedges_python_light_example_output = """
+st_coverageinvalidedges_python_example_output = """
++------+---------+
+|cov_id|bad_edges|
++------+---------+
+|     1|[binary] |
++------+---------+
+... (BINARY — union of the invalid edge segments; non-empty because the two squares overlap)
+"""
+
+
+def st_coverageisvalid_array_python_example(spark):
+    """Check polygon-coverage validity from an array of WKB polygons (light pyvx tier).
+
+    Two adjacent squares share the edge x=5 in group ``cov_id=1``. ``collect_list`` gathers
+    each group's WKB polygons into one array, and ``st_coverageisvalid_array`` returns the
+    answer of the aggregate ``st_coverageisvalid`` over the same polygons: ``True``.
+    """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import box  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [
+            (1, bytearray(to_wkb(box(0.0, 0.0, 5.0, 5.0)))),
+            (1, bytearray(to_wkb(box(5.0, 0.0, 10.0, 5.0)))),
+        ],
+        "cov_id INT, geom BINARY",
+    )
+    result = df.groupBy("cov_id").agg(
+        vectorx_api.st_coverageisvalid_array(f.collect_list("geom"), 0.0).alias(
+            "is_valid"
+        )
+    )
+    return result.first()["is_valid"]
+
+
+st_coverageisvalid_array_python_example_output = """
++------+--------+
+|cov_id|is_valid|
++------+--------+
+|     1|    true|
++------+--------+
+... (BOOLEAN — true: the two adjacent squares share a clean edge with no overlap)
+"""
+
+
+def st_coverageinvalidedges_array_python_example(spark):
+    """Return the invalid edges of an array of overlapping WKB polygons (light pyvx tier).
+
+    Two squares overlap in [4,6]x[4,6] in group ``cov_id=1``. ``st_coverageinvalidedges_array``
+    returns the BINARY union of the edges that make the coverage invalid, the answer of the
+    aggregate ``st_coverageinvalidedges`` over the same polygons.
+    """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import box  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [
+            (1, bytearray(to_wkb(box(0.0, 0.0, 6.0, 6.0)))),
+            (1, bytearray(to_wkb(box(4.0, 4.0, 10.0, 10.0)))),
+        ],
+        "cov_id INT, geom BINARY",
+    )
+    result = df.groupBy("cov_id").agg(
+        vectorx_api.st_coverageinvalidedges_array(f.collect_list("geom"), 0.0).alias(
+            "bad_edges"
+        )
+    )
+    return result.first()["bad_edges"]
+
+
+st_coverageinvalidedges_array_python_example_output = """
 +------+---------+
 |cov_id|bad_edges|
 +------+---------+
@@ -814,7 +913,7 @@ def coverage_simplify_python_light_example(spark):
     simplified polygons still meet at x=5.  Returns the list of simplified WKB bytes
     (2 rows in, 2 rows out).
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import helpers  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     left = from_wkt("POLYGON((0 0, 2.5 0.001, 5 0, 5 5, 0 5, 0 0))")
@@ -826,7 +925,7 @@ def coverage_simplify_python_light_example(spark):
         ],
         ["cov_id", "geom"],
     )
-    result = vx.coverage_simplify(df, "cov_id", "geom", 0.1)
+    result = helpers.coverage_simplify(df, "cov_id", "geom", 0.1)
     rows = result.collect()
     return [row["geom_simplified"] for row in rows]
 

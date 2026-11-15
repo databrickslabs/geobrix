@@ -29,7 +29,7 @@ const config = {
   // Re-scroll to the URL hash after fonts/layout settle, so deep anchors on very
   // long reference pages (e.g. api/raster-functions) land on their section instead
   // of short. See the module for details.
-  clientModules: ['./src/clientModules/scrollToHashOnLoad.js'],
+  clientModules: ['./src/clientModules/scrollToHashOnLoad.js', './src/clientModules/zarrOldAnchors.js'],
 
   // Markdown configuration
   markdown: {
@@ -77,6 +77,13 @@ const config = {
         redirects: [
           { from: '/docs/beta-release-notes', to: '/docs/release-notes' },
           { from: '/docs/api/h3-raster-tessellation', to: '/docs/api/grid-raster-tessellation' },
+          // The Zarr Stores page became a set of topic pages under the Zarr function reference.
+          // Old #anchors are re-pointed by src/clientModules/zarrOldAnchors.js.
+          { from: '/docs/formats/zarr', to: '/docs/api/zarr-stores' },
+          // The format selection guide moved under Readers & Writers.
+          { from: '/docs/formats/overview', to: '/docs/choosing-a-format' },
+          // The 0.6.0 release notes split into New, Changes and Breaking pages.
+          { from: '/docs/release-notes-0-6', to: '/docs/release-notes/0-6/new' },
         ],
       },
     ],
@@ -133,7 +140,7 @@ const config = {
           },
           {
             to: '/docs/api/execution-tiers',
-            label: 'Lightweight vs Heavyweight',
+            label: 'Surfaces & Levels',
             position: 'left'
           },
           {
@@ -141,6 +148,35 @@ const config = {
             label: 'Readers & Writers',
             position: 'left'
           },
+          // The archive is a separate static site on the published docs host; the offline
+          // static zip (DOCS_STATIC_ZIP=1) does not contain it, so it gets no version menu.
+          ...(process.env.DOCS_STATIC_ZIP === '1'
+            ? []
+            : [
+                {
+                  type: 'dropdown',
+                  // The label names the version being read; the matching entry below is
+                  // highlighted (activeBaseRegex) on every docs page.
+                  label: '0.6 (current)',
+                  position: 'right',
+                  items: [
+                    {
+                      label: '0.6 (current)',
+                      to: '/docs/intro',
+                      // Tested against the full pathname (baseUrl included) on desktop and
+                      // the baseUrl-less one on mobile, so it matches /docs under either.
+                      activeBaseRegex: '/docs(/|$)',
+                    },
+                    {
+                      // pathname:// keeps the baseUrl, does a full page load (the archive
+                      // is a separate static site) and skips the broken-link check.
+                      label: '0.5.x (archive)',
+                      href: 'pathname:///archive/0.5/',
+                      target: '_self',
+                    },
+                  ],
+                },
+              ]),
           {
             href: 'https://github.com/databrickslabs/geobrix',
             label: 'GitHub',
@@ -211,7 +247,7 @@ const config = {
       prism: {
         theme: prismThemes.github,
         darkTheme: prismThemes.dracula,
-        additionalLanguages: ['java', 'bash', 'sql'],
+        additionalLanguages: ['java', 'scala', 'bash', 'sql'],
       },
     }),
 };

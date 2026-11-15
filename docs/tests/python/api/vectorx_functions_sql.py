@@ -53,6 +53,36 @@ st_asmvt_sql_example_output = """
 """
 
 
+def st_asmvt_array_sql_example():
+    """Encode one tile's features from an array of (geom, attrs) structs (SQL).
+
+    Reads the two-row ``mvt_features`` fixture view (tile-local WKB POINT(100, 100) and
+    POINT(200, 200), both in tile z=0/x=0/y=0). ``collect_list(struct(...))`` gathers each
+    tile's features into one array, after the ``GROUP BY`` of the tile key. The attributes
+    go in as JSON object text (``to_json``), because an array element has no free-form struct.
+    The layer is the one ``gbx_st_asmvt`` builds from the same rows.
+    """
+    return """
+SELECT z, x, y,
+       gbx_st_asmvt_array(
+         collect_list(struct(geom_wkb AS geom, to_json(attrs) AS attrs)),
+         'layer'
+       ) AS mvt
+FROM mvt_features
+GROUP BY z, x, y;
+"""
+
+
+st_asmvt_array_sql_example_output = """
++-+-+-+--------+
+|z|x|y|mvt     |
++-+-+-+--------+
+|0|0|0|[binary]|
++-+-+-+--------+
+... (MVT binary)
+"""
+
+
 def st_asmvt_pyramid_sql_example():
     """Explode one WGS-84 feature into per-tile (z, x, y, mvt_bytes) rows (SQL, heavy form).
 
@@ -61,17 +91,16 @@ def st_asmvt_pyramid_sql_example():
     re-encodes the feature for every intersecting tile, yielding 3 rows: one per zoom level
     ((0,0,0), (1,1,1), (2,2,2)).
 
-    Note: The heavy tier uses ``LATERAL VIEW ... AS tile`` (Hive-style); the lightweight
-    tier uses ``LATERAL ... t`` (SQL standard).  Both forms accept the same arguments.
+    Note: a table function, called as ``FROM t, LATERAL gbx_st_asmvt_pyramid(...)``; it
+    returns the flat columns ``z``, ``x``, ``y`` and ``mvt_bytes``.
     """
     return """
 WITH feats AS (
     SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb,
            named_struct('name', 'origin', 'id', 1L) AS attrs
 )
-SELECT t.tile.z AS z, t.tile.x AS x, t.tile.y AS y, t.tile.mvt_bytes AS mvt_bytes
-FROM feats
-LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t AS tile;
+SELECT t.z, t.x, t.y, t.mvt_bytes
+FROM feats, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t;
 """
 
 
@@ -94,15 +123,13 @@ def st_triangulate_sql_example():
     (4 WKB POINT Z forming a 10×10 m square with elevations 0, 0, 10, 5 m) and
     ``bl ARRAY<BINARY>`` (empty breaklines array).  Constrained Delaunay
     triangulation of a quadrilateral produces exactly 2 triangle polygons.
-    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
-    (inserts Steiner points) is heavyweight-only.
-    Uses ``LATERAL VIEW`` (Hive-style generator syntax); the lightweight tier
-    supports the SQL-standard ``LATERAL`` form.
+    ``mode='constrained'`` and ``mode='conforming'`` (inserts Steiner points) run
+    in both tiers.
+    A table function, called as ``FROM t, LATERAL f(...)``.
     """
     return """
 SELECT t.triangle
-FROM tin_survey
-LATERAL VIEW gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t AS triangle
+FROM tin_survey, LATERAL gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t
 """
 
 
@@ -124,15 +151,13 @@ def st_interpolateelevationbbox_sql_example():
     ``st_triangulate``).  Samples the TIN on a 3×3 grid spanning the full 10×10 m
     extent (0–10 in both X and Y, SRID=0).  All 9 cell centres fall inside the TIN
     convex hull, so the generator emits 9 rows.
-    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
-    (inserts Steiner points) is heavyweight-only.
-    Uses ``LATERAL VIEW`` (Hive-style generator syntax); the lightweight tier
-    supports the SQL-standard ``LATERAL`` form.
+    ``mode='constrained'`` and ``mode='conforming'`` (inserts Steiner points) run
+    in both tiers.
+    A table function, called as ``FROM t, LATERAL f(...)``.
     """
     return """
 SELECT t.elevation_point
-FROM tin_survey
-LATERAL VIEW gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t AS elevation_point
+FROM tin_survey, LATERAL gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t
 """
 
 
@@ -156,15 +181,13 @@ def st_interpolateelevationgeom_sql_example():
     3 columns, 3 rows, and cell sizes of 3.0 m × 3.0 m (negative Y steps
     downward per raster convention).  All 9 cell centres fall inside the TIN hull
     and the SRID of the output points is 0 (plain WKB origin carries no SRID).
-    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
-    (inserts Steiner points) is heavyweight-only.
-    Uses ``LATERAL VIEW`` (Hive-style generator syntax); the lightweight tier
-    supports the SQL-standard ``LATERAL`` form.
+    ``mode='constrained'`` and ``mode='conforming'`` (inserts Steiner points) run
+    in both tiers.
+    A table function, called as ``FROM t, LATERAL f(...)``.
     """
     return """
 SELECT t.elevation_point
-FROM tin_survey
-LATERAL VIEW gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('010100000000000000000000000000000000002440'), 3, 3, 3, -3, 'constrained') t AS elevation_point
+FROM tin_survey, LATERAL gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('010100000000000000000000000000000000002440'), 3, 3, 3, -3, 'constrained') t
 """
 
 
@@ -638,6 +661,55 @@ GROUP BY cov_id
 
 
 st_coverageinvalidedges_sql_example_output = """
++------+---------+
+|cov_id|bad_edges|
++------+---------+
+|1     |[binary] |
++------+---------+
+... (BINARY — union of the invalid edge segments; empty geometry when the coverage is clean)
+"""
+
+
+def st_coverageisvalid_array_sql_example():
+    """Check whether an array of polygons forms a valid coverage (SQL).
+
+    The ``coverage_parcels`` view holds two adjacent squares that share the edge x=5, as WKB in
+    ``geom_wkb``. ``collect_list(geom_wkb)`` gathers each ``cov_id`` group into one array.
+    ``gbx_st_coverageisvalid_array(geoms, 0.0)`` returns the answer of the aggregate
+    ``gbx_st_coverageisvalid`` over the same polygons: ``true``.
+    """
+    return """
+SELECT cov_id, gbx_st_coverageisvalid_array(collect_list(geom_wkb), 0.0) AS is_valid
+FROM coverage_parcels
+GROUP BY cov_id
+"""
+
+
+st_coverageisvalid_array_sql_example_output = """
++------+--------+
+|cov_id|is_valid|
++------+--------+
+|1     |true    |
++------+--------+
+... (BOOLEAN — true when the polygons have no overlap and no gap narrower than gap_width)
+"""
+
+
+def st_coverageinvalidedges_array_sql_example():
+    """Return the invalid edges of an array of polygons (SQL).
+
+    The ``coverage_overlap`` view holds two squares that overlap in [4,6]x[4,6], as WKB in
+    ``geom_wkb``. ``gbx_st_coverageinvalidedges_array`` returns the union of the edges that
+    make the coverage invalid, the answer of the aggregate over the same polygons.
+    """
+    return """
+SELECT cov_id, gbx_st_coverageinvalidedges_array(collect_list(geom_wkb), 0.0) AS bad_edges
+FROM coverage_overlap
+GROUP BY cov_id
+"""
+
+
+st_coverageinvalidedges_array_sql_example_output = """
 +------+---------+
 |cov_id|bad_edges|
 +------+---------+

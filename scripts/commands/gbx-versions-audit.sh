@@ -1,7 +1,12 @@
 #!/bin/bash
-# gbx:versions:audit - Inventory pinned Python tooling versions across CI, Docker, init scripts, and venv setup.
+# gbx:versions:audit - Inventory pinned Python tooling versions across CI, Docker, the DCS image, and venv setup.
 # Use case 1: audit drift between locations.
 # Use case 2: when bumping to a new DBR LTS, run this first to see every place that needs an update.
+# Use case 3 (--native, --host): check the native stack (GDAL, PROJ, GEOS, Rust, the bindings) against
+# scripts/native/pins.conf: the repository's consumers (--native) and the host venv and the dev container (--host).
+# Use case 4 (--install-moves): what installing each env wheel (its core install, and with every extra) moves on each
+# runtime it targets (python/geobrix/envs/runtimes/), resolved with uv; fails on an undocumented move or a pulled
+# vendored package (scripts/native/install_moves.py).
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -9,28 +14,53 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 show_help() {
-    show_banner "Versions audit (CI / Docker / init / venv)"
+    show_banner "Versions audit (CI / Docker / DCS / venv)"
     echo -e "${CYAN}Usage:${NC}"
     echo -e "  ${GREEN}gbx:versions:audit${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--package <name>${NC} Show only one package (e.g. pip, numpy, pyspark)."
+    echo -e "  ${GREEN}--native${NC}         Audit every consumer of the native pins (scripts/native/pins.conf, rust-toolchain.toml,"
+    echo -e "                      legacy consumers) instead of the package inventory."
+    echo -e "  ${GREEN}--host${NC}           Check the host venv AND this checkout's dev container against the pins: Python patch"
+    echo -e "                      version, the bound Python packages, and GDAL/PROJ/GEOS as rasterio/pyproj/shapely report them."
+    echo -e "  ${GREEN}--check${NC}          With --native or --host: exit 1 on drift (without it the report is printed and the exit is 0)."
+    echo -e "  ${GREEN}--install-moves${NC}  Resolve each env wheel's requirements (core, and core + every extra) against each target"
+    echo -e "                      runtime's preinstalled list (python/geobrix/envs/runtimes/) with uv, both architectures:"
+    echo -e "                      prints what moves, exits 1 on an undocumented move or a PyPI copy of a vendored package."
+    echo -e "  ${GREEN}--env 5|6${NC}        With --install-moves: only that env wheel's runtimes (repeatable; default both)."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
     echo ""
     echo -e "${CYAN}When to use:${NC}"
     echo -e "  - Bumping to a new DBR LTS: run this, then ask Claude to apply the new pins"
     echo -e "    given the release-notes URL (e.g. docs.databricks.com/.../runtime/18.3lts)."
-    echo -e "  - Suspect drift between Dockerfile / CI / init scripts: run to spot it."
+    echo -e "  - Suspect drift between Dockerfile / CI / images: run to spot it."
     echo ""
 }
 
 PACKAGE_FILTER=""
 LOG_PATH=""
+NATIVE=false
+HOST=false
+CHECK=false
+MOVES=false
+MOVES_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --package)
             PACKAGE_FILTER="$2"; shift 2;;
+        --native)
+            NATIVE=true; shift;;
+        --host)
+            HOST=true; shift;;
+        --check)
+            CHECK=true; shift;;
+        --install-moves)
+            MOVES=true; shift;;
+        --env)
+            [[ $# -ge 2 ]] || { echo -e "${RED}--env needs a value${NC}"; exit 2; }
+            MOVES_ARGS+=(--env "$2"); shift 2;;
         --log)
             LOG_PATH=$(resolve_log_path "$2"); shift 2;;
         --help|-h)
@@ -44,22 +74,67 @@ cd "$PROJECT_ROOT"
 show_banner "Versions audit"
 setup_log_file "$LOG_PATH"
 
-# Files where pinned versions live. Keep this list in sync with the SECURITY/CI
-# review notes in .superpowers/prompts/security/. New file? Add it here AND remove this line
-# of staleness.
+# --install-moves: no inventory; scripts/native/install_moves.py resolves (uv, the configured index, output redacted).
+if [ "$MOVES" = true ]; then
+    command -v uv > /dev/null 2>&1 || { echo "PRECONDITION MISSING: uv is not installed; gbx:versions:audit --install-moves not run"; exit 1; }
+    RC=0
+    python3 scripts/native/install_moves.py ${MOVES_ARGS[@]+"${MOVES_ARGS[@]}"} || RC=1
+    if [ -n "$LOG_PATH" ]; then
+        echo -e "${CYAN}Log saved to: ${YELLOW}$LOG_PATH${NC}"
+    fi
+    exit $RC
+fi
+
+# --native / --host: the native pins are checked, not inventoried (scripts/native/pins.py does the work).
+if [ "$NATIVE" = true ] || [ "$HOST" = true ]; then
+    CHECK_ARG=()
+    [ "$CHECK" = true ] && CHECK_ARG=(--check)
+    RC=0
+    if [ "$NATIVE" = true ]; then
+        python3 scripts/native/pins.py audit ${CHECK_ARG[@]+"${CHECK_ARG[@]}"} || RC=1
+    fi
+    if [ "$HOST" = true ]; then
+        # The same collector gbx:venv:check uses, run by the host venv's interpreter and inside the container.
+        REPORT="$PROJECT_ROOT/scripts/ci/venv_env_report.py"
+        VENV_DIR="${GBX_PYRX_VENV:-$PROJECT_ROOT/.venv-pyrx}"
+        VENV_PY="$VENV_DIR/bin/python"
+        if [ ! -x "$VENV_PY" ]; then
+            echo -e "${RED}ERROR: no host venv at $VENV_DIR. Run: bash scripts/commands/gbx-venv-sync.sh${NC}" >&2
+            exit 1
+        fi
+        check_docker
+        WORK="$(mktemp -d "${TMPDIR:-/tmp}/gbx-versions-audit.XXXXXX")"
+        "$VENV_PY" - collect < "$REPORT" > "$WORK/host.json" \
+            || { rm -rf "$WORK"; echo -e "${RED}ERROR: could not read the host venv${NC}" >&2; exit 1; }
+        docker exec -i "$GBX_DEV_CONTAINER" python3 - collect < "$REPORT" > "$WORK/container.json" \
+            || { rm -rf "$WORK"; echo -e "${RED}ERROR: could not read the container's environment${NC}" >&2; exit 1; }
+        python3 scripts/native/pins.py env-check ${CHECK_ARG[@]+"${CHECK_ARG[@]}"} "host=$WORK/host.json" "container=$WORK/container.json" || RC=1
+        rm -rf "$WORK"
+    fi
+    if [ -n "$LOG_PATH" ]; then
+        echo -e "${CYAN}Log saved to: ${YELLOW}$LOG_PATH${NC}"
+    fi
+    exit $RC
+fi
+
+# Files where pinned versions live (the audit's scope). A new file that pins a version
+# must be added here, or its pins are never audited.
 FILES=(
     ".github/actions/scala_build/action.yml"
     ".github/actions/python_build/action.yml"
     ".github/workflows/build_main.yml"
-    ".github/workflows/build_python.yml"
-    ".github/workflows/build_scala.yml"
     ".github/workflows/build_scala_by_package.yml"
     ".github/workflows/codecov-scala-parallel.yml"
     "scripts/docker/Dockerfile"
-    "scripts/geobrix-gdal-init.sh"
+    "scripts/docker/dcs/Dockerfile"
+    "scripts/ci-local/Dockerfile.gha-runner"
+    ".mvn/wrapper/maven-wrapper.properties"
+    "pom.xml"
+    "scripts/native/pins.conf"
+    "rust-toolchain.toml"
     "scripts/commands/gbx-lint-python.sh"
     "python/geobrix/pyproject.toml"
-    "notebooks/tests/requirements.txt"
+    "examples/tests/requirements.txt"
 )
 
 # Packages we pin or track. Format: package_name:::grep_pattern:::source-of-truth
@@ -83,7 +158,9 @@ PACKAGES=(
     "pytest-cov:::pytest-cov(==|_VERSION=):::current PyPI stable"
     "build:::build(==|_VERSION=):::current PyPI stable (not in DBR)"
     # Native — system + apt
-    "gdal:::(gdal-config|gdal\[numpy\]|GDAL\[numpy\]|gdal: ?\[):::system apt + ubuntugis PPA"
+    "gdal:::(gdal-config|gdal\[numpy\]|GDAL\[numpy\]|gdal: ?\[|GDAL_VERSION=|org\.gdal):::scripts/native/pins.conf (legacy consumers listed in scripts/native/legacy-consumers.txt)"
+    "proj:::PROJ_VERSION=:::scripts/native/pins.conf"
+    "geos:::GEOS_VERSION=:::scripts/native/pins.conf"
     # Jupyter / notebook stack — DBR-aligned (Dockerfile dev container)
     "ipython:::ipython(==|_VERSION=):::DBR LTS"
     "ipykernel:::ipykernel(==|_VERSION=):::DBR LTS"
@@ -96,8 +173,13 @@ PACKAGES=(
     "nbformat:::nbformat(==|_VERSION=|>=):::DBR LTS"
     "nbconvert:::nbconvert(==|_VERSION=|>=):::DBR LTS"
     "pyzmq:::pyzmq(==|_VERSION=):::INTENTIONAL DBR DIVERGENCE — see Dockerfile ZMQ fixes"
+    # Build tool — one Maven for CI (wrapper), the dev image, the local-CI image and the pom's enforcer floor
+    "maven:::MAVEN_VERSION=|distributionUrl=|<version>\[3\.[0-9.]+,\)</version>:::.mvn/wrapper (CI); scripts/ci/test_maven_wrapper.py keeps them equal"
     # Geospatial — geopandas not in DBR; pinned to be pandas-2.2 compatible
     "geopandas:::geopandas(==|_VERSION=):::current stable, compatible with DBR pandas 2.2"
+    # Zarr extra ([zarr_dbr19] / [zarr_env6]) — none of these is preinstalled on DBR 19, env 6 or DBR 19 ML;
+    # the pins are floors + next-minor caps. Matches only the extra's own entries in pyproject.toml.
+    "zarr:::^ +\"(zarr|numcodecs|zarrs|tensorstore|obstore|ml_dtypes|msgspec|donfig)>=:::Zarr runtime-deps report (not in DBR 19 / env 6 / DBR 19 ML); python/geobrix/pyproject.toml [zarr_dbr19]"
 )
 
 print_package() {

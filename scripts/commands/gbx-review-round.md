@@ -32,11 +32,26 @@ bash scripts/commands/gbx-review-round.sh [OPTIONS] [-- <extra isaac args>]
   while outputs aren't reviewable code. Stripping happens in a scratch worktree (outputs
   cleared on both the base and HEAD side, reviewed with `isaac review --uncommitted`);
   your checkout is untouched.
+- `--include-generated` — Also review the generated lock files. By default
+  `requirements-dev-container*.txt` and `requirements*-ci.txt` (hash-pinned `uv pip compile`
+  output: nothing to review, and they cost context) are skipped through Isaac's `opt_out.paths`,
+  set in `scripts/commands/isaac-review-local.yaml`, which the command passes with `-c`.
+  Isaac replaces a list when it layers a config, so that file repeats Isaac's own default
+  `opt_out` paths too. The same file sets `pr_commenting.auto_post_threshold` so every severity
+  (critical, major, minor, info) is reported; Isaac's default drops minor and info. A config you pass
+  yourself after `--` (`-c`) replaces it. With `--include-generated` the command passes
+  `scripts/commands/isaac-review-severities.yaml` (the same severity block, no `opt_out`) instead.
 - `--log <path>` — Tee output to a log (`filename` → `test-logs/<name>`).
 - `-h`, `--help` — Show help.
 
 Extra isaac flags after `--` pass through (e.g. `-- -f markdown -o report.md`). Isaac runs
 via `dbexec repo run isaac` (the shell alias is not available in a non-interactive script).
+
+## Scope in a dirty checkout
+
+- Isaac's local mode also reviews uncommitted and untracked files, not only `base...HEAD`.
+- When the checkout has any, the command reviews `HEAD` from a clean detached worktree. The scope is then the committed change alone.
+- Commit what you want reviewed first.
 
 ## Examples
 

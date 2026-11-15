@@ -1,5 +1,7 @@
 """Tests for splitStrategy / layout-aware chunking in raster_gbx."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import rasterio
 
@@ -23,7 +25,7 @@ def _write_striped(path, w=4000, h=4000):
         transform=rasterio.Affine.identity(),
         tiled=False,
     )  # striped
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(np.zeros((1, h, w), dtype="uint8"))
 
 
@@ -120,3 +122,65 @@ def test_netcdf_reader_accepts_options(tmp_path):
     assert r.strategy == "serverless"
     # tileFormat/cogBlockSize/cogOverviewResampling are no longer reader options.
     assert not hasattr(r, "tile_format"), "tile_format removed from reader in 0.4.4+"
+
+
+def test_materialized_reads_stage_through_shared_cache(tmp_path, monkeypatch):
+    """Wiring: re-encoded (non-passthrough) reads stage the source through the
+    shared bounded StageCache -- two reads of one file copy it once."""
+    from databricks.labs.gbx.ds import raster as raster_mod
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        StageCache,
+        copy_source_sequential,
+    )
+
+    p = tmp_path / "s.tif"
+    _write_striped(str(p), 256, 256)
+    copies = []
+
+    def counting_copy(src, dst):
+        copies.append(src)
+        copy_source_sequential(src, dst)
+
+    monkeypatch.setattr(
+        raster_mod, "_RASTER_STAGE", StageCache("gbx_stage_t_", counting_copy)
+    )
+    from databricks.labs.gbx.ds.raster import _TilePartition
+
+    r = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "false"})
+    # A windowed tile is decoded from the staged local copy.
+    part = _TilePartition(file_path=str(p), window=(0, 0, 64, 64))
+    assert len(list(r.read(part))) == 1 and len(list(r.read(part))) == 1
+    assert copies == [str(p)]
+
+
+def test_materialized_reads_restage_a_source_replaced_in_place(tmp_path):
+    """Wiring: the shared StageCache validates the source signature, so a raster
+    replaced at the same path is decoded fresh in the same worker process."""
+    import os
+
+    from databricks.labs.gbx.ds.raster import _TilePartition
+
+    p = str(tmp_path / "s.tif")
+
+    def write(value, bump_s):
+        profile = dict(
+            driver="GTiff",
+            width=64,
+            height=64,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:4326",
+            transform=rasterio.Affine.identity(),
+        )
+        with open_raster(p, "w", **profile) as dst:
+            dst.write(np.full((1, 64, 64), value, dtype="uint8"))
+        st = os.stat(p)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + bump_s * 1_000_000_000))
+
+    r = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "false"})
+    part = _TilePartition(file_path=p, window=(0, 0, 64, 64))
+    write(1, 0)
+    first = list(r.read(part))
+    write(2, 5)
+    second = list(r.read(part))
+    assert len(first) == len(second) == 1 and first != second

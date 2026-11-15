@@ -78,7 +78,7 @@ def test_simplify_spec_produces_interactive():
 
 
 # ---------------------------------------------------------------------------
-# Task 11b: audit_layers and dry_run tests
+# audit_layers and dry_run tests
 # ---------------------------------------------------------------------------
 
 
@@ -166,6 +166,49 @@ def test_audit_max_tile_bytes_for_archive():
     assert (
         entry["max_tile_bytes"] > 0
     ), f"max_tile_bytes should be positive, got {entry['max_tile_bytes']}"
+
+
+@pytest.mark.parametrize("plain", [False, True], ids=["gzip", "uncompressed-directory"])
+def test_the_archive_helpers_read_the_tiles_of_either_directory_layout(plain):
+    """The tile-size audit, the MVT layer discovery and the raster tile size read the same tiles
+    whether the archive's directories are gzipped or stored plain (the heavy writer's layout).
+    """
+    import io
+    from test.pmtiles_light._archives import uncompressed_internals
+
+    import mapbox_vector_tile as mvt
+    from PIL import Image
+    from pmtiles.tile import TileType
+
+    from databricks.labs.gbx.vizx._maplibre import (
+        _max_tile_bytes,
+        _mvt_layer_names_from_bytes,
+        _raster_tile_px,
+    )
+
+    from .test_pmtiles_autofit import _build_archive
+
+    vector = mvt.encode(
+        [
+            {
+                "name": "roads",
+                "features": [{"geometry": "POINT(10 10)", "properties": {}}],
+            }
+        ]
+    )
+    png = io.BytesIO()
+    Image.new("RGBA", (32, 32), (1, 2, 3, 255)).save(png, format="PNG")
+    png = png.getvalue()
+    archives = {
+        "vector": _build_archive([(0, 0, 0, vector)], TileType.MVT),
+        "raster": _build_archive([(0, 0, 0, png)], TileType.PNG),
+    }
+    if plain:
+        archives = {k: uncompressed_internals(v) for k, v in archives.items()}
+
+    assert _max_tile_bytes(archives["vector"]) == len(vector)
+    assert _mvt_layer_names_from_bytes(archives["vector"]) == ["roads"]
+    assert _raster_tile_px({"bytes": archives["raster"]}) == 32
 
 
 # ---------------------------------------------------------------------------
@@ -317,3 +360,47 @@ def test_remedy_message_mentions_serverless_cell_cap():
     ), "remedy must mention the Serverless cell-output cap lever"
     # Must NOT tell the user the misleading 'increase max_embed_mb' remedy alone.
     assert "increase max_embed_mb if your notebook" not in combined
+
+
+# ---------------------------------------------------------------------------
+# Audit line: an over-budget (skipped) layer must report its real size.
+# ---------------------------------------------------------------------------
+
+
+def _big_archive(mb: float) -> bytes:
+    return b"PMTiles" + b"\x03" + b"\x00" * (int(mb * 1024 * 1024) - 8)
+
+
+def test_audit_reports_real_size_for_oversize_layer():
+    """A pmtiles layer too big to embed is not prepared, but its audit entry must
+    carry the rendered (base64) size estimate, and the per-layer sizes must add
+    up to the total (they printed ``layer[0] 0.0MB = 23.2MB`` before)."""
+    from databricks.labs.gbx.vizx._interactive import _format_audit_line
+
+    layer = pmtiles_layer(_big_archive(2.0))
+    expected = int(len(_big_archive(2.0)) * 4 / 3)
+    for audit in (
+        audit_layers([layer], max_embed_mb=0),
+        prepare_layers([layer], max_embed_mb=0)["audit"],
+    ):
+        (entry,) = audit["layers"]
+        assert entry["embed_bytes"] == expected
+        assert (
+            sum(e["embed_bytes"] for e in audit["layers"]) == audit["total_embed_bytes"]
+        )
+        line = _format_audit_line(audit, 0)
+        assert "layer[0] 2.7MB = 2.7MB > 0MB" in line, line
+
+
+def test_audit_total_includes_skipped_layer_when_others_embed():
+    """An oversize pmtiles next to a small vector layer: the skipped layer is
+    counted in the total (so the verdict cannot say 'embed'), and parts add up."""
+    big = pmtiles_layer(_big_archive(2.0), label="big")
+    small = vector_layer(_small_gdf())
+    audit = audit_layers([big, small], max_embed_mb=1)
+    sizes = {e["label"]: e["embed_bytes"] for e in audit["layers"]}
+    assert sizes["big"] == int(len(_big_archive(2.0)) * 4 / 3)
+    assert sizes[audit["layers"][1]["label"]] > 0
+    assert audit["total_embed_bytes"] >= sum(sizes.values())
+    assert audit["fits"] is False
+    assert audit["verdict"] == "static"

@@ -7,6 +7,11 @@ across both cases so parity locks once; ``path``/``window``/``clip_polygon``/
 ``clip_crs``/``crs`` are null for a plain v1 tile.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
@@ -21,6 +26,11 @@ from pyspark.sql.types import (
 )
 
 Window4 = Tuple[int, int, int, int]  # (col_off, row_off, width, height)
+
+# ``metadata`` key marking a tile as ONE BAND of its parent (1-based band number).
+# ``rst_separatebands`` stamps it so a writer can tell the band tiles apart from
+# a whole-file tile: they share the parent's cellid, path/source and extent.
+BAND_METADATA_KEY = "band"
 
 _WINDOW_STRUCT = StructType(
     [

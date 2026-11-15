@@ -14,11 +14,14 @@ suite covers the added v2 ``(source, tile)`` envelope acceptance:
 
 import glob
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
+import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
+from shapely import box, to_wkb
 
 from databricks.labs.gbx.ds.cog_writer import CogGbxWriter, assert_path_schema
 from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
@@ -35,7 +38,7 @@ def _write_src(path, w=512, h=512):
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w) % 251)
 
 
@@ -365,3 +368,308 @@ def test_top_level_path_input_still_writes(tmp_path):
     assert len(produced) == 1
     with open(produced[0], "rb") as fh:
         assert gbxcog.sniff_header(fh.read()).is_cog is True
+
+
+# ---------------------------------------------------------------------------
+# (d) default output names never collide when tiles share a cellid
+# ---------------------------------------------------------------------------
+
+
+def _gtiff_bytes(value, w=256, h=256):
+    """Encoded GeoTIFF bytes of a constant-valued uint8 raster."""
+    from rasterio.io import MemoryFile
+
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 60, 0.01, 0.01),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(np.full((1, h, w), value, dtype="uint8"))
+        return mf.read()
+
+
+def _materialized_row(cellid, value):
+    """A source-less materialized tile row: bytes set, no path, empty source."""
+    return _v2_row(cellid, raster=_gtiff_bytes(value))
+
+
+def _pixel_value(path):
+    with rasterio.open(path) as ds:
+        arr = ds.read(1)
+    assert arr.min() == arr.max(), "constant-valued tile expected"
+    return int(arr[0, 0])
+
+
+def test_sourceless_tiles_sharing_a_cellid_get_distinct_names(tmp_path):
+    """Retile windows share their parent's cellid. With no nameCol, no path and
+    no source, the fallback name must still differ per tile, so no window
+    overwrites (or, with cogSkipIfExists, silently drops) another."""
+    out = tmp_path / "out"
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=128)
+    msg = w.write(iter([_materialized_row(7, 10), _materialized_row(7, 200)]))
+
+    assert len(set(msg.paths)) == 2, f"tiles collided on one name: {msg.paths}"
+    on_disk = sorted(glob.glob(os.path.join(str(out), "*.tif")))
+    assert len(on_disk) == 2, f"expected two files, found {on_disk}"
+    assert sorted(_pixel_value(p) for p in on_disk) == [10, 200]
+
+
+def test_sourceless_tile_name_is_deterministic(tmp_path):
+    """A re-run of the same tile writes the same file name (content-keyed, no
+    random suffix), so an idempotent re-run lines up on the same files."""
+    names = []
+    for run in ("a", "b"):
+        out = tmp_path / run
+        w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=128)
+        msg = w.write(iter([_materialized_row(7, 10)]))
+        names.append([os.path.basename(p) for p in msg.paths])
+    assert names[0] == names[1], f"name changed between runs: {names}"
+    assert names[0][0].startswith("7_"), "cellid stays the readable name prefix"
+
+
+def test_windowed_virtual_tiles_of_one_path_get_distinct_names(tmp_path):
+    """Windows of one source file share its path (and cellid). The default name
+    comes from the path, so each window needs its own name or they overwrite."""
+    src = tmp_path / "in" / "big.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    out = tmp_path / "out"
+    meta = _dims_meta(512, 512)
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=128)
+    msg = w.write(
+        iter(
+            [
+                _v2_row(0, path=str(src), window=(0, 0, 256, 256), metadata=meta),
+                _v2_row(0, path=str(src), window=(256, 0, 256, 256), metadata=meta),
+            ]
+        )
+    )
+
+    assert len(set(msg.paths)) == 2, f"windows collided on one name: {msg.paths}"
+    assert len(glob.glob(os.path.join(str(out), "*.tif"))) == 2
+    assert all(os.path.basename(p).startswith("big_") for p in msg.paths)
+
+
+def test_whole_file_virtual_keeps_source_stem_name(tmp_path):
+    """A whole-file tile is the only tile of its source: it keeps the plain
+    source-stem name (no key suffix)."""
+    src = tmp_path / "in" / "whole.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    out = tmp_path / "out"
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=256)
+    msg = w.write(
+        iter(
+            [
+                _v2_row(
+                    0,
+                    path=str(src),
+                    window=(0, 0, 512, 512),
+                    metadata=_dims_meta(512, 512),
+                )
+            ]
+        )
+    )
+    assert [os.path.basename(p) for p in msg.paths] == ["whole.tif"]
+
+
+# -- provenance-marked parts of one source (window / clip / band) ------------
+
+
+def _part_row(
+    source, *, window=None, band=None, clip=None, path=None, metadata=None, value=10
+):
+    """A materialized tile row cut out of ``source``: bytes set, plus the provenance
+    a tile function stamps (window within its parent, a 1-based band marker, or a clip).
+    """
+    row = _v2_row(
+        7, raster=_gtiff_bytes(value), window=window, path=path, metadata=metadata
+    )
+    row["source"] = source
+    if band is not None:
+        row["tile"]["metadata"]["band"] = str(band)
+    if clip is not None:
+        row["tile"]["clip_polygon"] = to_wkb(box(*clip))
+        row["tile"]["clip_crs"] = "EPSG:4326"
+    return row
+
+
+def _stem(writer, row):
+    from databricks.labs.gbx.pyrx.core.open_tile import _to_virtual_tile
+
+    vt = _to_virtual_tile(row["tile"])
+    return os.path.basename(writer._out_path_for(vt, row))
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        # Sibling windows share the parent's cellid and source; even byte-identical ones
+        # (all-NoData) are different places, so the window is part of the name's key.
+        [dict(window=(256, 0, 256, 256)), dict(window=(0, 256, 256, 256))],
+        # Band tiles have the parent's cellid, source and extent: the band marker tells
+        # them apart, even when the bands hold identical pixels.
+        [dict(band=1), dict(band=2), dict(band=3)],
+        # Clip-only parts have no window and no band: only the clip polygon tells them apart.
+        [dict(clip=(0, 0, 1, 1)), dict(clip=(1, 1, 2, 2))],
+    ],
+    ids=["windows", "bands", "clips"],
+)
+def test_parts_of_one_source_with_identical_bytes_get_distinct_names(tmp_path, parts):
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    names = {_stem(w, _part_row("/data/parent.tif", **kw)) for kw in parts}
+    assert len(names) == len(parts)
+    assert all(n.startswith("parent_") for n in names)
+
+
+def test_pathless_origin_window_is_a_part(tmp_path):
+    """Every parent's first child sits at (0,0,tw,th), equal to its own extent. A
+    tile with no path was cut from a parent (readers always stamp the path), so even
+    that origin child is a part and never takes the plain source name."""
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    origin = _stem(w, _part_row("/data/parent.tif", window=(0, 0, 256, 256)))
+    assert origin.startswith("parent_")
+
+
+def test_part_name_is_deterministic(tmp_path):
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    row = _part_row("/data/parent.tif", window=(256, 0, 256, 256))
+    assert _stem(w, row) == _stem(w, row)
+
+
+def _reader_row(path, *, window, passthrough):
+    """A materialized (source, tile) row exactly as the raster_gbx reader builds it:
+    ``_encode.passthrough_tile`` / ``encode_tile`` bytes and metadata assembled by
+    ``_v2_tile_row`` (path plus window provenance, NO width/height metadata)."""
+    from databricks.labs.gbx.ds import _encode
+    from databricks.labs.gbx.ds.raster import _v2_tile_row
+
+    with rasterio.open(path) as ds:
+        if passthrough:
+            cellid, raster_bytes, meta = _encode.passthrough_tile(
+                path, ds.width, ds.height, source_path=path, all_parents=""
+            )
+        else:
+            cellid, raster_bytes, meta = _encode.encode_tile(
+                ds, window=window, source_path=path, all_parents=""
+            )
+    tile = _v2_tile_row(cellid, raster_bytes, path=path, window=window, metadata=meta)
+    fields = [f.name for f in reader_schema_v2()["tile"].dataType.fields]
+    return {"source": path, "tile": dict(zip(fields, tile))}
+
+
+def test_reader_passthrough_whole_file_tile_keeps_source_stem(tmp_path):
+    """A materialized whole-file GTiff read (passthrough bytes) records path plus
+    window (0,0,W,H) and no dims metadata: the window is the tile's own full
+    extent, so it is the whole file and keeps the plain stem."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=256, h=256)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    row = _reader_row(str(src), window=(0, 0, 256, 256), passthrough=True)
+    assert _stem(w, row) == "scene.tif"
+
+
+def test_reader_reencoded_whole_file_tile_keeps_source_stem(tmp_path):
+    """Same for a whole-file read that re-encodes the window (non-GTiff source)."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=256, h=256)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    row = _reader_row(str(src), window=(0, 0, 256, 256), passthrough=False)
+    assert _stem(w, row) == "scene.tif"
+
+
+def test_reader_split_tiles_are_named_as_parts(tmp_path):
+    """Windows of a materialized split read are parts of the file: each gets its
+    own key after the source stem."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    a = _stem(w, _reader_row(str(src), window=(256, 0, 256, 256), passthrough=False))
+    b = _stem(w, _reader_row(str(src), window=(0, 256, 256, 256), passthrough=False))
+    assert a != b
+    assert a.startswith("scene_") and b.startswith("scene_")
+
+
+# ---------------------------------------------------------------------------
+# virtual Zarr tiles: the path is a store of chunks, one file per tile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("materialized", [False, True], ids=["virtual", "materialized"])
+@pytest.mark.parametrize(
+    "tile_size", [None, (24, 16)], ids=["chunk-windows", "whole-plane"]
+)
+def test_zarr_tiles_are_each_written_to_their_own_cog(
+    tmp_path, tile_size, materialized
+):
+    """Zarr tiles of one store share its path and, for a whole-plane window, the stamped
+    source dims, whether they are virtual or hold their bytes (``virtual_tiles=False``).
+    Every variable and step still gets its own file, band 1 of which is that step's cells;
+    a virtual whole-plane tile is not path-converted (its path is a directory)."""
+    zarr = pytest.importorskip("zarr")
+    from databricks.labs.gbx.zarr import _read, _tiles
+
+    store = tmp_path / "cube.zarr"
+    group = zarr.open_group(str(store), mode="w", zarr_format=3)
+    axes = (
+        ("time", np.arange(3, dtype="int64"), "hours since 2000-01-01"),
+        ("latitude", np.linspace(15.5, 0.5, 16), "degrees_north"),
+        ("longitude", np.linspace(0.5, 23.5, 24), "degrees_east"),
+    )
+    for name, values, units in axes:
+        axis = group.create_array(
+            name,
+            shape=values.shape,
+            chunks=values.shape,
+            dtype=values.dtype,
+            dimension_names=(name,),
+            attributes={"units": units},
+        )
+        axis[:] = values
+    cells = {}
+    for k, name in enumerate(("a", "b")):
+        cells[name] = (
+            np.arange(3 * 16 * 24, dtype="float32").reshape(3, 16, 24) + k * 1e4
+        )
+        var = group.create_array(
+            name,
+            shape=(3, 16, 24),
+            chunks=(1, 8, 12),
+            dtype="float32",
+            dimension_names=("time", "latitude", "longitude"),
+        )
+        var[:] = cells[name]
+
+    src = _read._open_source(None, str(store), "path", None, None)
+    plans = _read._plan_tile_set(
+        None, src, ["a", "b"], True, None, None, True, None, None, tile_size
+    )
+    tiles = [r for p in plans for r in _tiles.tile_rows(p, range(p.n_tiles))]
+    assert len(tiles) == (2 * 3 * 4 if tile_size is None else 2 * 3)
+    if materialized:
+        from databricks.labs.gbx.pyrx.core.open_tile import materialize_to_bytes
+        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+        tiles = [materialize_to_bytes(VirtualTile.from_row(t)).to_row() for t in tiles]
+        assert all(t["raster"] for t in tiles)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    msg = w._write_tiles(
+        iter([{"source": _tiles.source_of(t), "tile": t} for t in tiles])
+    )
+
+    assert len(msg.paths) == len(set(msg.paths)) == len(tiles)
+    for t, path in zip(tiles, msg.paths):
+        c, r, width, height = t["window"].values()
+        step = int(t["metadata"]["sliceDims"].partition("=")[2])
+        want = cells[t["metadata"]["zarr_array"]][step, r : r + height, c : c + width]
+        with rasterio.open(path) as ds:
+            assert np.array_equal(ds.read(1), want)

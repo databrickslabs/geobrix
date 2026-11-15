@@ -6,6 +6,11 @@ bytes with rasterio and calls a core function. Returning a Column preserves the
 one-line swap contract with the heavyweight rasterx wrappers.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Callable, Union
 
 import pandas as pd

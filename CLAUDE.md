@@ -8,11 +8,11 @@ core. The index of those rules is at the bottom.
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.5.2**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.6.0**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
 
-Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
+Every function runs at the Python level from the env wheel (Python UDFs, some with a Rust kernel). The JAR (Scala/Spark) is a performance add-on that adds a JVM level where measured faster, on dedicated compute only. Vocabulary: a **surface** is what you call (SQL, the Python API, Unity Catalog SQL, Scala); a **level** is what runs it — SQL expression (L0), JVM (L1), Python (L3), Unity Catalog function (L4). *Lightweight* = the Python level and *heavyweight* = the JVM level are shorthand only, defined in `api/execution-tiers`, installation and performance.
 
-Current branch: `beta/0.5.0`. Repo: `databrickslabs/geobrix`. Release fixes land on `beta/*` first; the user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `beta/*`.
+Current branch: `streamline/0.6.0`, the 0.6.0 release branch, checked out in the main checkout (container `geobrix-dev`). `beta/0.6.0` is fully merged into it and takes no new work; `beta/0.5.2` = the v0.5.2 release line, kept for hotfixes only — 0.5.2 is the last 0.5.x. Repo: `databrickslabs/geobrix`. The user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `streamline/*` or `beta/*`.
 
 ## Working patterns in this repo
 
@@ -36,12 +36,12 @@ Three API packages, each with its own SQL prefix:
 | Package | Scala root | Python | SQL prefix | Purpose |
 |---|---|---|---|---|
 | **RasterX** | `com.databricks.labs.gbx.rasterx` | `databricks.labs.gbx.rasterx` | `gbx_rst_*` | Raster ops (ported from Mosaic raster). Gap-filling — product has no built-in raster. |
-| **GridX** | `com.databricks.labs.gbx.gridx.{bng,grid,h3}` | `databricks.labs.gbx.gridx.bng` | `gbx_bng_*` | Discrete global grids, primarily BNG (ported — preserve baseline behavior). |
+| **GridX** | `com.databricks.labs.gbx.gridx.{bng,grid,h3}` | `databricks.labs.gbx.gridx.<grid>` (`bng`, `h3`, `quadbin`, `custom`) | `gbx_bng_*` | Discrete global grids, primarily BNG (ported — preserve baseline behavior). |
 | **VectorX** | `com.databricks.labs.gbx.vectorx` | `databricks.labs.gbx.vectorx` | `gbx_st_*` | Augments product built-in ST functions: vector-tile (MVT) encoding, TIN surface modeling, and legacy-geometry migration. |
 
-Each package exposes `functions` with `register(spark)` to install SQL UDFs. Shared primitives (`expressions`, `ds`, `util`) live under `com.databricks.labs.gbx`. Spark data source registrations are in `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.
+`databricks.labs.gbx.register(spark)` is the only registrar: it registers every SQL function (from the manifest, `python/geobrix/src/databricks/labs/gbx/manifest/functions.json`) and every data source. Python callers use the per-package modules (`databricks.labs.gbx.rasterx`, `gridx.<grid>`, `vectorx`, `pmtiles`). The JAR registers no SQL functions and no data sources; it is a performance tier (Scala packages under `com.databricks.labs.gbx`: `expressions`, `kernels`, `operations`, `util`, plus the three API packages and `pmtiles`).
 
-**Readers** are namespace-suffixed (`<format>_<engine>`), e.g. raster (GDAL): `gdal`, `gtiff_gdal`, `netcdf_gdal`; vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`. Light readers use the `*_gbx` suffix (pure Python, no JAR). Named readers extend generic readers and preset driver options via `dsExtraMap`; generic readers (`ogr`, `gdal`) stay clean.
+**Readers** are all pure-Python DataSource V2 classes named `<format>_gbx` (no JAR; the Scala `gdal`/`ogr` readers were retired in 065bf3f12): raster `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx`, `zarr_gbx`, `pmtiles_gbx`; vector `vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx`, `file_gdb_gbx`; other `file_gbx`, `lidar_gbx`, `exif_gbx`. Named readers extend the generic ones (`raster_gbx`, `vector_gbx`) and preset driver options; the generic ones stay clean. Writers use the same `*_gbx` names (see `docs/docs/writers/overview.mdx`). Reader and writer registration is `databricks.labs.gbx.register(spark)` (or `manager.register_sources(spark, only=...)`), driven by the manifest's `datasources` rows with `impl: python`.
 
 Scala 2.13.16, Spark 4.0.0, Java 17. Python 3.12+. A **single wheel + single JAR** runs on DBR 17.3/18/19.
 
@@ -57,18 +57,20 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 
 ## Commands (the `gbx:*` palette)
 
-**50 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
+**103 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
 
-- **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs`, `gbx:test:function-info`, `gbx:test:notebooks`, `gbx:test:bindings`
+- **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs`, `gbx:test:function-info` (the DESCRIBE contract row), `gbx:test:notebooks`, `gbx:test:mutation-gate` (Tier-0 mutation gate for a test fold)
   - Single Scala suite: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'` or `--suites 'A,B'`
   - Single Python path: `gbx:test:python --path python/geobrix/test/rasterx/`
   - Cross-tier parity tests SKIP on plain `gbx:test:python` — re-run `--with-integration` after a JAR change.
+- **Manifest**: `gbx:manifest:gen --write` / `--check` (generated surfaces vs the manifest; the check replaces the old binding-parity scripts). `GBX_ORACLE_TABLES=<tables>` selects family oracle tables on the host and in the container (`MVP_S`, `MVP_G`, `MVP_H` run in the same harness).
 - **Coverage**: `gbx:coverage:scala-package <pkg>` (1–3 min), `gbx:coverage:gaps` (fast), `gbx:coverage:baseline` (~10 min). Full `gbx:coverage:scala` ~10 min — use `--parallel` or `--report-only`.
 - **Docs**: `gbx:docs:dev` (hot reload, port 3000 — reserved for the user; agents use `--port 3001`), `gbx:docs:start` / `gbx:docs:stop`, `gbx:docs:function-info` (regenerate `function-info.json` — in Docker, or it leaks host paths).
 - **Lint**: `gbx:lint:scalastyle` (matches CI — run before push), `gbx:lint:python` (isort/black/flake8; `--fix` on host). Pre-push includes `gbx:lint:python --check`, not just scalastyle.
-- **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:stage-wheel`, `gbx:data:stage-jar`
+- **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:stage-wheel`, `gbx:data:stage-jar`, `gbx:data:stage-sample --profile <name>` (one bundle dataset dir to a Volume; default the Zarr ERA5-like cube — generate it first with `gbx:data:generate-minimal-bundle --zarr-only`)
 - **CI**: `gbx:ci:push`, `gbx:ci:status`, `gbx:ci:watch`, `gbx:ci:logs`, `gbx:ci:docs`. Dev-branch CI is **not a gate** — batch and push; don't chase red→green on it.
 - **Docker**: `gbx:docker:start`, `gbx:docker:exec "<cmd>"`, `gbx:docker:attach`
+- **DCS image**: `gbx:dcs:build` (local build + in-image checks, tags `<ver>-env6-<arm|x86>-rc`), `gbx:dcs:publish` (`--candidate` / `--release`; run by the release owner only — agents never push or log in)
 - **Review / Security**: `gbx:review:round` (Isaac — scope it; a full branch-vs-main run silently exits 0/0 findings), `gbx:security:codeql`
 
 ## Subagent orientation (paste the relevant parts into every dispatch)
@@ -80,13 +82,14 @@ edits matching files, but paste the relevant rule into the dispatch when the wor
 
 **Facts that are NOT findings** (each has been reported as a "discovery"):
 
-- **The heavy tier needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/` but **no `*.jar`** unless `package` ran. No JAR ⇒ heavy SQL registration can't work ⇒ mass `UNRESOLVED_ROUTINE`. That's a missing artifact, **not** a code defect — build/stage first.
-- **The light tier is pure Python and needs no JAR.** `pyrx`/`pyvx`/`pygx` never require it; the wheel is JAR-less.
-- **Both tiers register the same `gbx_*` SQL names** and the last registration wins. Metadata + builder write as one atomic triple — implementation and metadata cannot desync. One geobrix JAR per cluster (pkg + `gbx_*` collision).
+- **The JVM level (L1) needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/` but **no `*.jar`** unless `package` ran. No JAR ⇒ JVM-level SQL registration can't work ⇒ mass `UNRESOLVED_ROUTINE`. That's a missing artifact, **not** a code defect — build/stage first.
+- **The Python level (L3) needs no JAR.** `pyrx`/`pyvx`/`pygx` never require it; the env wheels carry the JAR only for the JVM (L1) level.
+- **The JVM level opens no data paths.** JVM functions take tile bytes (opened in `/vsimem`); a virtual tile is refused by the JVM and routed to the Python level by the dispatch wrapper.
+- **`databricks.labs.gbx.register(spark)` is the only registrar.** It registers each `gbx_*` name once, at the level the manifest's level table picks (the JVM level only where it is measured faster), and prints why it fell back. One geobrix JAR per cluster.
 - **SQL binds positionally** — an extra wrapper argument is silently dropped, not errored.
 - **Doc tests only run in Docker** (full env + sample data under `/Volumes`).
 - **`.superpowers/` is gitignored** scratch — all internal planning. The public representation of decisions lives in `docs/docs/`.
-- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers. Parity means CRS-equivalence, not string equality.
+- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across levels. Parity means CRS-equivalence, not string equality.
 
 **Standing instructions for any implementation subagent:**
 
@@ -134,14 +137,15 @@ Path-scoped — each loads automatically when you edit a matching file. Read the
 
 | Rule file | Loads when you touch | Covers |
 |---|---|---|
-| `functions-authoring.md` | Scala expressions, `functions.py`, `docs/docs/api/*.mdx`, `function-info.json`, `registered_functions.txt` | Cross-language naming, the 7-surface signature change, function-info/DESCRIBE generation, `usageArgs` style, param-name distinctions |
+| `functions-authoring.md` | Scala expressions, `functions.py`, `docs/docs/api/*.mdx`, `function-info.json` | A function = one manifest row + one oracle row; run `gbx:manifest:gen`. Cross-language naming, the signature change across surfaces, function-info/DESCRIBE generation, `usageArgs` style, param-name distinctions |
 | `gdal-resources.md` | rasterx/ds Scala, `ds`/`pyrx` Python | GDAL/OGR `GDALManager` guards, resource release, materialize policy, pyrx Serverless constraints |
 | `bng-resolution.md` | gridx Scala/Python | BNG resolution indices, `bng_pointascell` CRS, grid tessellation & geom-aware kring/kloop |
-| `uc-volumes.md` | package Python, notebooks | UC Volume FUSE semantics, bare-path heavy reads, Serverless parallelism; source-file listing & path normalization via `ds/_listing` (readers, writers, functions, bench, `preparer.py`) |
-| `crs-resolution.md` | `python/geobrix/src/databricks/labs/gbx/**`, `notebooks/**` | Canonical `resolve_crs`/`crs_to_canonical`/`authority_srid_of`; avoid bare `ProjCRS.from_*/CRS.from_*/parse_crs().to_wkt()` outside `crs.py` |
+| `uc-volumes.md` | package Python, examples | UC Volume FUSE semantics, bare-path heavy reads, Serverless parallelism; source-file listing & path normalization via `ds/_listing` (readers, writers, functions, bench, `preparer.py`) |
+| `crs-resolution.md` | `python/geobrix/src/databricks/labs/gbx/**`, `examples/**` | Canonical `resolve_crs`/`crs_to_canonical`/`authority_srid_of`; avoid bare `ProjCRS.from_*/CRS.from_*/parse_crs().to_wkt()` outside `crs.py` |
 | `compression.md` | `python/geobrix/src/databricks/labs/gbx/**` | Canonical `creation_opts`/`predictor_for`; avoid bespoke GTiff profile dicts and duplicate helpers outside `compression.py` |
 | `memory-budget.md` | `python/geobrix/src/databricks/labs/gbx/ds/**`, `python/geobrix/src/databricks/labs/gbx/pyrx/**` | Canonical `budget_for`/`materialize_decision`; avoid raw `/proc/meminfo`, `SPARK_*_MEMORY` env sniffing, hardcoded caps outside `budget.py`/`file_gbx.py`/`mvs.py` |
 | `writer-scaffolding.md` | `python/geobrix/src/databricks/labs/gbx/ds/**` | Reuse `_publish_merged`/`_glob_merge_inputs`/`_safe_name`/`assert_write_schema` + `new_scratch_dir`/`remove_scratch_dir`; avoid `tempfile.mkdtemp` in writers |
 | `docs-and-doctests.md` | `docs/**` | Doc-tests-as-source, user-facing voice (no wave numbers), MDX/sidebar/deploy gotchas |
-| `notebooks-on-databricks.md` | `notebooks/**`, notebook runner commands | Staging on dogfood, `%pip` wheel-install incantations, canonical runners, viz |
+| `notebooks-on-databricks.md` | `examples/**`, notebook runner commands | Staging on dogfood, `%pip` wheel-install incantations, canonical runners, viz |
 | `gbx-commands.md` | `scripts/commands/**` | How to add or fix a `gbx:*` command |
+| `cluster-work.md` | `bench/**`, the cluster launcher, `gbx-bench-*`, `gbx-test-notebooks*`, `gbx-uc-tests*`, `gbx-data-stage-*` | Any work on Databricks compute: fail fast, split and size parts, prepare inputs once, a DBR 19 pool only when a fixed cluster is needed (60-min idle), isolated staging + sha check, env6 first, isolated timing, an at-a-glance header per run, cleanup |

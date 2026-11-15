@@ -1,0 +1,21 @@
+# [vizx]: visualization helpers (gbx.vizx). geopandas and contextily are vendored (vendor-pure.txt): installed
+# from PyPI they would pull PyPI's rasterio, pyogrio, pyproj and shapely (a second GDAL, PROJ and GEOS) beside the
+# vendored builds. This extra is the rest of the plain wheel's [vizx], and contextily's other requirements.
+# The runtimes preinstall matplotlib and joblib: a floor only, the oldest preinstalled version, no cap (a cap under a
+# later runtime's version would be a downgrade). Nothing here moves click or psutil (that came with PyPI rasterio,
+# which [vizx] no longer pulls; gbx:versions:audit --install-moves checks every runtime), and they get no hold: a
+# click cap would make the separate overturemaps step (click>=8.3) unsatisfiable beside [vizx], and psutil 5.9 has
+# no cp312 aarch64 wheel. GeoBrix brings the rest in, capped at the next major.
+matplotlib>=3.10.0
+mapclassify>=2.6,<3
+anywidget>=0.9,<1
+tippecanoe>=2.72.0,<3
+imageio>=2.28,<3
+imageio-ffmpeg>=0.4,<2
+mercantile>=1.2,<2
+geopy>=2.0,<3
+xyzservices>=2023.10
+# contextily fetches its tiles through requests: as in [stac], the CVE-2024-47081 floor (a patch move of the runtimes'
+# 2.32.3) under the frozen-base cap.
+requests>=2.32.4,<2.33
+joblib>=1.4.2

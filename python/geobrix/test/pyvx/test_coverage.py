@@ -119,3 +119,13 @@ def test_coverage_simplify_pdf_raises_on_unparseable_row():
     pdf = pd.DataFrame({"cov_id": ["c", "c"], "geom": [_wkb(A[0]), b"not-wkb"]})
     with pytest.raises(ValueError):
         cov.coverage_simplify_pdf(pdf, "geom", 0.0, True, "geom_simplified")
+
+
+def test_coverage_simplify_helper_returns_every_row_with_its_columns(spark):
+    from databricks.labs.gbx.vectorx import helpers as vx_helpers
+
+    rows = [("c", "p0", _wkb(A[0])), ("c", "p1", _wkb(A[1]))]
+    df = spark.createDataFrame(rows, "cov_id string, name string, geom binary")
+    out = vx_helpers.coverage_simplify(df, "cov_id", "geom", 0.0).collect()
+    assert {row["name"] for row in out} == {"p0", "p1"}
+    assert all(from_wkb(bytes(row["geom_simplified"])).is_valid for row in out)

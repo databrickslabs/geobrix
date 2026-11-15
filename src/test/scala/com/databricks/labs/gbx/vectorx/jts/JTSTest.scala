@@ -265,6 +265,38 @@ class JTSTest extends AnyFunSuite {
         geom.getSRID shouldBe 27700
     }
 
+    // ====== mixed-dimension text: keep the Z that exists, NaN for the rest ======
+
+    test("fromWKT keeps the Z a LINESTRING vertex has and marks the missing one NaN") {
+        val g = JTS.fromWKT("SRID=4326;LINESTRING Z (15 51 5, 16 52)")
+        g.getSRID shouldBe 4326
+        val zs = g.getCoordinates.map(_.z)
+        zs(0) shouldBe 5.0
+        zs(1).isNaN shouldBe true
+    }
+
+    test("fromWKT keeps the Z a MULTIPOINT member has and marks the missing one NaN") {
+        val zs = JTS.fromWKT("MULTIPOINT Z ((15 51 5), (16 52))").getCoordinates.map(_.z)
+        zs(0) shouldBe 5.0
+        zs(1).isNaN shouldBe true
+    }
+
+    test("fromWKT drops the measure of a mixed-dimension text and never invents a Z") {
+        val zs = JTS.fromWKT("LINESTRING ZM (15 51 5 99, 16 52)").getCoordinates.map(_.z)
+        zs(0) shouldBe 5.0
+        zs(1).isNaN shouldBe true
+    }
+
+    test("fromWKT leaves plain 2D text 2D and still refuses garbage") {
+        JTS.fromWKT("LINESTRING (15 51, 16 52)").getCoordinates.forall(_.z.isNaN) shouldBe true
+        assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("LINESTRING Z (15 51 5, oops)") }
+    }
+
+    test("fromWKT refuses a Z tag over 2D ordinates instead of reading a NaN Z") {
+        assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("POINT Z (1 2)") }
+        assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("LINESTRING Z (1 2, 3 4)") }
+    }
+
     test("fromWKT should leave SRID=0 for plain WKT") {
         val geom = JTS.fromWKT("POINT (1 2)")
         geom.getSRID shouldBe 0
@@ -340,6 +372,39 @@ class JTSTest extends AnyFunSuite {
         val standard = JTS.toEWKB(pt)
         adaptive.length shouldBe standard.length
         adaptive shouldEqual standard
+    }
+
+    // ====== Byte order: every writer is little-endian (NDR), like shapely, GDAL and st_asbinary ======
+
+    private def hex(b: Array[Byte]): String = b.map(x => f"${x & 0xff}%02x").mkString
+
+    test("toWKB writes little-endian bytes (POINT(1 2))") {
+        hex(JTS.toWKB(JTS.point(1.0, 2.0))) shouldBe "0101000000000000000000f03f0000000000000040"
+    }
+
+    test("toWKB3 writes little-endian WKB with Z (JTS Z flag 0x80000000) (POINT Z(1 2 3))") {
+        val pt = new GeometryFactory().createPoint(new Coordinate(1.0, 2.0, 3.0))
+        hex(JTS.toWKB3(pt)) shouldBe "0101000080000000000000f03f00000000000000400000000000000840"
+    }
+
+    test("toEWKB writes little-endian bytes with the SRID (POINT(1 2), 4326)") {
+        val pt = JTS.point(1.0, 2.0)
+        pt.setSRID(4326)
+        hex(JTS.toEWKB(pt)) shouldBe "0101000020e6100000000000000000f03f0000000000000040"
+    }
+
+    test("toEWKB3 writes little-endian bytes with Z and the SRID") {
+        val pt = new GeometryFactory().createPoint(new Coordinate(1.0, 2.0, 3.0))
+        pt.setSRID(4326)
+        hex(JTS.toEWKB3(pt)) shouldBe "01010000a0e6100000000000000000f03f00000000000000400000000000000840"
+    }
+
+    test("every adaptive writer leads with the little-endian marker 0x01") {
+        val gf = new GeometryFactory()
+        val flat = gf.createPoint(new Coordinate(1.0, 2.0)); flat.setSRID(4326)
+        val deep = gf.createPoint(new Coordinate(1.0, 2.0, 3.0)); deep.setSRID(4326)
+        Seq(JTS.toWKBAdaptive(flat), JTS.toWKBAdaptive(deep), JTS.toEWKBAdaptive(flat), JTS.toEWKBAdaptive(deep),
+            JTS.toWKBForOGR(flat), JTS.toWKBForOGR(deep)).foreach(_.head shouldBe 1.toByte)
     }
 
     test("toEWKBAdaptive: 2D point is 25 bytes (no Z)") {

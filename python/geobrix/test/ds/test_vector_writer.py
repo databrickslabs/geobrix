@@ -9,12 +9,11 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
-from shapely import LineString, Point, Polygon
+from shapely import LineString, MultiPolygon, Point, Polygon
 from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
 from databricks.labs.gbx.ds import _scratch
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import (
     VectorGbxWriter,
     _geometry_type_of,
@@ -37,7 +36,9 @@ def test_gpkg_write_to_path_named_gpkg(spark, tmp_path):
     # Saving to a path whose stem is 'gpkg' must not fail with the GeoPackage
     # reserved-prefix error (the layer name falls back to 'layer').
     # The writer appends .gpkg so the resolved file is out + ".gpkg".
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "gpkg")  # stem == "gpkg"
     rows = [("a", bytearray(to_wkb(Point(1.0, 2.0))), "4326", "")]
     df = spark.createDataFrame(
@@ -57,12 +58,14 @@ def test_non_geojson_commit_streams_without_concat(spark, tmp_path, monkeypatch)
     # GPKG write must still succeed.
     import pyarrow as pa
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     monkeypatch.setattr(
         pa,
         "concat_tables",
         lambda *a, **k: pytest.fail("commit must not concat for GPKG"),
     )
-    register(spark)
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "streamed.gpkg")
     rows = [
         ("a", bytearray(to_wkb(Point(1.0, 2.0))), "4326", ""),
@@ -77,15 +80,14 @@ def test_non_geojson_commit_streams_without_concat(spark, tmp_path, monkeypatch)
 
 
 def test_should_stream_policy():
-    # All pyogrio single-file writers (GeoJSON, Shapefile, GPKG) stream fragments
-    # into one write (bounded driver memory, single pass). OpenFileGDB uses the
-    # native osgeo path and is excluded.
+    # All pyogrio single-file writers (GeoJSON, Shapefile, GPKG, OpenFileGDB) stream
+    # fragments into one write (bounded driver memory, single pass).
     from databricks.labs.gbx.ds.vector import _should_stream
 
     assert _should_stream("GeoJSON") is True
     assert _should_stream("ESRI Shapefile") is True
     assert _should_stream("GPKG") is True
-    assert _should_stream("OpenFileGDB") is False
+    assert _should_stream("OpenFileGDB") is True
 
 
 def test_stream_record_batches_chains_and_drops_meta(tmp_path):
@@ -136,7 +138,9 @@ def test_stream_record_batches_chains_and_drops_meta(tmp_path):
 
 
 def _roundtrip_streamed(spark, tmp_path, driver, name):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / name)
     rows = [
         (str(i), None, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -254,7 +258,9 @@ def _wkb_df(spark):
 
 
 def test_geojson_roundtrip_single_partition(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "out.geojson")
     _wkb_df(spark).coalesce(1).write.format("vector_gbx").mode("overwrite").option(
         "driverName", "GeoJSON"
@@ -270,7 +276,9 @@ def test_geojson_roundtrip_single_partition(spark, tmp_path):
 
 
 def test_multi_partition_merge(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "multi.geojson")
     rows = [
         (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -291,7 +299,9 @@ def test_multi_partition_merge(spark, tmp_path):
 
 
 def test_crs_roundtrips(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "crs.geojson")
     _wkb_df(spark).coalesce(1).write.format("vector_gbx").mode("overwrite").option(
         "driverName", "GeoJSON"
@@ -302,7 +312,9 @@ def test_crs_roundtrips(spark, tmp_path):
 
 
 def test_geometry_type_override(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "poly.geojson")
     poly = to_wkb(Polygon([(0, 0), (0, 1), (1, 1), (0, 0)]))
     df = spark.createDataFrame(
@@ -319,7 +331,9 @@ def test_geometry_type_override(spark, tmp_path):
 
 
 def test_append_mode_rejected(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "exists.geojson")
     _wkb_df(spark).coalesce(1).write.format("vector_gbx").mode("overwrite").option(
         "driverName", "GeoJSON"
@@ -340,7 +354,9 @@ def test_append_mode_rejected(spark, tmp_path):
     ],
 )
 def test_named_writer_roundtrip(spark, tmp_path, fmt, target):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / target)
     _wkb_df(spark).coalesce(1).write.format(fmt).mode("overwrite").save(out)
     back = spark.read.format(fmt).load(out)
@@ -351,39 +367,10 @@ def test_named_writer_roundtrip(spark, tmp_path, fmt, target):
     } == {"Point"}
 
 
-def _ogr_can_create(driver: str) -> bool:
-    try:
-        import tempfile
-
-        import pyarrow as pa
-        import pyogrio
-        from shapely import Point as _P
-        from shapely import to_wkb as _twkb
-
-        d = tempfile.mkdtemp()
-        path = d + ("/t.gdb" if driver == "OpenFileGDB" else "/t.out")
-        tbl = pa.table({"g": [_twkb(_P(0, 0))]})
-        pyogrio.write_arrow(
-            tbl,
-            path,
-            driver=driver,
-            geometry_name="g",
-            geometry_type="Point",
-            crs="EPSG:4326",
-        )
-        return True
-    except Exception:
-        return False
-
-
 def test_file_gdb_writer_roundtrip(spark, tmp_path):
-    import importlib.util
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
-    if importlib.util.find_spec("osgeo") is None:
-        pytest.skip(
-            "native osgeo (heavy GDAL natives) not present; file_gdb_gbx write requires osgeo"
-        )
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "out.gdb")
     _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(out)
     back = spark.read.format("file_gdb_gbx").load(out)
@@ -397,7 +384,9 @@ def test_gpkg_reads_from_readonly_dir(spark, tmp_path):
     import os
     import stat
 
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "ro.gpkg")
     _wkb_df(spark).coalesce(1).write.format("gpkg_gbx").mode("overwrite").save(out)
     # make the output file + its dir read-only
@@ -411,52 +400,16 @@ def test_gpkg_reads_from_readonly_dir(spark, tmp_path):
         os.chmod(out, 0o644)
 
 
-def test_file_gdb_osgeo_hybrid_roundtrip(spark, tmp_path):
-    import pytest
-
-    pytest.importorskip("osgeo", reason="native osgeo (heavy GDAL natives) not present")
-    register(spark)
-    out = str(tmp_path / "hybrid.gdb")
-    _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(out)
-    back = spark.read.format("file_gdb_gbx").load(out)
-    assert back.count() == 2
-
-
-def test_file_gdb_clear_error_without_osgeo(spark, tmp_path):
-    import importlib.util
-
-    import pytest
-
-    if importlib.util.find_spec("osgeo") is not None:
-        pytest.skip("osgeo present -- the no-natives error path is not exercised")
-    register(spark)
-    out = str(tmp_path / "noosgeo.gdb")
-    with pytest.raises(Exception) as ei:
-        _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(
-            out
-        )
-    assert "osgeo" in str(ei.value).lower() or "native" in str(ei.value).lower()
-
-
 def test_file_gdb_multi_fragment_streaming(spark, tmp_path):
-    """Multi-partition FileGDB write: fragment streaming + OGR transaction batching
-    must produce the same row count and preserve attribute + geometry values.
-
-    This validates both the fragment-streaming path (no full-dataset in-memory
-    concat before the write) and the transaction batching (no per-feature
-    auto-commit corruption). Uses >1 partition so at least two fragments land.
+    """Multi-partition FileGDB write: fragment streaming must produce the same row
+    count and preserve attribute + geometry values (no full-dataset in-memory concat
+    before the write). Uses >1 partition so at least two fragments land.
     """
-    import importlib.util
-
-    import pytest
     from shapely import from_wkb as _from_wkb
 
-    if importlib.util.find_spec("osgeo") is None:
-        pytest.skip(
-            "native osgeo (heavy GDAL natives) not present; file_gdb_gbx write requires osgeo"
-        )
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     # Build a small dataset that is guaranteed to span multiple partitions. Use
     # Polygon geometry so we exercise the geometry survival path (not just Point).
     from shapely import Polygon as _Polygon
@@ -512,92 +465,12 @@ def test_file_gdb_multi_fragment_streaming(spark, tmp_path):
     assert len(geom_types) > 0, "no non-null geometries read back"
 
 
-def test_file_gdb_tx_batch_boundary(spark, tmp_path, monkeypatch):
-    """The OGR mid-loop CommitTransaction/StartTransaction path must not drop or
-    double-write features.
-
-    With the default _GDB_TX_BATCH=100_000 a 10-feature test never triggers the
-    boundary commit.  Monkeypatching the module-level constant to 3 forces the
-    commit/restart cycle at rows 3, 6 (and the tail commit at row 7), so this
-    test exercises the code path the default value leaves dead.
-
-    Asserts:
-    (a) exact row count == 7  (no drop, no double-write at batch boundaries)
-    (b) attribute values survive intact across commit boundaries
-    (c) geometry values survive (non-null, correct shapely type)
-    """
-    import importlib.util
-
-    from shapely import Polygon as _Polygon
-    from shapely import from_wkb as _from_wkb
-
-    import databricks.labs.gbx.ds.vector as _vec_mod
-
-    if importlib.util.find_spec("osgeo") is None:
-        pytest.skip(
-            "native osgeo (heavy GDAL natives) not present; "
-            "file_gdb_gbx write requires osgeo"
-        )
-
-    # Patch the module-level batch size to 3 so 7 features cross two boundaries.
-    monkeypatch.setattr(_vec_mod, "_GDB_TX_BATCH", 3)
-
-    register(spark)
-
-    def _box(x, y):
-        return bytearray(
-            to_wkb(_Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1), (x, y)]))
-        )
-
-    # 7 features, 2 partitions -> >=2 fragments; batch=3 means commits at
-    # features 3 and 6, then a tail commit for feature 7.
-    rows = [(f"r{i}", i * 5, _box(float(i), 0.0), "4326", "") for i in range(7)]
-    df = spark.createDataFrame(
-        rows,
-        schema="name string, val int, geom_0 binary, "
-        "geom_0_srid string, geom_0_srid_proj string",
-    ).repartition(2, F.col("name"))
-
-    out = str(tmp_path / "boundary.gdb")
-    df.write.format("file_gdb_gbx").mode("overwrite").save(out)
-
-    back = spark.read.format("file_gdb_gbx").load(out)
-    rows_back = back.collect()
-
-    # (a) exact row count -- no drop or double-write
-    assert len(rows_back) == 7, f"expected 7 rows, got {len(rows_back)}"
-
-    # (b) attribute values survive
-    name_to_val = {r["name"]: r["val"] for r in rows_back}
-    assert set(name_to_val.keys()) == {
-        f"r{i}" for i in range(7)
-    }, f"name set mismatch: {set(name_to_val.keys())}"
-    for i in range(7):
-        assert (
-            name_to_val[f"r{i}"] == i * 5
-        ), f"val mismatch for r{i}: got {name_to_val[f'r{i}']}"
-
-    # (c) geometry survives (non-null; OpenFileGDB may promote Polygon->MultiPolygon)
-    gcol = next(
-        f.name
-        for f in back.schema.fields
-        if f.name not in ("name", "val")
-        and not f.name.endswith(("_srid", "_srid_proj"))
-    )
-    geom_types = {
-        _from_wkb(bytes(r[gcol])).geom_type for r in rows_back if r[gcol] is not None
-    }
-    assert geom_types <= {
-        "Polygon",
-        "MultiPolygon",
-    }, f"unexpected geometry types: {geom_types}"
-    assert len(geom_types) > 0, "all geometries were null after round-trip"
-
-
 def test_gpkg_output_uses_format_default_geom_name(spark, tmp_path):
     # GPKG output should use the format-default geometry column name `geom`,
     # not the input column name, so an arbitrary input name doesn't leak out.
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "out.gpkg")
     rows = [("a", bytearray(to_wkb(Point(1.0, 2.0))), "4326", "")]
     df = spark.createDataFrame(
@@ -620,7 +493,9 @@ def test_classic_write_path_roundtrip(spark, tmp_path):
     # Exercise the classic pyogrio.raw.write fallback path directly (write_arrow
     # works locally so the auto-fallback won't trigger here) to prove the
     # arrow-table -> (geometry, field_data, fields) conversion round-trips.
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     import os
     import tempfile
 
@@ -774,7 +649,9 @@ def test_zip_gdb_bundle_preserves_top_level_dir(tmp_path):
 
 def test_shapefile_zip_produces_single_file(spark, tmp_path):
     """zip=true writes a single .shp.zip file, not a directory or sidecar set."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "roads")
     _wkb_df(spark).coalesce(1).write.format("shapefile_gbx").mode("overwrite").option(
         "zip", "true"
@@ -791,7 +668,9 @@ def test_shapefile_zip_archive_contents(spark, tmp_path):
     """The .shp.zip archive contains .shp/.shx/.dbf at the archive root (no subdir)."""
     import zipfile
 
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "bundle")
     _wkb_df(spark).coalesce(1).write.format("shapefile_gbx").mode("overwrite").option(
         "zip", "true"
@@ -808,7 +687,9 @@ def test_shapefile_zip_archive_contents(spark, tmp_path):
 
 def test_shapefile_zip_roundtrip(spark, tmp_path):
     """zip=true multi-partition write round-trips via shapefile_gbx reader."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "roundtrip")
     rows = [
         (str(i), bytearray(to_wkb(Point(float(i), 40.0))), "4326", "")
@@ -834,7 +715,9 @@ def test_shapefile_zip_roundtrip(spark, tmp_path):
 
 def test_shapefile_no_zip_no_regression(spark, tmp_path):
     """zip=false (default) shapefile write still produces sidecar files, not a zip."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nozip_shp")
     _wkb_df(spark).coalesce(1).write.format("shapefile_gbx").mode("overwrite").save(out)
     # The shapefile sidecar files land either in the parent dir (e.g. nozip_shp.shp)
@@ -852,7 +735,9 @@ def test_non_streaming_fallback_writes_and_roundtrips(spark, tmp_path):
     """Non-streaming drivers (FlatGeobuf, etc.) produce correct output by writing
     fragments with bounded memory usage (generator-based, not list-based). This is
     a regression test to ensure the fix doesn't break output correctness."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nonstream.fgb")
     rows = [
         (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -883,7 +768,9 @@ def test_non_streaming_fallback_writes_and_roundtrips(spark, tmp_path):
 def test_non_streaming_fallback_roundtrip_output_equivalence(spark, tmp_path):
     """Non-streaming driver write (with lazy fragment reading) must round-trip
     all rows and geometries without loss."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nonstream_roundtrip.fgb")
     rows = [
         (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -974,3 +861,242 @@ def test_write_local_streams_generator_without_materializing(tmp_path, monkeypat
     # whole-generator materialization; and all five were eventually written.
     assert pulled_at_first_write["v"] == 1
     assert pulled["n"] == 5
+
+
+@pytest.mark.parametrize(
+    "driver,name",
+    [("GPKG", "o.gpkg"), ("GeoJSON", "o.geojson"), ("ESRI Shapefile", "o.shp")],
+)
+def test_other_drivers_accept_columns_named_shape_and_objectid(tmp_path, driver, name):
+    """Only a FileGDB layer reserves ``SHAPE`` and ``OBJECTID``: every other writer takes
+    columns with those names as ordinary attributes, with no refusal and no warning."""
+    import warnings
+
+    import pyogrio
+
+    schema = StructType(
+        [
+            StructField("shape", StringType()),
+            StructField("OBJECTID", IntegerType()),
+            StructField("geom_0", BinaryType()),
+            StructField("geom_0_srid", StringType()),
+            StructField("geom_0_srid_proj", StringType()),
+        ]
+    )
+    rows = [
+        ("a", 7, bytearray(to_wkb(Point(1.0, 2.0))), "4326", ""),
+        ("b", 8, bytearray(to_wkb(Point(3.0, 4.0))), "4326", ""),
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+        w.commit([w.write(iter(rows))])
+    assert not [c for c in caught if "file_gdb_gbx" in str(c.message)]
+    fields = list(pyogrio.read_info(w.path)["fields"])
+    assert "shape" in fields and "OBJECTID" in fields
+    got = pyogrio.read_dataframe(w.path)
+    assert sorted(got["shape"]) == ["a", "b"]
+    assert sorted(int(v) for v in got["OBJECTID"]) == [7, 8]
+
+
+_MIXED = [
+    Point(10, 50),
+    LineString([(10, 50), (11, 51), (12, 50)]),
+    Polygon([(10, 50), (11, 50), (11, 51), (10, 51), (10, 50)]),
+]
+
+
+@pytest.mark.parametrize(
+    "driver,name", [("GML", "o.gml"), ("GPKG", "o.gpkg"), ("FlatGeobuf", "o.fgb")]
+)
+@pytest.mark.parametrize(
+    "parts",
+    [[[1], [2, 0]], [[0, 1, 2]], [[2], [0], [1]]],
+    ids=["line-first", "point-first", "polygon-first"],
+)
+def test_a_layer_of_mixed_geometry_types_keeps_each_type(tmp_path, driver, name, parts):
+    """A frame mixing types is written as a layer of any geometry, whatever partition comes
+    first. Typing the layer by the first geometry made GML's schema declare a LineString
+    layer, and GDAL then read the polygon back as its ring."""
+    import pyogrio
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("geom_0", BinaryType()),
+            StructField("geom_0_srid", StringType()),
+        ]
+    )
+    w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+    w.commit(
+        [
+            w.write(iter([(i, bytearray(to_wkb(_MIXED[i])), "4326") for i in part]))
+            for part in parts
+        ]
+    )
+    got = pyogrio.read_dataframe(w.path)
+    assert {g.normalize().wkt for g in got.geometry} == {
+        g.normalize().wkt for g in _MIXED
+    }
+    assert pyogrio.read_info(w.path)["geometry_type"] == "Unknown"
+
+
+def _write_layer(tmp_path, driver, name, parts):
+    """Write each part (a list of shapely geometries) as one partition; return the written path."""
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("geom_0", BinaryType()),
+            StructField("geom_0_srid", StringType()),
+        ]
+    )
+    w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+    w.commit(
+        [
+            w.write(iter([(i, bytearray(to_wkb(g)), "4326") for i, g in enumerate(p)]))
+            for p in parts
+        ]
+    )
+    return w.path
+
+
+_POLY = Polygon([(10, 50), (11, 50), (11, 51), (10, 51), (10, 50)])
+_MPOLY = MultiPolygon([Polygon([(12, 50), (13, 50), (13, 51), (12, 50)])])
+
+
+@pytest.mark.parametrize(
+    "driver,name", [("GPKG", "o.gpkg"), ("FlatGeobuf", "o.fgb"), ("GML", "o.gml")]
+)
+def test_polygons_and_multipolygons_are_a_layer_of_any_geometry_each_kept_as_written(
+    tmp_path, driver, name
+):
+    """Single and multi forms of one type are not promoted to Multi: the layer is of any geometry, and each geometry
+    comes back in the form it was written."""
+    import pyogrio
+
+    path = _write_layer(tmp_path, driver, name, [[_POLY], [_MPOLY]])
+    assert pyogrio.read_info(path)["geometry_type"] == "Unknown"
+    got = pyogrio.read_dataframe(path)
+    assert {g.normalize().wkt for g in got.geometry} == {
+        _POLY.normalize().wkt,
+        _MPOLY.normalize().wkt,
+    }
+
+
+@pytest.mark.parametrize(
+    "driver,name",
+    [("GPKG", "o.gpkg"), ("FlatGeobuf", "o.fgb"), ("ESRI Shapefile", "o.shp")],
+)
+def test_a_layer_whose_geometries_all_carry_z_is_declared_3d(tmp_path, driver, name):
+    """The layer type keeps Z: a 2D type made the format drop or ignore the heights."""
+    import pyogrio
+
+    a = Polygon([(10, 50, 1.0), (11, 50, 2.0), (11, 51, 3.0), (10, 50, 1.0)])
+    b = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
+    path = _write_layer(tmp_path, driver, name, [[a], [b]])
+    assert pyogrio.read_info(path)["geometry_type"] == "Polygon Z"
+    got = pyogrio.read_dataframe(path)
+    assert all(g.has_z for g in got.geometry)
+    assert sorted(z for g in got.geometry for *_, z in g.exterior.coords) == sorted(
+        z for g in (a, b) for *_, z in g.exterior.coords
+    )
+
+
+def test_a_geopackage_mixing_2d_and_3d_keeps_each_geometrys_dimension(tmp_path):
+    """Z is never made up: a GeoPackage stores each geometry as it is, so the 2D one comes back 2D and the 3D one
+    keeps its heights under a 3D layer."""
+    import pyogrio
+
+    flat = Polygon([(10, 50), (11, 50), (11, 51), (10, 50)])
+    high = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
+    path = _write_layer(tmp_path, "GPKG", "o.gpkg", [[flat], [high]])
+    assert pyogrio.read_info(path)["geometry_type"] == "Polygon Z"
+    got = {g.normalize().wkt: g.has_z for g in pyogrio.read_dataframe(path).geometry}
+    assert got == {flat.normalize().wkt: False, high.normalize().wkt: True}
+
+
+def test_a_one_dimension_format_refuses_a_mix_of_2d_and_3d_geometries(tmp_path):
+    flat = Polygon([(10, 50), (11, 50), (11, 51), (10, 50)])
+    high = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
+    with pytest.raises(ValueError, match="mix 2D and 3D.*Fix: write one dimension"):
+        _write_layer(tmp_path, "ESRI Shapefile", "o.shp", [[flat], [high]])
+
+
+@pytest.mark.parametrize("before", [None, "WAL"], ids=["unset", "user-set"])
+def test_a_geopackage_write_and_read_leave_the_sqlite_journal_option_as_they_found_it(
+    volume_like_tmp, before
+):
+    """A GPKG is written (and read) with OGR_SQLITE_JOURNAL=DELETE so no WAL is left for a reader on a read-only Volume
+    to checkpoint. The option is process-wide in GDAL: it is set for the write or read only, and the session's own
+    value (or none) comes back after it."""
+    import pyogrio
+
+    from databricks.labs.gbx.ds.vector import VectorGbxDataSource
+
+    key = "OGR_SQLITE_JOURNAL"
+    pyogrio.set_gdal_config_options({key: before})
+    seen = []
+    real = pyogrio.write_arrow
+
+    def spy(*a, **k):
+        seen.append(pyogrio.get_gdal_config_option(key))
+        return real(*a, **k)
+
+    pyogrio.write_arrow, saved = spy, pyogrio.write_arrow
+    try:
+        schema = StructType(
+            [
+                StructField("id", IntegerType()),
+                StructField("geom_0", BinaryType()),
+                StructField("geom_0_srid", StringType()),
+            ]
+        )
+        # the writer assembles on local disk and copies over: it writes under a Volume-like tmp_path
+        w = VectorGbxWriter(str(volume_like_tmp / "j.gpkg"), schema, "GPKG", {}, True)
+        w.commit([w.write(iter([(1, bytearray(to_wkb(Point(1, 2))), "4326")]))])
+        assert seen and set(seen) == {"DELETE"}  # the writes
+        assert pyogrio.get_gdal_config_option(key) == before
+        real_info = pyogrio.read_info
+
+        def info_spy(*a, **k):
+            seen.append(("read", pyogrio.get_gdal_config_option(key)))
+            return real_info(*a, **k)
+
+        pyogrio.read_info = info_spy
+        try:
+            VectorGbxDataSource({"path": w.path, "driverName": "GPKG"}).schema()
+        finally:
+            pyogrio.read_info = real_info
+        assert ("read", "DELETE") in seen
+        assert pyogrio.get_gdal_config_option(key) == before
+        assert pyogrio.read_info(w.path)["features"] == 1
+    finally:
+        pyogrio.write_arrow = saved
+        pyogrio.set_gdal_config_options({key: None})
+
+
+def test_two_interleaved_reads_hold_the_sqlite_journal_until_the_last_one_ends():
+    """Two generator reads open at once (a zip of two layers): the first to end must not put the session's value back
+    while the other still reads; the last to end does."""
+    import pyogrio
+
+    from databricks.labs.gbx.ds import vector
+
+    key = "OGR_SQLITE_JOURNAL"
+    pyogrio.set_gdal_config_options({key: "WAL"})
+
+    @vector._sqlite_delete_journal
+    def read(n):
+        for i in range(n):
+            yield pyogrio.get_gdal_config_option(key)
+
+    try:
+        a, b = read(2), read(2)
+        assert next(a) == "DELETE"
+        assert next(b) == "DELETE"
+        assert list(a) == ["DELETE"]  # A ends
+        assert pyogrio.get_gdal_config_option(key) == "DELETE"  # B still reads
+        assert list(b) == ["DELETE"]  # B ends
+        assert pyogrio.get_gdal_config_option(key) == "WAL"
+    finally:
+        pyogrio.set_gdal_config_options({key: None})

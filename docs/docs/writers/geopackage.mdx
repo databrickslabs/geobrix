@@ -8,32 +8,29 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoPackage Writer
 
-_Since:_ lightweight `gpkg_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `gpkg_gbx` **v0.4.0**
 
 `gpkg_gbx` — pyogrio-backed, pure-Python DataSource V2 writer with the OGR
 driver preset to `GPKG`. It round-trips with the matching `gpkg_gbx` reader;
 the schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across all
-lightweight vector readers and writers.
+`*_gbx` vector readers and writers.
 
 :::tip Compute & scale
 - **Large datasets:** GeoPackage has **no 2 GB cap** and is the recommended single-file option
-  for large data, but it still assembles on the driver (single-node write). For the very
+  for large data. However, it still assembles on the driver (single-node write). For the very
   largest outputs, use a **classic cluster** (high-memory Serverless does *not* help here) or
   switch to the fully distributed `geojsonl_gbx` writer. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
-- **Tier & compute:** the lightweight (`*_gbx`) writers need **no JAR or init script** and are
-  the **only** option on Serverless, standard (shared), and ARM clusters. The heavyweight
-  raster/PMTiles writers require a **classic x86 cluster** (JAR + GDAL init script). Your
-  compute usually decides the tier — then data scale. See
-  [Benchmarking](../api/benchmarking) for timings and methodology.
+- **Compute:** the `*_gbx` writers need **no JAR** and run on every compute, Serverless and
+  standard (shared) clusters included. See [Benchmarking](../api/benchmarking) for timings and
+  methodology.
 :::
 
 :::note Before you write
 - **Register first** — call `register(spark)` once before using any `*_gbx` format (see the
   [Writers Overview](./overview)).
-- **Lightweight-only** — this single-file writer isn't implemented in the heavyweight tier;
-  for output in **both** tiers, use the sharded [**GeoJSONL** writer](./geojsonl)
-  (`geojsonl_gbx` lightweight / `geojsonl` heavyweight).
+- **Single file** — this writer assembles one output file; for sharded output, use the
+  [**GeoJSONL** writer](./geojsonl) (`geojsonl_gbx`).
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?
@@ -50,7 +47,7 @@ lightweight vector readers and writers.
 | `fileName` | _(none)_ | Name the output unit explicitly. When set, `.save(path)` treats `path` as the **parent directory** (created if missing) and writes `path/<fileName>.gpkg` (extension auto-completed). See [Output naming](#output-naming). |
 | `geometryType` | inferred from the data | Override the OGR geometry type. |
 | `layerName` | driver default | Output layer name where supported. |
-| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). This is a lightweight-tier writer. |
+| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). |
 | `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). |
 | `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
 
@@ -73,15 +70,15 @@ coerce to the `geom_0` convention.
 For coercing an arbitrary frame to this shape and for exporting Databricks `GEOMETRY` /
 `GEOGRAPHY` columns, see the [**Vector Writer schema**](./vector#schema).
 
-**Output:** a GeoPackage `.gpkg` (SQLite) file; the geometry is stored in a named geometry
-column (default `geom`); attribute names/types and the layer are preserved with no 2 GB cap
+**Output:** a GeoPackage `.gpkg` (SQLite) file. The geometry is stored in a named geometry
+column (default `geom`). Attribute names/types and the layer are preserved with no 2 GB cap
 (set the layer name with `layerName`).
 
 ## How it scales
 
 Unlike a single-node `pyogrio.write_*` call that serializes one file on one machine, the
-`gpkg_gbx` writer runs as a Spark DataSource V2 two-phase write: **each partition is
-written concurrently** by its executor to a scratch fragment, then the driver **merges the
+`gpkg_gbx` writer runs as a Spark DataSource V2 two-phase write. **Each executor
+writes its partition concurrently** to a scratch fragment. Then the driver **merges the
 fragments into one output file**. The merge is sequential and rename-free, so it is safe on
 FUSE-mounted cloud storage (Unity Catalog Volumes, DBFS). Repartition the input to control
 write parallelism.
@@ -113,7 +110,7 @@ df = spark.table("main.geo.districts")  # vector data in a (Delta) table
 df.write.format("gpkg_gbx").mode("overwrite").save("/Volumes/main/geo/exports/districts.gpkg")
 ```
 
-Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for light-vs-heavy export figures.
+Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for export timings.
 
 ## Common functions: used vs excluded
 
@@ -131,5 +128,5 @@ The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and regist
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

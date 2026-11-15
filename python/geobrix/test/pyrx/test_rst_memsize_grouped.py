@@ -14,7 +14,8 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
-from databricks.labs.gbx.pyrx.functions import rst_memsize, rst_memsize_grouped
+from databricks.labs.gbx.rasterx.functions import rst_memsize
+from databricks.labs.gbx.rasterx.helpers import rst_memsize_grouped
 
 
 def _make_bytes(width=8, height=8, count=1, epsg=4326):
@@ -80,7 +81,7 @@ def test_grouped_equals_per_row_for_virtual_tiles(spark, tmp_path):
 def test_grouped_equals_per_row_for_windowless_virtual_tiles(spark, tmp_path):
     """PROOF: grouped == per_row == full-source footprint for windowless virtual tiles.
 
-    Task 1 relaxed the 'virtual tile requires a window' invariant; window=None
+    A virtual tile does not require a window; window=None
     means the full source.  The fallback must use open_header (not _open, which
     raises ValueError for windowless tiles) so grouped matches per-row rst_memsize.
     """

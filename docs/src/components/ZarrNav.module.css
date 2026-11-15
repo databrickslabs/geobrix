@@ -1,0 +1,20 @@
+.nav {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-left: 4px solid var(--ifm-color-primary);
+  border-radius: 0.4rem;
+  background: var(--ifm-color-emphasis-100);
+  padding: 0.6rem 0.9rem;
+  margin: 0 0 1.25rem 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.title { font-weight: 700; margin-bottom: 0.25rem; }
+.row { margin: 0.1rem 0; }
+.label {
+  display: inline-block;
+  min-width: 5.5rem;
+  color: var(--ifm-color-emphasis-700);
+  font-weight: 600;
+}
+.sep { color: var(--ifm-color-emphasis-500); margin: 0 0.35rem; }
+.here { font-weight: 700; color: var(--ifm-font-color-base); }

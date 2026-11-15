@@ -8,12 +8,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Source common utilities
 source "$SCRIPT_DIR/common.sh"
 
-APP_DIR="$PROJECT_ROOT/apps/genie_map"
+APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 ENV_FILE="$APP_DIR/databricks.env"
 
-# Defaults. genie-map-env is the standing full-stack demo workspace; the shared
-# oauth-fe workspace is perpetually at app capacity, so Apps deploys go here.
-PROFILE="genie-map-env"
+# --profile is required: no workspace is picked for you.
+PROFILE=""
 LOG_ARG=""
 
 # Help message
@@ -27,19 +26,19 @@ USAGE:
     bash scripts/commands/gbx-app-deploy.sh [OPTIONS]
 
 OPTIONS:
-    --profile <p>    Databricks CLI profile (default: genie-map-env)
+    --profile <p>    Databricks CLI profile of the target workspace (required)
     --log <path>     Tee output to a log file (filename → test-logs/<name>)
     --help, -h       Display this help message
 
 NOTES:
-    - Requires apps/genie_map/databricks.env (copy from databricks.env.example
+    - Requires examples/apps/genie_map/databricks.env (copy from databricks.env.example
       and fill it in). It is sourced into the shell so the build picks up the vars.
     - Runs 'pnpm install' automatically if node_modules is missing.
-    - Deploys the bundle at apps/genie_map (databricks.yml), then runs the app.
+    - Deploys the bundle at examples/apps/genie_map (databricks.yml), then runs the app.
 
 EXAMPLES:
-    bash scripts/commands/gbx-app-deploy.sh
-    bash scripts/commands/gbx-app-deploy.sh --profile genie-map-env --log deploy.log
+    bash scripts/commands/gbx-app-deploy.sh --profile <profile>
+    bash scripts/commands/gbx-app-deploy.sh --profile <profile> --log deploy.log
 EOF
     exit 0
 }
@@ -66,6 +65,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [ -z "$PROFILE" ]; then
+    echo "❌ --profile is required (the CLI profile of the workspace to deploy to). Use --help for usage." >&2
+    exit 2
+fi
+
 # Optional logging
 LOG_PATH="$(resolve_log_path "$LOG_ARG")"
 [ -n "$LOG_PATH" ] && setup_log_file "$LOG_PATH"
@@ -73,7 +77,10 @@ LOG_PATH="$(resolve_log_path "$LOG_ARG")"
 cd "$APP_DIR" || exit 1
 
 # Require + source the populated env file
-[ -f "$ENV_FILE" ] || { echo "❌ apps/genie_map/databricks.env missing — copy databricks.env.example and fill it"; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "❌ examples/apps/genie_map/databricks.env missing — copy databricks.env.example and fill it"; exit 1; }
+# A shell syntax error (an unfilled <placeholder> value) makes `source` stop at that line
+# and silently drop every later var, so check it first.
+bash -n "$ENV_FILE" || { echo "❌ examples/apps/genie_map/databricks.env is not valid shell (an unfilled <placeholder>? leave unknown values empty)"; exit 1; }
 set -a; source "$ENV_FILE"; set +a
 
 # Install deps if needed

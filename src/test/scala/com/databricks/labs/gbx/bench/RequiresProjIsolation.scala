@@ -10,7 +10,7 @@ import org.scalatest.Tag
  * PROJ caches grid lookups process-globally on first use. In the default CI run
  * (`forkMode once`, all suites sharing one JVM), dozens of suites performing
  * plain EPSG transforms initialize GDAL/PROJ before
- * `RST_TransformCrsGridSpec`, freezing the PROJ context so a later
+ * `RegisteredProjGridSpec`, freezing the PROJ context so a later
  * `SetConfigOption("PROJ_DATA", …)` no longer takes effect for the fixture
  * filename. Tests tagged `RequiresProjIsolation` only produce a meaningful
  * result in an isolated JVM (e.g., `-Dsuites=<single spec>`) and must therefore
@@ -21,7 +21,7 @@ import org.scalatest.Tag
  *
  * {{{
  *   mvn test -PskipScoverage -DskipTests=false \
- *     -Dsuites='com.databricks.labs.gbx.rasterx.RST_TransformCrsGridSpec' \
+ *     -Dsuites='com.databricks.labs.gbx.rasterx.RegisteredProjGridSpec' \
  *     -DtagsToExclude=com.databricks.labs.gbx.bench.NoOpExcludeSentinel
  * }}}
  *
@@ -29,7 +29,7 @@ import org.scalatest.Tag
  *
  * {{{
  *   bash scripts/commands/gbx-test-scala.sh \
- *     --suite 'com.databricks.labs.gbx.rasterx.RST_TransformCrsGridSpec' \
+ *     --suite 'com.databricks.labs.gbx.rasterx.RegisteredProjGridSpec' \
  *     --tags-to-exclude com.databricks.labs.gbx.bench.NoOpExcludeSentinel
  * }}}
  */

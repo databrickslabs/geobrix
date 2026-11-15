@@ -15,7 +15,6 @@ Tests that directly test operation classes and utilities **without Spark**. Thes
 - `RST_AccessorsExecuteTest` - Tests accessor operations directly on GDAL datasets
 - `ClipToGeomTest` - Tests ClipToGeom operation logic
 - `KernelFilterTest` - Tests KernelFilter operation logic
-- `RasterProjectTest` - Tests RasterProject operation logic
 
 ### 2. Eval Tests (Spark Execution)
 Tests that test expressions **through Spark execution**. These test the end-to-end Spark SQL integration.
@@ -33,23 +32,16 @@ Tests that test expressions **through Spark execution**. These test the end-to-e
 src/test/scala/
 ├── README.md (this file)
 ├── com/databricks/labs/gbx/
-│   ├── ds/
-│   │   ├── RegisterDSTest.scala           # Data source registration tests
-│   │   └── WhitelistDSTest.scala          # Whitelist data source tests
 │   ├── expressions/
 │   │   └── CoreClassesTest.scala          # Core expression classes
 │   ├── gridx/bng/
 │   │   ├── BNG_ExpressionEvalTest.scala   # BNG Spark execution tests
 │   │   └── BNG_ExpressionExecuteTest.scala # BNG operation tests
 │   ├── rasterx/
-│   │   ├── ds/
-│   │   │   └── GDAL_DataSourceTest.scala  # GDAL data source tests
 │   │   ├── expressions/
 │   │   │   ├── RST_AccessorsEvalTest.scala          # Accessor Spark tests
 │   │   │   ├── RST_AccessorsExecuteTest.scala       # Accessor operation tests
-│   │   │   ├── RST_AggEvalTest.scala                # Aggregation Spark tests
 │   │   │   ├── RST_ConstructorsEvalTest.scala       # Constructor Spark tests
-│   │   │   ├── RST_ConstructorsExecuteTest.scala    # Constructor operation tests
 │   │   │   ├── RST_ExpressionEvalTest.scala         # Expression Spark tests
 │   │   │   ├── RST_ExpressionExecuteTest.scala      # Expression operation tests
 │   │   │   ├── RST_GeneratorsEvalTest.scala         # Generator Spark tests
@@ -58,14 +50,9 @@ src/test/scala/
 │   │   │   └── RST_TransformationsEvalTest.scala    # ✨ NEW: Transformations (clip, filter, transform)
 │   │   ├── operations/
 │   │   │   ├── ClipToGeomTest.scala         # ✨ NEW: Clip operation tests
-│   │   │   ├── KernelFilterTest.scala       # ✨ NEW: Filter operation tests
-│   │   │   └── RasterProjectTest.scala      # ✨ NEW: Projection operation tests
-│   │   ├── GDALOperationsTest.scala         # GDAL operations tests
+│   │   │   └── KernelFilterTest.scala       # ✨ NEW: Filter operation tests
 │   │   └── RasterDebugger.scala             # Debugging utilities
 │   ├── vectorx/
-│   │   ├── ds/
-│   │   │   ├── OGR_DataSourceTest.scala     # OGR data source tests
-│   │   │   └── OGRInferenceTest.scala       # OGR type inference tests
 │   │   └── jts/
 │   │       ├── JTSTest.scala                # JTS tests
 │   │       └── ST_LegacyTest.scala          # Legacy ST functions tests
@@ -88,7 +75,6 @@ mvn test
 # Operation tests (Execute)
 mvn test -Dtest=ClipToGeomTest
 mvn test -Dtest=KernelFilterTest
-mvn test -Dtest=RasterProjectTest
 
 # Expression tests (Eval)
 mvn test -Dtest=RST_TransformationsEvalTest
@@ -185,20 +171,7 @@ Test data is located in `src/test/resources/`:
 - Property preservation
 - Error handling
 
-**RasterProjectTest** (10 tests):
-- Multiple CRS transformations
-- Property preservation
-- Dimension validation
-- Options handling
-
 ### Expression Tests (Spark Level)
-
-**RST_TransformationsEvalTest** (15 tests):
-- RST_Clip with WKT and WKB
-- RST_Filter with multiple operations
-- RST_Transform to various CRS
-- Combined workflows
-- Binary content handling
 
 ## Writing New Tests
 
@@ -259,7 +232,7 @@ class MyExpressionEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 

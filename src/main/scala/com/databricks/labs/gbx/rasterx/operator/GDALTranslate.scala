@@ -25,8 +25,8 @@ object GDALTranslate {
         val sourcePath = raster.GetFileList().asScala.headOption.map(_.toString).getOrElse("unknown source path")
         val size = Try(Files.size(Paths.get(outputPath))).getOrElse(-1L)
         // TODO: build a JNA bridge for VSI mem estimate
-        // Record the OUTPUT driver here, not the input's. Operations like
-        // MergeRasters / MergeBands / PixelCombineRasters pass a VRT-driver
+        // Record the OUTPUT driver here, not the input's. An operation may
+        // pass a VRT-driver
         // Dataset as input to executeTranslate; if we stamped the input's
         // driver (VRT) into the returned metadata, downstream code paths
         // (notably RasterDriver.writeToBytes via the extension calc and the
@@ -44,7 +44,7 @@ object GDALTranslate {
           "all_parents" -> s"$sourcePath;${options.getOrElse("all_parents", "")}",
           "size" -> size.toString, // For in memory we always return -1
           "format" -> outputDriverName,
-          "compression" -> options.getOrElse("compression", "DEFLATE"),
+          "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped" -> "false",
           "isSubset" -> "false"
         )

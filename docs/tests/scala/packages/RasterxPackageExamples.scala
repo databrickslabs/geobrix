@@ -11,18 +11,18 @@ object RasterxPackageExamples {
 import org.apache.spark.sql.functions._
 
 // Register functions
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 
 // Read raster files (sample data path; see Sample Data guide)
 val rasterPath = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
-val rasterDf = spark.read.format("gdal").load(rasterPath)
+val rasterDf = spark.read.format("binaryFile").load(rasterPath).select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
 // Get metadata
 val metadataDf = rasterDf.select(
   col("path"),
-  rx.rst_width(col("tile")).alias("width"),
-  rx.rst_height(col("tile")).alias("height"),
-  rx.rst_numbands(col("tile")).alias("num_bands")
+  call_function("gbx_rst_width", col("tile")).alias("width"),
+  call_function("gbx_rst_height", col("tile")).alias("height"),
+  call_function("gbx_rst_numbands", col("tile")).alias("num_bands")
 )
 
 metadataDf.show()"""

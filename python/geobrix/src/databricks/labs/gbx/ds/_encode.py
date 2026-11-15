@@ -1,7 +1,7 @@
 """Windowed GTiff re-encode + 11-key metadata, matching the heavy reader.
 
-Mirrors RasterDriver.writeToBytes (GTiff on the wire) and WindowedExtract
-metadata. tile.raster is NOT raw source bytes.
+Writes GTiff on the wire, like the JVM reader's `RasterDriver.writeToBytes`, with the same 11 metadata keys.
+tile.raster is NOT raw source bytes.
 
 Default compression is ``"auto"`` which routes through the compression
 authority (``pyrx.core.compression``) for ZSTD + dtype-predictor output.
@@ -17,6 +17,7 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx.core import cog as _cog
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
@@ -57,30 +58,36 @@ def encode_tile(
         cog_overview_resampling: Overview resampling algorithm for COG (default
                                ``"AVERAGE"``).
     """
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+
     col_off, row_off, win_w, win_h = window
     rio_window = Window(col_off, row_off, win_w, win_h)
     data = ds.read(window=rio_window)
+    # The pixels alone do not carry a source's own (non-alpha) mask band: written
+    # with them, it keeps the masked pixels invalid in the encoded tile.
+    mask = ds.read_masks(1, window=rio_window) if has_own_mask(ds) else None
 
     win_transform = ds.window_transform(rio_window)
 
     if str(tile_format).lower() == "cog":
         # Write directly from the decoded array to driver="COG" — no GTiff
         # intermediate so peak = decoded array + COG file bytes (not all three).
-        from rio_cogeo.profiles import cog_profiles
-
         # Resolve "auto" → "ZSTD" for the ZSTD baseline (constraint requirement).
         # Route through the compression authority for size-adaptive levels.
         cog_compression = compression if str(compression).lower() != "auto" else "AUTO"
         compression_str = str(cog_compression).upper()
+        if compression_str == "NONE":
+            compression_str = "RAW"  # the COG profile names call "no compression" raw
 
         # If not AUTO, validate compression name (same set as analysis.cog_convert).
-        if compression_str != "AUTO":
-            _profile_check = cog_profiles.get(compression_str.lower())
-            if _profile_check is None:
-                raise ValueError(
-                    f"encode_tile: unknown compression '{cog_compression}'; "
-                    f"valid: {', '.join(sorted(cog_profiles.keys()))}"
-                )
+        if (
+            compression_str != "AUTO"
+            and compression_str.lower() not in _comp.COG_PROFILES
+        ):
+            raise ValueError(
+                f"encode_tile: unknown compression '{cog_compression}'; "
+                f"valid: {', '.join(sorted(_comp.COG_PROFILES))}"
+            )
 
         # Route through the compression authority for proper codec/level/predictor
         # with driver="COG" to ensure LEVEL (not zstd_level) is used.
@@ -94,7 +101,9 @@ def encode_tile(
             driver="COG",
         )
 
-        profile = ds.profile.copy()
+        # The source's layout and codec keys are not the COG driver's (cog_profile); merge the
+        # authority options (codec + level + predictor).
+        profile = _comp.cog_profile(ds.profile)
         profile.update(
             driver="COG",
             width=win_w,
@@ -103,16 +112,18 @@ def encode_tile(
             blocksize=cog_blocksize,
             overview_resampling=str(cog_overview_resampling).upper(),
         )
-        # Remove stale compression keys from the source profile before merging authority opts.
-        for _k in ("compress", "predictor", "zstd_level", "zlevel", "LEVEL"):
-            profile.pop(_k, None)
-        # Merge authority options (codec + level + predictor)
         profile.update(_comp_opts)
 
         tmp = new_local_temp_file(suffix=".tif")
         try:
-            with rasterio.open(tmp, "w", **profile) as out:
+            with (
+                _comp.internal_mask_env(mask),
+                open_data(tmp, "w", **profile) as out,
+            ):
+                _comp.match_alpha(out, ds.colorinterp)
                 out.write(data)
+                if mask is not None:
+                    out.write_mask(mask)
             # Free the decoded array before reading bytes back.
             del data
             with open(tmp, "rb") as fh:
@@ -135,9 +146,15 @@ def encode_tile(
                 out_dtype, decoded_bytes=decoded_bytes, compress=compression
             )
         )
-        with MemoryFile() as mf:
+        # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
+        # any other codec cannot carry it.
+        profile = _comp.source_profile(profile, unless_jpeg=True)
+        with _comp.internal_mask_env(mask), MemoryFile() as mf:
             with mf.open(**profile) as out:
+                _comp.match_alpha(out, ds.colorinterp)
                 out.write(data)
+                if mask is not None:
+                    out.write_mask(mask)
             raster_bytes = mf.read()
 
     metadata = {

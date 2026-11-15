@@ -2,12 +2,11 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.BNG
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
-import com.databricks.labs.gbx.util.SerializationUtil
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
@@ -80,7 +79,7 @@ object BNGRasterizeAcc {
 }
 
 /** UDAF: `gbx_rst_bng_rasterize_agg(cellid, value, srid, pixel_size, xmin, ymin,
- *  xmax, ymax, width, height, mode, kring_pad)`.
+ *  xmax, ymax, width, height, mode, kring_pad[, out_crs])`.
  *
  *  Streams `(cellid STRING, value DOUBLE)` per row; the remaining ten arguments are
  *  per-group constants (Literal or constant expressions). The BNG `cellid` is a STRING
@@ -105,9 +104,10 @@ object BNGRasterizeAcc {
  *  6=1m), which is directly the projected metre resolution. NoData = -9999.0. A
  *  null/omitted `value` burns 1.0 (presence mask).
  *
- *  Overlap is last-wins; the accumulated cells are sorted by `(cellId, value)` before
- *  building the value lookup so the winner is deterministic regardless of row-arrival
- *  order (matches the lightweight tier).
+ *  A cell id that repeats keeps its LARGEST value, whatever order the rows arrive in: the
+ *  accumulated cells are sorted by `(cellId, value)` before the value lookup is built, so the
+ *  last write for a cell is its maximum. A NaN never wins against a number (see [[RasterizeBurn.canonicalLut]]); a cell of nothing but NaN burns NaN.
+ *  The lightweight tier follows the same rule.
  */
 case class RST_BNG_RasterizeAgg(
     cellidExpr:    Expression,
@@ -122,6 +122,7 @@ case class RST_BNG_RasterizeAgg(
     heightExpr:    Expression,
     modeExpr:      Expression,
     kringPadExpr:  Expression,
+    outCrsExpr:    Expression = Literal.create(null, StringType),
     exprConfExpr:  Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
@@ -131,18 +132,18 @@ case class RST_BNG_RasterizeAgg(
 
     override lazy val deterministic: Boolean = true  // canonical fold order (see eval)
     override val nullable: Boolean = true
-    override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(BinaryType)
+    override lazy val dataType: DataType = BinaryType  // the GeoTIFF bytes: the one contract of this name
     override def prettyName: String = RST_BNG_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
         cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
-        exprConfExpr
+        outCrsExpr, exprConfExpr
     )
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): RST_BNG_RasterizeAgg =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11), nc(12))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11), nc(12), nc(13))
 
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate =
         copy(mutableAggBufferOffset = n)
@@ -158,6 +159,8 @@ case class RST_BNG_RasterizeAgg(
      *  [[BNG.parse]]; the accumulator stays Long-keyed so the serde is unchanged.
      */
     override def update(buffer: BNGRasterizeAcc, input: InternalRow): BNGRasterizeAcc = {
+        // out_crs is refused, not ignored: a value the engine never reads would be a silent defect.
+        if (outCrsExpr.eval(input) != null) throw new IllegalArgumentException(RST_BNG_RasterizeAgg.OutCrsRefusal)
         val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
@@ -169,7 +172,7 @@ case class RST_BNG_RasterizeAgg(
         }
         val vRaw = valueExpr.eval(input)
         val v = vRaw match {
-            case null      => 1.0  // presence mask
+            case null      => RasterizeBurn.nullBurn(valueExpr)  // 1.0 for an omitted value, NaN for a missing one
             case d: Double => d
             case f: Float  => f.toDouble
             case i: Int    => i.toDouble
@@ -213,14 +216,9 @@ case class RST_BNG_RasterizeAgg(
         // Resolution from the cells (derived from each cell's Long id); error on mixed.
         val resolution = RST_BNG_RasterizeAgg.resolutionOf(buffer.cells.iterator.map(_._1))
 
-        // Canonical fold order: sort by (cellId, value) so the last-wins overlap
-        // winner is deterministic regardless of row-arrival order. Build the lookup
-        // in that order so later writes win.
-        val ordered = buffer.cells.toSeq.sortWith { (a, b) =>
-            if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0 else a._2 < b._2
-        }
-        val lut = scala.collection.mutable.LongMap.empty[Double]
-        ordered.foreach { case (cellId, v) => lut.update(cellId, v) }
+        // Canonical fold order (see RasterizeBurn.canonicalLut): the last write for a repeated cell is its largest
+        // value (a NaN sorts first, so any number in its cell wins), regardless of row-arrival order.
+        val lut = RasterizeBurn.canonicalLut(buffer.cells.toSeq)
 
         // Resolve grid spec: explicit extent if fully supplied, else snapped grid.
         val explicit = xminOpt.isDefined && yminOpt.isDefined && xmaxOpt.isDefined &&
@@ -239,15 +237,7 @@ case class RST_BNG_RasterizeAgg(
             RasterizeBurn.burn(BNG, lut, srid, resolution, rasterDs, width, height)
             rasterDs.FlushCache()
             val bytes = VectorRasterBridge.toGTiffBytes(rasterDs)
-            val mtd = Map(
-                "driver"      -> "GTiff",
-                "extension"   -> "tif",
-                "size"        -> bytes.length.toString,
-                "parentPath"  -> "",
-                "all_parents" -> ""
-            )
-            val mapData = SerializationUtil.toMapData[String, String](mtd)
-            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
+            bytes
         } finally {
             rasterDs.delete()
         }
@@ -265,25 +255,29 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
     /** NoData fill value, matching the lightweight tier (`cellraster._NODATA`). */
     val NoData: Double = -9999.0
 
+    /** The refusal of a non-NULL `out_crs`. BNG output is always EPSG:27700; the light tier refuses the argument with
+      * the same text (`pyrx.functions.BNG_OUT_CRS_REFUSAL`), so the two tiers agree. */
+    val OutCrsRefusal: String = "gbx_rst_bng_rasterize_agg: out_crs is not supported; the output is always " +
+        "EPSG:27700. Fix: pass NULL for out_crs, then reproject the tile with gbx_rst_transformcrs."
+
+    /** 12 arguments, or 13 with the trailing `out_crs`, which must be NULL: a non-NULL value is refused. */
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
         case 12 => RST_BNG_RasterizeAgg(
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
+        case 13 =>
+            c(12) match {
+                case Literal(v, _) if v != null => throw new IllegalArgumentException(OutCrsRefusal)
+                case _ =>
+            }
+            RST_BNG_RasterizeAgg(
+                c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11), c(12))
         case n => throw new IllegalArgumentException(
-            s"$name expects 12 arguments " +
-            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
+            s"$name expects 12 or 13 arguments " +
+            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad[, out_crs]); got $n")
     }
 
     /** Resolution of a cell set (derived from each cell's Long id); throws on a mixed-resolution set. */
-    private[agg] def resolutionOf(cellIds: Iterator[Long]): Int = {
-        var res = Int.MinValue
-        cellIds.foreach { c =>
-            val r = BNG.getResolution(BNG.cellDigits(c))
-            if (res == Int.MinValue) res = r
-            else if (r != res) throw new IllegalArgumentException(
-                s"$name: BNG cell set has mixed resolutions ($res and $r)")
-        }
-        res
-    }
+    private[agg] def resolutionOf(cellIds: Iterator[Long]): Int = RasterizeBurn.bngResolutionOf(cellIds)
 
     /** Snapped, lattice-aligned grid spec from a cell set; port of
      *  `cellraster.compute_gridspec` (+ `snap_bounds`).

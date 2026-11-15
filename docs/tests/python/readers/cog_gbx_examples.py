@@ -19,7 +19,7 @@ SAMPLE_RASTER_SINGLE = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 # ---------------------------------------------------------------------------
 
 FILE_GBX_LIST = """# List raster files in a directory — no content loaded.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 refs = spark.read.format("file_gbx").load(
@@ -44,7 +44,7 @@ refs = (
 )"""
 
 COG_PREPARE = r"""# Step 1 — list source files.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 refs = spark.read.format("file_gbx").load(
@@ -87,9 +87,9 @@ cog_df.show()
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs import gbx
 
-    register(spark)
+    gbx.register(spark)
 
 
 def list_files_file_gbx(spark, path=None):
@@ -128,10 +128,17 @@ def list_files_filter_regex(spark, path=None):
 
 
 def halo_mode_prepare_cog(spark, src_path=None):
-    """file_gbx -> cog_gbx writer: each source file becomes a master COG."""
+    """file_gbx -> cog_gbx writer: each source file becomes a master COG (GDAL's COG validator)."""
     import rasterio
-    from rio_cogeo.cogeo import cog_validate
 
+    from databricks.labs.gbx import _osgeo
+
+    # by path only: the validator may run on another GDAL than rasterio's
+    validator = _osgeo.utils(
+        "samples.validate_cloud_optimized_geotiff",
+        "halo_mode_prepare_cog",
+        same_libgdal=False,
+    )
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE
 
@@ -154,8 +161,8 @@ def halo_mode_prepare_cog(spark, src_path=None):
         ]
         assert tif_files, "cog_gbx writer produced no .tif output"
         for tif in tif_files:
-            is_valid, errors, warnings = cog_validate(tif, strict=False)
-            assert is_valid, (
+            warnings, errors, _details = validator.validate(tif, full_check=True)
+            assert not errors, (
                 f"cog_gbx output is not a valid COG: {tif}\n"
                 f"errors={errors}\nwarnings={warnings}"
             )

@@ -22,19 +22,31 @@ Synthesis recipes (deterministic, idempotent):
                       union for the mosaic.
 
 Idempotent: a given (source, fn) always writes to the same paths with the same
-bytes; if the outputs already exist they are reused (re-synthesis is skipped).
+bytes; if the outputs already exist AND read back (first block) they are reused,
+an unreadable one is rewritten.
+
+Volume-safe: GDAL finishes a GTiff by seeking back to write the first IFD offset,
+which a UC Volume (FUSE) does not honour -- the file is left with IFD offset 0 and
+is unreadable. So every file is written to local disk, then copied sequentially to
+a hidden sibling of the destination and renamed into place (a reader never sees a
+partial file).
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
+import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Union
 
-import rasterio
 from rasterio.transform import Affine
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench import manifest as _m
+from databricks.labs.gbx.pyrx.core.compression import source_profile
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 # Recipes and their output filenames. The element ORDER is the band/merge order
 # the consuming function relies on (frombands element 0 -> band 1, etc.).
@@ -72,24 +84,66 @@ def synthesize(src_path: str, fn: str, out_dir: str) -> List[str]:
     return _synth_merge(src_path, out)
 
 
+def publish_file(local: Union[str, Path], dest: Union[str, Path]) -> None:
+    """Copy local file ``local`` to ``dest`` sequentially, atomically.
+
+    Copies to a hidden sibling then ``os.replace``; if the filesystem refuses the
+    replace, falls back to a direct copy (and cleans the sibling up).
+    """
+    dest = Path(dest)
+    tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        shutil.copyfile(
+            local, tmp
+        )  # copyfile: no chmod, which a Volume's FUSE mount may refuse
+        os.replace(tmp, dest)
+    except OSError as exc:
+        print(f"publish_file: rename onto {dest} refused ({exc}); copying in place")
+        shutil.copyfile(local, dest)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _readable(path: Path) -> bool:
+    """True when ``path`` exists and opens through ``open_data`` with a readable first block."""
+    if not path.exists():
+        return False
+    try:
+        with open_data(path) as ds:
+            window = next(iter(ds.block_windows(1)))[1]
+            ds.read(1, window=window)
+        return True
+    except Exception:  # noqa: BLE001 - any failure to open/read means rewrite
+        return False
+
+
 def _write(profile: dict, bands: list, path: Path) -> None:
-    """Write ``bands`` (list of 2-D arrays) to ``path`` as a GTiff."""
-    with rasterio.open(path, "w", **profile) as dst:
-        for i, arr in enumerate(bands, start=1):
-            dst.write(arr, i)
+    """Write ``bands`` (list of 2-D arrays) to ``path`` as a GTiff (local, then published)."""
+    scratch = new_local_temp_dir("gbx_synth_")
+    try:
+        local = os.path.join(scratch, path.name)
+        with open_data(local, "w", **profile) as dst:
+            for i, arr in enumerate(bands, start=1):
+                dst.write(arr, i)
+        publish_file(local, path)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _synth_frombands(src_path: str, out: Path) -> List[str]:
     """Split the N-band source into N single-band GTiffs (band order preserved)."""
     paths: List[str] = []
-    with rasterio.open(src_path) as ds:
+    with open_data(src_path) as ds:
         n = ds.count
         for b in range(1, n + 1):
             p = out / f"band_{b:02d}.tif"
             paths.append(str(p))
-            if p.exists():
+            if _readable(p):
                 continue
-            profile = ds.profile.copy()
+            profile = source_profile(ds.profile, unless_jpeg=True)
             profile.update(driver="GTiff", count=1)
             _write(profile, [ds.read(b)], p)
     return paths
@@ -97,17 +151,17 @@ def _synth_frombands(src_path: str, out: Path) -> List[str]:
 
 def _synth_combineavg(src_path: str, out: Path) -> List[str]:
     """Two ALIGNED copies of the source (identical grid) for a per-pixel mean."""
-    paths: List[str] = []
-    with rasterio.open(src_path) as ds:
+    paths = [str(out / f"copy_{i}.tif") for i in range(2)]
+    if all(_readable(Path(p)) for p in paths):
+        return paths  # nothing to read or write: the source is not decoded for copies that are there
+    with open_data(src_path) as ds:
         data = ds.read()
-        profile = ds.profile.copy()
+        profile = source_profile(ds.profile, unless_jpeg=True)
         profile.update(driver="GTiff")
-        for i in range(2):
-            p = out / f"copy_{i}.tif"
-            paths.append(str(p))
-            if p.exists():
+        for p in paths:
+            if _readable(Path(p)):
                 continue
-            _write(profile, [data[b] for b in range(data.shape[0])], p)
+            _write(profile, [data[b] for b in range(data.shape[0])], Path(p))
     return paths
 
 
@@ -119,8 +173,10 @@ def _synth_merge(src_path: str, out: Path) -> List[str]:
     extents are distinct and abut/overlap into a larger union. The pixel size and
     CRS are unchanged so both copies snap onto one common grid for the mosaic.
     """
-    paths: List[str] = []
-    with rasterio.open(src_path) as ds:
+    paths = [str(out / f"part_{i}.tif") for i in range(2)]
+    if all(_readable(Path(p)) for p in paths):
+        return paths  # nothing to read or write: the source is not decoded for parts that are there
+    with open_data(src_path) as ds:
         data = ds.read()
         base = ds.transform
         w, h = ds.width, ds.height
@@ -131,10 +187,9 @@ def _synth_merge(src_path: str, out: Path) -> List[str]:
         offset = Affine(base.a, base.b, base.c + dx, base.d, base.e, base.f + dy)
         for i, tr in enumerate((base, offset)):
             p = out / f"part_{i}.tif"
-            paths.append(str(p))
-            if p.exists():
+            if _readable(p):
                 continue
-            profile = ds.profile.copy()
+            profile = source_profile(ds.profile, unless_jpeg=True)
             profile.update(driver="GTiff", transform=tr)
             _write(profile, [data[b] for b in range(data.shape[0])], p)
     return paths

@@ -2,37 +2,31 @@
 sidebar_position: 1
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Writers Overview
 
 GeoBrix provides Spark writers for geospatial file formats.
 
 ## Available Writers
 
-Every named writer, by tier. Lightweight (`*_gbx`) writers are pure-Python DataSource V2 (no
-JAR); heavyweight writers are GDAL/Scala-backed. Detailed options and the vector column
+Every writer is a pure-Python DataSource V2 (the `*_gbx` formats). It needs no JAR and
+runs on every compute, Serverless included. Detailed options and the vector column
 contract follow below.
 
-| Format | Lightweight | Heavyweight |
-|---|---|---|
-| [Raster (generic)](./raster) | `raster_gbx` | `gdal` |
-| [GeoTIFF](./geotiff) | `gtiff_gbx` | `gtiff_gdal` |
-| [COG](./cog) | `cog_gbx` | — (light-only) |
-| [PMTiles](./pmtiles) | `pmtiles_gbx` | `pmtiles` |
-| [NetCDF](./netcdf) | `netcdf_gbx` | — (light-only) |
-| [LiDAR (LAS/LAZ)](./lidar) | `lidar_gbx` | — (light-only) |
-| [Vector (generic)](./vector) | `vector_gbx` | — (light-only) |
-| [Shapefile](./shapefile) | `shapefile_gbx` | — (light-only) |
-| [GeoJSON](./geojson) | `geojson_gbx` | — (light-only) |
-| [GeoJSONL](./geojsonl) | `geojsonl_gbx` | `geojsonl_ogr` |
-| [GeoPackage](./geopackage) | `gpkg_gbx` | — (light-only) |
-| [File Geodatabase](./filegdb) | `file_gdb_gbx` | — (hybrid; needs native GDAL) |
-
-The single-file vector formats (Vector, Shapefile, GeoJSON, GeoPackage, File Geodatabase) are
-**lightweight-only** to write; the heavyweight tier writes raster (`gdal` / `gtiff_gdal`),
-`pmtiles`, and the sharded `geojsonl_ogr`.
+| Format | Writer |
+|---|---|
+| [Raster (generic)](./raster) | `raster_gbx` |
+| [GeoTIFF](./geotiff) | `gtiff_gbx` |
+| [COG](./cog) | `cog_gbx` |
+| [Zarr](./zarr) | `gbx_zarr_write` (a function, not a DataSource) |
+| [PMTiles](./pmtiles) | `pmtiles_gbx` |
+| [NetCDF](./netcdf) | `netcdf_gbx` |
+| [LiDAR (LAS/LAZ)](./lidar) | `lidar_gbx` |
+| [Vector (generic)](./vector) | `vector_gbx` |
+| [Shapefile](./shapefile) | `shapefile_gbx` |
+| [GeoJSON](./geojson) | `geojson_gbx` |
+| [GeoJSONL](./geojsonl) | `geojsonl_gbx` |
+| [GeoPackage](./geopackage) | `gpkg_gbx` |
+| [File Geodatabase](./filegdb) | `file_gdb_gbx` |
 
 ## Named Vector Formats
 
@@ -64,8 +58,8 @@ is named, field-name and type limits, and how the CRS is stored:
 
 ### What `.save(path)` produces
 
-The format (driver) is chosen by the writer name, **not** the path extension — but
-some formats are a single file and others a directory, so name `path` accordingly:
+The writer name chooses the format (driver), **not** the path extension.
+Some formats are a single file and others a directory, so name `path` accordingly:
 
 | Writer | `.save(path)` writes | Recommended `path` |
 |---|---|---|
@@ -97,7 +91,7 @@ handles partial names so you never produce a misnamed file.
 canonical extension for the format — so `roads` → `roads.shp.zip`, `roads.shp` →
 `roads.shp.zip`, `roads.shp.zip` → unchanged. If `name` ends with a **different** recognized
 geo extension (for example, `.gpkg` passed to the Shapefile writer), the writer raises a clear
-error rather than silently producing a doubly-suffixed name.
+error. It never silently produces a doubly-suffixed name.
 
 Examples:
 
@@ -123,10 +117,10 @@ The `nameCol` option on the sharded and raster writers (`geojsonl_gbx`, `raster_
 
 ### Choosing a writer for large datasets
 
-The **single-file** writers (`geojson_gbx`, `shapefile_gbx`, `gpkg_gbx`) assemble
-the output on the **driver**, but they **stream** the partitions through one pass
-with **bounded memory** (the whole dataset is never held at once), so they scale
-much further than a naive single-node merge. They are still single-node writes,
+The **single-file** writers (`geojson_gbx`, `shapefile_gbx`, `gpkg_gbx`, `file_gdb_gbx`) assemble
+the output on the **driver**. They **stream** the partitions through one pass
+(the whole dataset is never held at once), so they scale much further than a naive
+single-node merge. They are still single-node writes,
 so:
 
 - **`shapefile_gbx`** — streamed, but the format hard-caps each `.shp`/`.dbf` at
@@ -134,6 +128,10 @@ so:
   attribute tables eventually hit that ceiling.
 - **`geojson_gbx`** / **`gpkg_gbx`** — streamed, single file, no hard size cap;
   bounded by the single-node write throughput.
+- **`file_gdb_gbx`** — streamed, but GDAL's FileGDB writer keeps per-feature index state in
+  memory until the file is closed. Driver memory therefore grows with the feature count (about 120
+  bytes per feature; a 14-million-polygon write peaked at 1.9 GB). See
+  [Benchmarking](../api/benchmarking).
 
 For the largest datasets, prefer the writers that spread work across partitions:
 
@@ -142,14 +140,11 @@ For the largest datasets, prefer the writers that spread work across partitions:
 - **`gpkg_gbx`** — a single file with no 2 GB cap, a good single-file choice when
   one file is required.
 
-(`file_gdb_gbx` uses the native GDAL path and currently assembles in memory — a
-heavy-tier writer; prefer the above on Serverless.)
-
 :::tip Large single-file writes may need a larger cluster
 The single-file writers assemble the output in Spark's **Python worker**
-processes, so a very large result (for example, a Shapefile whose `.dbf` runs to
-~1 GB+) can exceed the worker memory on **Serverless** and fail mid-write — seen
-as a `CancelledKeyException` (the driver is lost) or a "Python worker exited
+processes. A very large result (for example, a Shapefile whose `.dbf` runs to
+~1 GB+) can therefore exceed the worker memory on **Serverless** and fail mid-write.
+The failure appears as a `CancelledKeyException` (the driver is lost) or a "Python worker exited
 unexpectedly" crash. If you hit that:
 
 - Run on a **classic cluster** with a larger node — the proven path for the
@@ -157,36 +152,32 @@ unexpectedly" crash. If you hit that:
 - Or avoid single-node assembly entirely: use **`geojsonl_gbx`** (shards per
   partition) or **`gpkg_gbx`**, which scale on Serverless without this ceiling.
 
-Note: **[high-memory Serverless](https://docs.databricks.com/aws/en/compute/serverless/dependencies#use-high-memory-serverless-compute)** ("High: 32 GB") raises the notebook **REPL** memory but **not** the Spark Python-worker memory the writer assembles in, so it does **not** extend this ceiling — prefer a classic cluster or the sharded writers. The write itself is correct at scale (it completes on a classic cluster); this is a memory ceiling, not a writer limit.
+Note: **[high-memory Serverless](https://docs.databricks.com/aws/en/compute/serverless/dependencies#use-high-memory-serverless-compute)** ("High: 32 GB") raises the notebook **REPL** memory but **not** the Spark Python-worker memory the writer assembles in. It therefore does **not** extend this ceiling, so prefer a classic cluster or the sharded writers. The write itself is correct at scale (it completes on a classic cluster); this is a memory ceiling, not a writer limit.
 :::
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pyrx)">
-
-The lightweight tier ships native Python DataSource V2 writers — no JAR, no init script.
+GeoBrix ships native Python DataSource V2 writers — no JAR.
 
 :::tip Why this scales beyond a single node
 These are Spark DataSource V2 writers, not single-node `pyogrio`/`rasterio` wrappers. **Each
 partition is written concurrently** by its executor, then the driver merges the parts into
 the final output (a two-phase write). The PMTiles writer goes further with **distributed
-spatial sharding** — partitioning tiles into bounded per-shard archives written in parallel
-and then cataloging them — which scales horizontally instead of building one memory-bound
+spatial sharding**. It partitions tiles into bounded per-shard archives written in parallel
+and then catalogs them. This scales horizontally instead of building one memory-bound
 archive on a single node. Merges are sequential and rename-free, so they are safe on
 FUSE-mounted Unity Catalog Volumes / DBFS.
 
-The two-phase staging is **isolated per write**: each write stages its parts under a unique,
-hidden scratch namespace, so concurrent jobs — or multiple users — writing to the same output
+The two-phase staging is **isolated per write**. Each write stages its parts under a unique,
+hidden scratch namespace. Concurrent jobs, or multiple users, writing to the same output
 location never see or overwrite one another's in-progress data. Scratch left behind by an
 interrupted job is reclaimed automatically on a later write to the same location.
 :::
 
 :::note Register first
-Unlike the heavyweight writers (auto-discovered from the JAR), the lightweight Python
-DataSources are **not** auto-registered — call `register(spark)` once per session before
-using any `*_gbx` format:
+The Python DataSources are **not** auto-registered — call `register(spark)` once per
+session before using any `*_gbx` format:
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 
@@ -202,9 +193,8 @@ An unrecognized format raises `ValueError`.
 :::tip On Serverless, write to a FILE-column table for fast reads
 On Serverless, prefer writing raster or vector output to a **FILE-column Delta table** (use
 `file_mode="external"` or `file_mode="managed"` on the writer). Once written, reads via
-`tilesTable` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path — measured
-at **~2 s** per 1,000 tiles on both Serverless and classic — instead of the per-tile FUSE opens
-that make the directory DataSource path **~3.7× slower on Serverless**.
+`read_tiles_table` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path. That path resolves the
+FILE reference in the scan, so it needs no per-tile FUSE open. The directory DataSource path opens each tile on the worker.
 
 Per-tile FILE writes themselves are not the fast path; the benefit is on the read side once the
 table exists. For large-dataset write throughput on Serverless, `geojsonl_gbx` (sharded) and
@@ -213,7 +203,7 @@ table exists. For large-dataset write throughput on Serverless, `geojsonl_gbx` (
 See the full [capability tiers & read-options matrix](../readers-writers#capability-tiers).
 :::
 
-### Lightweight writers in detail
+### Writers in detail
 
 | Writer | Format Name | Description |
 |--------|-------------|-------------|
@@ -224,84 +214,22 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [Vector Writer](./vector) | `vector_gbx` | Pure-Python generic vector writer (pyogrio); any OGR-supported driver. |
 | [Shapefile Writer](./shapefile) | `shapefile_gbx` | Pure-Python Shapefile writer (OGR driver: `ESRI Shapefile`). |
 | [GeoJSON Writer](./geojson) | `geojson_gbx` | Pure-Python GeoJSON writer (OGR driver: `GeoJSON`) — single merged file. |
-| [GeoJSONL Writer](./geojsonl) | `geojsonl_gbx` / `geojsonl_ogr` | Multi-file newline-delimited GeoJSONL — one shard per partition, no driver merge. Available in **both** tiers. |
+| [GeoJSONL Writer](./geojsonl) | `geojsonl_gbx` | Multi-file newline-delimited GeoJSONL — one shard per partition, no driver merge. |
 | [GeoPackage Writer](./geopackage) | `gpkg_gbx` | Pure-Python GeoPackage writer (OGR driver: `GPKG`). |
-| [GeoDatabase Writer](./filegdb) | `file_gdb_gbx` | **Hybrid** File Geodatabase writer (OGR driver: `OpenFileGDB`) — requires the native GDAL libraries (e.g. as provided by the heavyweight tier), not pure-Python. |
-| [NetCDF Writer](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF writer — CF grids (raster) or CF-DSG points (vector), with `singleFile` / `merge` consolidation. Light-only (no heavyweight NetCDF writer). |
-| [LiDAR Writer](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud writer — one `.laz` per Spark partition by default, with `singleFile` / `merge` consolidation and `keepParts` control. Light-only (no heavyweight LiDAR writer). |
+| [GeoDatabase Writer](./filegdb) | `file_gdb_gbx` | Pure-Python File Geodatabase writer (OGR driver: `OpenFileGDB`). |
+| [NetCDF Writer](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF writer — CF grids (raster) or CF-DSG points (vector), with `singleFile` / `merge` consolidation. |
+| [LiDAR Writer](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud writer — one `.laz` per Spark partition by default, with `singleFile` / `merge` consolidation and `keepParts` control. |
 
 See the [Raster Writer](./raster) page for full usage, options, and the `nameCol` / `ext` controls.
 
 ## Benchmarks
 
-Each `*_gbx` lightweight writer is benchmarked against its heavyweight counterpart on the
-same cluster, same corpus, and same row counts, with the median of measured iterations
-reported. Parity is a hard gate — the two tiers' outputs must decode to the same records
-(and, where applicable, byte-identical tile data) or the run fails immediately.
-
 Per-format timing results — spanning the vector writers (GeoJSON, Shapefile, GeoPackage,
 GeoJSONL) and the PMTiles writer — are published on the [Benchmarking](../api/benchmarking)
-page. For the full methodology and raster-function results, see the same page.
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (rasterx)">
-
-Heavyweight writers are implemented as Spark DataSource V2 connectors backed by GDAL (raster) and a native Scala PMTiles encoder. They are registered automatically when the GeoBrix JAR is on the classpath — no additional configuration needed. For vector output, the heavyweight tier provides the sharded `geojsonl_ogr` writer; other vector output flows through the lightweight writers, Spark's built-in writers, or the product's native geospatial writers.
-
-## Available Writers
-
-| Writer | Format Name | Description |
-|--------|-------------|-------------|
-| [Raster Writer](./raster) | `gdal` | Emits each row's tile using the GDAL driver recorded in the tile's metadata. |
-| [GeoTIFF Writer](./geotiff) | `gtiff_gdal` | Named writer for GeoTIFF files (preset `driver="GTiff"`). |
-| [PMTiles Writer](./pmtiles) | `pmtiles` | Streams a `(z, x, y, bytes)` tile set into a single PMTiles v3 archive file. |
-| [GeoJSONL Writer](./geojsonl) | `geojsonl_ogr` | Multi-file newline-delimited GeoJSONL — one shard per partition. The heavyweight tier's first vector writer; the lightweight peer is `geojsonl_gbx`. |
-
-## At a Glance
-
-**GDAL writer:**
-- **Input schema:** exactly `(source: string, tile: struct)` — the reader's default schema. Don't `.select()` or add columns.
-- **Mode:** `.mode("append")` only.
-- **Format on disk:** comes from the `driver` stored in each tile's metadata. `ext` controls the filename suffix only.
-- **Target directory:** must already exist; the writer does not create Volume roots.
-
-**PMTiles writer:**
-- **Input schema:** exactly `(z: int, x: int, y: int, bytes: binary)`.
-- **Mode:** `.mode("overwrite")` is required; default `ErrorIfExists` is rejected upstream by Spark.
-- **Output path:** the final `.pmtiles` file, not a directory. The heavyweight DataSource is write-only; read PMTiles via the lightweight `pmtiles_gbx` reader.
-
-:::note Heavyweight vector writing
-The heavyweight tier writes raster (GDAL), PMTiles, and — its first vector writer — the
-sharded [**GeoJSONL** writer](./geojsonl) (`geojsonl_ogr`). The single-file vector formats
-(GeoJSON, Shapefile, GeoPackage, File Geodatabase) are **lightweight-only** to write —
-those OGR write paths aren't implemented in the heavyweight tier. For single-file vector
-output, use the lightweight vector writers: [Vector](./vector) (`vector_gbx`),
-[Shapefile](./shapefile) (`shapefile_gbx`), [GeoJSON](./geojson) (`geojson_gbx`),
-[GeoPackage](./geopackage) (`gpkg_gbx`), or [GeoDatabase](./filegdb) (`file_gdb_gbx`).
-:::
-
-:::note Hybrid writer: GeoDatabase (`file_gdb_gbx`)
-The [GeoDatabase writer](./filegdb) (`file_gdb_gbx`) is a **hybrid**: it is registered in the
-lightweight tier but, unlike the other `*_gbx` vector writers, it is not pure-Python — it
-drives the **native GDAL libraries** (`osgeo`) to write the File Geodatabase. It therefore
-runs only where those natives are present, such as on a cluster with the **heavyweight tier**
-(the GeoBrix JAR) installed. On a runtime without native GDAL it raises a clear error at write
-time; use another single-file vector writer (GeoPackage, GeoJSON, Shapefile) there.
-:::
-
-## Benchmarks
-
-Each heavyweight writer is benchmarked against its `*_gbx` lightweight counterpart on the
-same cluster, same corpus, and same row counts, with the median of measured iterations
-reported. Parity (matching output records, and byte-identical tile data where applicable)
-is a hard gate — a mismatch fails the run immediately.
-
-Per-format timing results — the PMTiles writer and the sharded GeoJSONL writer — are
-published on the [Benchmarking](../api/benchmarking) page, alongside the full methodology
-and raster-function results.
+page, with the full methodology.
 
 :::note Coordinate reference systems
-Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC authority code) and passes it to the OGR driver via `srs.SetFromUserInput`; when `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 column is the fallback. Raster writers preserve the CRS from each tile's spatial reference metadata. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full SRID-vs-CRS-string model and the ESRI/OGC authority-preservation behavior.
+Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC authority code) and passes it to the OGR driver via `srs.SetFromUserInput`. When `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 column is the fallback. Raster writers preserve the CRS from each tile's spatial reference metadata. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full SRID-vs-CRS-string model and the ESRI/OGC authority-preservation behavior.
 :::
 
 ## Next Steps
@@ -312,5 +240,3 @@ Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC a
 - [Readers Overview](../readers/overview) — the corresponding read paths.
 - [Helios notebooks](../notebooks/helios) — worked end-to-end example using the PMTiles writer to package raster and terrain pyramids over a San Francisco AOI.
 
-</TabItem>
-</Tabs>

@@ -18,6 +18,7 @@ from typing import Iterator, List, Optional
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.ds import _write
 from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
 from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -98,7 +99,7 @@ def _raster_bytes_compression(raster_bytes: bytes) -> "Optional[str]":
     from rasterio.io import MemoryFile
 
     try:
-        with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        with MemoryFile(raster_bytes) as mf, open_bytes(mf) as ds:
             comp = ds.compression
             return comp.value.lower() if comp is not None else None
     except Exception:
@@ -118,7 +119,7 @@ def _apply_compression(
     dtype-appropriate predictors. Returns the re-encoded GTiff bytes.
 
     When compress='auto', this will return ZSTD+predictor output. When
-    compress='none', the output has no compression keys.
+    compress='none', the output has no compression (the profile carries compress=none).
 
     Fast-path: when compress='auto' and *raster_bytes* are already
     ZSTD-compressed, returns *raster_bytes* unchanged (no re-encode).  This
@@ -132,8 +133,12 @@ def _apply_compression(
 
     from rasterio.io import MemoryFile
 
-    with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+
+    with MemoryFile(raster_bytes) as src_mf, open_bytes(src_mf) as src:
         data = src.read()
+        # The pixels alone do not carry a source's own (non-alpha) mask band.
+        mask = src.read_masks(1) if has_own_mask(src) else None
         profile = src.profile.copy()
         profile.update(driver="GTiff")
         out_dtype = profile.get("dtype", str(src.dtypes[0]))
@@ -156,9 +161,15 @@ def _apply_compression(
                 predictor=predictor,
             )
         )
-        with MemoryFile() as out_mf:
+        # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
+        # any other codec cannot carry it.
+        profile = _comp.source_profile(profile, unless_jpeg=True)
+        with _comp.internal_mask_env(mask), MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
+                _comp.match_alpha(dst, src.colorinterp)
                 dst.write(data)
+                if mask is not None:
+                    dst.write_mask(mask)
             return out_mf.read()
 
 
@@ -213,13 +224,13 @@ class RasterGbxWriter(DataSourceWriter):
         cog: bool = False,
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
-        # Unified compression surface (Task 5).
+        # Unified compression surface.
         # ``compress`` = "auto" (default) | "zstd" | "deflate" | "lzw" | "none".
         # ``compress_level`` and ``predictor`` refine it when compress != "auto".
         # When compress == "auto", explicit level/predictor are ignored (with a
         # UserWarning from the authority).
         # Deprecated: ``cog_compression`` is the old single-codec option accepted
-        # by the pre-Task-5 API; it still works but maps to ``compress`` internally.
+        # by the earlier API; it still works but maps to ``compress`` internally.
         # If BOTH are supplied, ``compress`` wins (callers should migrate).
         compress: str = "auto",
         compress_level: Optional[int] = None,
@@ -355,7 +366,7 @@ class RasterGbxWriter(DataSourceWriter):
                 info = _cog.detect_cog(metadata, raster_bytes)
                 if not info.is_cog:
                     with MemoryFile(raster_bytes) as mf:
-                        with mf.open() as ds:
+                        with open_bytes(mf) as ds:
                             raster_bytes = _analysis.cog_convert(
                                 ds,
                                 _cog_compress,

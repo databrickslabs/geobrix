@@ -7,13 +7,22 @@ else raise (a code in neither registry is invalid). The code sets come from PROJ
 ``proj.db`` via ``pyproj.database.get_codes`` and are built once + cached.
 """
 
+import re
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from rasterio.crs import CRS
+
+from databricks.labs.gbx.pyrx._env import configure_gdal_env
+
+# Every light CRS lookup comes through this module, on the driver as in the tasks, so make
+# PROJ's data findable before the first one: a runtime can export a PROJ_DATA this process
+# cannot read (DBR 19 standard access), and rasterio took it as its search path at import.
+configure_gdal_env()
 
 # 120 WGS84 UTM zones (EPSG 326xx N + 327xx S) + 4326/27700/3857 + headroom.
 # A workload touching every UTM zone plus the common CRSes never evicts.
@@ -56,6 +65,36 @@ def _epsg_codes() -> frozenset:
     return _authority_codes("EPSG")
 
 
+@lru_cache(maxsize=None)
+def _crs_codes(authority: str) -> frozenset:
+    """Every CRS code (any kind, vertical included) ``authority`` has in PROJ's database, upper-cased."""
+    from pyproj.database import get_codes
+    from pyproj.enums import PJType
+
+    try:
+        return frozenset(
+            c.upper() for c in get_codes(authority, PJType.CRS, allow_deprecated=True)
+        )
+    except Exception:  # an authority PROJ does not have
+        return frozenset()
+
+
+def _authority_known(value: str) -> None:
+    """Raise unless each AUTHORITY:CODE ``value`` names (each part of a compound one) is a CRS in PROJ's database.
+    GDAL's parse, which rasterio's ``from_authority`` uses, reads a code it cannot resolve as a file name; the JVM
+    parses with file and network access off, so both tiers refuse it."""
+    auth, _, rest = value.partition(":")
+    for part in rest.lstrip(":").split("+"):
+        a, sep, code = part.partition(":")
+        a, code = (a, code.lstrip(":")) if sep else (auth, part)
+        if code.upper() not in _crs_codes(a.upper()):
+            raise ValueError(
+                f"resolve_crs: '{value}' names {a}:{code}, which is no CRS in PROJ's database; GDAL would read it "
+                "as a file name, and a CRS value is never read from a file. Fix: pass EPSG:<code> (or another "
+                "AUTHORITY:CODE PROJ knows), an integer SRID, WKT, PROJJSON or a +proj string"
+            )
+
+
 def _esri_codes() -> frozenset:
     return _authority_codes("ESRI")
 
@@ -83,14 +122,89 @@ def _is_intlike(value) -> bool:
     return False
 
 
+# The CRS strings resolve_crs parses, besides an int SRID. GDAL's universal parser reads a file when a string
+# names one (a relative name included), and PROJ opens a grid named by path, so anything else is refused: a CRS
+# value never reaches a file or the network. The JVM's SpatialRefOps.resolveCrs applies the same rule.
+# AUTHORITY:CODE, and a compound one (EPSG:4326+5773, EPSG:4326+EPSG:5773: a horizontal CRS plus a vertical one)
+_AUTH_CODE = re.compile(
+    r"[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\-]+(?:\+(?:[A-Za-z][A-Za-z0-9_]*::?)?[A-Za-z0-9_.\-]+)*"
+)
+_URL = re.compile(
+    r"[A-Za-z][A-Za-z0-9+.\-]*://"
+)  # a value that IS a URL (PROJJSON's $schema is not one)
+_WKT_START = re.compile(r"[A-Za-z][A-Za-z0-9_]*\s*\[")
+_URN_PREFIXES = ("urn:ogc:def:crs:", "urn:ogc:def:crs,crs:", "urn:x-ogc:def:crs:")
+_NAMED_CRS = frozenset({"WGS84", "WGS72", "NAD27", "NAD83"})
+# Grid (and init file) parameters, which PROJ opens by name: a bare name is looked up on PROJ's search path, the
+# registered grid directories included; a path is refused.
+_PROJ_GRID_PARAM = re.compile(
+    r"\+?\b(nadgrids|geoidgrids|grids|init)\s*=\s*([^\s\"\]]+)", re.I
+)
+_WKT_GRID_PARAM = re.compile(
+    r'(?:PROJ4_GRIDS"\s*,\s*"|PARAMETERFILE\s*\[\s*"[^"]*"\s*,\s*")([^"]*)"', re.I
+)
+_JSON_STRING_VALUE = re.compile(r'"value"\s*:\s*"([^"]*)"')
+CRS_FIX = "Fix: pass EPSG:<code> (or another AUTHORITY:CODE), an integer SRID, WKT, PROJJSON or a +proj string"
+
+
+def _names_a_path(value: str) -> bool:
+    """True for a grid value (or a comma list of them) that names a file by path rather than by grid name."""
+    items = [i.strip().lstrip("@") for i in value.split(",")]
+    return any("/" in i or "\\" in i or i.startswith(".") for i in items if i)
+
+
+def crs_text_kind(value: str) -> str:
+    """The kind of CRS string ``value`` is: ``auth`` (``EPSG:4326``), ``wkt``, ``projjson``, ``proj``, ``urn`` or
+    ``named`` (``WGS84``). Raises ValueError, naming what the value is and with a ``Fix:``, for anything else (a
+    file name, a URL) and for a grid or init file named by path; such a value is never read.
+    """
+    v = value.strip()
+    if not v:
+        raise ValueError(f"resolve_crs: the CRS value is empty. {CRS_FIX}")
+    if _URL.match(v) or v.lower().startswith("www."):
+        raise ValueError(
+            f"resolve_crs: '{value}' is a URL; a CRS value is never fetched. {CRS_FIX}"
+        )
+    if v.startswith("{"):
+        kind = "projjson"
+        grids = _JSON_STRING_VALUE.findall(v)
+    elif v.startswith("+") or "+proj=" in v:
+        kind = "proj"
+        grids = []
+    elif _WKT_START.match(v):
+        kind = "wkt"
+        grids = _WKT_GRID_PARAM.findall(v)
+    elif v.lower().startswith(_URN_PREFIXES):
+        return "urn"
+    elif v.upper() in _NAMED_CRS:
+        return "named"
+    elif _AUTH_CODE.fullmatch(v):
+        return "auth"
+    else:
+        raise ValueError(
+            f"resolve_crs: '{value}' is not a CRS GeoBrix reads (it looks like a file or CRS name); a CRS "
+            f"value is never read from a file. {CRS_FIX}"
+        )
+    grids += [g for _, g in _PROJ_GRID_PARAM.findall(v)]
+    bad = [g for g in grids if _names_a_path(g)]
+    if bad:
+        raise ValueError(
+            f"resolve_crs: '{value}' names a grid or init file by path ({bad[0]}); a CRS value never names a "
+            "file. Fix: register the grid's directory with register_proj_grids and name the grid alone, or "
+            "pass EPSG:<code>"
+        )
+    return kind
+
+
 def resolve_crs(value: Union[int, str]) -> CRS:
     """Resolve a SRID int or CRS string to a rasterio CRS.
 
     Integer (or int-castable string): classified via the authoritative PROJ code sets —
     EPSG code -> ``EPSG:<n>``; else ESRI code -> ``ESRI:<n>``; else ``ValueError``.
-    Any other string: parsed as a CRS definition (``EPSG:x`` / ``ESRI:x`` / WKT / PROJ4).
-    Raises for a code in neither registry, or for unparseable garbage — intended (this is
-    the apply moment; callers guard ``0``/absent as "no CRS" before calling).
+    Any other string is one of the kinds ``crs_text_kind`` accepts (``AUTH:CODE``, WKT, PROJJSON, a PROJ string,
+    an OGC URN, ``WGS84``-style names), parsed by that kind's own importer, so it is never read from a file or a
+    URL; anything else raises with a ``Fix:``. Raises for a code in neither registry, or for unparseable
+    garbage — intended (this is the apply moment; callers guard ``0``/absent as "no CRS" before calling).
     """
     if _is_intlike(value):
         n = str(int(str(value).strip()))
@@ -99,7 +213,24 @@ def resolve_crs(value: Union[int, str]) -> CRS:
         if n in _esri_codes():
             return CRS.from_authority("ESRI", int(n))
         raise ValueError(f"resolve_crs: {n} is not a valid EPSG or ESRI code")
-    return CRS.from_user_input(value)
+    if isinstance(value, CRS):
+        return value
+    if not isinstance(value, str):
+        if isinstance(value, dict):  # PROJ parameters as a mapping
+            crs_text_kind(" ".join(f"+{k}={v}" for k, v in value.items()))
+        return CRS.from_user_input(value)
+    kind = crs_text_kind(value)
+    v = value.strip()
+    if kind == "auth":
+        _authority_known(v)
+        auth, _, code = v.partition(":")
+        return CRS.from_authority(auth.upper(), code.lstrip(":"))
+    if kind == "wkt":
+        return CRS.from_wkt(v)
+    if kind == "proj":
+        return CRS.from_proj4(v)
+    # PROJJSON, an OGC URN or a named CRS: GDAL parses these before it would try a file.
+    return CRS.from_user_input(v)
 
 
 def authority_srid_of(crs: Optional[CRS]) -> Optional[int]:
@@ -217,10 +348,23 @@ def crs_equal(a, b) -> bool:
         return True
     if a is None or b is None:
         return False
+    if isinstance(a, str) and isinstance(b, str):
+        return _crs_text_equal(a, b)
+    return _crs_equal(a, b)
+
+
+def _crs_equal(a, b) -> bool:
     try:
         return to_pyproj_crs(a).equals(to_pyproj_crs(b))
     except Exception:
         return str(a) == str(b)
+
+
+@lru_cache(maxsize=256)
+def _crs_text_equal(a: str, b: str) -> bool:
+    """:func:`crs_equal` of two CRS texts, kept: a per-row caller (the engine's ``same_crs`` check of each tile) asks the
+    same pair again and again, and each answer parses both texts (about 0.4 ms)."""
+    return _crs_equal(a, b)
 
 
 def crs_to_proj4(crs: Optional[CRS]) -> Optional[str]:
@@ -387,3 +531,82 @@ def enu_to_lonlat(east, north, ref_lat, ref_lon):
     lon = ref_lon + np.asarray(east, dtype="float64") / (_M_PER_DEG_LAT * cos_ref)
     lat = ref_lat + np.asarray(north, dtype="float64") / _M_PER_DEG_LAT
     return lon, lat
+
+
+# --- UC surface: CRS forms, decided from what the product st_* functions accept -----------------------
+# UC functions accept an INTEGER SRID or an `EPSG:<n>` / `ESRI:<n>` string, converted to its integer
+# BEFORE any product st_* call (the product casts strings to INT; with ANSI off a bad one is a silent
+# NULL). Everything else (WKT, PROJJSON, PROJ4, URN/URL, other authorities, custom) is refused with a
+# Fix:. Outputs carry the integer SRID. This table is the single place that decision lives.
+UC_CRS_FORMS: Tuple[str, ...] = ("srid_int", "epsg_code", "esri_code")
+# A code has at most 9 digits: a longer digit run is refused with the Fix, never handed to int().
+_UC_CODE = re.compile(r"^(EPSG|ESRI):([0-9]{1,9})$", re.IGNORECASE)
+_UC_DIGITS = re.compile(r"^[0-9]{1,9}$")
+
+
+@dataclass(frozen=True)
+class UcCrs:
+    authority: str  # "EPSG" | "ESRI"
+    srid: int  # what product st_* calls and outputs carry
+
+    @property
+    def code(self) -> str:
+        """For GeoBrix's own kernels (rasterio/pyproj), never for product st_* calls."""
+        return f"{self.authority}:{self.srid}"
+
+
+def _known(authority: str, srid: int) -> bool:
+    # The authoritative PROJ registries, as resolve_crs uses them: "EPSG:102003" is not an EPSG code.
+    return srid > 0 and str(srid) in _authority_codes(authority)
+
+
+def _uc_srid_int(value) -> Optional[UcCrs]:
+    if isinstance(value, bool):
+        return None
+    if (isinstance(value, int) and value < 10**9) or (
+        isinstance(value, str) and _UC_DIGITS.match(value.strip())
+    ):
+        n = int(value)
+        # An int names one code space; EPSG first, as resolve_crs does.
+        for auth in ("EPSG", "ESRI"):
+            if _known(auth, n):
+                return UcCrs(auth, n)
+    return None
+
+
+def _uc_code(auth: str):
+    def parse(value) -> Optional[UcCrs]:
+        m = _UC_CODE.match(value.strip()) if isinstance(value, str) else None
+        if m and m.group(1).upper() == auth and _known(auth, int(m.group(2))):
+            return UcCrs(auth, int(m.group(2)))
+        return None
+
+    return parse
+
+
+_UC_CRS_VALIDATORS = {
+    "srid_int": _uc_srid_int,
+    "epsg_code": _uc_code("EPSG"),
+    "esri_code": _uc_code("ESRI"),
+}
+_UC_FORM_TEXT = {
+    "srid_int": "an SRID integer",
+    "epsg_code": "'EPSG:<n>'",
+    "esri_code": "'ESRI:<n>'",
+}
+
+
+def parse_uc_crs(value, *, fn: str) -> UcCrs:
+    """The restricted CRS of the UC surface (see UC_CRS_FORMS). Raises ValueError with a Fix:, never returns NULL."""
+    for form in UC_CRS_FORMS:
+        out = _UC_CRS_VALIDATORS[form](value)
+        if out is not None:
+            return out
+    forms = ", ".join(_UC_FORM_TEXT[f] for f in UC_CRS_FORMS)
+    shown = repr(value)
+    shown = shown if len(shown) <= 60 else shown[:57] + "..."
+    raise ValueError(
+        f"{fn}: the UC function takes a CRS as {forms}, for a code PROJ knows; got {shown}. "
+        "A full CRS definition (WKT, PROJJSON, PROJ4, URN or custom) stays outside UC. "
+        f"Fix: use the session function {fn} (after databricks.labs.gbx.register(spark)) or the Python API."
+    )

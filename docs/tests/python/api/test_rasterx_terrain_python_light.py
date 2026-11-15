@@ -36,66 +36,66 @@ def _assert_materialized_tile(result, name):
 # ============================================================================
 
 
-def test_rst_slope_python_light_example(spark):
+def test_rst_slope_python_example(spark):
     """rst_slope returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_slope_python_light_example(spark)
+    result = terrain_examples.rst_slope_python_example(spark)
     _assert_materialized_tile(result, "rst_slope")
 
 
-def test_rst_aspect_python_light_example(spark):
+def test_rst_aspect_python_example(spark):
     """rst_aspect returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_aspect_python_light_example(spark)
+    result = terrain_examples.rst_aspect_python_example(spark)
     _assert_materialized_tile(result, "rst_aspect")
 
 
-def test_rst_hillshade_python_light_example(spark):
+def test_rst_hillshade_python_example(spark):
     """rst_hillshade returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_hillshade_python_light_example(spark)
+    result = terrain_examples.rst_hillshade_python_example(spark)
     _assert_materialized_tile(result, "rst_hillshade")
 
 
-def test_rst_tri_python_light_example(spark):
+def test_rst_tri_python_example(spark):
     """rst_tri returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_tri_python_light_example(spark)
+    result = terrain_examples.rst_tri_python_example(spark)
     _assert_materialized_tile(result, "rst_tri")
 
 
-def test_rst_tpi_python_light_example(spark):
+def test_rst_tpi_python_example(spark):
     """rst_tpi returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_tpi_python_light_example(spark)
+    result = terrain_examples.rst_tpi_python_example(spark)
     _assert_materialized_tile(result, "rst_tpi")
 
 
-def test_rst_roughness_python_light_example(spark):
+def test_rst_roughness_python_example(spark):
     """rst_roughness returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_roughness_python_light_example(spark)
+    result = terrain_examples.rst_roughness_python_example(spark)
     _assert_materialized_tile(result, "rst_roughness")
 
 
 def test_rst_color_relief_python_light_example(spark):
     """rst_color_relief returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_color_relief_python_light_example(spark)
+    result = terrain_examples.rst_color_relief_python_example(spark)
     _assert_materialized_tile(result, "rst_color_relief")
 
 
-def test_rst_proximity_python_light_example(spark):
+def test_rst_proximity_python_example(spark):
     """rst_proximity returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_proximity_python_light_example(spark)
+    result = terrain_examples.rst_proximity_python_example(spark)
     _assert_materialized_tile(result, "rst_proximity")
 
 
 def test_rst_contour_python_light_example(spark):
     """rst_contour returns an array of contour line feature structs."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_contour_python_light_example(spark)
+    result = terrain_examples.rst_contour_python_example(spark)
     assert result is not None, "rst_contour: result should not be None"
     assert isinstance(
         result, list
@@ -108,14 +108,26 @@ def test_rst_contour_python_light_example(spark):
 def test_rst_viewshed_python_light_example(spark):
     """rst_viewshed returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_viewshed_python_light_example(spark)
+    result = terrain_examples.rst_viewshed_python_example(spark)
     _assert_materialized_tile(result, "rst_viewshed")
 
 
-def test_rst_sample_python_light_example(spark):
+def test_rst_gdal_python_light_example(spark):
+    """rst_gdal returns a materialized tile in the pipeline's CRS."""
+    assert terrain_examples is not None
+    result = terrain_examples.rst_gdal_python_example(spark)
+    _assert_materialized_tile(result, "rst_gdal")
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(result["raster"])) as mf, mf.open() as src:
+        assert src.crs.to_epsg() == 3857
+        assert src.dtypes[0] == "float32"
+
+
+def test_rst_sample_python_example(spark):
     """rst_sample returns an array of sampled pixel values."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_sample_python_light_example(spark)
+    result = terrain_examples.rst_sample_python_example(spark)
     assert result is not None, "rst_sample: result should not be None"
     assert isinstance(result, list), "rst_sample: result should be an array of values"
 
@@ -123,12 +135,12 @@ def test_rst_sample_python_light_example(spark):
 def test_rst_gridfrompoints_python_light_example(spark):
     """rst_gridfrompoints returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_gridfrompoints_python_light_example(spark)
+    result = terrain_examples.rst_gridfrompoints_python_example(spark)
     _assert_materialized_tile(result, "rst_gridfrompoints")
 
 
 def test_rst_dtmfromgeoms_python_light_example(spark):
     """rst_dtmfromgeoms returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_dtmfromgeoms_python_light_example(spark)
+    result = terrain_examples.rst_dtmfromgeoms_python_example(spark)
     _assert_materialized_tile(result, "rst_dtmfromgeoms")

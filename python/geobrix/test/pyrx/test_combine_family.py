@@ -24,6 +24,7 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import agg
+from databricks.labs.gbx.rasterx import functions as rx
 
 ND = -9999.0
 TOL = 1e-6
@@ -122,6 +123,32 @@ def test_combine_max_valid_pixels():
 def test_combine_max_all_nodata_pixel_gets_nodata():
     r = _read(agg.combine_max_tiles(_stack()))
     assert r[2] == pytest.approx(ND, abs=TOL)
+
+
+def test_combine_max_holds_a_few_tiles_not_the_stack():
+    """Peak allocation does not grow with the number of tiles: a running max, not np.stack of all N."""
+    import tracemalloc
+
+    rng = np.random.default_rng(0)
+    side, n = 256, 48
+    profile = dict(
+        driver="GTiff", width=side, height=side, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_origin(0.0, 1.0, 0.001, 0.001), nodata=ND,
+    )  # fmt: skip
+    rasters = []
+    for _ in range(n):
+        with MemoryFile() as mf:
+            with mf.open(**profile) as ds:
+                ds.write(rng.random((1, side, side)).astype("float32"))
+            rasters.append(mf.read())
+    tracemalloc.start()
+    try:
+        agg.combine_max_tiles(rasters)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    one_tile = side * side * 4
+    assert peak < 12 * one_tile, f"peak {peak / 2**20:.1f} MiB for {n} tiles"
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +337,6 @@ def test_rst_combinemin_column_wrapper(spark):
         StructType,
     )
 
-    import databricks.labs.gbx.pyrx.functions as prx
-
     t0 = _tile([1.0, 10.0, ND, 4.0])
     t1 = _tile([2.0, ND, ND, 4.0])
     t2 = _tile([3.0, 20.0, ND, 4.0])
@@ -332,7 +357,7 @@ def test_rst_combinemin_column_wrapper(spark):
         schema=StructType([StructField("tiles", ArrayType(schema), True)]),
     )
 
-    result_df = df.select(prx.rst_combinemin("tiles").alias("out"))
+    result_df = df.select(rx.rst_combinemin("tiles").alias("out"))
     rows = result_df.collect()
     assert rows, "no rows returned"
     out = rows[0]["out"]
@@ -347,10 +372,11 @@ def test_rst_combinemin_column_wrapper(spark):
 
 def test_sql_registration_combine_family(spark):
     """All 6 gbx_rst_combine* SQL functions are registered and callable."""
-    import databricks.labs.gbx.pyrx.functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(
+    gbx_manager.register_family(
         spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
         only=[
             "gbx_rst_combinemin",
             "gbx_rst_combinemax",
@@ -359,13 +385,9 @@ def test_sql_registration_combine_family(spark):
             "gbx_rst_combinemedian",
             "gbx_rst_combinestddev",
         ],
+        level="L3",
     )
     # SQL name check: function should exist in catalog
-    funcs = {
-        r.function
-        for r in spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_combine*'").collect()
-    }
     for stat in ("min", "max", "sum", "count", "median", "stddev"):
-        assert (
-            f"gbx_rst_combine{stat}" in funcs
-        ), f"gbx_rst_combine{stat} not registered"
+        # DESCRIBE FUNCTION raises when the name is not registered
+        spark.sql(f"DESCRIBE FUNCTION gbx_rst_combine{stat}").collect()

@@ -8,7 +8,9 @@ unsupported), derives an affine+CRS for grids, and flattens point/swath data to
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
@@ -18,8 +20,37 @@ POINTS = "points"  # CF discrete sampling geometries -> vector
 CURVILINEAR = "curvilinear"  # class 3 (2-D lat/lon) -> vector (per-cell points)
 UNSUPPORTED = "unsupported"  # class 4 (sensor geometry + GLT) / unknown
 
+# Dataset.encoding key holding the HDF5 group a dataset was opened at.
+_GROUP_KEY = "gbx_group"
+
 _LAT_NAMES = {"lat", "latitude", "y"}
 _LON_NAMES = {"lon", "longitude", "x"}
+
+
+def classic_truncation(path: str) -> Optional[str]:
+    """Why a NetCDF classic file (``CDF`` version 1 or 2) is shorter than the
+    data its header declares, or None (also for CDF-5 and NetCDF-4 / HDF5 files,
+    which are not checked here: scipy reads neither). Classic files carry no
+    checksum: read through netCDF4 the missing data comes back as zeros, so the
+    size check is the only sign. scipy maps the file (no data is read) and fails
+    to shape a variable that runs past its end."""
+    import warnings
+
+    with open(path, "rb") as fh:
+        if fh.read(4) not in (b"CDF\x01", b"CDF\x02"):
+            return None
+    from scipy.io import netcdf_file
+
+    try:
+        f = netcdf_file(path, "r", mmap=True)
+    except ValueError as e:
+        return f"the file is shorter than the data its header declares: {e}"
+    except Exception:  # noqa: BLE001 - not this check's error: the reader reports it
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # closing a mapped file with live arrays
+        f.close()
+    return None
 
 
 @contextmanager
@@ -31,6 +62,9 @@ def open_dataset(path: str, group: Optional[str]) -> Iterator["object"]:
     if group:
         kw["group"] = group
     ds = xr.open_dataset(path, **kw)
+    # xarray records the source file but not the group: keep it, so the raw reopen
+    # of a variable that cannot be decoded (see _decoded_or_raw) reads the same group.
+    ds.encoding[_GROUP_KEY] = group or None
     try:
         yield ds
     finally:
@@ -182,6 +216,10 @@ def leading_dims(ds, variable: str) -> List[Tuple[str, int]]:
 def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object":
     """The variable's 2-D slice as a north-up numpy array (lat descending).
 
+    Only that slice is read and decoded (``isel`` before ``.values``): a fanout
+    or bandDim read decodes one slice per call, never the whole variable, so
+    memory stays at one slice and a corrupt chunk fails only the slices in it.
+
     Args:
         ds:       Open xarray Dataset.
         variable: Variable name.
@@ -197,7 +235,7 @@ def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object
     if sel is None:
         sel = {}
 
-    da = _decoded_or_raw(ds, variable)
+    da = ds[variable]  # lazy: nothing is read or decoded here
 
     # Early validation: check sel indices are in range for dims present in this var.
     for s_dim, s_idx in sel.items():
@@ -209,63 +247,71 @@ def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object
                     f"(size={s_size}) for variable {variable!r}."
                 )
 
-    # Squeeze any leading dims until 2-D.
-    # If the dim is in sel, use that index (no warning).
-    # Otherwise fall back to index 0 with a warning when size > 1.
-    while da.ndim > 2:
-        drop_dim = da.dims[0]
+    # Index the leading dims down to 2-D: the index in *sel* (no warning), else
+    # index 0, with a warning when the dim has more than one slice.
+    index: Dict[str, object] = {}
+    for drop_dim in da.dims[: max(da.ndim - 2, 0)]:
         drop_size = int(da.sizes[drop_dim])
         if drop_dim in sel:
-            da = da.isel({drop_dim: sel[drop_dim]})
-        else:
-            if drop_size > 1:
-                _logger.warning(
-                    "netcdf_gbx: variable %r has leading dimension %r of size %d; "
-                    "reading only index 0 and dropping the other %d slice(s). "
-                    "Use the 'fanout' or 'dimIndex' option to read other slices.",
-                    variable,
-                    drop_dim,
-                    drop_size,
-                    drop_size - 1,
-                )
-            da = da.isel({drop_dim: 0})
+            index[drop_dim] = sel[drop_dim]
+            continue
+        if drop_size > 1:
+            _logger.warning(
+                "netcdf_gbx: variable %r has leading dimension %r of size %d; "
+                "reading only index 0 and dropping the other %d slice(s). "
+                "Use the 'fanout' or 'dimIndex' option to read other slices.",
+                variable,
+                drop_dim,
+                drop_size,
+                drop_size - 1,
+            )
+        index[drop_dim] = 0
 
     lat, _ = _find_lat_lon(ds)
     latdim = lat.dims[0]
     # Ensure north-up: descending latitude along the lat dimension.
     latvals = ds[lat.name].values
-    if latdim in da.dims and float(latvals[0]) < float(latvals[-1]):
-        da = da.isel({latdim: slice(None, None, -1)})
-    return np.asarray(da.values)
+    if (
+        latdim in da.dims
+        and latdim not in index
+        and float(latvals[0]) < float(latvals[-1])
+    ):
+        index[latdim] = slice(None, None, -1)
+    return np.asarray(_decoded_or_raw(ds, variable, index))
 
 
-def _decoded_or_raw(ds, variable: str) -> "object":
-    """Return the variable's DataArray, materializing its values.
+def _decoded_or_raw(ds, variable: str, index: Optional[Dict[str, object]] = None):
+    """The variable's values at ``index`` (``isel`` indexers; None = all of it),
+    reading and decoding only that selection.
 
-    Normally the ``mask_and_scale``-decoded array. But some CF integer variables
-    (e.g. NOAA coral ``bleaching_alert_area``: uint8 with ``valid_min/max`` and a
-    fill of 251) trip xarray's masking decode with "cannot convert float NaN to
-    integer". For those we fall back to the RAW (undecoded) values -- which is
-    also what the heavy GDAL reader emits (fill kept as its integer sentinel, no
-    NaN promotion), so it is the parity-correct behavior. The reopen is targeted
-    (only on decode failure) using the variable's own source-file encoding.
+    Normally the ``mask_and_scale``-decoded values. But some CF integer variables
+    (e.g. NOAA coral ``bleaching_alert_area``: uint8 with ``valid_min/max``, an
+    integer ``scale_factor`` and a fill of 251) trip xarray's masking decode with
+    "cannot convert float NaN to integer" -- for any selection, since the failure
+    comes from the variable's attributes. For those we fall back to the RAW
+    (undecoded) values -- which is also what the heavy GDAL reader emits (fill
+    kept as its integer sentinel, no NaN promotion), so it is the parity-correct
+    behavior. The reopen is targeted (only on decode failure) using the
+    variable's own source-file encoding, at the group the dataset was opened at,
+    and reads the same selection only.
     """
     import xarray as xr
 
+    index = index or {}
     da = ds[variable]
     try:
-        # Force the lazy decode now so a masking failure is caught here.
-        da.values  # noqa: B018 - intentional materialization to trigger decode
-        return da
+        return da.isel(index).values
     except ValueError:
         src = da.encoding.get("source") or ds.encoding.get("source")
         if not src:
             raise
-        raw = xr.open_dataset(
-            src, engine="netcdf4", decode_coords="all", mask_and_scale=False
-        )
+        kw = {"engine": "netcdf4", "decode_coords": "all", "mask_and_scale": False}
+        group = ds.encoding.get(_GROUP_KEY)
+        if group:
+            kw["group"] = group
+        raw = xr.open_dataset(src, **kw)
         try:
-            return raw[variable].load()
+            return raw[variable].isel(index).values
         finally:
             raw.close()
 
@@ -278,6 +324,21 @@ def nodata_of(ds, variable: str) -> Optional[float]:
             return float(val)
     enc = v.encoding.get("_FillValue")
     return float(enc) if enc is not None else None
+
+
+def fill_kept(arr, nodata: Optional[float]):
+    """*arr* with the cells that xarray decoded from the variable's fill value (NaN in a float variable) set back to
+    that fill value, so the tile's pixels and its NoData agree and equal what GDAL reads from the file. A variable
+    with no fill value, an integer one (no NaN) and a fill value that is itself NaN come back unchanged.
+    """
+    import numpy as np
+
+    if nodata is None or arr.dtype.kind != "f" or np.isnan(nodata):
+        return arr
+    gaps = np.isnan(arr)
+    if not gaps.any():
+        return arr
+    return np.where(gaps, arr.dtype.type(nodata), arr)
 
 
 def point_arrays(
@@ -308,13 +369,183 @@ def point_arrays(
     return lon_flat, lat_flat, attrs, "4326"
 
 
+# CF-1.8 discrete sampling geometry (DSG) feature types the vector mode reads, one point per observation.
+DSG_TYPES = frozenset({"point", "profile", "trajectory"})
+
+
+@dataclass(frozen=True)
+class Dsg:
+    """The layout of a CF-1.8 DSG file: where its points come from and which variables become columns.
+
+    ``obs_dim`` is the dimension of the observations (one point each). ``lat``, ``lon`` and the optional altitude
+    ``z`` (the point's Z) sit on it, or, in a ragged array representation, on ``instance_dim`` (the profile or
+    trajectory dimension); ``lat`` and ``lon`` may stay on ``obs_dim`` there, as a CF trajectory has them. Indexed ragged: ``index`` is the variable on ``obs_dim`` whose ``instance_dimension``
+    attribute names ``instance_dim`` and whose values say which instance each observation belongs to. Contiguous
+    ragged: ``counts`` is the variable on ``instance_dim`` whose ``sample_dimension`` attribute names ``obs_dim``
+    and whose values count the observations of each instance, which follow one another.
+    ``attributes`` are the variables that become columns, the id variable (``cf_role``) first, then by name.
+    """
+
+    obs_dim: str
+    lat: str
+    lon: str
+    z: Optional[str]
+    index: Optional[str]
+    instance_dim: Optional[str]
+    attributes: Tuple[str, ...]
+    counts: Optional[str] = None
+
+
+# CF vertical coordinates: by axis, by standard name (altitude is a height, depth its downward counterpart), or by
+# the ``positive`` attribute CF requires on every vertical coordinate.
+_Z_STANDARD_NAMES = frozenset({"altitude", "depth"})
+
+
+def _is_z(var) -> bool:
+    """True for a CF vertical coordinate. A depth (``positive="down"`` or ``standard_name="depth"``) is one, and its
+    values are the point's Z as stored, positive down: the GDAL netCDF driver (``netcdf_ogr``) gives the same Z and
+    does not flip the sign, so the two readers agree."""
+    return (
+        str(var.attrs.get("axis", "")).upper() == "Z"
+        or str(var.attrs.get("standard_name", "")).lower() in _Z_STANDARD_NAMES
+        or str(var.attrs.get("positive", "")).lower() in ("up", "down")
+    )
+
+
+def dsg_layout(ds) -> Optional[Dsg]:
+    """The DSG layout of ``ds`` (a ``featureType`` of point, profile or trajectory), else None.
+
+    A file that carries no ``featureType`` (a swath, a grid, a plain table of points) has none: the other vector
+    paths read it. A DSG file the layout cannot place (no lat/lon, or a lat/lon on neither the observation nor the
+    instance dimension) has none either.
+    """
+    if str(ds.attrs.get("featureType", "")).strip().lower() not in DSG_TYPES:
+        return None
+    lat, lon = _find_lat_lon(ds)
+    if lat is None or lon is None or lat.dims != lon.dims or len(lat.dims) != 1:
+        return None
+    index = counts = instance_dim = None
+    for name in ds.variables:
+        v = ds[name]
+        inst, sample = v.attrs.get("instance_dimension"), v.attrs.get(
+            "sample_dimension"
+        )
+        if inst is not None and len(v.dims) == 1 and str(inst) in ds.sizes:
+            index, instance_dim = str(name), str(inst)
+            break
+        if sample is not None and len(v.dims) == 1 and str(sample) in ds.sizes:
+            counts, instance_dim = str(name), v.dims[0]
+            obs_dim = str(sample)
+            break
+    if index is not None:
+        obs_dim = ds[index].dims[0]
+    elif counts is None:
+        obs_dim = lat.dims[0]
+    # lat/lon sit on the instance dimension (one position per profile or trajectory) or, as a CF trajectory has them and
+    # a profile may, on the observation dimension (a position per observation): either way the instance variables
+    # are expanded per observation, and the id, the time and the Z are columns.
+    if instance_dim is not None and lat.dims not in ((instance_dim,), (obs_dim,)):
+        return None
+    z = next(
+        (
+            str(n)
+            for n in ds.variables
+            if ds[n].dims in ((obs_dim,), (instance_dim,)) and _is_z(ds[n])
+        ),
+        None,
+    )
+    skip = {str(lat.name), str(lon.name), z, index, counts, obs_dim}
+    wanted = {obs_dim} | ({instance_dim} if instance_dim else set())
+    names = [
+        str(n)
+        for n in ds.variables
+        if str(n) not in skip
+        and len(ds[n].dims) == 1
+        and ds[n].dims[0] in wanted
+        and (ds[n].dims[0] != obs_dim or str(n) != obs_dim)
+    ]
+    names.sort(key=lambda n: (not ds[n].attrs.get("cf_role"), n))
+    return Dsg(
+        obs_dim,
+        str(lat.name),
+        str(lon.name),
+        z,
+        index,
+        instance_dim,
+        tuple(names),
+        counts,
+    )
+
+
+def dsg_arrays(
+    ds, layout: Dsg, variables: List[str]
+) -> Tuple["object", "object", Optional["object"], Dict[str, "object"], str]:
+    """Per-observation arrays of a DSG file: lon, lat, z (or None) and the ``variables``, an instance-dimension
+    variable expanded to its observations through the index variable."""
+    import numpy as np
+
+    ix = None  # the instance of each observation
+    n_obs = ds.sizes[layout.obs_dim]
+    n_inst = ds.sizes[layout.instance_dim] if layout.instance_dim else 0
+    if layout.index is not None:
+        raw = np.asarray(ds[layout.index].values)
+        # a missing index decodes to NaN (a fill value masked), -1 is the usual stand-in: an observation with no
+        # instance. It has no profile or trajectory to take its id, time or position from, so the file is refused
+        # rather than the observation dropped or, worse, wrapped onto the last instance (index -1).
+        bad = ~np.isfinite(raw) if raw.dtype.kind == "f" else np.zeros(raw.shape, bool)
+        ix = np.where(bad, -1, raw).astype("int64")
+        orphan = bad | (ix < 0) | (ix >= n_inst)
+        if orphan.any():
+            first = int(np.flatnonzero(orphan)[0])
+            raise ValueError(
+                f"netcdf_gbx: {layout.index!r} gives observation {first} (of {n_obs}) no instance: its value is "
+                f"{raw[first]!r}, not an index in [0, {n_inst}) of {layout.instance_dim!r}; "
+                f"{int(orphan.sum())} observation(s) in all. Fix: give every observation a valid instance index "
+                f"(CF allows no missing index), or drop the observation(s) from the file."
+            )
+    elif layout.counts is not None:
+        raw = np.asarray(ds[layout.counts].values)
+        if raw.dtype.kind == "f" and not np.isfinite(raw).all():
+            raise ValueError(
+                f"netcdf_gbx: {layout.counts!r} holds a missing count. Fix: give every {layout.instance_dim!r} "
+                f"its number of observations (0 for none)."
+            )
+        sizes = raw.astype("int64")
+        if (sizes < 0).any() or int(sizes.sum()) != n_obs:
+            raise ValueError(
+                f"netcdf_gbx: the counts in {layout.counts!r} add up to {int(sizes.sum())}, but "
+                f"{layout.obs_dim!r} holds {n_obs} observations"
+                + (", and a count is negative" if (sizes < 0).any() else "")
+                + f". Fix: make the counts sum to the size of {layout.obs_dim!r}."
+            )
+        ix = np.repeat(np.arange(len(sizes)), sizes)
+
+    def per_obs(name: str):
+        values = np.asarray(ds[name].values)
+        return (
+            values[ix]
+            if ix is not None and ds[name].dims[0] != layout.obs_dim
+            else values
+        )
+
+    lon, lat = per_obs(layout.lon), per_obs(layout.lat)
+    z = per_obs(layout.z) if layout.z is not None else None
+    return lon, lat, z, {name: per_obs(name) for name in variables}, "4326"
+
+
 def readable_variables(ds, mode: str) -> List[str]:
     """Data variables readable in `mode` ('raster' -> GRID; 'vector' -> POINTS/CURVILINEAR).
 
     Iterates ds.data_vars only: with open_dataset's decode_coords="all", lat/lon,
     grid-mapping, and bounds coordinate variables are xarray coords, not data_vars,
-    so they are never surfaced as readable fields.
+    so they are never surfaced as readable fields. A DSG file (``featureType`` point,
+    profile or trajectory) is the exception in vector mode: its columns are the variables
+    of :func:`dsg_layout` (the id and the time are coordinates there, and are columns).
     """
+    if mode != "raster":
+        layout = dsg_layout(ds)
+        if layout is not None:
+            return list(layout.attributes)
     keep = {GRID} if mode == "raster" else {POINTS, CURVILINEAR}
     return [name for name in list(ds.data_vars) if classify(ds, name) in keep]
 
@@ -328,6 +559,104 @@ def select_variables(ds, options: Dict[str, str], mode: str) -> List[str]:
     requested = [v.strip() for v in str(raw).split(",") if v.strip()]
     readable_set = set(readable)
     return [v for v in requested if v in readable_set]
+
+
+# CF time units that count days from a base: with whole days and a midnight base the values are
+# calendar dates, not instants.
+_DAYS_SINCE = "days since"
+# the clock of a CF base ("2000-01-01 12:00:00", "2000-01-01T00:00:00Z", "... 00:00:00 +05:00")
+_BASE_CLOCK = re.compile(
+    r"^\d{1,4}-\d{1,2}-\d{1,2}(?:[ T](\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2})(?:\.\d+)?)?"
+    r"\s*(Z|UTC|GMT|[+-]\d{1,2}(?::?\d{2})?)?)?$",
+    re.IGNORECASE,
+)
+
+
+def _is_date_axis(var) -> bool:
+    """True when a decoded time variable counts whole days from a midnight base, read from its CF
+    attributes and its stored type (no data read): ``units`` ``days since <date>`` with no time of
+    day or zone offset in the base, stored as an integer with no ``scale_factor`` / ``add_offset``.
+    Anything else (a float count, a scaled one, a base with a clock time) can carry a time of day,
+    which a date would drop."""
+    import numpy as np
+
+    enc = var.encoding
+    units = str(enc.get("units", "")).strip().lower()
+    if not units.startswith(_DAYS_SINCE):
+        return False
+    stored = enc.get("dtype")
+    if stored is None or np.dtype(stored).kind not in "iu":
+        return False
+    if enc.get("scale_factor") is not None or enc.get("add_offset") is not None:
+        return False
+    base = _BASE_CLOCK.match(units[len(_DAYS_SINCE) :].strip())
+    if base is None:
+        return False
+    hour, minute, second, zone = base.groups()
+    if any(int(x or 0) for x in (hour, minute, second)):
+        return False
+    return zone is None or not any(int(x) for x in re.findall(r"\d+", zone))
+
+
+def column_kind(var) -> Optional[str]:
+    """What a decoded variable is beyond its numpy type, read from its CF attributes (no data
+    read): ``"timestamp"`` or ``"date"`` for a time variable (``"date"`` only for a whole-day
+    count from a midnight base, see :func:`_is_date_axis`), ``"boolean"`` for a variable that
+    flags 0 and 1 as ``false true`` (``flag_values`` and ``flag_meanings``, which is how
+    ``netcdf_gbx`` writes a BOOLEAN), else ``None``. xarray decodes a time to ``datetime64``
+    and, with its fill value masked, a flag to a float; the numpy type alone says neither.
+    """
+    import numpy as np
+
+    if np.dtype(var.dtype).kind == "M":
+        return "date" if _is_date_axis(var) else "timestamp"
+    meanings = str(var.attrs.get("flag_meanings", "")).split()
+    values = np.atleast_1d(var.attrs.get("flag_values", []))
+    if meanings == ["false", "true"]:
+        try:
+            if [int(v) for v in values] == [0, 1]:
+                return "boolean"
+        except (ValueError, TypeError, OverflowError):
+            pass  # flag_values that is text or holds a NaN or infinity is malformed: not a flag
+    return None
+
+
+def spark_type_of(var) -> "object":
+    """Spark type of a decoded variable: a timestamp, date or boolean by :func:`column_kind`,
+    else the one of its numpy type (:func:`np_to_spark`)."""
+    from pyspark.sql import types as T
+
+    kind = column_kind(var)
+    if kind is not None:
+        return {
+            "timestamp": T.TimestampType,
+            "date": T.DateType,
+            "boolean": T.BooleanType,
+        }[kind]()
+    return np_to_spark(var.dtype)
+
+
+def cell_value(kind: Optional[str], v):
+    """The Python value of one element of a decoded variable of ``kind``: a UTC ``datetime``,
+    a ``date`` or a ``bool``, ``None`` for NaT / NaN; otherwise numpy's own ``item()``.
+    """
+    import datetime
+
+    import numpy as np
+
+    if kind in ("timestamp", "date"):
+        if np.isnat(v):
+            return None
+        if kind == "date":
+            return v.astype("datetime64[D]").item()
+        # xarray decodes float seconds to nanoseconds, a hair under a microsecond boundary
+        # (…15.249999999 for …15.25): round to the microsecond, do not cut.
+        us = (int(v.astype("datetime64[ns]").astype("int64")) + 500) // 1000
+        epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+        return epoch + datetime.timedelta(microseconds=us)
+    if kind == "boolean":
+        return None if v != v else bool(v)
+    return v.item()
 
 
 def np_to_spark(dtype) -> "object":

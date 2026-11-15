@@ -1,3 +1,5 @@
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -11,7 +13,7 @@ from rasterio.transform import from_bounds  # noqa: E402
 def _write_tif(path, size=32, crs="EPSG:4326"):
     data = (np.random.rand(size, size) * 100).astype("uint16")
     transform = from_bounds(-104.0, 31.0, -103.9, 31.1, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -138,7 +140,7 @@ def test_plot_tiles_facet_mixed_crs_ok(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 3: empty DataFrame raises a clear ValueError in all modes
+# Empty DataFrame raises a clear ValueError in all modes
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +178,7 @@ def test_plot_tiles_empty_df_mosaic_raises(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 4: first mode emits NO overflow warning on a multi-row DataFrame
+# First mode emits NO overflow warning on a multi-row DataFrame
 # ---------------------------------------------------------------------------
 
 
@@ -206,13 +208,12 @@ def test_plot_tiles_first_no_overflow_warn(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 5: _extract_tile handles wrapper Row that has sibling path/raster col
+# _extract_tile handles wrapper Row that has sibling path/raster col
 # ---------------------------------------------------------------------------
 
 
 def test_extract_tile_wrapper_with_sibling_path(tmp_path):
     """Wrapper dict with both 'tile' struct and a sibling 'path' key resolves correctly."""
-    import rasterio
     from rasterio.transform import from_bounds
 
     from databricks.labs.gbx.vizx._tiles import resolve_tile_row
@@ -220,7 +221,7 @@ def test_extract_tile_wrapper_with_sibling_path(tmp_path):
     p = str(tmp_path / "sib.tif")
     data = (np.random.rand(32, 32) * 100).astype("uint16")
     transform = from_bounds(-104.0, 31.0, -103.9, 31.1, 32, 32)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",
@@ -250,7 +251,7 @@ def test_extract_tile_wrapper_with_sibling_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 2: mosaic decimates — output dataset fits within max_pixels
+# Mosaic decimates — output dataset fits within max_pixels
 # ---------------------------------------------------------------------------
 
 

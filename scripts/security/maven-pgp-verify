@@ -15,15 +15,21 @@
 # dependency is pinned to a known-good signing key" — provided
 # .maven-keys.list has been reviewed.
 #
-# Requires: mvn.
+# Runs the pinned Maven (./mvnw, version + SHA-256 in .mvn/wrapper/maven-wrapper.properties).
+# Inside the geobrix-dev container the wrapper cannot download (Maven Central is blocked
+# there), so set GBX_MVN=mvn: the image installs that same version.
+#
+# Requires: ./mvnw (needs a JDK and the network route to the pinned distribution),
+# or GBX_MVN.
 
 set -eu
 
 root="$(git rev-parse --show-toplevel)"
+mvn_cmd="${GBX_MVN:-${root}/mvnw}"
 
 cd "${root}"
 # -C: strict-checksums — fail (not warn) on missing/mismatched artifact checksums.
-exec mvn -B -C -Pverify-pgp verify \
+exec "${mvn_cmd}" -B -C -Pverify-pgp verify \
     -DskipTests \
     -Dscoverage.skip \
     -Dscalastyle.skip=true

@@ -1,0 +1,58 @@
+# geobrix-0.6.0+env6 default dependencies: DBR 19, Serverless environment 6, SQL warehouses, UC
+# functions. The env wheel's unmarked Requires-Dist is exactly this file (gbx:build:wheel checks it).
+# rasterio, pyogrio, pyproj, shapely and netCDF4 are not here: the wheel carries them, built against
+# its own GDAL (_vendor/<arch>), and so rio-tiler, morecantile and mapbox-vector-tile (vendor-pure.txt),
+# and GDAL's own osgeo and osgeo_utils from that GDAL. rio-cogeo and xarray-spatial are dropped:
+# GDAL's COG driver and GDALViewshedGenerate do their work.
+
+# The runtime's preinstalled versions as the floor, the next minor as the cap: these move nothing.
+# These are FROZEN-BASE caps, deliberate: this wheel targets frozen runtime bases (DBR 19, Serverless environment
+# 6), so a cap cannot downgrade the runtime's numpy, pandas, pyarrow, scipy, protobuf, urllib3 or pillow, and it stops a
+# transitive requirement from upgrading one. (The extras follow another rule: a package the runtimes preinstall
+# gets a floor only there; see gbx:build:wheel.)
+numpy>=2.3.4,<2.4
+pandas>=2.3.3,<2.4
+pyarrow>=21.0.0,<22
+scipy>=1.16.3,<1.17
+protobuf>=6.31.1,<7
+urllib3<2.6
+# pillow: GeoBrix imports PIL (rasterx ortho and imagery, the exif_gbx reader); DBR 19 and env 6 (and their ML runtimes)
+# all ship 12.0.0.
+pillow>=12.0.0,<12.1
+# PEP 728 TypedDict(extra_items=...), which rio-tiler 9 uses, works from 4.13.0 (the runtimes ship 4.15.0).
+typing_extensions>=4.13
+# What the core install does move (gbx:versions:audit --install-moves lists these and fails on any other move), each
+# to the newest release that meets the floor, as pip upgrades an installed package that does not:
+# - idna 3.11 -> 3.18 or later: httpx2 2.12 and later (below) need it; earlier httpx2 releases have two HIGH
+#   advisories;
+
+# The light tier.
+# numexpr: rio-tiler imports it, and the env wheel vendors rio-tiler (vendor-pure.txt) without its requirements.
+numexpr>=2.14.1
+h3>=4.1,<5
+quadbin>=0.2,<0.3
+pmtiles>=3.4,<4
+defusedxml>=0.7,<1
+laspy>=2.7,<2.8
+lazrs>=0.8.2,<0.9
+exifread>=3.0,<4
+
+# What the vendored packages need at run time (their Requires-Dist; the vendored trees carry no
+# metadata, so the wheel declares it). click: `import rasterio` imports it (rasterio.errors);
+# every Databricks runtime already has a click >= 4.0, so this moves nothing.
+affine>=2.4
+attrs
+certifi
+click>=4.0
+pyparsing>=3
+packaging
+cftime>=1.6
+pyclipper>=1.3,<2
+cachetools
+pydantic>=2,<3
+color-operations
+pystac>=1.9,<2
+# rio-tiler's HTTP client; 2.12 and later are the releases without the two HIGH advisories (it moves idna: see the
+# top).
+httpx2>=2.12
+xarray>=2025.1

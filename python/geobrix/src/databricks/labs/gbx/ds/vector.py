@@ -4,8 +4,9 @@ typed attributes). Pure-Python / Serverless-safe (no JVM)."""
 
 from __future__ import annotations
 
-import atexit
 import contextlib
+import functools
+import inspect
 import os
 import shutil
 import threading
@@ -31,76 +32,36 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampNTZType,
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _scratch
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+from databricks.labs.gbx import _gdal_policy
+from databricks.labs.gbx.ds import _arrow_utc, _quarantine, _scratch
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    StageCache,
+    new_local_temp_dir,
+    retried_source_signature,
+)
 
 # ---------------------------------------------------------------------------
-# Worker-local staging cache (module-level, process-global)
+# Worker-local staging cache (process-global; see local_temp.StageCache)
 # ---------------------------------------------------------------------------
-# Mirrors raster._STAGED_FILES: key = original source path, value = locally-staged path.
-# Guarded by _VEC_STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
-# Staged copies are held for the process lifetime and removed at exit via atexit.
-# This amortizes the staging cost: N partitions of the same source file share one copy.
-_VEC_STAGED_FILES: Dict[str, str] = {}
-_VEC_STAGE_LOCK = threading.Lock()
-_VEC_STAGE_DIR: Optional[str] = None
 
 
-def _ensure_vec_stage_dir() -> str:
-    """Return (creating if needed) the process-wide stage directory. Must be called while holding `_VEC_STAGE_LOCK`."""
-    global _VEC_STAGE_DIR
-    if _VEC_STAGE_DIR is None:
-        _VEC_STAGE_DIR = new_local_temp_dir("gbx_vecstage_")
-        atexit.register(_cleanup_vec_stage_dir)
-    return _VEC_STAGE_DIR
+def _copy_vec_source(source_path: str, local: str) -> None:
+    """Sequential (FUSE-safe) copy of a source file, or a whole ``.gdb`` directory."""
+    if os.path.isdir(source_path):
+        shutil.copytree(source_path, local)
+    else:
+        shutil.copy(source_path, local)
 
 
-def _cleanup_vec_stage_dir() -> None:
-    global _VEC_STAGE_DIR
-    if _VEC_STAGE_DIR and os.path.isdir(_VEC_STAGE_DIR):
-        shutil.rmtree(_VEC_STAGE_DIR, ignore_errors=True)
-        _VEC_STAGE_DIR = None
-
-
-def _get_or_stage_vec(source_path: str) -> str:
-    """Return a worker-local path for *source_path*, staging it if not yet cached.
-
-    For directories (e.g. ``.gdb``), copies the entire directory tree.
-    For regular files, copies the single file.
-
-    The result is cached by source path: multiple partitions targeting the same
-    source file on the same worker process share one staged copy, paying the
-    sequential-copy cost only once.
-
-    Args:
-        source_path: FUSE path to the source file or directory.
-
-    Returns:
-        Absolute local path to the staged copy (file or directory).
-    """
-    with _VEC_STAGE_LOCK:
-        if source_path in _VEC_STAGED_FILES:
-            return _VEC_STAGED_FILES[source_path]
-
-        stage_dir = _ensure_vec_stage_dir()
-        # Use uuid4 to guarantee a collision-free on-disk name even when two
-        # different source paths share the same basename.  The cache key remains
-        # source_path, so a repeat call for the same path returns the cached
-        # entry above and never reaches this branch.
-        basename = os.path.basename(source_path.rstrip("/")) or "vector_src"
-        safe_name = f"{uuid.uuid4().hex}_{basename}"
-        local = os.path.join(stage_dir, safe_name)
-
-        if os.path.isdir(source_path):
-            shutil.copytree(source_path, local)
-        else:
-            shutil.copy(source_path, local)  # sequential read — FUSE-safe
-
-        _VEC_STAGED_FILES[source_path] = local
-        return local
+# GPKG/FileGDB sources need seeked I/O: each is copied to worker-local disk once
+# and shared by every partition of it on the worker, within a bounded cache. The
+# signature (size + mtime of the file, or of a ``.gdb`` directory's contents) is
+# the shared retried one, so a source replaced at the same path is staged again.
+_VEC_STAGE = StageCache("gbx_vecstage_", _copy_vec_source, retried_source_signature)
 
 
 # OGR field type (+ subtype) -> Spark type, matching heavy OGR_SchemaInference.getType.
@@ -111,7 +72,7 @@ _OGR_TO_SPARK = {
     "OFTString": StringType,
     "OFTWideString": StringType,
     "OFTDate": DateType,
-    "OFTTime": TimestampType,
+    "OFTTime": StringType,  # Spark has no TIME type: GDAL's HH:MM:SS[.sss] text
     "OFTDateTime": TimestampType,
     "OFTBinary": BinaryType,
 }
@@ -123,11 +84,41 @@ _OGR_LIST_TO_SPARK = {
 }
 
 
-def _arrow_to_spark(at):
+def _arrow_to_spark(at, coded_domains_mode: str = "code"):
     """Map a pyarrow attribute-column type to the Spark type the reader declares.
     Mirrors _ogr_to_spark's targets so the per-partition output schema (derived from
-    the pyogrio Arrow table) matches schema()/_vector_schema for the same source."""
+    the pyogrio Arrow table) matches schema()/_vector_schema for the same source.
+
+    Coded-value domain fields (verified pyogrio 0.13 / GDAL 3.12, FileGDB + GPKG):
+    pyogrio returns a dictionary<values=string, indices=intN> ONLY for some domains
+    (e.g. sorted, non-negative integer codes), and there the INDICES ARE THE STORED
+    CODES, not positions (the dictionary is padded so dict[code] == description).
+    Other domains (unsorted / negative codes, String domains) arrive as plain codes.
+    So for a dictionary column:
+    - "code": the codes, typed by the index type (int32 -> IntegerType, else Long)
+    - "description": StringType
+    Description mode for NON-dictionary coded fields is decided by the reader from
+    the domain definitions (see VectorGbxReader._description_fields), not here.
+    """
     import pyarrow as pa
+
+    # Handle dictionary types (coded-value domains from OGR)
+    if pa.types.is_dictionary(at):
+        if coded_domains_mode == "description":
+            # Return descriptions as strings
+            return StringType()
+        else:  # coded_domains_mode == "code" (default)
+            # Return codes as their original OGR field type.
+            # The index type determines the code type.
+            index_type = at.index_type
+            if pa.types.is_int32(index_type) or (
+                pa.types.is_integer(index_type) and index_type.bit_width <= 32
+            ):
+                return IntegerType()
+            if pa.types.is_integer(index_type):
+                return LongType()
+            # Fallback: if index type is unusual, treat as string
+            return StringType()
 
     if pa.types.is_boolean(at):
         return BooleanType()
@@ -144,7 +135,7 @@ def _arrow_to_spark(at):
     if pa.types.is_binary(at) or pa.types.is_large_binary(at):
         return BinaryType()
     if pa.types.is_list(at) or pa.types.is_large_list(at):
-        return ArrayType(_arrow_to_spark(at.value_type))
+        return ArrayType(_arrow_to_spark(at.value_type, coded_domains_mode))
     return StringType()  # string / large_string / anything else
 
 
@@ -199,31 +190,229 @@ def _crs_to_srid_proj(crs) -> Tuple[str, str]:
         return "0", ""
 
 
-def _make_layer_srs(crs):
-    """Return an OSR SpatialReference for the given CRS string, or None.
-
-    Uses ``SetFromUserInput`` so EPSG:, ESRI:, OGC:, WKT, and PROJ4 strings
-    are all handled uniformly.  The old inline code used ``ImportFromEPSG`` for
-    EPSG-prefixed strings and ``ImportFromProj4`` for everything else —
-    ``ImportFromProj4("ESRI:54008")`` / ``ImportFromProj4("OGC:CRS84")`` both
-    fail silently and produce a null SRS.
-
-    Returns None when ``crs`` is falsy.
-    """
-    if not crs:
-        return None
-    from osgeo import osr
-
-    srs = osr.SpatialReference()
-    srs.SetFromUserInput(str(crs))
-    return srs
-
-
 def _zip_vsi(path: str) -> str:
     """Map a zipped vector source to a GDAL /vsizip/ path."""
     if path.lower().endswith(".zip"):
         return "/vsizip/" + path
     return path
+
+
+# Drivers that read the same data, so a reader named for one accepts a file GDAL
+# opens with another: GeoJSON / GeoJSONSeq / ESRIJSON / TopoJSON / JSONFG (the
+# GeoJSON reader reads all five; JSON-FG is a GeoJSON superset), KML / LIBKML,
+# OpenFileGDB / FileGDB, GPKG / SQLite.
+_DRIVER_FAMILIES: Tuple[Tuple[str, ...], ...] = (
+    ("GeoJSON", "GeoJSONSeq", "ESRIJSON", "TopoJSON", "JSONFG"),
+    ("GPKG", "SQLite"),
+    ("OpenFileGDB", "FileGDB"),
+    ("KML", "LIBKML"),
+)
+
+# Extensions GDAL reads with a driver of the family by itself (keyed by the
+# family's first driver): such a file is opened as named, with no extra open.
+_FAMILY_EXTS = {
+    "GeoJSON": (".geojson", ".json", ".geojsonl", ".geojsons", ".topojson"),
+    "ESRI Shapefile": (".shp", ".shz", ".zip", ".dbf"),  # .zip: a zipped shapefile
+    "GPKG": (".gpkg", ".sqlite", ".db"),
+    "OpenFileGDB": (".gdb", ".gdb.zip"),
+    "KML": (".kml", ".kmz"),
+    "CSV": (".csv", ".tsv", ".psv"),
+}
+
+# GDAL connection-string prefixes that force a driver ("GeoJSON:<file>"), tried
+# in this order: strictest parser first. GeoJSONSeq reads any JSON object as a
+# feature and JSONFG reads the first line of a sequence as one, so they come last
+# (an open that finds only records with no fields and no geometry is passed over,
+# see _featureless). pyogrio's read functions take no driver argument -- a
+# ``driver=`` keyword becomes the open option DRIVER, which the drivers reject
+# with a warning and never use -- so a prefix is the only way to force one.
+_DRIVER_PREFIX = {
+    "GeoJSON": "GeoJSON:",
+    "TopoJSON": "TopoJSON:",
+    "ESRIJSON": "ESRIJSON:",
+    "GeoJSONSeq": "GeoJSONSeq:",
+    "JSONFG": "JSONFG:",
+    "GPKG": "GPKG:",
+    "CSV": "CSV:",
+}
+
+# The named reader for a family, for error hints.
+_READER_FOR = {
+    "GeoJSON": "geojson_gbx",
+    "ESRI Shapefile": "shapefile_gbx",
+    "GPKG": "gpkg_gbx",
+    "OpenFileGDB": "file_gdb_gbx",
+}
+
+# Drivers whose fields come from the features (none are declared up front).
+_FIELDS_FROM_FEATURES = _DRIVER_FAMILIES[0]
+
+
+def _family(driver: str) -> Tuple[str, ...]:
+    """The drivers equivalent to ``driver`` (itself first-class), or just it."""
+    for fam in _DRIVER_FAMILIES:
+        if driver in fam:
+            return fam
+    return (driver,)
+
+
+@functools.lru_cache(maxsize=1)
+def _known_drivers() -> Dict[str, str]:
+    """{lower-case name: GDAL name} for every OGR driver (plus the family names,
+    which need not be installed: FileGDB is read with OpenFileGDB)."""
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+
+    names = set(pyogrio.list_drivers()) | {d for f in _DRIVER_FAMILIES for d in f}
+    return {n.lower(): n for n in names}
+
+
+def _canonical_driver(name: str) -> str:
+    """GDAL's name for the ``driverName`` option (matched case-insensitively, as
+    GDAL does); "" for none. An unknown name raises with the closest matches."""
+    import difflib
+
+    name = (name or "").strip()
+    if not name:
+        return ""
+    known = _known_drivers()
+    if name.lower() in known:
+        return known[name.lower()]
+    close = difflib.get_close_matches(name.lower(), list(known), n=3, cutoff=0.6)
+    hint = f" Did you mean {', '.join(repr(known[c]) for c in close)}?" if close else ""
+    raise ValueError(
+        f"driverName {name!r} is not an OGR vector driver.{hint} Names match "
+        f"GDAL's driver names, in any case (e.g. 'GeoJSON', 'ESRI Shapefile')."
+    )
+
+
+def _native_ext(path: str, driver: str) -> bool:
+    """True when ``path`` is opened as named: GDAL reads it with a driver of
+    ``driver``'s family by its extension alone, or the family has no prefix to
+    force it with (and so nothing to decide: FlatGeobuf, GML, MapInfo, ...)."""
+    fam = _family(driver)
+    exts = _FAMILY_EXTS.get(fam[0], ())
+    if exts:
+        return path.lower().rstrip("/").endswith(exts)
+    return not any(d in _DRIVER_PREFIX for d in fam)
+
+
+def _with_prefix(path: str, prefix: str) -> str:
+    """The name pyogrio opens: a zipped source as ``/vsizip/``, else ``path``
+    behind the driver ``prefix`` ("" = GDAL picks the driver). GDAL splits
+    ``GPKG:<file>:<table>`` on ':', so the GPKG file name is quoted."""
+    if not prefix:
+        return _zip_vsi(path)
+    if prefix == "GPKG:":
+        return f'GPKG:"{path}"'
+    return prefix + path
+
+
+def _forcible(driver: str, path: str) -> List[str]:
+    """The prefixes that can force ``driver``'s family onto ``path``, in order.
+    A .zip is never prefixed (pyogrio wraps a name ending in .zip in /vsizip/
+    again), nor a GPKG path holding a quote (it cannot be quoted)."""
+    if _zip_vsi(path) != path:
+        return []
+    fam = _family(driver)
+    out = [p for d, p in _DRIVER_PREFIX.items() if d in fam]
+    return [p for p in out if not (p == "GPKG:" and '"' in path)]
+
+
+def _detect(name: str, layer):
+    """(driver GDAL opens ``name`` with or None, its read_info or None, the open
+    error or None)."""
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+    from pyogrio.errors import DataLayerError, DataSourceError
+
+    try:
+        info = pyogrio.read_info(name, layer=layer)
+        return info.get("driver"), info, None
+    except DataLayerError as e:  # opened, but the layer is not there
+        try:
+            return pyogrio.read_info(name).get("driver"), None, e
+        except (DataLayerError, DataSourceError):
+            return None, None, e
+    except DataSourceError as e:
+        return None, None, e
+
+
+def _featureless(name: str, info: Dict, layer) -> bool:
+    """True when GDAL reads records from ``name`` that hold nothing -- no fields
+    and no geometry -- as the lenient GeoJSONSeq driver does with a plain JSON
+    object. read_info alone cannot tell such records from features of mixed
+    geometry types without properties (both report no fields and an Unknown
+    geometry type), so then a sample is read: all geometries null = nothing."""
+    if list(info.get("fields", [])) or not info.get("features"):
+        return False
+    if info.get("geometry_type") not in (None, "Unknown"):
+        return False
+    import pyarrow.compute as pc
+
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+    from pyogrio.errors import DataLayerError, DataSourceError
+
+    try:
+        meta, tbl = pyogrio.read_arrow(name, layer=layer, columns=[], max_features=1000)
+    except (DataLayerError, DataSourceError):
+        return True  # it cannot even be read back
+    gcol = meta.get("geometry_name") or "wkb_geometry"
+    if gcol not in tbl.column_names or tbl.num_rows == 0:
+        return True
+    return bool(pc.all(pc.is_null(tbl.column(gcol))).as_py())
+
+
+def _featureless_error(path: str, driver: str) -> ValueError:
+    return ValueError(
+        f"no features/fields found in {path}: GDAL's {driver} driver reads its "
+        f"records with no fields and no geometry, so it is not a GeoJSON-family "
+        f"file. Check the file."
+    )
+
+
+def _driver_error(
+    path: str, want: str, got: Optional[str], err=None, empty: Optional[str] = None
+) -> ValueError:
+    """The error for a file the reader's driver (family) cannot read: the file,
+    the requested driver, what GDAL detected, and the reader to use instead.
+    ``empty``: a family driver that opened it but found no features/fields; then
+    that is the whole story (what GDAL detected, e.g. CSV for a JSON object named
+    .csv, would be a misleading remedy)."""
+    fam = _family(want)
+    asked = f"driverName {want!r}" + (
+        f" (or {', '.join(d for d in fam if d != want)})" if len(fam) > 1 else ""
+    )
+    if empty:
+        detail = (
+            f"no features/fields found in {path}: the {empty} driver opens it, but "
+            f"only as records with no fields and no geometry. Check the file."
+        )
+    elif got:
+        reader = _READER_FOR.get(_family(got)[0])
+        use = f"{reader} or driverName={got!r}" if reader else f"driverName={got!r}"
+        detail = f"GDAL opens it with the {got} driver. Read it with {use}."
+    else:
+        why = f" ({str(err).splitlines()[0]})" if err else ""
+        detail = (
+            f"GDAL does not recognize it as {'/'.join(fam)}{why}. Check the file, "
+            f"or give it its format's extension."
+        )
+    return ValueError(f"{path}: cannot read it with {asked}: {detail}")
+
+
+@contextlib.contextmanager
+def _naming(path: str):
+    """Make an open / read error of ``path`` name the file. GDAL's message often
+    does not (``Failed to read GeoJSON data; At line 1 ...``). The error keeps its
+    type and GDAL's message after the path, and the GDAL error is its cause; one
+    that already names the file passes through."""
+    from pyogrio.errors import DataLayerError, DataSourceError
+
+    try:
+        yield
+    except (DataSourceError, DataLayerError) as e:
+        if path in str(e):
+            raise
+        raise type(e)(f"{path}: {e}") from e
 
 
 _CANONICAL_EXT = {
@@ -364,11 +553,309 @@ def _zip_gdb_bundle(gdb_dir: str, zip_path: str) -> None:
                 zf.write(full, arcname=os.path.join(base, rel))  # "<name>.gdb/<rel>"
 
 
+def _geometry_type_option(value) -> Optional[str]:
+    """The ``geometryType`` writer option: ``None`` when it is not given or is blank (the type is
+    then taken from the first geometry), else the text without the blanks around it."""
+    return str(value).strip() or None if value is not None else None
+
+
 def _geometry_type_of(wkb: bytes) -> str:
     """OGR geometry-type name (e.g. 'Point', 'MultiPolygon') from a WKB blob."""
     from shapely import from_wkb
 
     return from_wkb(bytes(wkb)).geom_type
+
+
+def _wkb_has_z(wkb: bytes) -> bool:
+    """Whether a WKB (ISO or EWKB) header declares Z: the EWKB Z flag, or an ISO code in the 1000s (Z) or 3000s (ZM).
+    Read from the header, so an empty 3D geometry counts as 3D."""
+    code = int.from_bytes(bytes(wkb[1:5]), "little" if wkb[0] == 1 else "big")
+    return bool(code & 0x80000000) or (code & 0x0FFFFFFF) // 1000 in (1, 3)
+
+
+def _geometry_types_of(wkbs) -> Tuple[str, ...]:
+    """The distinct geometry-type names of the non-NULL WKB blobs ``wkbs``, sorted, each with a
+    `` Z`` suffix when the geometry carries Z (OGR's names: ``Polygon``, ``Polygon Z``).
+
+    The first five bytes of a WKB (byte order, type code) decide its type, so one blob per
+    distinct header is decoded, not every geometry."""
+    first: Dict[bytes, bytes] = {}
+    for b in wkbs:
+        if b is not None:
+            first.setdefault(bytes(b[:5]), b)
+    return tuple(
+        sorted(
+            {
+                _geometry_type_of(b) + (" Z" if _wkb_has_z(b) else "")
+                for b in first.values()
+            }
+        )
+    )
+
+
+# Formats whose layer holds one dimension: a layer cannot mix 2D and 3D geometries there.
+_ONE_DIMENSION_DRIVERS = ("ESRI Shapefile", "FlatGeobuf", "OpenFileGDB")
+
+
+def _layer_geometry_type(types, first: str, driver: str) -> str:
+    """The layer type for geometries of the OGR type names ``types`` (see ``_geometry_types_of``).
+
+    One type is that type; any mix, single and multi forms of one type included, is ``Unknown``
+    (the geometries are written as they are, never promoted to Multi), except a FileGDB layer,
+    which keeps the type of the ``first`` geometry (GDAL refuses the others). Z is declared when a
+    geometry carries it; a format of one dimension refuses a mix of 2D and 3D, since either layer
+    type would drop or make up heights. Z is never added to ``Unknown`` (OGR has no name for it
+    here).
+    """
+    bases = {t[: -len(" Z")] if t.endswith(" Z") else t for t in types}
+    z = [t.endswith(" Z") for t in types]
+    if any(z) and not all(z) and driver in _ONE_DIMENSION_DRIVERS:
+        raise ValueError(
+            f"The geometries mix 2D and 3D, and a {driver} layer holds one dimension. "
+            "Fix: write one dimension (drop or add Z first), or set the geometryType option "
+            "(for example geometryType='Polygon Z') to choose the layer's type."
+        )
+    if len(bases) == 1:
+        base = bases.pop()
+    elif driver == "OpenFileGDB":
+        base = first
+    else:
+        base = "Unknown"
+    return base + " Z" if any(z) and base != "Unknown" else base
+
+
+_OGR_DOMAIN_META = b"GDAL:OGR:domain_name"
+
+# Arrow Binary/String arrays use 32-bit offsets: one array holds at most this many bytes,
+# and Spark reads every light-reader batch through those types.
+_ARROW_OFFSET_LIMIT = 2**31 - 1
+# Byte budget for the variable-width columns of each yielded batch -- half the offset limit,
+# so a slice never approaches it. WKT output is several times larger than its WKB source, so
+# in WKT mode the budget is divided by _WKT_EXPANSION (measured on the WKB read from the file).
+_ARROW_BATCH_BYTES_LIMIT = 1024**3
+_WKT_EXPANSION = 4
+
+
+def _field_domain_names(arrow_schema) -> Dict[str, str]:
+    """{field: domain name} from the ``GDAL:OGR:domain_name`` field metadata that
+    pyogrio attaches to every attribute column bound to a field domain."""
+    out: Dict[str, str] = {}
+    for f in arrow_schema:
+        name = (f.metadata or {}).get(_OGR_DOMAIN_META)
+        if name:
+            out[f.name] = name.decode("utf-8")
+    return out
+
+
+def _xml_local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _read_gdb_items_domains(
+    path: str,
+) -> Dict[str, Optional[List[Tuple[str, Optional[str]]]]]:
+    """Field domains of a FileGDB: {domain: [(code_text, description)]} for coded
+    domains, {domain: None} for range domains (no codes to map).
+
+    Domain definitions live as XML in the GDB_Items system table (one
+    ``*CodedValueDomain*`` / ``*RangeDomain*`` document per domain). Parsed with
+    defusedxml -- the XML comes from an untrusted file."""
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+    from defusedxml import ElementTree
+
+    _, tbl = pyogrio.read_arrow(
+        path, sql="SELECT Definition FROM GDB_Items", read_geometry=False
+    )
+    out: Dict[str, Optional[List[Tuple[str, Optional[str]]]]] = {}
+    for xml in tbl.column("Definition").to_pylist():
+        if not xml or "Domain" not in xml[:256]:
+            continue
+        root = ElementTree.fromstring(xml)
+        kind = _xml_local(root.tag)
+        if "CodedValueDomain" not in kind and "RangeDomain" not in kind:
+            continue
+        name = None
+        pairs: List[Tuple[str, Optional[str]]] = []
+        for el in root:
+            tag = _xml_local(el.tag)
+            if tag == "DomainName":
+                name = (el.text or "").strip()
+            elif tag == "CodedValues":
+                for cv in el:
+                    parts = {_xml_local(c.tag): c.text for c in cv}
+                    if parts.get("Code") is not None:
+                        pairs.append((parts["Code"].strip(), parts.get("Name")))
+        if name:
+            out[name] = pairs if "CodedValueDomain" in kind else None
+    return out
+
+
+def _read_gpkg_domains(
+    path: str,
+) -> Dict[str, Optional[List[Tuple[str, Optional[str]]]]]:
+    """Field domains of a GeoPackage: {domain: [(code_text, description)]} for
+    ``enum`` (coded) constraints, {domain: None} for ``range``/``glob`` ones.
+
+    Read through GDAL (pyogrio ``sql=``) like the layer itself, so any path the
+    reader can open works. GDAL also writes a ``_<domain>_domain_description``
+    row per domain (the domain's own description, not a code), which is skipped."""
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+
+    try:
+        _, tbl = pyogrio.read_arrow(
+            path,
+            sql="SELECT constraint_name, constraint_type, value, description "
+            "FROM gpkg_data_column_constraints",
+            read_geometry=False,
+        )
+    except (pyogrio.errors.DataSourceError, pyogrio.errors.DataLayerError):
+        return {}  # no constraints table -> no domain definitions
+    out: Dict[str, Optional[List[Tuple[str, Optional[str]]]]] = {}
+    for name, ctype, value, desc in zip(
+        *(tbl.column(c).to_pylist() for c in tbl.column_names)
+    ):
+        if name.startswith("_") and name.endswith("_domain_description"):
+            continue
+        if ctype != "enum":
+            out[name] = None
+        elif value is not None:
+            out.setdefault(name, []).append((str(value), desc))
+    return out
+
+
+def _read_coded_domains(path: str, driver: str):
+    """Field domain definitions for a (locally readable) source -- coded domains
+    map to their (code, description) pairs, non-coded ones to None -- or {} for
+    formats without stored domain definitions."""
+    low = path.lower().rstrip("/")
+    if driver == "OpenFileGDB" or low.endswith((".gdb", ".gdb.zip")):
+        return _read_gdb_items_domains(path)
+    if driver == "GPKG" or low.endswith(".gpkg"):
+        return _read_gpkg_domains(path)
+    return {}
+
+
+def _typed_code(text: str, arrow_type):
+    """Domain code text -> a value comparable with a column of ``arrow_type``."""
+    import pyarrow as pa
+
+    if pa.types.is_integer(arrow_type):
+        try:
+            return int(text)
+        except ValueError:
+            f = float(text)  # e.g. "3.0"; raises for non-numeric -> skipped
+            if not f.is_integer():
+                raise
+            return int(f)
+    if pa.types.is_floating(arrow_type):
+        return float(text)
+    return text
+
+
+def _map_codes_to_descriptions(codes, pairs):
+    """Vectorized code -> description. NULL stays NULL; a code with no domain
+    entry falls back to its string form (never silently dropped)."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    keys, descs = [], []
+    for code_text, desc in pairs:
+        try:
+            keys.append(_typed_code(code_text, codes.type))
+        except ValueError:
+            continue
+        descs.append(desc if desc is not None else code_text)
+    as_text = pc.cast(codes, pa.string())
+    if not keys:
+        return as_text
+    idx = pc.index_in(codes, value_set=pa.array(keys, type=codes.type))
+    mapped = pc.take(pa.array(descs, type=pa.string()), idx)
+    return pc.coalesce(mapped, as_text)
+
+
+def _decode_coded_domain_column(col, coded_domains_mode: str = "code", domain=None):
+    """Decode a coded-value domain column into codes or descriptions.
+
+    A dictionary column's INDICES ARE THE STORED CODES (see _arrow_to_spark); a
+    non-dictionary coded column already holds the codes. So:
+    - "code": the codes (dictionary indices, or the column as-is); the caller's
+      cast to the declared schema types them.
+    - "description": with ``domain`` ([(code_text, description)], from the
+      source's domain definitions) map every code to its description; without
+      it, fall back to the dictionary's values (or the column unchanged).
+    """
+    import pyarrow as pa
+
+    col = col.combine_chunks() if isinstance(col, pa.ChunkedArray) else col
+    is_dict = pa.types.is_dictionary(col.type)
+    codes = col.indices if is_dict else col
+    if coded_domains_mode != "description":
+        return codes
+    if domain is not None:
+        return _map_codes_to_descriptions(codes, domain)
+    return col.dictionary_decode() if is_dict else col
+
+
+def _time_text(col):
+    """OGR Time values as GDAL formats them: HH:MM:SS, or HH:MM:SS.sss when the
+    value has milliseconds (Spark has no TIME type)."""
+    import pyarrow as pa
+
+    return pa.array(
+        [
+            (
+                None
+                if v is None
+                else v.isoformat(
+                    timespec="milliseconds" if v.microsecond else "seconds"
+                )
+            )
+            for v in col.to_pylist()
+        ],
+        pa.string(),
+    )
+
+
+def _byte_bounded_slices(batch, budget: int, layer: str, first_feature: int = 0):
+    """Zero-copy row slices of ``batch`` whose variable-width (binary/string) columns
+    together hold at most ``budget`` bytes; a single row larger than the budget gets
+    a slice of its own. Raises ValueError for a value over Arrow's 32-bit offset
+    limit, which no Spark row can hold."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    row_bytes = np.zeros(batch.num_rows, dtype=np.int64)
+    for name, col in zip(batch.schema.names, batch.columns):
+        t = col.type
+        if not (
+            pa.types.is_binary(t)
+            or pa.types.is_large_binary(t)
+            or pa.types.is_string(t)
+            or pa.types.is_large_string(t)
+        ):
+            continue
+        lens = pc.binary_length(col).fill_null(0).to_numpy(zero_copy_only=False)
+        over = np.flatnonzero(lens > _ARROW_OFFSET_LIMIT)
+        if over.size:
+            i = int(over[0])
+            raise ValueError(
+                f"Feature {first_feature + i} in layer {layer!r}: column {name!r} holds "
+                f"{int(lens[i]):,} bytes, over the {_ARROW_OFFSET_LIMIT:,}-byte limit of a "
+                "single Spark binary/string value, so it cannot be read."
+            )
+        row_bytes += lens.astype(np.int64)
+
+    if int(row_bytes.sum()) <= budget:
+        yield batch
+        return
+    start, acc = 0, 0
+    for i, b in enumerate(row_bytes.tolist()):
+        if i > start and acc + b > budget:
+            yield batch.slice(start, i - start)
+            start, acc = i, 0
+        acc += b
+    yield batch.slice(start)
 
 
 def _srid_to_crs(srid: str, proj4: str):
@@ -397,12 +884,80 @@ def _srid_to_crs(srid: str, proj4: str):
 # is structural (no named field), so the value is inert there; GPKG/FileGDB name
 # the geometry column, so use the format default rather than the input column
 # name (which may be arbitrary once geomCol is in play).
-# OGR transaction batch size for FileGDB writes.  Large enough to amortise the
-# commit overhead; small enough to bound memory and not starve other threads.
-# Module-level so tests can monkeypatch it to exercise the boundary code path.
-_GDB_TX_BATCH = 100_000
-
 _OUTPUT_GEOM_NAME = {"GPKG": "geom", "OpenFileGDB": "SHAPE"}
+
+# OpenFileGDB ``TARGET_ARCGIS_VERSION`` layer creation option, set by the writer option
+# ``targetArcGisVersion``. ``ALL`` (GDAL's default) keeps the layer readable by every Esri
+# client but stores a 64-bit integer column as Float64 (silently rounding ids above 2**53),
+# a date column as a date-time and a timestamp column as a date-time with no offset.
+# ``ARCGIS_PRO_3_2_OR_LATER`` keeps all three exactly (64-bit integer, date-only and
+# timestamp-with-offset fields) and stamps the WHOLE layer as needing a 3.2 client
+# (``RequiredGeodatabaseClientVersion`` 13.2), so an older Esri client may not open it.
+# ``auto`` (the default) picks the second only when the schema has such a column.
+_GDB_TARGET_ALL = "ALL"
+_GDB_TARGET_PRO_3_2 = "ARCGIS_PRO_3_2_OR_LATER"
+_GDB_TARGET_CHOICES = ("auto", _GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2)
+_GDB_PRO_3_2_TYPES = (LongType, DateType, TimestampType, TimestampNTZType)
+
+# Layer name a FileGDB gets when the writer is not given ``layerName``.
+_GDB_DEFAULT_LAYER = "layer"
+
+
+def _check_gdb_attr_names(attr_cols):
+    """Refuse or warn about attribute names a FileGDB layer reserves, before pyogrio.
+
+    The geometry field of a FileGDB layer is ``SHAPE``. An attribute named ``shape``
+    in any letter case clashes with it, and ``pyogrio.write_arrow`` then aborts the
+    whole process (GDAL 3.11 and 3.12) instead of raising, so it is refused here with
+    a ``ValueError``. The feature id column is ``OBJECTID``: GDAL does not write an
+    attribute of that name but takes an integer one as the feature ids (and refuses
+    any other type), which is easy to miss, so it warns, naming the column.
+    """
+    import warnings
+
+    clash = [c for c in attr_cols if c.lower() == "shape"]
+    if clash:
+        raise ValueError(
+            f"file_gdb_gbx cannot write the column(s) {clash}: a FileGDB layer names "
+            "its geometry field SHAPE, and a column with that name in any letter case "
+            "clashes with it. Rename the column before writing, for example to "
+            "'shape_attr' (df.withColumnRenamed)."
+        )
+    for c in (c for c in attr_cols if c.lower() == "objectid"):
+        warnings.warn(
+            f"file_gdb_gbx: the column {c!r} is not written as an attribute: a FileGDB "
+            "layer keeps its feature id in OBJECTID, so GDAL takes an integer column of "
+            "that name (unique, positive 32-bit values) as the feature ids and refuses "
+            "any other type. Rename the column to write it as an ordinary attribute.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+
+def _gdb_target_version(value, schema, attr_cols) -> str:
+    """The ``TARGET_ARCGIS_VERSION`` for the ``targetArcGisVersion`` option.
+
+    ``value`` is matched without regard to case: ``auto`` / ``None`` (the default) is
+    ``ARCGIS_PRO_3_2_OR_LATER`` when an attribute column is a long, date or timestamp (the
+    types ``ALL`` cannot keep exactly) and ``ALL`` otherwise; the other two are used as
+    given. Anything else raises a ``ValueError``.
+    """
+    key = "AUTO" if value is None else str(value).strip().upper()
+    if key == "AUTO":
+        # Only the columns that are written count: an integer OBJECTID becomes the
+        # feature id and is not written as a field (see _check_gdb_attr_names).
+        wants_pro = any(
+            isinstance(f.dataType, _GDB_PRO_3_2_TYPES)
+            for f in schema.fields
+            if f.name in attr_cols and f.name.lower() != "objectid"
+        )
+        return _GDB_TARGET_PRO_3_2 if wants_pro else _GDB_TARGET_ALL
+    if key in (_GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2):
+        return key
+    raise ValueError(
+        f"file_gdb_gbx option targetArcGisVersion={value!r} is not recognised; use one of "
+        f"{', '.join(repr(c) for c in _GDB_TARGET_CHOICES)}."
+    )
 
 
 def _output_geom_name(driver, geom_col):
@@ -414,22 +969,44 @@ def _should_stream(driver):
     partition fragments' record batches into one ``write_arrow`` (bounded driver
     memory + single pass), vs. reading all fragments at once.
 
-    Applies to every pyogrio single-file writer: GeoJSON, ESRI Shapefile, GPKG.
-    Streaming is the union of what the alternatives lack: one pass (no
-    per-fragment file re-opens, and no GeoJSON quadratic re-encode) AND bounded
-    memory (never the whole dataset in driver memory, which OOMs the single-node
-    driver on large inputs). GDAL sizes the shapefile `.dbf` fields safely across
-    the stream (a wider value in a later batch is NOT truncated -- verified).
-    GeoJSON/Shapefile geometry is structural (no rename); GPKG's geometry column
-    is renamed per batch to its format default (see ``_write_streaming``).
-
-    OpenFileGDB is excluded from this function: its write goes through the
-    native ``osgeo`` OGR path (pyogrio's bundled GDAL has a read-only
-    OpenFileGDB driver), so it cannot use ``write_arrow``. Memory is bounded
-    via ``_write_local_osgeo_gdb``, which streams fragments one at a time
-    with OGR transaction batching (committed every ``_GDB_TX_BATCH`` rows).
+    Applies to every pyogrio single-file writer: GeoJSON, ESRI Shapefile, GPKG,
+    OpenFileGDB, KML, GML and DXF. Streaming is the union of what the alternatives lack: one pass
+    (no per-fragment file re-opens, and no GeoJSON quadratic re-encode) AND
+    bounded memory (never the whole dataset in driver memory, which OOMs the
+    single-node driver on large inputs). GDAL sizes the shapefile `.dbf` fields
+    safely across the stream (a wider value in a later batch is NOT truncated --
+    verified). GeoJSON/Shapefile geometry is structural (no rename); the GPKG and
+    OpenFileGDB geometry column is renamed per batch to its format default (see
+    ``_write_streaming``).
     """
-    return driver in ("GeoJSON", "ESRI Shapefile", "GPKG")
+    return driver in _STREAMED_DRIVERS
+
+
+# The pyogrio writers that stream the fragments into one write. KML, GML and DXF are on it because GDAL cannot reopen
+# their file to append a second fragment: they need the one write.
+_STREAMED_DRIVERS = (
+    "GeoJSON",
+    "ESRI Shapefile",
+    "GPKG",
+    "OpenFileGDB",
+    "KML",
+    "GML",
+    "DXF",
+)
+
+
+def _is_field_error(e: BaseException) -> bool:
+    """Whether *e* is pyogrio's ``FieldError`` (a column the driver could not create), by its class and not its name."""
+    try:
+        from pyogrio.errors import FieldError
+    except ImportError:  # a pyogrio without the class cannot raise it
+        return False
+    return isinstance(e, FieldError)
+
+
+# The streamed drivers whose file GDAL cannot reopen to append a second fragment (see _STREAMED_DRIVERS): when the
+# build cannot stream into one of them, a concat or append fallback would fail on every fragment after the first.
+_NO_APPEND_DRIVERS = ("KML", "GML", "DXF")
 
 
 def _stream_record_batches(frag_paths, drop_cols, rename=None):
@@ -527,18 +1104,27 @@ def _writer_arrow_table(cols, schema, geom_col):
     from the reader schema keeps an all-null ``StringType`` column a proper
     (all-null) Arrow ``string``. The geometry column is always emitted as WKB
     ``bytes`` here, so it is typed ``binary`` regardless of its declared type.
+
+    A TimestampType column is typed UTC through ``_arrow_utc`` (``to_arrow_type`` asserts a
+    session timezone that Spark-Connect / Serverless workers do not have), and its values
+    are converted from the worker's local time to UTC so they stay exact on a worker that
+    is not on UTC.
     """
     import pyarrow as pa
-    from pyspark.sql.pandas.types import to_arrow_type
 
-    fields = [
-        pa.field(
-            f.name, pa.binary() if f.name == geom_col else to_arrow_type(f.dataType)
+    def _arrow_type(f):
+        return (
+            pa.binary() if f.name == geom_col else _arrow_utc.arrow_type_utc(f.dataType)
         )
-        for f in schema.fields
-    ]
+
+    def _values(f):
+        if isinstance(f.dataType, TimestampType):
+            return [_arrow_utc.to_utc(v) for v in cols[f.name]]
+        return cols[f.name]
+
+    fields = [pa.field(f.name, _arrow_type(f)) for f in schema.fields]
     return pa.table(
-        {f.name: cols[f.name] for f in schema.fields}, schema=pa.schema(fields)
+        {f.name: _values(f) for f in schema.fields}, schema=pa.schema(fields)
     )
 
 
@@ -580,6 +1166,73 @@ def _copy_tree_to_fuse(src, dst):
             _copy_tree_to_fuse(s, d)
         else:
             shutil.copyfile(s, d)
+
+
+# WKT output for a WKB the reader could not decode under read_paths'
+# on_error="skip": not WKT, so the row is set aside as an unreadable geometry.
+_UNREADABLE_WKB = _quarantine.UNREADABLE_WKB
+
+
+_SQLITE_JOURNAL = "OGR_SQLITE_JOURNAL"
+# The calls inside _sqlite_delete_journal now, and the session's value the first of them found. A depth count under a
+# lock: reads that overlap (two generators open at once, a read during a write, threads) set DELETE once, and only the
+# last to end puts the value back, whatever order they end in.
+_JOURNAL_LOCK = threading.Lock()
+_JOURNAL_DEPTH = 0
+_JOURNAL_BEFORE: Optional[str] = None
+
+
+def _journal_enter() -> None:
+    global _JOURNAL_DEPTH, _JOURNAL_BEFORE
+    with _JOURNAL_LOCK:
+        if _JOURNAL_DEPTH == 0:
+            pyogrio = _gdal_policy.pyogrio()
+            v = pyogrio.get_gdal_config_option(_SQLITE_JOURNAL)
+            _JOURNAL_BEFORE = ("ON" if v else "OFF") if isinstance(v, bool) else v
+            pyogrio.set_gdal_config_options({_SQLITE_JOURNAL: "DELETE"})
+        _JOURNAL_DEPTH += 1
+
+
+def _journal_exit() -> None:
+    global _JOURNAL_DEPTH
+    with _JOURNAL_LOCK:
+        _JOURNAL_DEPTH -= 1
+        if _JOURNAL_DEPTH == 0:
+            _gdal_policy.pyogrio().set_gdal_config_options(
+                {_SQLITE_JOURNAL: _JOURNAL_BEFORE}
+            )
+
+
+def _sqlite_delete_journal(fn):
+    """Run ``fn`` (a function, or a generator to its end) with ``OGR_SQLITE_JOURNAL=DELETE``, then put back the value
+    the session had (none included) once no such call is still running.
+
+    A GeoPackage (SQLite) written with a WAL journal leaves a WAL for its first reader to checkpoint, a write that a
+    read-only Volume refuses; DELETE leaves none, and a read with it attempts no journal write. The option is
+    process-wide in GDAL, so it is held only while vector reads or writes run: set for good, it changed every SQLite
+    open of the user's session. Harmless for the drivers that are not SQLite.
+    """
+    if inspect.isgeneratorfunction(fn):
+
+        @functools.wraps(fn)
+        def gen(*a, **k):
+            _journal_enter()
+            try:
+                yield from fn(*a, **k)
+            finally:
+                _journal_exit()
+
+        return gen
+
+    @functools.wraps(fn)
+    def call(*a, **k):
+        _journal_enter()
+        try:
+            return fn(*a, **k)
+        finally:
+            _journal_exit()
+
+    return call
 
 
 class _ChunkPartition(InputPartition):
@@ -633,7 +1286,7 @@ class VectorGbxReader(DataSourceReader):
                 f"access='{access}' is not supported on the "
                 f"df.read.format('vector_gbx') reader (FUSE-only, session-less on "
                 f"Spark Connect). Use the function-layer API instead: "
-                f"from databricks.labs.gbx.pyvx.file_read import vector_file_read. "
+                f"from databricks.labs.gbx.vectorx.file_read import vector_file_read. "
                 f"It reads a directory of vector files with FILE (MANAGED/EXTERNAL) "
                 f"leverage where the runtime supports it."
             )
@@ -646,7 +1299,8 @@ class VectorGbxReader(DataSourceReader):
         from databricks.labs.gbx.ds._listing import to_local_path
 
         self.path = to_local_path(raw_path)
-        self.driver = options.get("driverName", "") or self._DRIVER
+        # GDAL's own driver name (driverName matches in any case, as in GDAL).
+        self.driver = _canonical_driver(options.get("driverName", "") or self._DRIVER)
         # `multi=true` reads a DIRECTORY of newline-delimited GeoJSONL shards (the
         # output of geojsonl_gbx): switch a GeoJSON reader to the GeoJSONSeq driver so
         # _members() enumerates .geojsonl/.geojsons and each shard is parsed as a
@@ -674,6 +1328,26 @@ class VectorGbxReader(DataSourceReader):
         else:
             self.bbox = None
         self.where = options.get("where") or None
+        # codedDomains option: "code" (default, return stored codes) or "description"
+        # (return domain descriptions as strings). When a field has a coded-value domain,
+        # pyogrio returns a dictionary type; this option controls the decoding.
+        coded_domains_opt = options.get("codedDomains", "code")
+        if coded_domains_opt not in ("code", "description"):
+            raise ValueError(
+                f"codedDomains option must be 'code' or 'description'; got '{coded_domains_opt}'"
+            )
+        self.coded_domains = coded_domains_opt
+        # Per-member coded-domain definitions (description mode only), read once
+        # per member by schema()/read() on this reader instance.
+        self._domain_defs_cache: Dict[str, Dict] = {}
+        # Per member: the driver prefix it is opened with ("" = GDAL's pick) and
+        # its read_info, so schema(), the per-file check and read() open it once.
+        self._prefix: Dict[str, str] = {}
+        self._probed: Dict[str, Dict] = {}  # read_info taken while choosing it
+        self._infos: Dict[str, Dict] = {}  # ... and checked by _info_for
+        # Per opened name: whether it holds nothing but empty records. The check can
+        # parse the whole file, so choosing the driver and _info_for share one result.
+        self._empty: Dict[str, bool] = {}
 
         # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
         # Spark Connect (getActiveSession() -> None), so probing here falsely
@@ -684,14 +1358,6 @@ class VectorGbxReader(DataSourceReader):
 
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
-
-    @staticmethod
-    def _gdal_readonly_safe() -> None:
-        # Reading a GeoPackage (SQLite) from read-only object storage (a Volume) must
-        # not attempt a journal/checkpoint write. DELETE journal mode avoids that.
-        import pyogrio
-
-        pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
 
     def _members(self) -> List[str]:
         """Member paths to read.  A ``.gdb`` directory is a single FileGDB
@@ -731,7 +1397,8 @@ class VectorGbxReader(DataSourceReader):
         Reading these directly from object storage (a UC Volume) does poorly -- FUSE
         does not serve random/seeked I/O well -- or triggers a read-only write attempt.
         Stage the source to worker-local temp first and read it there."""
-        return self.driver in ("GPKG", "OpenFileGDB")
+        fam = _family(self.driver)
+        return "GPKG" in fam or "OpenFileGDB" in fam
 
     @contextlib.contextmanager
     def _staged(self, path: str):
@@ -739,9 +1406,9 @@ class VectorGbxReader(DataSourceReader):
 
         For random-access drivers (GPKG, FileGDB), the source is copied to worker-local
         temp via a sequential read (FUSE-safe) so GDAL can do seeked I/O on local disk.
-        The copy is **cached per (process, source path)** via the module-level
-        ``_VEC_STAGED_FILES`` dict: N partitions of the same file share one staged copy,
-        paying the copy cost only once (open amortization).
+        The copy is **cached per (process, source path)** in ``_VEC_STAGE`` (a bounded
+        ``StageCache``): N partitions of the same file share one staged copy, paying
+        the copy cost only once (open amortization).
 
         For sequential drivers (GeoJSON/Shapefile/GeoJSONSeq), the source is yielded
         in-place — no copy is made or cached.
@@ -749,20 +1416,105 @@ class VectorGbxReader(DataSourceReader):
         if not self._needs_stage():
             yield path
             return
-        local = _get_or_stage_vec(path)
-        yield local
+        with _VEC_STAGE.use(path) as local:
+            yield local
 
+    def _source_name(self, path: str, local: str) -> str:
+        """The name pyogrio opens member ``path`` (readable as ``local``) with.
+
+        GDAL picks the driver itself when the file's extension is one its family
+        reads, or when the driver it detects is of the reader's family (GeoJSON
+        reads GeoJSONSeq / ESRIJSON / TopoJSON too). Otherwise -- a GeoJSON or
+        GeoPackage named data.csv, say -- the family's GDAL prefix forces it; a
+        file no driver of the family can open raises, naming what GDAL detected.
+        Decided once per member (an open only for an unrecognized extension)."""
+        if path not in self._prefix:
+            self._prefix[path] = self._resolve_prefix(path, local)
+        return _with_prefix(local, self._prefix[path])
+
+    @_sqlite_delete_journal
+    def _resolve_prefix(self, path: str, local: str) -> str:
+        # A missing file is left to the open, which reports it as missing.
+        if (
+            not self.driver
+            or _native_ext(path, self.driver)
+            or not os.path.exists(local)
+        ):
+            return ""
+        if not _forcible(self.driver, local):
+            # Nothing can force the driver (a family with no GDAL prefix, or a zip
+            # / quoted GPKG path), so a detection open could only end in "" or in
+            # the error _info_for raises from the same open at schema time.
+            return ""
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+        from pyogrio.errors import DataLayerError, DataSourceError
+
+        got, info, err = _detect(_zip_vsi(local), self._layer())
+        if got in _family(self.driver):
+            if info is not None:
+                self._probed[path] = info
+            return ""
+        last, empty = err, None
+        for prefix in _forcible(self.driver, local):
+            name = _with_prefix(local, prefix)
+            try:
+                info = pyogrio.read_info(name, layer=self._layer())
+            except (DataLayerError, DataSourceError) as e:
+                last = e
+                continue
+            if self._is_featureless(name, info):
+                empty = prefix.rstrip(":")
+                continue
+            self._probed[path] = info
+            return prefix
+        raise _driver_error(path, self.driver, got, err, empty) from last
+
+    def _is_featureless(self, name: str, info: Dict) -> bool:
+        """_featureless for ``name``, decided once per reader."""
+        if name not in self._empty:
+            self._empty[name] = _featureless(name, info, self._layer())
+        return self._empty[name]
+
+    def _read_info(self, path: str, local: str, name: str) -> Dict:
+        """read_info of the opened ``name``. A name outside the reader's family
+        extensions that no GDAL prefix can force the driver onto, and that GDAL
+        cannot open, is explained like any file of another format."""
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+        from pyogrio.errors import DataSourceError
+
+        try:
+            return pyogrio.read_info(name, layer=self._layer())
+        except DataSourceError as e:
+            if (
+                self.driver
+                and os.path.exists(local)
+                and not _native_ext(path, self.driver)
+                and not _forcible(self.driver, local)
+            ):
+                raise _driver_error(path, self.driver, None, e) from e
+            raise
+
+    @_sqlite_delete_journal
     def _info_for(self, path: str):
-        """Read pyogrio metadata for the given path. Random-access formats are staged
-        to local temp first (see _staged) so the open does not seek over a Volume."""
-        self._gdal_readonly_safe()
-        import pyogrio
-
-        kw: Dict = {"layer": self._layer()}
-        if self.driver:
-            kw["driver"] = self.driver
+        """Read pyogrio metadata for the given path (once per reader). Random-access
+        formats are staged to local temp first (see _staged) so the open does not
+        seek over a Volume. A file whose extension GDAL routes to a driver outside
+        the reader's family is rejected here."""
+        if path in self._infos:
+            return self._infos[path]
         with self._staged(path) as _p:
-            return pyogrio.read_info(_zip_vsi(_p), **kw)
+            name = self._source_name(path, _p)
+            with _naming(path):
+                info = self._probed.get(path) or self._read_info(path, _p, name)
+            if self.driver and info.get("driver") not in _family(self.driver):
+                raise _driver_error(path, self.driver, info.get("driver"))
+            # A JSON file of plain objects is not a schema: it must not define one.
+            if self.driver in _FIELDS_FROM_FEATURES and self._is_featureless(
+                name, info
+            ):
+                raise _featureless_error(path, info.get("driver"))
+        self._infos[path] = info
+        return info
 
     def _info(self):
         return self._info_for(self._members()[0])
@@ -778,7 +1530,95 @@ class VectorGbxReader(DataSourceReader):
         ogr_types = list(info.get("ogr_types", []))
         return tuple(zip(fields, ogr_types))
 
+    def _domain_defs_for(self, path: str) -> Dict:
+        """Coded-value domain definitions of one member, cached per member."""
+        if path not in self._domain_defs_cache:
+            # The family's first driver (GPKG for SQLite, OpenFileGDB for FileGDB)
+            # selects where the definitions are stored.
+            with self._staged(path) as _p:
+                self._domain_defs_cache[path] = _read_coded_domains(
+                    self._source_name(path, _p), _family(self.driver)[0]
+                )
+        return self._domain_defs_cache[path]
+
+    def _description_fields(self, path: str, arrow_schema) -> Dict[str, Optional[list]]:
+        """Description mode: {field: coded pairs or None} for every field that is
+        emitted as StringType descriptions. A field qualifies when its domain is a
+        coded domain in the source's definitions (pairs drive the mapping), or when
+        pyogrio dictionary-encoded it (None -> the dictionary's own values).
+        schema() and read() both call this so the declared and emitted types agree.
+
+        Raises ValueError if a field's domain is declared in metadata but cannot be
+        resolved from the source's domain definitions."""
+        import pyarrow as pa
+
+        names = _field_domain_names(arrow_schema)
+        defs = self._domain_defs_for(path) if names else {}
+        out: Dict[str, Optional[list]] = {}
+        for f in arrow_schema:
+            dom = names.get(f.name)
+            if dom is not None:  # field has a domain_name in metadata
+                if dom in defs:  # domain is defined and readable
+                    if defs[dom] is not None:  # coded; range domains pass through
+                        out[f.name] = defs[dom]
+                elif pa.types.is_dictionary(f.type):  # fallback for dictionary columns
+                    out[f.name] = None
+                else:  # domain in metadata but not readable and not dictionary
+                    raise ValueError(
+                        f"Field {f.name!r} references domain {dom!r} which could not be "
+                        f"resolved from the source. Check that the domain definitions are "
+                        f"readable and complete."
+                    )
+            elif pa.types.is_dictionary(
+                f.type
+            ):  # no metadata, but column is dict-encoded
+                out[f.name] = None
+        return out
+
+    @_sqlite_delete_journal
+    def _description_schema_fields(self, path: str) -> Dict[str, Optional[list]]:
+        """_description_fields for schema(): field domain metadata comes from a
+        zero-feature Arrow read (pyogrio.read_info does not expose it)."""
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+
+        with self._staged(path) as _p, _naming(path):
+            _, tbl = pyogrio.read_arrow(
+                self._source_name(path, _p), layer=self._layer(), max_features=0
+            )
+        return self._description_fields(path, tbl.schema)
+
+    def declared_schema(self) -> Optional[StructType]:
+        """The schema the source declares before any feature is read (checked per
+        file by read_paths), or None when it declares none: GeoJSON-family fields
+        come from the features, so a file with none has no fields. Their first
+        batch is checked instead, which also spares a second parse of the whole
+        file (each open of a GeoJSON parses all of it): for a reader with no
+        driver, a GeoJSON-family extension is enough to tell, without an open."""
+        if self.driver in _FIELDS_FROM_FEATURES:
+            return None
+        if not self.driver:
+            member = self._members()[0]
+            if _native_ext(member, "GeoJSON"):
+                return None
+            if self._info_for(member).get("driver") in _FIELDS_FROM_FEATURES:
+                return None
+        return self.schema()
+
     def schema(self) -> StructType:
+        out = self._attr_schema()
+        if self.coded_domains != "description":
+            return out
+        desc = self._description_schema_fields(self._members()[0])
+        if not desc:
+            return out
+        return StructType(
+            [
+                StructField(f.name, StringType(), f.nullable) if f.name in desc else f
+                for f in out.fields
+            ]
+        )
+
+    def _attr_schema(self) -> StructType:
         members = self._members()
         first_info = self._info_for(members[0])
         if len(members) > 1:
@@ -800,13 +1640,16 @@ class VectorGbxReader(DataSourceReader):
         # single file into feature-offset chunks is counterproductive for these formats:
         # OGR's GeoJSON driver re-parses the ENTIRE FeatureCollection into memory on every
         # open, so N chunks = N full parses (~O(features * chunks) -- this was the dominant
-        # cost). Parallelism comes from reading many files concurrently (one task per file);
-        # within a single read, chunk_size only bounds the Arrow batch size on the yield, not
-        # the parse. Random-access formats (GPKG/FileGDB) are staged to local temp + read whole.
+        # cost). Parallelism comes from reading many files concurrently (one task per file).
         #
-        # Layout convention (T8): _members() returns paths sorted alphabetically so
+        # chunkSize is the streamed batch size (see read()): a file is read once,
+        # incrementally, so per-task memory scales with chunkSize, not file size.
+        # Random-access formats (GPKG/FileGDB) are staged to worker-local temp first so
+        # GDAL can seek; the stream reads the local copy.
+        #
+        # Layout convention: _members() returns paths sorted alphabetically so
         # partitions are emitted in source-path order. When a worker pulls consecutive
-        # tasks from the same source file the per-worker staged-file cache (_VEC_STAGED_FILES)
+        # tasks from the same source file the per-worker staged-file cache (_VEC_STAGE)
         # is reused, paying the copy cost only once per source.
         # To control task parallelism or re-align after a join, use
         #   df.repartition(n, 'path').sortWithinPartitions('path')
@@ -826,12 +1669,13 @@ class VectorGbxReader(DataSourceReader):
             for member in self._members()
         ]
 
+    @_sqlite_delete_journal
     def read(self, partition: "_ChunkPartition"):
-        """Arrow-native read: transform the pyogrio Arrow table in Arrow (rename the
-        geometry column, vectorized WKB/WKT, constant srid/proj columns, cast to the
-        declared StructType) and yield pyarrow.RecordBatch objects. No per-row Python
-        tuple construction -- that per-row loop made large reads ~10x slower than the
-        JVM reader.
+        """Arrow-native streaming read: pyogrio.open_arrow yields the layer in batches of
+        ``chunkSize`` features; each batch is cut into byte-bounded slices
+        (_byte_bounded_slices) and each slice transformed on its own (_transform_batch) --
+        the layer is never held whole, so memory scales with chunkSize and no column
+        overflows Arrow's 32-bit offsets. No per-row Python tuple construction.
 
         FILE access mode (``self.access``):
         - ``"auto"`` / ``"fuse"``: reads via FUSE (to_local_path).
@@ -839,93 +1683,156 @@ class VectorGbxReader(DataSourceReader):
           to ``vector_file_read``; never reaches read().
         """
         # managed/external are rejected in __init__; read() always takes the FUSE path.
+        from databricks.labs.gbx.ds import _listing
 
-        import numpy as np
+        if _listing.is_empty_plan(partition):
+            return
+
         import pyarrow as pa
-        import shapely
-        from pyspark.sql.pandas.types import to_arrow_schema
 
-        self._gdal_readonly_safe()
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         kw: Dict = {
             "layer": partition.layer,
+            "batch_size": self.chunk_size,  # stream in chunk_size-sized batches
             "skip_features": partition.skip,
             "read_geometry": True,
             "datetime_as_string": False,
+            "use_pyarrow": True,
         }
-        # One partition per file reads the whole member (count==0); max_features is left
-        # unset so OGR parses the file once. (A non-zero count would cap features, but the
-        # planner no longer splits a file into offset chunks -- see partitions().)
-        if partition.count:
-            kw["max_features"] = partition.count
-        if partition.driver:
-            kw["driver"] = partition.driver
         # Pushdown filters -> only matching features are parsed (Serverless memory).
         if partition.bbox:
             kw["bbox"] = partition.bbox
         if partition.where:
             kw["where"] = partition.where
-        with self._staged(partition.path) as _p:
-            meta, tbl = pyogrio.read_arrow(_zip_vsi(_p), **kw)
 
-        # Arrow table uses 'wkb_geometry' when geometry_name is empty; the declared
-        # schema names the geometry column geometry_name or 'geom_0' (see _geom_name).
-        gcol = meta.get("geometry_name") or "wkb_geometry"
-        out_gname = meta.get("geometry_name") or "geom_0"
-        srid, proj4 = _crs_to_srid_proj(meta.get("crs"))
-        n = tbl.num_rows
+        with self._staged(partition.path) as _p, _naming(partition.path):
+            # Stream RecordBatches from pyogrio.open_arrow instead of loading the whole
+            # layer into memory with read_arrow. Each batch is processed independently.
+            src = self._source_name(partition.path, _p)
+            with pyogrio.open_arrow(src, **kw) as (meta, reader):
+                # With use_pyarrow=True, reader is a pyarrow.RecordBatchReader
 
-        # Build the declared output Spark schema from THIS table's field types (so we do
-        # not re-open the file just to compute it): attrs preserved, geom typed by asWKB,
-        # srid/proj string columns -- column NAMES/ORDER match _vector_schema/schema().
-        attr_cols = [c for c in tbl.column_names if c != gcol]
-        fields: List[StructField] = [
-            StructField(c, _arrow_to_spark(tbl.schema.field(c).type), True)
-            for c in attr_cols
-        ]
-        geom_spark = BinaryType() if partition.as_wkb else StringType()
-        fields.append(StructField(out_gname, geom_spark, True))
-        fields.append(StructField(out_gname + "_srid", StringType(), True))
-        fields.append(StructField(out_gname + "_srid_proj", StringType(), True))
-        target = to_arrow_schema(StructType(fields))
+                # Geometry column: Arrow table uses 'wkb_geometry' when geometry_name is empty;
+                # the declared schema names the geometry column geometry_name or 'geom_0'.
+                gcol = meta.get("geometry_name") or "wkb_geometry"
+                out_gname = meta.get("geometry_name") or "geom_0"
+                srid, proj4 = _crs_to_srid_proj(meta.get("crs"))
 
-        if n == 0:
-            for batch in target.empty_table().to_batches():
-                yield batch
-            return
+                # Description mode: the coded fields (from the stream schema's domain
+                # metadata) -- computed once, reused for every batch.
+                desc = (
+                    self._description_fields(partition.path, reader.schema)
+                    if self.coded_domains == "description"
+                    else {}
+                )
 
-        # Geometry column: keep WKB binary, or vectorized WKB->WKT (shapely 2.x).
-        wkb_arr = tbl.column(gcol).combine_chunks()
+                # Build the target Spark schema. Use the reader schema to infer attribute
+                # column types, so they match what read() will emit.
+                attr_cols = [c for c in reader.schema.names if c != gcol]
+                fields: List[StructField] = [
+                    StructField(
+                        c,
+                        (
+                            StringType()
+                            if c in desc
+                            else _arrow_to_spark(
+                                reader.schema.field(c).type, self.coded_domains
+                            )
+                        ),
+                        True,
+                    )
+                    for c in attr_cols
+                ]
+                geom_spark = BinaryType() if partition.as_wkb else StringType()
+                fields.append(StructField(out_gname, geom_spark, True))
+                fields.append(StructField(out_gname + "_srid", StringType(), True))
+                fields.append(StructField(out_gname + "_srid_proj", StringType(), True))
+                # TimestampType is typed UTC (not by pyspark: a Serverless worker
+                # has no session timezone for it to assert on).
+                target = _arrow_utc.arrow_schema_utc(StructType(fields))
+
+                # Stream: each RecordBatch (<= chunkSize features) is cut into byte-bounded
+                # slices BEFORE any transform/cast, so no array -- WKB in, WKT or WKB out --
+                # approaches Arrow's 32-bit offset limit and memory scales with chunkSize.
+                budget = _ARROW_BATCH_BYTES_LIMIT // (
+                    1 if partition.as_wkb else _WKT_EXPANSION
+                )
+                layer_label = partition.layer or str(partition.path)
+                seen = 0
+                yielded = False
+                # A feature-range partition (count > 0) stops the stream itself:
+                # open_arrow takes skip_features but not max_features.
+                remaining = partition.count or None
+                for batch in reader:
+                    if remaining is not None:
+                        if remaining <= 0:
+                            break
+                        batch = batch.slice(0, remaining)
+                        remaining -= batch.num_rows
+                    for sl in _byte_bounded_slices(batch, budget, layer_label, seen):
+                        if sl.num_rows:
+                            yield self._transform_batch(
+                                sl,
+                                gcol,
+                                attr_cols,
+                                desc,
+                                target,
+                                partition,
+                                srid,
+                                proj4,
+                            )
+                            yielded = True
+                    seen += batch.num_rows
+                if (
+                    not yielded
+                ):  # empty layer / no matches: one empty batch, declared schema
+                    yield pa.RecordBatch.from_pylist([], schema=target)
+
+    def _transform_batch(
+        self, batch, gcol, attr_cols, desc, target, partition, srid, proj4
+    ):
+        """One streamed slice -> the declared output batch: coded-domain decode, Time
+        fields as text, geometry
+        as WKB or WKT (shapely 2.x, vectorized), constant srid/proj columns, cast to the
+        declared Arrow schema."""
+        import numpy as np
+        import pyarrow as pa
+        import shapely
+
+        n = batch.num_rows
+        if gcol in batch.schema.names:
+            wkb = batch.column(gcol)
+        else:  # a layer with no geometry (a CSV with X and Y columns): the geometry column is NULL
+            wkb = pa.nulls(n, pa.binary())
         if partition.as_wkb:
-            geom_out = wkb_arr.cast(pa.binary())
+            geom_out = wkb.cast(pa.binary())
         else:
-            geoms = shapely.from_wkb(wkb_arr.to_numpy(zero_copy_only=False))
-            wkt = shapely.to_wkt(geoms)  # None -> None preserved
-            geom_out = pa.array(np.asarray(wkt, dtype=object), type=pa.string())
-
-        srid_out = pa.array([srid] * n, type=pa.string())
-        proj_out = pa.array([proj4] * n, type=pa.string())
-
-        out_cols = [tbl.column(c) for c in attr_cols] + [geom_out, srid_out, proj_out]
-        out_names = attr_cols + [
-            out_gname,
-            out_gname + "_srid",
-            out_gname + "_srid_proj",
+            # Under read_paths' on_error="skip" (a bad-record hook on the reader) an
+            # unreadable WKB becomes text that is not WKT, which read_paths sets
+            # aside as an unreadable geometry, instead of failing the file.
+            raw = wkb.to_numpy(zero_copy_only=False)
+            if getattr(self, "_gbx_bad_record", None) is not None:
+                wkt = _quarantine.wkt_or_marker(raw)
+            else:
+                wkt = np.asarray(shapely.to_wkt(shapely.from_wkb(raw)), dtype=object)
+            geom_out = pa.array(wkt, type=pa.string())
+        cols = [
+            (
+                _time_text(batch.column(c))
+                if pa.types.is_time(batch.schema.field(c).type)
+                else _decode_coded_domain_column(
+                    batch.column(c), self.coded_domains, desc.get(c)
+                )
+            )
+            for c in attr_cols
+        ] + [
+            geom_out,
+            pa.array([srid] * n, type=pa.string()),
+            pa.array([proj4] * n, type=pa.string()),
         ]
-        out_table = pa.Table.from_arrays(
-            [
-                c.combine_chunks() if isinstance(c, pa.ChunkedArray) else c
-                for c in out_cols
-            ],
-            names=out_names,
-        )
-        # Cast to the declared schema's Arrow types for guaranteed PySpark alignment.
-        out = out_table.cast(target, safe=False)
-        # Yield in chunk_size-bounded batches: the file is parsed once (above); chunk_size
-        # only bounds the per-batch row count handed to Spark (memory), not the parse.
-        for batch in out.to_batches(max_chunksize=self.chunk_size):
-            yield batch
+        out = pa.Table.from_arrays(cols, names=target.names).cast(target, safe=False)
+        return out.combine_chunks().to_batches()[0]
 
 
 class VectorGbxDataSource(DataSource):
@@ -1001,6 +1908,8 @@ class FileGdbGbxDataSource(VectorGbxDataSource):
 @dataclass
 class _VectorCommitMessage(WriterCommitMessage):
     frag_path: str
+    # the geometry types of the partition's non-NULL geometries: the commit types the layer by all of them
+    geom_types: Tuple[str, ...] = ()
 
 
 class VectorGbxWriter(DataSourceWriter):
@@ -1043,7 +1952,7 @@ class VectorGbxWriter(DataSourceWriter):
                 f"file_mode='{self._file_mode}' is not supported on the "
                 f"df.write.format('vector_gbx') writer (FUSE-only). Use the "
                 f"function-layer API instead: "
-                f"from databricks.labs.gbx.pyvx.file_write import vector_file_write. "
+                f"from databricks.labs.gbx.vectorx.file_write import vector_file_write. "
                 f"It assembles your vector output into a FILE-column Delta table "
                 f"(MANAGED create_file / EXTERNAL try_to_file)."
             )
@@ -1076,7 +1985,7 @@ class VectorGbxWriter(DataSourceWriter):
             self.path = _resolve_single_file_output(self.path, self._file_name, ext)
 
         self.overwrite = overwrite
-        self.geometry_type_override = opts.get("geometrytype")
+        self.geometry_type_override = _geometry_type_option(opts.get("geometrytype"))
         self.layer_name = opts.get("layername")
         self.geom_col, self.srid_col, self.proj_col, self.attr_cols = _writer_col_roles(
             schema,
@@ -1084,6 +1993,11 @@ class VectorGbxWriter(DataSourceWriter):
             srid_col=opts.get("sridcol"),
             proj_col=opts.get("projcol"),
         )
+        if self.driver == "OpenFileGDB":
+            _check_gdb_attr_names(self.attr_cols)
+            self._gdb_target = _gdb_target_version(
+                opts.get("targetarcgisversion"), schema, self.attr_cols
+            )
         self._schema = schema
         self._col_order = [f.name for f in schema.fields]
         self._geom_is_wkb = any(
@@ -1135,7 +2049,9 @@ class VectorGbxWriter(DataSourceWriter):
         tbl = _writer_arrow_table(cols, self._schema, self.geom_col)
         frag = os.path.join(self.scratch_dir, f"frag-{uuid.uuid4().hex}.arrow")
         feather.write_feather(tbl, frag)
-        return _VectorCommitMessage(frag_path=frag)
+        return _VectorCommitMessage(
+            frag_path=frag, geom_types=_geometry_types_of(cols[self.geom_col])
+        )
 
     # ---- driver: merge fragments into one output file ----
     def commit(self, messages: List[Optional[WriterCommitMessage]]) -> None:
@@ -1146,6 +2062,12 @@ class VectorGbxWriter(DataSourceWriter):
             for m in messages
             if isinstance(m, _VectorCommitMessage) and m.frag_path
         ]
+        types = {
+            t
+            for m in messages
+            if isinstance(m, _VectorCommitMessage)
+            for t in m.geom_types
+        }
         local_dir = None
         try:
             if not frags:
@@ -1162,21 +2084,12 @@ class VectorGbxWriter(DataSourceWriter):
                 # archive is copied to the target. local_out ends in ".zip"; strip
                 # it to get the inner path the writer produces alongside.
                 inner = local_out[: -len(".zip")]  # .../roads.shp or .../roads.gdb
-                if self.driver == "OpenFileGDB":
-                    # FileGDB: stream fragments one at a time with OGR transaction
-                    # batching. Infer geom/CRS from the first fragment only.
-                    first_tbl = feather.read_table(frags[0])
-                    geom_type, crs = self._infer_geom_crs([first_tbl])
-                    del first_tbl
-                    self._write_local_osgeo_gdb(frags, inner, geom_type, crs)
-                elif _should_stream(self.driver):
-                    first_tbl = feather.read_table(frags[0])
-                    geom_type, crs = self._infer_geom_crs([first_tbl])
-                    del first_tbl
+                if _should_stream(self.driver):
+                    geom_type, crs = self._infer_geom_crs_frags(frags, types)
                     self._write_streaming(frags, inner, geom_type, crs)
                 else:
                     tables = [feather.read_table(f) for f in frags]
-                    geom_type, crs = self._infer_geom_crs(tables)
+                    geom_type, crs = self._infer_geom_crs(tables, geom_types=types)
                     self._write_local(tables, inner, geom_type, crs)
                 if self.driver == "OpenFileGDB":
                     # .gdb is a directory: pack the whole tree, then drop it so only
@@ -1192,27 +2105,16 @@ class VectorGbxWriter(DataSourceWriter):
                             ".zip"
                         ):
                             os.remove(os.path.join(local_dir, name))
-            elif self.driver == "OpenFileGDB":
-                # FileGDB: stream fragments one at a time with OGR transaction
-                # batching. Infer geom/CRS from the first fragment only (bounded;
-                # the fragment is released before the write loop begins).
-                first_tbl = feather.read_table(frags[0])
-                geom_type, crs = self._infer_geom_crs([first_tbl])
-                del first_tbl
-                self._write_local_osgeo_gdb(frags, local_out, geom_type, crs)
             elif _should_stream(self.driver):
-                # Infer geom type + CRS from the first fragment only (one
-                # partition, bounded), then stream every fragment into one write.
-                first_tbl = feather.read_table(frags[0])
-                geom_type, crs = self._infer_geom_crs([first_tbl])
-                del first_tbl
+                # Infer geom type + CRS from the first fragment that has a geometry
+                # (bounded: one fragment's geometry columns at a time), then stream
+                # every fragment into one write.
+                geom_type, crs = self._infer_geom_crs_frags(frags, types)
                 self._write_streaming(frags, local_out, geom_type, crs)
             else:
-                # Infer geom/CRS from first fragment only (bounded memory), then
-                # stream remaining fragments via generator (lazy, not list).
-                first_tbl = feather.read_table(frags[0])
-                geom_type, crs = self._infer_geom_crs([first_tbl])
-                del first_tbl
+                # Infer geom/CRS the same way (bounded memory), then stream the
+                # fragments via generator (lazy, not list).
+                geom_type, crs = self._infer_geom_crs_frags(frags, types)
                 tables_gen = (feather.read_table(f) for f in frags)
                 self._write_local(tables_gen, local_out, geom_type, crs)
             # Writer is FUSE-only: clear any Spark stub, copy everything pyogrio
@@ -1229,6 +2131,13 @@ class VectorGbxWriter(DataSourceWriter):
                     _copy_tree_to_fuse(src, dst)
                 else:
                     _copy_file_to_fuse(src, dst)  # byte-only -> Volume-safe
+        except Exception as e:  # noqa: BLE001
+            if self.driver == "GPX" and _is_field_error(e):
+                raise ValueError(
+                    f"vector_gbx: GPX could not create a column of the DataFrame ({e}). GPX makes its own fields, "
+                    "such as name, ele, time and desc. Fix: rename or drop a column that has one of those names."
+                ) from e
+            raise
         finally:
             if local_dir is not None:
                 shutil.rmtree(local_dir, ignore_errors=True)
@@ -1239,80 +2148,9 @@ class VectorGbxWriter(DataSourceWriter):
             [c for c in (self.srid_col, self.proj_col) if c in tbl.column_names]
         )
 
-    def _write_streaming(self, frags, local_out, geom_type, crs) -> None:
-        """Assemble the output by streaming the fragment batches into ONE
-        write_arrow (bounded driver memory, single pass) for GeoJSON / Shapefile /
-        GPKG. The geometry column is written under the format default
-        (``_output_geom_name``); for GPKG that differs from the input name, so the
-        column is renamed per batch (GeoJSON/Shapefile geometry is structural, no
-        rename). Falls back to a concat write only if the GDAL build cannot consume
-        a RecordBatchReader."""
-        import pyarrow as pa
-        import pyarrow.feather as feather
-        import pyarrow.ipc as ipc
-        import pyogrio
-
-        drop = {c for c in (self.srid_col, self.proj_col) if c}
-        out_geom = _output_geom_name(self.driver, self.geom_col)
-        rename = None if out_geom == self.geom_col else (self.geom_col, out_geom)
-        with pa.memory_map(frags[0], "r") as src0:
-            full_schema = ipc.open_file(src0).schema
-        fields = [
-            (f.with_name(out_geom) if rename and f.name == self.geom_col else f)
-            for f in full_schema
-            if f.name not in drop
-        ]
-        stream_schema = pa.schema(fields)
-        # GPKG: DELETE journal (no WAL/-shm sidecars) so the output reads back from
-        # read-only object storage; harmless for non-SQLite drivers.
-        pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
-        kw = dict(
-            driver=self.driver,
-            geometry_name=out_geom,
-            geometry_type=geom_type,
-            crs=crs,
-        )
-        if self.layer_name:
-            kw["layer"] = self.layer_name
-        elif self.driver == "GPKG":
-            kw["layer"] = _default_gpkg_layer(self.path)
-        try:
-            reader = pa.RecordBatchReader.from_batches(
-                stream_schema, _stream_record_batches(frags, drop, rename)
-            )
-            pyogrio.write_arrow(reader, local_out, **kw)
-        except Exception as e:  # noqa: BLE001
-            # Only fall back if the GDAL build can't consume a streaming reader;
-            # re-raise genuine write errors.
-            if "does not support" not in str(e) and not isinstance(e, TypeError):
-                raise
-            # Fall back to _write_local with lazy generator (bounded memory).
-            tables_gen = (feather.read_table(f) for f in frags)
-            self._write_local(tables_gen, local_out, geom_type, crs)
-
-    def _write_local(self, tables, local_out, geom_type, crs) -> None:
-        """Write the merged tables to a local path. Use the fast Arrow path; if the
-        driver lacks Arrow-write support, fall back to the classic feature-based path.
-        OpenFileGDB is NOT routed here; the commit() method calls _write_local_osgeo_gdb
-        directly with fragment paths (streaming + transaction batching).
-
-        Accepts tables as an iterable (list or generator). For generators, the first
-        table is read explicitly to detect Arrow-write support, then remaining tables
-        are streamed to avoid whole-dataset materialization (bounded memory)."""
-        import pyogrio
-
-        # Convert to iterator so we can pull the first table explicitly
-        it = iter(tables)
-        try:
-            first_tbl = next(it)
-        except StopIteration:
-            return  # no tables, nothing to write
-
-        # Write SQLite-backed formats (GPKG) with a DELETE journal -- no WAL/-shm
-        # sidecars -- so the output reads back from read-only object storage (a
-        # Volume) without the reader attempting a checkpoint (write). Harmless for
-        # non-SQLite drivers. (GDAL config is process-global; set per write.)
-        pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
+    def _write_kw(self, geom_type, crs) -> dict:
+        """Keyword arguments shared by every pyogrio ``write_arrow`` of this write:
+        driver, geometry column name / type, CRS, layer name and layer options."""
         kw = dict(
             driver=self.driver,
             geometry_name=_output_geom_name(self.driver, self.geom_col),
@@ -1325,6 +2163,89 @@ class VectorGbxWriter(DataSourceWriter):
             # GDAL would name the GPKG layer after the file stem, which is invalid
             # when it starts with the reserved 'gpkg' prefix; use a safe default.
             kw["layer"] = _default_gpkg_layer(self.path)
+        elif self.driver == "OpenFileGDB":
+            kw["layer"] = _GDB_DEFAULT_LAYER
+        if self.driver == "OpenFileGDB":
+            kw["layer_options"] = {"TARGET_ARCGIS_VERSION": self._gdb_target}
+        elif self.driver == "CSV":
+            # the CSV driver writes a geometry column only on request: as the WKT text, in a column named WKT
+            kw["layer_options"] = {"GEOMETRY": "AS_WKT"}
+        return kw
+
+    @_sqlite_delete_journal
+    def _write_streaming(self, frags, local_out, geom_type, crs) -> None:
+        """Assemble the output by streaming the fragment batches into ONE
+        write_arrow (bounded driver memory, single pass) for GeoJSON / Shapefile /
+        GPKG / OpenFileGDB. The geometry column is written under the format default
+        (``_output_geom_name``); for GPKG and OpenFileGDB that differs from the
+        input name, so the column is renamed per batch (GeoJSON/Shapefile geometry
+        is structural, no rename). Falls back to a concat write only if the GDAL
+        build cannot consume a RecordBatchReader."""
+        import pyarrow as pa
+        import pyarrow.feather as feather
+        import pyarrow.ipc as ipc
+
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+
+        drop = {c for c in (self.srid_col, self.proj_col) if c}
+        out_geom = _output_geom_name(self.driver, self.geom_col)
+        rename = None if out_geom == self.geom_col else (self.geom_col, out_geom)
+        with pa.memory_map(frags[0], "r") as src0:
+            full_schema = ipc.open_file(src0).schema
+        fields = [
+            (f.with_name(out_geom) if rename and f.name == self.geom_col else f)
+            for f in full_schema
+            if f.name not in drop
+        ]
+        stream_schema = pa.schema(fields)
+        kw = self._write_kw(geom_type, crs)
+        try:
+            reader = pa.RecordBatchReader.from_batches(
+                stream_schema, _stream_record_batches(frags, drop, rename)
+            )
+            pyogrio.write_arrow(reader, local_out, **kw)
+        except Exception as e:  # noqa: BLE001
+            # Only fall back if the GDAL build can't consume a streaming reader;
+            # re-raise genuine write errors.
+            if "does not support" not in str(e) and not isinstance(e, TypeError):
+                raise
+            if self.driver in _NO_APPEND_DRIVERS and len(frags) > 1:
+                # the fallback writes the fragments one after the other, and GDAL cannot reopen a file of this driver
+                # to append: it would fail on the second fragment, with GDAL's wording and a half-written file
+                raise ValueError(
+                    f"vector_gbx: this GDAL build cannot stream the DataFrame into {self.driver} ({e}), and GDAL "
+                    f"cannot reopen a {self.driver} file to append the rows of a second partition. "
+                    "Fix: write from one partition, df.coalesce(1).write, or choose another driver."
+                ) from e
+            # Start from a clean local_out so a partial stream write cannot corrupt
+            # the fallback (a .gdb is a directory, a GPKG a file).
+            if os.path.isdir(local_out):
+                shutil.rmtree(local_out, ignore_errors=True)
+            elif os.path.isfile(local_out):
+                os.remove(local_out)
+            # Fall back to _write_local with lazy generator (bounded memory).
+            tables_gen = (feather.read_table(f) for f in frags)
+            self._write_local(tables_gen, local_out, geom_type, crs)
+
+    @_sqlite_delete_journal
+    def _write_local(self, tables, local_out, geom_type, crs) -> None:
+        """Write the merged tables to a local path. Use the fast Arrow path; if the
+        driver lacks Arrow-write support, fall back to the classic feature-based path.
+        The first table is written plain and every later one with ``append=True``.
+
+        Accepts tables as an iterable (list or generator). For generators, the first
+        table is read explicitly to detect Arrow-write support, then remaining tables
+        are streamed to avoid whole-dataset materialization (bounded memory)."""
+        _gdal_policy.pyogrio()  # the driver policy is active first
+
+        # Convert to iterator so we can pull the first table explicitly
+        it = iter(tables)
+        try:
+            first_tbl = next(it)
+        except StopIteration:
+            return  # no tables, nothing to write
+
+        kw = self._write_kw(geom_type, crs)
         out_geom = _output_geom_name(self.driver, self.geom_col)
 
         try:
@@ -1354,7 +2275,7 @@ class VectorGbxWriter(DataSourceWriter):
 
     def _write_one_arrow(self, tbl, local_out, out_geom, kw, append):
         """Write one table via the Arrow path, handling geom column rename."""
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         t = self._drop_meta_cols(tbl)
         # Rename the input geom column to the format-canonical output name
@@ -1365,130 +2286,6 @@ class VectorGbxWriter(DataSourceWriter):
                 [out_geom if c == self.geom_col else c for c in t.column_names]
             )
         pyogrio.write_arrow(t, local_out, append=append, **kw)
-
-    def _write_local_osgeo_gdb(  # noqa: C901
-        self, frags, local_out, geom_type, crs
-    ) -> None:
-        """Hybrid FileGDB path. pyogrio's bundled GDAL has a read-only OpenFileGDB
-        driver; the native GDAL from the heavyweight GDAL init script has write. Use
-        osgeo.ogr (native) to encode the .gdb. Requires those natives -- raises a clear
-        error otherwise (FileGDB write is unavailable in a lightweight-only env).
-
-        Fragments are consumed ONE AT A TIME (bounded driver memory — never the
-        whole dataset in RAM) and features are written inside OGR bulk transactions
-        (committed every _GDB_TX_BATCH rows), which eliminates the per-feature
-        auto-commit overhead that otherwise makes large writes O(n) slow."""
-        try:
-            from osgeo import ogr
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(
-                "file_gdb_gbx writing requires the native GDAL Python bindings (osgeo) "
-                "from the heavyweight GDAL init script; pyogrio's bundled GDAL ships a "
-                "read-only OpenFileGDB driver. Install the GeoBrix GDAL natives, or write "
-                "gpkg_gbx / geojson_gbx instead."
-            ) from e
-        import pyarrow as pa
-        import pyarrow.feather as feather
-
-        drv = ogr.GetDriverByName("OpenFileGDB")
-        if drv is None or not drv.TestCapability(ogr.ODrCCreateDataSource):
-            raise RuntimeError(
-                "native GDAL OpenFileGDB driver lacks create capability; FileGDB write "
-                "needs GDAL >= 3.6 with OpenFileGDB write (the heavyweight GDAL natives)."
-            )
-        _WKB = {
-            "Point": ogr.wkbPoint,
-            "LineString": ogr.wkbLineString,
-            "Polygon": ogr.wkbPolygon,
-            "MultiPoint": ogr.wkbMultiPoint,
-            "MultiLineString": ogr.wkbMultiLineString,
-            "MultiPolygon": ogr.wkbMultiPolygon,
-            "GeometryCollection": ogr.wkbGeometryCollection,
-        }
-        srs = _make_layer_srs(crs)
-
-        def _ogr_type(t):
-            if pa.types.is_floating(t):
-                return ogr.OFTReal
-            if pa.types.is_boolean(t):
-                return ogr.OFTInteger
-            if pa.types.is_integer(t):
-                return ogr.OFTInteger64
-            if pa.types.is_binary(t) or pa.types.is_large_binary(t):
-                return ogr.OFTBinary
-            return ogr.OFTString  # strings + anything else
-
-        # Read the first fragment to derive the schema (attr cols + field types).
-        # The fragment is released from memory before the main write loop so that
-        # only one fragment at a time lives in driver memory.
-        first_tbl = feather.read_table(frags[0])
-        meta = {self.geom_col, self.srid_col, self.proj_col}
-        attr_cols = [c for c in first_tbl.column_names if c not in meta]
-        types = {f.name: f.type for f in first_tbl.schema}
-        del first_tbl  # release — schema is all we need
-
-        ds = drv.CreateDataSource(local_out)
-        if ds is None:
-            raise RuntimeError(
-                f"OpenFileGDB CreateDataSource returned None for {local_out!r}; "
-                "the FileGDB output path must end in '.gdb'."
-            )
-        use_tx = lyr = None
-        try:
-            lyr = ds.CreateLayer(
-                self.layer_name or "layer",
-                srs,
-                _WKB.get(geom_type, ogr.wkbUnknown),
-                options=[
-                    f"GEOMETRY_NAME={_output_geom_name(self.driver, self.geom_col)}"
-                ],
-            )
-            for c in attr_cols:
-                lyr.CreateField(ogr.FieldDefn(c, _ogr_type(types[c])))
-            defn = lyr.GetLayerDefn()
-
-            # Check once whether the driver supports OGR transactions so we can
-            # fall back gracefully (per-feature auto-commit) on drivers that don't.
-            use_tx = lyr.TestCapability(ogr.OLCTransactions)
-            if use_tx:
-                lyr.StartTransaction()
-            pending = 0  # features written since last commit
-
-            # Stream fragments one at a time — each is loaded, written, then
-            # released before the next is read (bounded driver memory).
-            for frag_path in frags:
-                tbl = feather.read_table(frag_path)
-                cols = {c: tbl.column(c).to_pylist() for c in tbl.column_names}
-                geom = cols.get(self.geom_col, [None] * tbl.num_rows)
-                for i in range(tbl.num_rows):
-                    feat = ogr.Feature(defn)
-                    for c in attr_cols:
-                        v = cols[c][i]
-                        if v is not None:
-                            feat.SetField(c, v)
-                    g = geom[i]
-                    if g is not None:
-                        feat.SetGeometry(ogr.CreateGeometryFromWkb(bytes(g)))
-                    lyr.CreateFeature(feat)
-                    feat = None
-                    pending += 1
-                    if use_tx and pending >= _GDB_TX_BATCH:
-                        lyr.CommitTransaction()
-                        lyr.StartTransaction()
-                        pending = 0
-                del tbl, cols, geom  # release fragment memory before next read
-
-            if use_tx and pending > 0:
-                lyr.CommitTransaction()
-        except Exception:
-            if use_tx and lyr is not None:
-                try:
-                    lyr.RollbackTransaction()
-                except Exception:  # noqa: BLE001
-                    pass
-            raise
-        finally:
-            ds = None  # flush + close
 
     def _write_local_classic(self, tables, local_out, geom_type, crs) -> None:
         """Write tables via the classic (non-Arrow) OGR path. Accepts an iterable
@@ -1513,33 +2310,86 @@ class VectorGbxWriter(DataSourceWriter):
                 **kw,
             )
 
-    def _infer_geom_crs(self, tables) -> Tuple[str, Optional[str]]:
+    def _infer_geom_crs_frags(self, frags, geom_types=()) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS from the first fragment that has a geometry (``geom_types``: see
+        ``_infer_geom_crs``).
+
+        Fragments are read in order, geometry and CRS columns only, one at a time, and the
+        scan stops at the first non-NULL geometry; a partition whose geometries are all NULL
+        therefore decides nothing, whatever its position. Only when no fragment has a
+        geometry is the type unknown (``Unknown``; an error for a FileGDB layer).
+        """
+        import pyarrow.feather as feather
+
+        cols = [
+            c
+            for c in (self.geom_col, self.srid_col, self.proj_col)
+            if c in self._col_order
+        ]
+        tables = (feather.read_table(f, columns=cols) for f in frags)
+        return self._infer_geom_crs(
+            tables, first_geometry_only=True, geom_types=geom_types
+        )
+
+    def _infer_geom_crs(
+        self, tables, first_geometry_only=False, geom_types=()
+    ) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS of the first non-NULL geometry of each table in turn.
+
+        ``geom_types``: the types of every geometry written (the partitions report them). When
+        there are several, the layer is of any geometry (``Unknown``) instead of the first type.
+
+        The CRS comes from that geometry's own row. The scan goes on to the next table while
+        the type or the CRS is still unknown, unless ``first_geometry_only``: then it stops
+        at the first table that has a geometry (an unknown CRS stays unknown).
+        """
+        import pyarrow.compute as pc
+
         geom_type, crs = self.geometry_type_override, None
         for tbl in tables:
-            g = tbl.column(self.geom_col).to_pylist()
-            s = (
-                tbl.column(self.srid_col).to_pylist()
-                if self.srid_col in tbl.column_names
-                else []
-            )
-            p = (
-                tbl.column(self.proj_col).to_pylist()
-                if self.proj_col in tbl.column_names
-                else []
-            )
-            for i, gv in enumerate(g):
-                if gv is None:
-                    continue
+            col = tbl.column(self.geom_col)
+            found = col.null_count < len(col)
+            if found:
+                i = pc.index(pc.is_valid(col), True).as_py()
                 if geom_type is None:
-                    geom_type = _geometry_type_of(gv)
+                    geom_type = _geometry_type_of(col[i].as_py())
                 if crs is None:
-                    crs = _srid_to_crs(
-                        s[i] if i < len(s) else "", p[i] if i < len(p) else ""
+                    names = tbl.column_names
+                    s = (
+                        tbl.column(self.srid_col)[i].as_py()
+                        if self.srid_col in names
+                        else ""
                     )
+                    p = (
+                        tbl.column(self.proj_col)[i].as_py()
+                        if self.proj_col in names
+                        else ""
+                    )
+                    crs = _srid_to_crs(s, p)
+            if found and first_geometry_only:
                 break
             if geom_type is not None and crs is not None:
                 break
-        return geom_type or "Unknown", crs
+        geom_type = geom_type or "Unknown"
+        if self.geometry_type_override is None and geom_types:
+            # Typed by every geometry, not the first: typed by the first, the layer holds the others
+            # under a type they are not; GML's schema then declares that type and GDAL reads a polygon
+            # back as its ring, and FlatGeobuf refuses the write (also a 3D geometry in a 2D layer).
+            geom_type = _layer_geometry_type(geom_types, geom_type, self.driver)
+        if self.driver == "OpenFileGDB" and geom_type.lower() == "unknown":
+            if self.geometry_type_override is not None:
+                # the option itself says Unknown (any other type would not be "Unknown")
+                raise ValueError(
+                    "file_gdb_gbx: geometryType='Unknown' is not a type a FileGDB layer can "
+                    "have. Name one (for example geometryType='Point'), or leave the option "
+                    "out to take the type from the first geometry."
+                )
+            raise ValueError(
+                "file_gdb_gbx: every geometry is NULL, so the geometry type of the layer "
+                "cannot be inferred, and a FileGDB layer needs one. Set the geometryType "
+                "option (for example geometryType='Point')."
+            )
+        return geom_type, crs
 
     def _prepare_target(self) -> None:
         # PySpark may pre-create self.path as a directory; vector output is a
@@ -1589,7 +2439,7 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         # Strip a dbfs:/file: scheme so all os.* writes hit the bare FUSE path.
         self.path = to_local_path(path)
         self.overwrite = overwrite
-        self.geometry_type_override = opts.get("geometrytype")
+        self.geometry_type_override = _geometry_type_option(opts.get("geometrytype"))
         self.layer_name = opts.get("layername")
         mrpf = opts.get("maxrecordsperfile")
         self.max_records_per_file = int(mrpf) if mrpf else 0
@@ -1631,33 +2481,25 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         )
 
     def _infer_geom_crs(self, tbl) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS from the first non-NULL geometry of ``tbl``, found with an
+        Arrow scan (no Python list of the whole geometry column)."""
+        import pyarrow.compute as pc
+
         geom_type, crs = self.geometry_type_override, None
-        g = tbl.column(self.geom_col).to_pylist()
-        s = (
-            tbl.column(self.srid_col).to_pylist()
-            if self.srid_col in tbl.column_names
-            else []
-        )
-        p = (
-            tbl.column(self.proj_col).to_pylist()
-            if self.proj_col in tbl.column_names
-            else []
-        )
-        for i, gv in enumerate(g):
-            if gv is None:
-                continue
+        col = tbl.column(self.geom_col)
+        if col.null_count < len(col):
+            i = pc.index(pc.is_valid(col), True).as_py()
             if geom_type is None:
-                geom_type = _geometry_type_of(gv)
-            if crs is None:
-                crs = _srid_to_crs(
-                    s[i] if i < len(s) else "", p[i] if i < len(p) else ""
-                )
-            break
+                geom_type = _geometry_type_of(col[i].as_py())
+            names = tbl.column_names
+            s = tbl.column(self.srid_col)[i].as_py() if self.srid_col in names else ""
+            p = tbl.column(self.proj_col)[i].as_py() if self.proj_col in names else ""
+            crs = _srid_to_crs(s, p)
         return geom_type or "Unknown", crs
 
     # ---- executor: partition rows -> one or more GeoJSONL shards in OUTDIR ----
     def write(self, iterator: Iterator) -> WriterCommitMessage:
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
         from shapely import from_wkt, to_wkb
 
         idx = {n: i for i, n in enumerate(self._col_order)}

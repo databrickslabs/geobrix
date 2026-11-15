@@ -1,0 +1,170 @@
+bundle:
+  name: wireless_coverage_lf
+
+# Layer in a git-ignored databricks.override.yml (workspace profile, any local
+# variable overrides) when present. The glob tolerates its absence, so a fresh
+# clone validates/deploys with the committed defaults below.
+# See databricks.override.yml.example.
+include:
+  - "*.override.yml"
+
+variables:
+  catalog: {default: geospatial_docs}
+  schema: {default: wireless_coverage_lf}
+  volume: {default: data}
+  full_aoi: {default: "true"}
+  simplify: {default: "true"}
+  # empty → derived under the LDP volume; set to the series path to share
+  # already-staged LiDAR and skip a second ~4.9 GB download (about 24,000 LAZ tiles for the full city).
+  laz_dir: {default: ""}
+  water_mask_dir: {default: ""}
+  # The pipeline runs on the PREVIEW Lakeflow channel (DBR 19) with the +env6 wheel; the land/siting
+  # job environments below are Serverless environment 6, the same family. To fall back to the
+  # CURRENT channel (DBR 18) set pipeline_channel=CURRENT, gbx_wheel to the +env5 wheel and the
+  # job environment_version to "5": the wheel must follow the channel.
+  pipeline_channel: {default: "PREVIEW"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"}
+
+resources:
+  pipelines:
+    wireless_coverage_lf_pipeline:
+      name: wireless_coverage_lf_pipeline
+      # Defaults to Serverless (simplest; runs the whole medallion). For heavier
+      # runs -- notably full-SF (full_aoi=true), where the LiDAR binning/TIN/H3 is
+      # large -- you can switch to CLASSIC compute for dedicated, sized memory and
+      # throughput: set `serverless: false` and add a `clusters:` block (node_type
+      # + autoscale). Match the cluster DBR to the GeoBrix wheel (e.g. DBR 19 ->
+      # the +env6 wheel). See https://docs.databricks.com/aws/en/dlt/configure-compute
+      serverless: true
+      channel: ${var.pipeline_channel}
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      root_path: ./transformations
+      libraries:
+        - glob:
+            include: transformations/**
+      environment:
+        dependencies:
+          # The Lakeflow SDP pipeline runs on the runtime channel in `pipeline_channel`: PREVIEW is
+          # DBR 19, so gbx_wheel is the +env6 wheel. The CURRENT channel is DBR 18 -> the +env5 wheel.
+          # >>> Before you deploy, check the Lakeflow runtime channels at
+          # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
+          # and switch to the matching GeoBrix wheel if they have moved.
+          # Installed WITH its extras in ONE pip resolution: Lakeflow runs one `%pip install`
+          # per dependency entry, so splitting the extras defeats pip's resolver.
+          # The `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
+          - ${var.gbx_wheel}[vizx,stac]
+          # No Overture CLI here: the pipeline only reads the water mask the land task staged
+          # (OvertureClient.read is a parquet read). The CLI needs click>=8.3, and Lakeflow
+          # installs each entry under a constraint that holds the runtime's click 8.2.1, so the
+          # entry fails the install. The land task's job environment below keeps it.
+      configuration:
+        wireless_coverage.catalog: ${var.catalog}
+        wireless_coverage.schema: ${var.schema}
+        wireless_coverage.volume: ${var.volume}
+        wireless_coverage.full_aoi: ${var.full_aoi}
+        wireless_coverage.simplify: ${var.simplify}
+        wireless_coverage.laz_dir: ${var.laz_dir}
+        wireless_coverage.water_mask_dir: ${var.water_mask_dir}
+        # (all other wireless_coverage.* keys use _config.py inline defaults)
+        # Keep the gold H3 per-tile fan-out (repartition(512, tx, ty)) effective so
+        # the Python raster->H3 UDTF processes one tile's band per task. Without the
+        # settings below, a full-SF run OOMs the UDTF worker:
+        #  - excludedRules drops InferFiltersFromGenerate. Otherwise the optimizer
+        #    pushes the expensive LATERAL-UDTF generate down into the SCAN task,
+        #    BEFORE the repartition -- so every tile's UDTF work piles into the scan
+        #    stage and the fan-out never isolates it. Excluding the rule runs the
+        #    UDTF AFTER the repartition (ref: Databricks ES-2236400).
+        #  - coalescePartitions off keeps AQE from merging the fanned-out shuffle
+        #    partitions back together (the silver surfaces are only a few hundred
+        #    rows of inlined multi-MB rasters, so AQE judges the shuffle tiny by row
+        #    count).
+        spark.sql.optimizer.excludedRules: "org.apache.spark.sql.catalyst.optimizer.InferFiltersFromGenerate"
+        spark.sql.adaptive.coalescePartitions.enabled: "false"
+        # Fail fast: cap retries so a failed flow/update does not silently burn
+        # repeated retry passes. numUpdateRetryAttempts caps whole-update retries;
+        # maxFlowRetryAttempts caps per-flow retries (the ones that otherwise show
+        # as a flow "failed more than N times").
+        pipelines.numUpdateRetryAttempts: "1"
+        pipelines.maxFlowRetryAttempts: "0"
+
+  jobs:
+    wireless_coverage_lf_job:
+      name: wireless_coverage_lf_job
+      tasks:
+        - task_key: land
+          spark_python_task:
+            python_file: ./land/land.py
+            parameters:
+              - "--catalog"
+              - ${var.catalog}
+              - "--schema"
+              - ${var.schema}
+              - "--volume"
+              - ${var.volume}
+              - "--full-aoi"
+              - ${var.full_aoi}
+              - "--laz-dir"
+              - ${var.laz_dir}
+              - "--water-mask-dir"
+              - ${var.water_mask_dir}
+          environment_key: wc_env
+        - task_key: pipeline
+          depends_on:
+            - task_key: land
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.wireless_coverage_lf_pipeline.id}
+        - task_key: siting
+          depends_on:
+            - task_key: pipeline
+          spark_python_task:
+            python_file: ./siting/siting.py
+            parameters:
+              - "--catalog"
+              - ${var.catalog}
+              - "--schema"
+              - ${var.schema}
+              - "--volume"
+              - ${var.volume}
+              - "--full-aoi"
+              - ${var.full_aoi}
+          environment_key: wc_env
+        - task_key: validate
+          depends_on:
+            - task_key: siting
+          notebook_task:
+            notebook_path: ./validate/validate_wc_lf.ipynb
+            # The notebook's catalog/schema widgets default to geospatial_docs; pass the
+            # bundle's own so an override that repoints the catalog validates its tables.
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          environment_key: wc_env
+      environments:
+        - environment_key: wc_env
+          spec:
+            # Serverless job tasks use Environment-language versioning: Env 6 is the
+            # family of DBR 19 and of the +env6 wheel. Keep the env version and the
+            # wheel in lockstep (Env 5 pairs with the +env5 wheel and the CURRENT channel):
+            # the other family's wheel refuses to import.
+            environment_version: "6"
+            dependencies:
+              # Single-pass wheel+extras install, same rationale as the pipeline
+              # environment above (avoids per-dep %pip resolver churn).
+              - ${var.gbx_wheel}[vizx,stac]
+              # The Overture CLI (the bbox fast path of the land task's water-mask download)
+              # is not an env wheel extra: a separate entry. It raises click and tqdm.
+              - overturemaps>=1.0.2,<2
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"
+        timezone_id: "America/Chicago"
+        pause_status: PAUSED
+
+targets:
+  # No `mode: development` on purpose: dev mode force-prefixes every resource with
+  # "[dev <user>]" and ignores an empty name_prefix override, which we don't want for
+  # a demo/showcase. Omitting mode deploys with clean, unprefixed resource names.
+  # The pipeline's catalog/schema are fully explicit via vars, so published tables
+  # are unaffected regardless of target.
+  dev:
+    default: true

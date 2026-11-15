@@ -38,10 +38,10 @@ except (ModuleNotFoundError, ImportError):
 def _light_setup_views(spark):
     """Register pyrx + create the four light-tier Setup views once per test, so
     single-tile examples can read `spark.table("rasters")` etc."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_light  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     create_setup_views_light(spark)
 
 
@@ -63,126 +63,133 @@ def _assert_materialized_tile(result, name):
 # ---------------------------------------------------------------------------
 
 
-def test_rst_asformat_python_light_example(spark):
+def test_rst_asformat_python_example(spark):
     """rst_asformat returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_asformat_python_light_example(spark)
+    result = tileops_examples.rst_asformat_python_example(spark)
     _assert_materialized_tile(result, "rst_asformat")
 
 
 def test_rst_buildoverviews_python_light_example(spark):
     """rst_buildoverviews returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_buildoverviews_python_light_example(spark)
+    result = tileops_examples.rst_buildoverviews_python_example(spark)
     _assert_materialized_tile(result, "rst_buildoverviews")
 
 
-def test_rst_clip_python_light_example(spark):
+def test_rst_clip_python_example(spark):
     """rst_clip returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_clip_python_light_example(spark)
+    result = tileops_examples.rst_clip_python_example(spark)
     _assert_materialized_tile(result, "rst_clip")
 
 
 def test_rst_cog_convert_python_light_example(spark):
     """rst_cog_convert returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_cog_convert_python_light_example(spark)
+    result = tileops_examples.rst_cog_convert_python_example(spark)
     _assert_materialized_tile(result, "rst_cog_convert")
 
 
-def test_rst_convolve_python_light_example(spark):
+def test_rst_convolve_python_example(spark):
     """rst_convolve with a 3x3 identity kernel returns a materialized tile."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_convolve_python_light_example(spark)
+    result = tileops_examples.rst_convolve_python_example(spark)
     _assert_materialized_tile(result, "rst_convolve")
 
 
-def test_rst_fillnodata_python_light_example(spark):
+def test_rst_fillnodata_python_example(spark):
     """rst_fillnodata returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_fillnodata_python_light_example(spark)
+    result = tileops_examples.rst_fillnodata_python_example(spark)
     _assert_materialized_tile(result, "rst_fillnodata")
 
 
-def test_rst_filter_python_light_example(spark):
+def test_rst_filter_python_example(spark):
     """rst_filter with a 3x3 median kernel returns a materialized tile."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_filter_python_light_example(spark)
+    result = tileops_examples.rst_filter_python_example(spark)
     _assert_materialized_tile(result, "rst_filter")
 
 
-def test_rst_initnodata_python_light_example(spark):
+def test_rst_percentile_stretch_python_example(spark):
+    """rst_percentile_stretch returns a materialized tile with populated raster bytes."""
+    assert tileops_examples is not None
+    result = tileops_examples.rst_percentile_stretch_python_example(spark)
+    _assert_materialized_tile(result, "rst_percentile_stretch")
+
+
+def test_rst_initnodata_python_example(spark):
     """rst_initnodata returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_initnodata_python_light_example(spark)
+    result = tileops_examples.rst_initnodata_python_example(spark)
     _assert_materialized_tile(result, "rst_initnodata")
 
 
-def test_rst_resample_python_light_example(spark):
+def test_rst_resample_python_example(spark):
     """rst_resample returns a materialized tile (2x upsampled)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_resample_python_light_example(spark)
+    result = tileops_examples.rst_resample_python_example(spark)
     _assert_materialized_tile(result, "rst_resample")
 
 
-def test_rst_resample_to_res_python_light_example(spark):
+def test_rst_resample_to_res_python_example(spark):
     """rst_resample_to_res returns a materialized tile (downsampled to 20m)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_resample_to_res_python_light_example(spark)
+    result = tileops_examples.rst_resample_to_res_python_example(spark)
     _assert_materialized_tile(result, "rst_resample_to_res")
 
 
-def test_rst_resample_to_size_python_light_example(spark):
+def test_rst_resample_to_size_python_example(spark):
     """rst_resample_to_size returns a materialized tile (forced to 100x100)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_resample_to_size_python_light_example(spark)
+    result = tileops_examples.rst_resample_to_size_python_example(spark)
     _assert_materialized_tile(result, "rst_resample_to_size")
 
 
-def test_rst_setcrs_python_light_example(spark):
+def test_rst_setcrs_python_example(spark):
     """rst_setcrs stamps EPSG:32618 onto the tile without reprojecting."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_setcrs_python_light_example(spark)
+    result = tileops_examples.rst_setcrs_python_example(spark)
     assert (
         isinstance(result, str) and "32618" in result
     ), f"Expected CRS containing '32618', got {result!r}"
 
 
-def test_rst_setsrid_python_light_example(spark):
+def test_rst_setsrid_python_example(spark):
     """rst_setsrid returns a materialized tile with updated SRID."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_setsrid_python_light_example(spark)
+    result = tileops_examples.rst_setsrid_python_example(spark)
     _assert_materialized_tile(result, "rst_setsrid")
 
 
-def test_rst_threshold_python_light_example(spark):
-    """rst_threshold returns a materialized tile (binary mask)."""
+def test_rst_threshold_python_example(spark):
+    """rst_threshold returns a materialized tile (the passing pixels, others NoData)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_threshold_python_light_example(spark)
+    result = tileops_examples.rst_threshold_python_example(spark)
     _assert_materialized_tile(result, "rst_threshold")
 
 
-def test_rst_transform_python_light_example(spark):
+def test_rst_transform_python_example(spark):
     """rst_transform returns a materialized tile (reprojected to EPSG:4326)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_transform_python_light_example(spark)
+    result = tileops_examples.rst_transform_python_example(spark)
     _assert_materialized_tile(result, "rst_transform")
 
 
-def test_rst_transformcrs_python_light_example(spark):
+def test_rst_transformcrs_python_example(spark):
     """rst_transformcrs('EPSG:3857') reprojects the tile to Web Mercator."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_transformcrs_python_light_example(spark)
+    result = tileops_examples.rst_transformcrs_python_example(spark)
     assert (
         isinstance(result, str) and "3857" in result
     ), f"Expected CRS containing '3857', got {result!r}"
 
 
-def test_rst_updatetype_python_light_example(spark):
+def test_rst_updatetype_python_example(spark):
     """rst_updatetype returns a materialized tile (type-converted to Float32)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_updatetype_python_light_example(spark)
+    result = tileops_examples.rst_updatetype_python_example(spark)
     _assert_materialized_tile(result, "rst_updatetype")
 
 
@@ -191,10 +198,10 @@ def test_rst_updatetype_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_rst_band_python_light_example(spark):
+def test_rst_band_python_example(spark):
     """rst_band returns a materialized tile (single band extracted from multiband fixture)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_band_python_light_example(spark)
+    result = tileops_examples.rst_band_python_example(spark)
     _assert_materialized_tile(result, "rst_band")
 
 
@@ -206,21 +213,21 @@ def test_rst_band_python_light_example(spark):
 def test_rst_fromcontent_python_light_example(spark):
     """rst_fromcontent builds a GTiff tile from binary content via binaryFile reader."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_fromcontent_python_light_example(spark)
+    result = tileops_examples.rst_fromcontent_python_example(spark)
     assert result == "GTiff", f"Expected 'GTiff', got {result!r}"
 
 
 def test_rst_frombands_python_light_example(spark):
     """rst_frombands returns a materialized tile (3 per-band tiles stacked into a 3-band tile)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_frombands_python_light_example(spark)
+    result = tileops_examples.rst_frombands_python_example(spark)
     _assert_materialized_tile(result, "rst_frombands")
 
 
 def test_rst_fromfile_python_light_example(spark):
     """rst_fromfile defaults to a VIRTUAL v2 tile: raster null, path + window set."""
     assert tileops_examples is not None
-    tile = tileops_examples.rst_fromfile_python_light_example(spark)
+    tile = tileops_examples.rst_fromfile_python_example(spark)
     assert tile is not None, "rst_fromfile returned null for a readable path"
     assert tile["raster"] is None, "virtual tile must have raster=None (bytes-free)"
     assert tile["path"] is not None, "virtual tile must carry the source path"
@@ -230,31 +237,31 @@ def test_rst_fromfile_python_light_example(spark):
 def test_rst_binpoints_python_light_example(spark):
     """rst_binpoints returns a materialized Float32 tile from inline point arrays."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_binpoints_python_light_example(spark)
+    result = tileops_examples.rst_binpoints_python_example(spark)
     _assert_materialized_tile(result, "rst_binpoints")
 
 
-def test_rst_align_to_python_light_example(spark):
+def test_rst_align_to_python_example(spark):
     """rst_align_to returns a materialized tile warped to the reference grid."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_align_to_python_light_example(spark)
+    result = tileops_examples.rst_align_to_python_example(spark)
     _assert_materialized_tile(result, "rst_align_to")
 
 
-def test_rst_chm_python_light_example(spark):
+def test_rst_chm_python_example(spark):
     """rst_chm returns a materialized Float32 CHM tile (same-tile input yields all-zero CHM)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_chm_python_light_example(spark)
+    result = tileops_examples.rst_chm_python_example(spark)
     _assert_materialized_tile(result, "rst_chm")
 
 
 def test_rst_isoband_python_light_example(spark):
     """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
     assert tileops_examples is not None
-    patches = tileops_examples.rst_isoband_python_light_example(spark)
+    patches = tileops_examples.rst_isoband_python_example(spark)
     assert isinstance(patches, list), "rst_isoband must return a list of patches"
     assert len(patches) > 0, "rst_isoband must return at least one patch for a DEM with real elevation"
     patch = patches[0]
     assert patch["geom_wkb"] is not None, "patch geom_wkb must be non-null"
     assert patch["band"] is not None, "patch band must be non-null"
-    assert hasattr(tileops_examples, "rst_isoband_python_light_example_output")
+    assert hasattr(tileops_examples, "rst_isoband_python_example_output")

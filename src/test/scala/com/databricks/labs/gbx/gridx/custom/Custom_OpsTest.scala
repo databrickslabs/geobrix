@@ -94,4 +94,29 @@ class Custom_OpsTest extends PlanTest with SilentSparkSession {
         coord.y shouldBe 5.0 +- 1e-9
     }
 
+    // ------------------------------------------------------------------
+    // a cell id given as INT (a SQL literal such as 45) is the same cell as its BIGINT
+    // ------------------------------------------------------------------
+    test("the custom cell functions take a cell id given as INT, as light does") {
+        val gridLit = Literal.create(buildGridRow(), Custom_GridSpec.gridStructType)
+        val cell    = Custom_PointAsCell(
+            Literal.create(JTS.toWKB(JTS.point(55.0, 45.0)), BinaryType), gridLit, Literal(0, IntegerType)
+        ).eval(InternalRow.empty).asInstanceOf[Long]
+        cell.isValidInt shouldBe true
+        val asInt  = Literal(cell.toInt, IntegerType)
+        val asLong = Literal(cell, LongType)
+        val k      = Literal(1, IntegerType)
+        def ring(e: org.apache.spark.sql.catalyst.expressions.Expression) =
+            e.eval(InternalRow.empty).asInstanceOf[org.apache.spark.sql.catalyst.util.ArrayData].toLongArray().toSeq
+        ring(Custom_KRing(asInt, gridLit, k)) shouldBe ring(Custom_KRing(asLong, gridLit, k))
+        ring(Custom_KRing(asInt, gridLit, k)) should have size 9
+        ring(Custom_KLoop(asInt, gridLit, k)) shouldBe ring(Custom_KLoop(asLong, gridLit, k))
+        Custom_AsWKT(asInt, gridLit).eval(InternalRow.empty) shouldBe Custom_AsWKT(asLong, gridLit).eval(InternalRow.empty)
+        Custom_AsWKB(asInt, gridLit).eval(InternalRow.empty).asInstanceOf[Array[Byte]] shouldBe
+            Custom_AsWKB(asLong, gridLit).eval(InternalRow.empty).asInstanceOf[Array[Byte]]
+        Custom_Centroid(asInt, gridLit).eval(InternalRow.empty).asInstanceOf[Array[Byte]] shouldBe
+            Custom_Centroid(asLong, gridLit).eval(InternalRow.empty).asInstanceOf[Array[Byte]]
+        Custom_Distance(asInt, gridLit, asLong).eval(InternalRow.empty) shouldBe 0L
+    }
+
 }

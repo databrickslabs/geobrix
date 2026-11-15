@@ -28,6 +28,7 @@ import pytest
 import rasterio
 
 from databricks.labs.gbx.bench import grouped_file as gf
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 
 @pytest.fixture(scope="module")
@@ -96,14 +97,12 @@ def test_three_modes_run_and_produce_rows(spark, corpus):
 
 def _clip_outputs_by_cellid(spark, corpus, mode):
     """Apply rst_clip_grouped in `mode`; return {cellid: decoded pixels}."""
-    from databricks.labs.gbx.pyrx import functions as prx
-
     manifest_rows = gf.read_manifest_rows(corpus)
     geom_wkb, geom_crs = gf._clip_geom_from_source(manifest_rows[0]["path"])
     prior = gf._set_file_env(mode)
     try:
         df = gf.build_tile_df(spark, manifest_rows, mode=mode)
-        out = prx.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
+        out = rx_helpers.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
         collected = out.collect()
     finally:
         gf._restore_file_env(prior)
@@ -164,7 +163,7 @@ def _core_sum(ds, cellid):  # noqa: ARG001 - cellid unused, contract arg
     return (int(ds.count), int(ds.width), int(ds.height), float(np.nan_to_num(a).sum()))
 
 
-def test_lru_amortizes_source_opens(corpus, monkeypatch):
+def test_lru_amortizes_source_opens(corpus, monkeypatch, request):
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
     from databricks.labs.gbx.pyrx.grouped_exec import (
         OpenResourceLRU,
@@ -212,24 +211,17 @@ def test_lru_amortizes_source_opens(corpus, monkeypatch):
     assert lru.opens < n_windows
 
     # --- FILE-off: per-tile fallback opens the source path each time ---
-    real_open = rasterio.open
-    counter = {"n": 0}
-
-    def _spy(fp, *a, **k):
-        if isinstance(fp, str) and fp in src_paths:
-            counter["n"] += 1
-        return real_open(fp, *a, **k)
-
-    monkeypatch.setattr(rasterio, "open", _spy)
+    opened = request.getfixturevalue("named_raster_reads")
     fb_results = [
         _run_fallback_tile(_tile(i, r), i, "pixels", _core_sum)
         for i, r in enumerate(rows)
     ]
     monkeypatch.undo()
+    source_opens = sum(1 for p in opened if p in src_paths)
 
     # FILE-off opens the source once per window -> 16 opens (no amortization).
-    assert counter["n"] == n_windows
-    assert lru.opens < counter["n"]  # FILE-on strictly fewer source opens
+    assert source_opens == n_windows
+    assert lru.opens < source_opens  # FILE-on strictly fewer source opens
 
     # Correctness: the amortized fast path yields the same pixels as the
     # per-tile fallback for every window.

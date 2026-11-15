@@ -1,6 +1,6 @@
-"""Task 3 (SDD — Phase A native mini-COG mosaic): VRT index write via commit().
+"""VRT index write via commit().
 
-Tests the mosaic-mode VRT write path in CogGbxWriter.commit() added in Task 3.
+Tests the mosaic-mode VRT write path in CogGbxWriter.commit().
 Pure Python (no Spark, no JAR).
 
 Coverage:
@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import os
 import xml.etree.ElementTree as ET
+from test._volume_safe import open_raster
 from typing import List, Tuple
 
 import numpy as np
+import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
@@ -75,7 +77,7 @@ def _write_src(
             [data[0] + np.iinfo(dtype).max // count * b for b in range(count)]
         )
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -96,7 +98,7 @@ def _write_src_with_nodata_patch(
     data = np.ones((1, h, w), dtype="float32") * 99.0
     data[0, 100:, 100:] = nodata
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -370,6 +372,26 @@ def test_vrt_multiband_source(tmp_path):
         ), "must be ComplexSource, not SimpleSource"
 
 
+def test_a_tile_with_fewer_bands_than_the_first_is_refused_naming_the_counts(tmp_path):
+    """The mosaic has the first tile's bands and every tile is a source of each, so a tile with
+    fewer bands used to fail on a band index (IndexError) while the VRT was built. (A tile with
+    more is allowed: its extra bands feed the mask band, see the own-mask rows.)"""
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    out = tmp_path / "out"
+    out.mkdir()
+    first, second = out / "first.tif", out / "second.tif"
+    _write_src(str(first), w=100, h=60, count=3)
+    _write_src(str(second), w=100, h=60, count=1)
+    with open_raster(second, "r+") as ds:  # next to the first, not on top of it
+        ds.transform = from_origin(401000.0, 5000000.0, 10.0, 10.0)
+    with pytest.raises(ValueError, match=r"Fix: ") as err:
+        _build_mosaic_vrt([str(first), str(second)], str(out))
+    msg = str(err.value)
+    assert "3 bands of first.tif" in msg and "second.tif: 1" in msg
+    assert not (out / "mosaic.vrt").exists()
+
+
 def test_vrt_multiband_nodata_on_every_band(tmp_path):
     """A multi-band source carrying nodata writes NoDataValue on EVERY VRT band.
 
@@ -401,7 +423,7 @@ def test_vrt_multiband_nodata_on_every_band(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: quadbin mosaic VRT (EPSG:3857)
+# Quadbin mosaic VRT (EPSG:3857)
 # ---------------------------------------------------------------------------
 # These tests mirror the Phase-A VRT tests but drive the quadbin path:
 # gridSystem='quadbin', gridResolution=12.  Source raster is in EPSG:32630
@@ -426,7 +448,7 @@ def _write_qb_src(path: str) -> None:
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -452,7 +474,7 @@ def _run_quadbin_mosaic(src_path: str, out_dir: str, **extra_opts) -> CogCommitM
 
 
 # ---------------------------------------------------------------------------
-# T4-1. VRT exists after a quadbin write+commit
+# VRT exists after a quadbin write+commit
 # ---------------------------------------------------------------------------
 
 
@@ -465,7 +487,7 @@ def test_quadbin_vrt_file_created(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-2. VRT references exactly the written quadbin members
+# VRT references exactly the written quadbin members
 # ---------------------------------------------------------------------------
 
 
@@ -491,7 +513,7 @@ def test_quadbin_vrt_references_written_members(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-3. VRT opens with CRS EPSG:3857
+# VRT opens with CRS EPSG:3857
 # ---------------------------------------------------------------------------
 
 
@@ -509,7 +531,7 @@ def test_quadbin_vrt_crs_is_3857(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-4. Windowed read from quadbin VRT is non-trivial (members loaded)
+# Windowed read from quadbin VRT is non-trivial (members loaded)
 # ---------------------------------------------------------------------------
 
 
@@ -544,7 +566,7 @@ def test_quadbin_vrt_windowed_read_returns_data(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-5. write_vrt=False → no VRT produced for quadbin path either
+# write_vrt=False → no VRT produced for quadbin path either
 # ---------------------------------------------------------------------------
 
 

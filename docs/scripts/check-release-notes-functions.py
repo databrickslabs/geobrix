@@ -7,11 +7,14 @@ Reads:
                      If unset or empty, prints a notice and exits 0 (nothing to check).
 
 Algorithm:
-  1. ``git diff QC_RANGE -- docs/tests-function-info/registered_functions.txt``
-     Collect lines matching ``^+gbx_[a-z0-9_]+`` (added registered functions;
-     the ``+++`` file-header line is excluded by the regex).
+  1. The added names: the registered names at the range's end (the rows of the function manifest,
+     ``manifest/functions.json``) minus the names at the range's base (the same file, read with
+     ``git show <rev>:<path>``).
+     The end is HEAD when the range has none; the base of ``a...b`` is the merge-base of a and b.
   2. For each added name, check whether it appears (substring) anywhere in
-     ``docs/docs/release-notes.mdx``.  Also accept the bare name (strip
+     ``docs/docs/release-notes.mdx``, the pages under ``docs/docs/release-notes/`` (the 0.6.0
+     New, Changes and Breaking pages) or ``docs/docs/release-notes-0-5-and-earlier.mdx`` (the
+     release notes are split across the summary page and the series subpages).  Also accept the bare name (strip
      leading ``gbx_``) as a match -- some bullets reference the bare form.
      A match on either counts.
   3. Exit 1 listing every added function NOT mentioned in the release notes.
@@ -24,6 +27,7 @@ Graceful degradation:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -31,37 +35,104 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
+MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
+# A revision before the 0.6 manifest lists its functions here instead (the old JAR registry).
+FUNCTION_INFO_JSON = REPO_ROOT / "src/main/resources/com/databricks/labs/gbx/function-info.json"
 RELEASE_NOTES = REPO_ROOT / "docs/docs/release-notes.mdx"
+# The release notes are split across the summary page and the series subpages; a function
+# mentioned on any of them counts.
+RELEASE_NOTES_PAGES = [
+    RELEASE_NOTES,
+    *sorted((REPO_ROOT / "docs/docs/release-notes").rglob("*.mdx")),
+    REPO_ROOT / "docs/docs/release-notes-0-5-and-earlier.mdx",
+]
 
-# Matches a newly added registered-function line: ``+gbx_foo_bar``
-# The ``+++`` diff file-header lines are excluded because they contain a path,
-# not a bare function name -- they will never match ``^[+]gbx_[a-z0-9_]+$``.
-ADDED_LINE_RE = re.compile(r"^\+(?P<name>gbx_[a-z0-9_]+)\s*$", re.MULTILINE)
-
-
-def added_functions(qc_range: str) -> list[str] | None:
-    """Return names added to registered_functions.txt in ``qc_range``.
-
-    Returns None on git error (caller should treat as advisory skip).
-    """
+def _show(rev: str, path: Path) -> str | None:
+    """``path`` at ``rev`` ("" when the file did not exist there); None on any other git error."""
+    rel = str(path.relative_to(REPO_ROOT))
     result = subprocess.run(
-        ["git", "diff", qc_range, "--", str(REGISTERED_TXT.relative_to(REPO_ROOT))],
+        ["git", "show", f"{rev}:{rel}"], capture_output=True, text=True, cwd=str(REPO_ROOT)
+    )
+    if result.returncode == 0:
+        return result.stdout
+    exists = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
     )
-    if result.returncode != 0:
-        print(
-            f"git diff failed (exit {result.returncode}); treating as advisory skip.",
-            file=sys.stderr,
-        )
-        if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
+    if exists.returncode == 0:
+        return ""  # the revision exists; the file did not exist there
+    print(f"git show {rev}:{rel} failed; treating as advisory skip.", file=sys.stderr)
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return None
+
+
+def _function_info_names(rev: str) -> set[str] | None:
+    """The function names of ``function-info.json`` at ``rev`` (its keys, minus ``_package_*`` dividers)."""
+    info = _show(rev, FUNCTION_INFO_JSON)
+    if info is None:
+        return None
+    if not info.strip():
+        return set()
+    try:
+        return {k for k in json.loads(info).get("functions", {}) if not k.startswith("_")}
+    except (ValueError, TypeError, AttributeError):
+        print(f"function-info.json at {rev} is not readable; treating as advisory skip.", file=sys.stderr)
         return None
 
-    names = ADDED_LINE_RE.findall(result.stdout)
+
+def names_at(rev: str) -> set[str] | None:
+    """The registered names at ``rev``: the manifest's rows. A revision before the manifest (0.5.x, main
+    before 0.6) has its functions in ``function-info.json`` instead, so a function that shipped then is not
+    counted as added."""
+    manifest = _show(rev, MANIFEST_JSON)
+    if manifest is None:
+        return None
+    if not manifest.strip():
+        return _function_info_names(rev)
+    names: set[str] = set()
+    if manifest.strip():
+        try:
+            rows = json.loads(manifest).get("functions", [])
+            names |= {r["sql_name"] for r in rows}
+        except (ValueError, KeyError, TypeError, AttributeError):
+            print(f"the manifest at {rev} is not readable; treating as advisory skip.", file=sys.stderr)
+            return None
     return names
+
+
+def range_ends(qc_range: str) -> tuple[str, str] | None:
+    """(base, end) revisions of ``a..b`` (base a) or ``a...b`` (base the merge-base of a and b); the end is
+    HEAD when empty. None when git cannot find the merge-base."""
+    sep = re.search(r"\.{2,3}", qc_range)
+    three = bool(sep) and len(sep.group()) == 3
+    left, right = (qc_range[: sep.start()], qc_range[sep.end() :]) if sep else (qc_range, "")
+    left, right = left.strip() or "HEAD", right.strip() or "HEAD"
+    if not three:
+        return left, right
+    result = subprocess.run(
+        ["git", "merge-base", left, right], capture_output=True, text=True, cwd=str(REPO_ROOT)
+    )
+    if result.returncode != 0:
+        print(f"git merge-base {left} {right} failed; treating as advisory skip.", file=sys.stderr)
+        return None
+    return result.stdout.strip(), right
+
+
+def added_functions(qc_range: str) -> list[str] | None:
+    """Return the names registered at the end of ``qc_range`` that were not registered at its base.
+
+    Returns None on git error (caller should treat as advisory skip).
+    """
+    ends = range_ends(qc_range)
+    if ends is None:
+        return None
+    before, after = names_at(ends[0]), names_at(ends[1])
+    if before is None or after is None:
+        return None
+    return sorted(after - before)
 
 
 def mentioned_in_release_notes(name: str, notes_text: str) -> bool:
@@ -108,8 +179,8 @@ def main() -> int:
 
     print(f"Range: {qc_range}")
 
-    if not REGISTERED_TXT.exists():
-        print(f"registered_functions.txt not found at {REGISTERED_TXT}; skipping.", file=sys.stderr)
+    if not MANIFEST_JSON.exists():
+        print(f"The function manifest not found at {MANIFEST_JSON}; skipping.", file=sys.stderr)
         return 0
 
     if not RELEASE_NOTES.exists():
@@ -122,13 +193,15 @@ def main() -> int:
         return 0
 
     if not added:
-        print("No functions added to registered_functions.txt in this range.")
+        print("No functions registered in this range.")
         print("release-notes-functions: PASS")
         return 0
 
     print(f"Added functions detected ({len(added)}): {', '.join(added)}")
 
-    notes_text = RELEASE_NOTES.read_text(encoding="utf-8")
+    notes_text = "\n".join(
+        page.read_text(encoding="utf-8") for page in RELEASE_NOTES_PAGES if page.exists()
+    )
     unmentioned = [n for n in added if not mentioned_in_release_notes(n, notes_text)]
 
     if unmentioned:

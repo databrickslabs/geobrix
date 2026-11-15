@@ -10,11 +10,17 @@ gx.register(spark), then use on columns. Serverless-safe: spark.udf.register
 plus Column expressions only — no _jvm / spark.conf / RDD access.
 """
 
-from typing import List, Optional, Union
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
+import math
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udf, udtf
 from pyspark.sql.types import (
@@ -24,16 +30,21 @@ from pyspark.sql.types import (
     IntegerType,
     LongType,
     StringType,
+    StructField,
+    StructType,
 )
 
-from databricks.labs.gbx import _register
-
-from . import _bng, _cellfill, _custom, _env
+from . import _bng, _cellfill, _custom
 from . import _h3 as _h3mod
 from . import _quadbin
-from ._dilate import MODES as _MODES
 from ._geom import parse_geom
-from ._serde import BNG_CHIP_SCHEMA, CUSTOM_GRID_SCHEMA, QUADBIN_CELL_SCHEMA
+from ._params import (  # noqa: F401 - re-exported: the grid explodes and the accelerators read them here
+    _dilate_check_mode,
+    _norm_res,
+    _parse_finite,
+    _whole_res,
+)
+from ._serde import BNG_CHIP_SCHEMA, CUSTOM_GRID_SCHEMA
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -42,6 +53,21 @@ def _col(x: ColLike) -> Union[Column, str]:
     if isinstance(x, Column) or isinstance(x, str):
         return x
     return f.lit(x)
+
+
+def _check_exact_ids(cell: pd.Series, fn: str) -> None:
+    """Raise when a BIGINT id column reached a grouped aggregate as float64 and holds an id past 2**53.
+
+    A NULL in a BIGINT column makes pandas hand the batch over as float64, which rounds every id past 2**53
+    (all quadbin, custom and H3 ids) to the nearest float: a different cell, with no error. An aggregate
+    cannot read the exact ints (a row UDF can, see `_resolution_udf`), so it refuses the batch instead.
+    """
+    if pd.api.types.is_float_dtype(cell) and (cell.dropna().abs() > 2**53).any():
+        raise ValueError(
+            f"{fn}: the cell id column holds a NULL, so its ids arrived as float64 and ids above 2**53 "
+            "would be rounded to a different cell. Fix: filter the NULL cells out first "
+            "(WHERE cellid IS NOT NULL)."
+        )
 
 
 # --- impl rule: scalar-output -> pandas_udf ; array-output -> plain @udf --------------------
@@ -61,38 +87,37 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     lons = lon.to_numpy(dtype=np.float64)
     lats = lat.to_numpy(dtype=np.float64)
     ress = res.to_numpy()
-    out = np.empty(len(lons), dtype=np.int64)
+    # a NULL arrives as NaN (or None) in a batch: a NULL resolution, longitude or latitude
+    # gives a NULL cell, and so does a coordinate that is not finite (it used to come out as a made-up cell)
+    null = pd.isna(ress) | ~np.isfinite(lons) | ~np.isfinite(lats)
+    out = np.zeros(len(lons), dtype=np.int64)
     # point_as_cell_vec needs a fixed z per call; group rows by their resolution
     # (typically a single literal => one pass). Bit-identical to the scalar path.
-    for z in np.unique(ress):
-        mask = ress == z
-        out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], int(z))
-    return pd.Series(out)
+    for z in np.unique(ress[~null]):
+        mask = ~null & (ress == z)
+        z = _whole_res("gbx_quadbin_pointascell", _res_or_null(z))  # 3.0, '3' -> 3
+        out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], z)
+    cells = pd.Series(out, dtype="Int64")
+    cells[null] = pd.NA
+    return cells
 
 
-@pandas_udf(IntegerType())
-def _resolution_udf(cell: pd.Series) -> pd.Series:
-    cells = cell.to_numpy(dtype=np.int64)
-    return pd.Series(_quadbin.resolution_vec(cells).astype(np.int32))
+# A BIGINT cell id is read by a plain row UDF, not a pandas_udf (nor an Arrow-optimized UDF, which Spark 4.0
+# builds on pandas too): pandas hands a BIGINT column that holds a NULL over as float64, and an id past 2**53
+# (quadbin ~5.2e18, custom ~7.2e16, H3 ~6e17) is then rounded to the nearest float, a different cell with no
+# error. A row UDF gets the exact int or None.
 
 
-@pandas_udf(IntegerType())
-def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
-    # Same-resolution-or-error; Chebyshev on cell_to_tile coords. Looped per
-    # element (cell_to_tile is scalar in the lib); batched Arrow transfer is the win.
-    # NULL input -> NULL (matches heavy NULL propagation).  ValueError from
-    # mismatched-resolution pair still propagates unchanged.
-    return pd.Series(
-        [
-            (
-                int(_quadbin.distance(int(x), int(y)))
-                if (x is not None and y is not None)
-                else None
-            )
-            for x, y in zip(a, b)
-        ],
-        dtype="object",
-    ).astype("Int32")
+@udf(IntegerType())
+def _resolution_udf(cell):
+    return None if cell is None else int(_quadbin.resolution(cell))
+
+
+@udf(IntegerType())
+def _distance_udf(a, b):
+    # Same-resolution-or-error; Chebyshev on cell_to_tile coords. NULL input -> NULL (matches heavy NULL
+    # propagation). ValueError from a mismatched-resolution pair propagates unchanged.
+    return None if a is None or b is None else int(_quadbin.distance(a, b))
 
 
 # --- single-geometry UDFs (pandas_udf, bounded scalar output) --------------------------------
@@ -101,16 +126,14 @@ def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
 # _quadbin oracle (the win is the batched Arrow transfer). NULL preserved per row.
 
 
-@pandas_udf(BinaryType())
-def _aswkb_udf(cell: pd.Series) -> pd.Series:
-    return pd.Series([_quadbin.as_wkb(int(c)) if c is not None else None for c in cell])
+@udf(BinaryType())
+def _aswkb_udf(cell):
+    return None if cell is None else _quadbin.as_wkb(cell)
 
 
-@pandas_udf(BinaryType())
-def _centroid_udf(cell: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_quadbin.centroid(int(c)) if c is not None else None for c in cell]
-    )
+@udf(BinaryType())
+def _centroid_udf(cell):
+    return None if cell is None else _quadbin.centroid(cell)
 
 
 @pandas_udf(BinaryType())
@@ -137,9 +160,13 @@ def _quadbin_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_quadbin_geomkring", res)
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a geometry that is not finite has no cells
     try:
         return _quadbin.geometry_k_ring(
-            geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
+            geom, res, int(k), mode or "boundary-out", coverage or "coveras"
         )
     except ValueError:
         raise  # re-raise param errors (bad mode propagated from engine)
@@ -151,9 +178,13 @@ def _quadbin_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_quadbin_geomkloop", res)
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a geometry that is not finite has no cells
     try:
         return _quadbin.geometry_k_loop(
-            geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
+            geom, res, int(k), mode or "boundary-out", coverage or "coveras"
         )
     except ValueError:
         raise  # re-raise param errors
@@ -166,36 +197,20 @@ def _quadbin_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
 
 @udtf(returnType="cellid: bigint")
 class _QuadbinGeomKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _quadbin.geometry_k_ring(
-                geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _quadbin_geomkring(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: bigint")
 class _QuadbinGeomKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _quadbin.geometry_k_loop(
-                geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _quadbin_geomkloop(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 def _kring(cell, k):
@@ -205,17 +220,29 @@ def _kring(cell, k):
 
 
 def _polyfill(geom, res):
-    if geom is None:
+    if geom is None or res is None:
         return None
-    return _quadbin.polyfill(geom, int(res))
+    z = _whole_res("gbx_quadbin_polyfill", res)
+    try:
+        return _quadbin.polyfill(geom, z)
+    except ValueError:
+        raise  # a resolution or cell-count PARAMETER error
+    except Exception:
+        return None  # unreadable geometry DATA -> NULL (matches BNG)
 
 
 def _tessellate(geom, res):
-    if geom is None:
+    if geom is None or res is None:
         return None
-    return [
-        {"cell": int(c), "geom": gm} for (c, gm) in _quadbin.tessellate(geom, int(res))
-    ]
+    z = _whole_res("gbx_quadbin_tessellate", res)
+    try:
+        return [
+            {"cell": int(c), "geom": gm} for (c, gm) in _quadbin.tessellate(geom, z)
+        ]
+    except ValueError:
+        raise
+    except Exception:
+        return None
 
 
 # --- grouped-aggregate pandas UDF -----------------------------------------------------------
@@ -225,7 +252,8 @@ def _tessellate(geom, res):
 
 @pandas_udf(BinaryType())
 def _cellunion_agg_udf(cell: pd.Series) -> Optional[bytes]:
-    return _quadbin.cell_union([int(c) for c in cell if c is not None])
+    _check_exact_ids(cell, "gbx_quadbin_cellunion_agg")
+    return _quadbin.cell_union([int(c) for c in cell if not pd.isna(c)])
 
 
 # ============================================================================
@@ -250,6 +278,7 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
     # the EPSG:27700 easting/northing (heavy BNG_PointAsCell semantics).
     out = []
     for g, r in zip(geom, res):
+        r = _res_or_null(r)  # a NULL resolution arrives as NaN in a batch
         if g is None or r is None:
             out.append(None)
             continue
@@ -258,7 +287,12 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
             out.append(None)
             continue
         c = pg.centroid
-        out.append(_bng.point_as_cell(c.x, c.y, _norm_res(r)))
+        # A centroid that is not a finite point (inf, NaN) is a data error: NULL, as for an
+        # empty geometry, before _bng.point_to_cell_id (which raises for it) is reached
+        if not (math.isfinite(c.x) and math.isfinite(c.y)):
+            out.append(None)
+            continue
+        out.append(_bng.point_as_cell(c.x, c.y, r))
     return pd.Series(out)
 
 
@@ -267,10 +301,17 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
     # eastnorthasbng takes SCALAR EPSG:27700 eastings/northings (not a geometry).
     out = []
     for ee, nn, r in zip(e, n, res):
-        if ee is None or nn is None or r is None:
+        # A NULL DOUBLE (or INT) arrives in pandas as NaN: NULL in, NULL out.
+        r = _res_or_null(r)
+        if pd.isna(ee) or pd.isna(nn) or r is None:
             out.append(None)
             continue
-        out.append(_bng.point_as_cell(float(ee), float(nn), _norm_res(r)))
+        ee, nn = float(ee), float(nn)
+        # An infinity is NULL like NaN, before the resolution is checked
+        if not (math.isfinite(ee) and math.isfinite(nn)):
+            out.append(None)
+            continue
+        out.append(_bng.point_as_cell(ee, nn, r))
     return pd.Series(out)
 
 
@@ -358,7 +399,8 @@ def _chip_tuple(struct_row):
     geom)``), matching the heavy reader's by-position/type field detection.
     """
     cellid, core, raw = struct_row[0], struct_row[1], struct_row[2]
-    chip = parse_geom(raw) if raw is not None else None
+    # NULL bytes are an empty geometry (an empty intersection leaves a chip with no bytes)
+    chip = parse_geom(raw) if raw is not None else _bng._empty_polygon()
     return (cellid, bool(core), chip)
 
 
@@ -384,7 +426,7 @@ def _chip_records(struct_col):
     """
     if isinstance(struct_col, pd.DataFrame):
         return [tuple(rec) for rec in struct_col.itertuples(index=False, name=None)]
-    return [_to_positional(rec) for rec in struct_col]
+    return [None if rec is None else _to_positional(rec) for rec in struct_col]
 
 
 def _chip_to_row(result):
@@ -397,22 +439,24 @@ def _chip_to_row(result):
     return {"cellid": cellid, "core": bool(core), "chip": chip_wkb}
 
 
-@pandas_udf(BNG_CHIP_SCHEMA)
-def _bng_cellunion_udf(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    rows = [
-        _chip_to_row(_bng.cell_union(_chip_tuple(lt), _chip_tuple(rt)))
-        for lt, rt in zip(_chip_records(left), _chip_records(right))
-    ]
-    return pd.DataFrame(rows, columns=["cellid", "core", "chip"])
+def _bng_cellunion(left, right):
+    """Row-wise (a NULL chip is a NULL result, which a struct-returning pandas UDF cannot give)."""
+    if left is None or right is None:
+        return None
+    return _chip_to_row(_bng.cell_union(_chip_tuple(left), _chip_tuple(right)))
 
 
-@pandas_udf(BNG_CHIP_SCHEMA)
-def _bng_cellintersection_udf(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    rows = [
-        _chip_to_row(_bng.cell_intersection(_chip_tuple(lt), _chip_tuple(rt)))
-        for lt, rt in zip(_chip_records(left), _chip_records(right))
-    ]
-    return pd.DataFrame(rows, columns=["cellid", "core", "chip"])
+def _bng_cellintersection(left, right):
+    """Row-wise, as :func:`_bng_cellunion`."""
+    if left is None or right is None:
+        return None
+    return _chip_to_row(_bng.cell_intersection(_chip_tuple(left), _chip_tuple(right)))
+
+
+# Arrow-optimized row UDFs: the batches cross as Arrow (not pickled rows) and a NULL chip is a NULL result,
+# which a struct-returning pandas_udf cannot give.
+_bng_cellunion_udf = udf(_bng_cellunion, BNG_CHIP_SCHEMA, useArrow=True)
+_bng_cellintersection_udf = udf(_bng_cellintersection, BNG_CHIP_SCHEMA, useArrow=True)
 
 
 # --- array-output -> plain @udf (row-by-row, scale-safe) --------------------
@@ -424,7 +468,7 @@ def _bng_kring(cellid, k):
     cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
     if cid is None:
         return None
-    return [_bng.format(c) for c in _bng.k_ring(cid, int(k))]
+    return _bng.k_ring_strs(cid, int(k))
 
 
 def _bng_kloop(cellid, k):
@@ -433,7 +477,7 @@ def _bng_kloop(cellid, k):
     cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
     if cid is None:
         return None
-    return [_bng.format(c) for c in _bng.k_loop(cid, int(k))]
+    return _bng.k_loop_strs(cid, int(k))
 
 
 def _bng_polyfill(geom, res):
@@ -452,6 +496,9 @@ def _bng_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     k_int = int(k)  # bad k PARAMETER -> raises
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a non-finite coordinate has no cell: NULL, as for every point-taking BNG function
     try:
         return sorted(
             _bng.geometry_k_ring_str(
@@ -474,6 +521,9 @@ def _bng_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     k_int = int(k)  # bad k PARAMETER -> raises
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a non-finite coordinate has no cell: NULL, as for every point-taking BNG function
     try:
         return sorted(
             _bng.geometry_k_loop_str(
@@ -490,11 +540,11 @@ def _bng_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _bng_tessellate(geom, res, keep_core_geom=True):
+def _bng_tessellate(geom, res, keep_core_geom=False):
     if geom is None or res is None:
         return None
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
-    keep = True if keep_core_geom is None else bool(keep_core_geom)
+    keep = False if keep_core_geom is None else bool(keep_core_geom)
     try:
         return [
             {"cellid": c, "core": bool(core), "chip": chip}
@@ -511,86 +561,51 @@ def _bng_tessellate(geom, res, keep_core_geom=True):
 
 @udtf(returnType="cellid: string")
 class _BngKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, cellid, k):
-        if cellid is None or k is None:
-            return
-        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
-        if cid is None:
-            return
-        for c in _bng.k_ring(cid, int(k)):
-            yield (_bng.format(c),)
+        for c in _bng_kring(cellid, k) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string")
 class _BngKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, cellid, k):
-        if cellid is None or k is None:
-            return
-        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
-        if cid is None:
-            return
-        for c in _bng.k_loop(cid, int(k)):
-            yield (_bng.format(c),)
+        for c in _bng_kloop(cellid, k) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string")
 class _BngGeomKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        k_int = int(k)  # bad k PARAMETER -> raises
-        try:
-            for c in sorted(
-                _bng.geometry_k_ring_str(
-                    geom,
-                    _norm_res(res),
-                    k_int,
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _bng_geomkring(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string")
 class _BngGeomKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        k_int = int(k)  # bad k PARAMETER -> raises
-        try:
-            for c in sorted(
-                _bng.geometry_k_loop_str(
-                    geom,
-                    _norm_res(res),
-                    k_int,
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _bng_geomkloop(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string, core: boolean, chip: binary")
 class _BngTessellateExplode:
-    def eval(self, geom, res):
+    def eval(self, geom, res, keep_core_geom=False):
         if geom is None or res is None:
             return
+        # a NULL keep_core_geom is the default, false, as in gbx_bng_tessellate on every level
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
         try:
-            for c, core, chip in _bng.tessellate_str(geom, _norm_res(res)):
+            for c, core, chip in _bng.tessellate_str(
+                geom, _norm_res(res), keep_core_geom=bool(keep_core_geom)
+            ):
                 yield (c, bool(core), chip)
         except Exception:
             return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
@@ -607,7 +622,7 @@ class _BngTessellateExplode:
 # load-bearing field), exactly like the quadbin cellunion_agg. The group key is
 # the cellid (callers GROUP BY cellid), and core is recoverable from whether the
 # chip equals the full cell, so no information is lost for the swap. Cross-tier
-# parity (Task 9) compares the decoded chip geometry.
+# parity compares the decoded chip geometry.
 
 
 def _fold_chip_geom(chip, op):
@@ -646,26 +661,39 @@ def _bng_cellintersection_agg_udf(chip: pd.DataFrame) -> Optional[bytes]:
     return _fold_chip_geom(chip, _bng.cell_intersection)
 
 
-def _dilate_check_mode(mode):
-    """Raise ValueError for an unknown dilation mode (parameter error).
-
-    ``None`` is allowed and treated as the default mode by callers.
-    Tasks 5/6/7 reuse this helper — keep it at module scope.
+def _fold_chip_array(chips, op):
+    """The array form of the chip folds: the chips of ONE cell as an array. Chips of several cells give NULL (the
+    aggregate folds them in arrival order, which has no meaning for a set); a core chip names the answer, as there.
     """
-    if mode is not None and mode not in _MODES:
-        raise ValueError(f"unknown mode {mode!r}; expected one of {_MODES}")
+    if chips is None:
+        return None
+    rows = [_to_positional(r) for r in chips if r is not None]
+    if not any(r[1] for r in rows) and len({r[0] for r in rows}) > 1:
+        return None
+    return _fold_chip_geom(chips, op)
 
 
-def _norm_res(res):
-    """Normalize a SQL resolution arg (Int index or resolutionMap string).
+@udf(returnType=BinaryType())
+def _bng_cellunion_array_udf(chips):
+    return _fold_chip_array(chips, _bng.cell_union)
 
-    _bng.get_resolution validates Int ±1..±6 / resolutionMap keys and rejects
-    metres-as-Int; the _bng wrapper fns call it again, so pass the raw value
-    through with only numpy-scalar unwrapping.
+
+@udf(returnType=BinaryType())
+def _bng_cellintersection_array_udf(chips):
+    return _fold_chip_array(chips, _bng.cell_intersection)
+
+
+def _res_or_null(res):
+    """The resolution of ONE ROW of a pandas batch, NULL-safe: ``None`` for a NULL, else
+    :func:`_norm_res`.
+
+    A NULL in an INT (or DOUBLE) column makes pandas hand the whole batch over as floats with
+    ``NaN`` for the NULL, so a resolution arrives as ``3.0``, and a NULL as ``nan`` that no
+    ``is None`` test sees (``gbx_bng_pointascell`` failed with "found nan" and took the valid rows
+    of the batch with it). Every light BNG pandas UDF that takes a resolution reads it through
+    this helper; the row-wise UDFs and UDTFs receive Python ints and ``None``.
     """
-    if isinstance(res, (np.integer,)):
-        return int(res)
-    return res
+    return None if pd.isna(res) else _norm_res(res)
 
 
 # ============================================================================
@@ -676,18 +704,21 @@ def _norm_res(res):
 # Same impl-by-shape rule as quadbin/BNG: scalar/bounded geometry ops ->
 # pandas_udf (batched Arrow transfer is the win); ARRAY-returning ops (polyfill/
 # kring) -> plain @udf (row-by-row, OOM-safe at scale). The grid SPEC builder is
-# a validating @udf (Resolved decision 1) returning CUSTOM_GRID_SCHEMA so build-
+# a validating @udf returning CUSTOM_GRID_SCHEMA so build-
 # time bad-bounds errors match heavy Custom_Grid.eval's require(...).
 # ============================================================================
 
 
 # --- custom-grid spec builder -> validating @udf returning CUSTOM_GRID_SCHEMA ---
-# Resolved decision 1 (spec 2026-06-14): eager validation matches heavy
+# Eager validation matches heavy
 # Custom_Grid.eval's require(...) (error-at-build-time parity). The 7-arg form
 # defaults srid to -1 (no CRS), as in Custom_Grid.builder; the Column wrapper
 # always supplies all 8.
 @udf(returnType=CUSTOM_GRID_SCHEMA)
 def _custom_grid_udf(x_min, x_max, y_min, y_max, splits, root_x, root_y, srid=-1):
+    # A NULL required argument gives a NULL grid (the SQL convention, and heavy's), not a TypeError.
+    if any(v is None for v in (x_min, x_max, y_min, y_max, splits, root_x, root_y)):
+        return None
     x_min, x_max = int(x_min), int(x_max)
     y_min, y_max = int(y_min), int(y_max)
     splits, root_x, root_y = int(splits), int(root_x), int(root_y)
@@ -734,9 +765,11 @@ def _custom_pointascell_udf(
 ) -> pd.Series:
     out = []
     for g, spec, r in zip(point, _custom_grid_records(grid), res):
+        r = _res_or_null(r)  # a NULL resolution arrives as NaN in a batch
         if g is None or spec is None or r is None:
             out.append(None)
             continue
+        r = _whole_res("gbx_custom_pointascell", r)
         pg = parse_geom(g)
         if pg is None or pg.is_empty:
             out.append(None)
@@ -745,50 +778,31 @@ def _custom_pointascell_udf(
         x, y = _custom_first_coord(pg)
         # resolution PARAMETER raises (via point_to_cell_id_or_none);
         # NaN / out-of-bounds coordinate DATA -> None
-        out.append(_custom.point_to_cell_id_or_none(conf, x, y, int(r)))
-    return pd.Series(out)
+        out.append(_custom.point_to_cell_id_or_none(conf, x, y, r))
+    # Int64, not the float64 pandas picks for ints beside a None: a cell id past 2**53 would
+    # be rounded to the nearest float in any batch that holds a NULL.
+    return pd.Series(out, dtype="Int64")
 
 
-@pandas_udf(BinaryType())
-def _custom_cellaswkb_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                _custom.cell_aswkb(_custom.conf_from_row(s), int(c))
-                if c is not None and s is not None
-                else None
-            )
-            for c, s in zip(cell, _custom_grid_records(grid))
-        ]
-    )
+@udf(BinaryType())
+def _custom_cellaswkb_udf(cell, grid):
+    if cell is None or grid is None:
+        return None
+    return _custom.cell_aswkb(_custom.conf_from_row(grid), cell)
 
 
-@pandas_udf(StringType())
-def _custom_cellaswkt_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                _custom.cell_aswkt(_custom.conf_from_row(s), int(c))
-                if c is not None and s is not None
-                else None
-            )
-            for c, s in zip(cell, _custom_grid_records(grid))
-        ]
-    )
+@udf(StringType())
+def _custom_cellaswkt_udf(cell, grid):
+    if cell is None or grid is None:
+        return None
+    return _custom.cell_aswkt(_custom.conf_from_row(grid), cell)
 
 
-@pandas_udf(BinaryType())
-def _custom_centroid_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                _custom.cell_centroid(_custom.conf_from_row(s), int(c))
-                if c is not None and s is not None
-                else None
-            )
-            for c, s in zip(cell, _custom_grid_records(grid))
-        ]
-    )
+@udf(BinaryType())
+def _custom_centroid_udf(cell, grid):
+    if cell is None or grid is None:
+        return None
+    return _custom.cell_centroid(_custom.conf_from_row(grid), cell)
 
 
 def _custom_grid_records(grid):
@@ -802,7 +816,7 @@ def _custom_grid_records(grid):
     if isinstance(grid, pd.DataFrame):
         recs = []
         for rec in grid.to_dict(orient="records"):
-            recs.append(None if all(v is None for v in rec.values()) else rec)
+            recs.append(None if all(pd.isna(v) for v in rec.values()) else rec)
         return recs
     return list(grid)
 
@@ -813,18 +827,28 @@ def _custom_grid_records(grid):
 def _custom_polyfill(geom, grid, res):
     if geom is None or grid is None or res is None:
         return None
-    return _custom.polyfill(_custom.conf_from_row(grid), parse_geom(geom), int(res))
+    r = _whole_res("gbx_custom_polyfill", res)
+    conf = _custom.conf_from_row(grid)
+    try:
+        parsed = parse_geom(geom)
+    except Exception:
+        return None  # unreadable geometry DATA -> NULL (matches BNG)
+    return _custom.polyfill(conf, parsed, r)
 
 
 def _custom_geomkring(geom, grid, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or grid is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_custom_geomkring", res)
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a geometry that is not finite has no cells
     try:
         return _custom.geometry_k_ring(
             _custom.conf_from_row(grid),
             geom,
-            int(res),
+            res,
             int(k),
             mode or "boundary-out",
             coverage or "coveras",
@@ -839,11 +863,15 @@ def _custom_geomkloop(geom, grid, res, k, mode="boundary-out", coverage="coveras
     if geom is None or grid is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_custom_geomkloop", res)
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a geometry that is not finite has no cells
     try:
         return _custom.geometry_k_loop(
             _custom.conf_from_row(grid),
             geom,
-            int(res),
+            res,
             int(k),
             mode or "boundary-out",
             coverage or "coveras",
@@ -856,46 +884,20 @@ def _custom_geomkloop(geom, grid, res, k, mode="boundary-out", coverage="coveras
 
 @udtf(returnType="cellid: bigint")
 class _CustomGeomKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, grid, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or grid is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _custom.geometry_k_ring(
-                _custom.conf_from_row(grid),
-                geom,
-                int(res),
-                int(k),
-                mode or "boundary-out",
-                coverage or "coveras",
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _custom_geomkring(geom, grid, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: bigint")
 class _CustomGeomKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, grid, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or grid is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _custom.geometry_k_loop(
-                _custom.conf_from_row(grid),
-                geom,
-                int(res),
-                int(k),
-                mode or "boundary-out",
-                coverage or "coveras",
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _custom_geomkloop(geom, grid, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 def _custom_kring(cell, grid, k):
@@ -916,21 +918,11 @@ def _custom_kloop(cell, grid, k):
     return _custom.k_loop(_custom.conf_from_row(grid), int(cell), int(k))
 
 
-@pandas_udf(LongType())
-def _custom_distance_udf(
-    cell1: pd.Series, grid: pd.Series, cell2: pd.Series
-) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                int(_custom.distance(_custom.conf_from_row(s), int(a), int(b)))
-                if (a is not None and s is not None and b is not None)
-                else None
-            )
-            for a, s, b in zip(cell1, _custom_grid_records(grid), cell2)
-        ],
-        dtype="object",
-    ).astype("Int64")
+@udf(LongType())
+def _custom_distance_udf(cell1, grid, cell2):
+    if cell1 is None or grid is None or cell2 is None:
+        return None
+    return int(_custom.distance(_custom.conf_from_row(grid), cell1, cell2))
 
 
 # ============================================================================
@@ -950,16 +942,22 @@ def _custom_distance_udf(
 def _parse_k(s: "pd.Series") -> int:  # type: ignore[name-defined]
     # SQL NULL arrives as pd.NA (nullable Int64) or np.nan (float64), not Python None.
     # Extract the scalar first, then test for NA — pd.isna on a scalar is always safe.
+    if s is None:  # left out of the call
+        return 1
     v = s.iloc[0]
     return 1 if v is None or pd.isna(v) else int(v)
 
 
 def _parse_method(s: "pd.Series") -> str:  # type: ignore[name-defined]
+    if s is None:
+        return "mean"
     v = s.iloc[0]
     return "mean" if v is None or pd.isna(v) else str(v)
 
 
 def _parse_power(s: "pd.Series") -> float:  # type: ignore[name-defined]
+    if s is None:
+        return 2.0
     v = s.iloc[0]
     return 2.0 if v is None or pd.isna(v) else float(v)
 
@@ -975,15 +973,16 @@ def _h3_k_loop(cell_id: int, d: int) -> list:
 def _h3_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    _check_exact_ids(cellid, "gbx_h3_cellfill")
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1000,15 +999,16 @@ def _h3_cellfill_agg_udf(
 def _quadbin_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    _check_exact_ids(cellid, "gbx_quadbin_cellfill")
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1025,19 +1025,19 @@ def _quadbin_cellfill_agg_udf(
 def _bng_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
     # BNG cell IDs arrive as strings (object dtype); None = SQL NULL.
-    cells = {}
-    for c, v in zip(cellid, value):
-        if c is None or pd.isna(c):
-            continue
-        cid_int = _bng.parse_safe(str(c))
-        if cid_int is None:
-            continue
-        cells[cid_int] = None if pd.isna(v) else float(v)
+    parsed = (
+        (_bng.parse_safe(str(c)), v) for c, v in zip(cellid, value) if not pd.isna(c)
+    )
+    cells = _cellfill.collect(
+        (cid_int, None if pd.isna(v) else float(v))
+        for cid_int, v in parsed
+        if cid_int is not None
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1055,10 +1055,11 @@ def _custom_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
     grid: pd.Series,  # struct arrives as Series of dicts in grouped-agg context
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
+    _check_exact_ids(cellid, "gbx_custom_cellfill")
     # Extract grid conf from first non-null row (all rows share the same grid spec).
     conf = None
     for g in grid:
@@ -1067,11 +1068,11 @@ def _custom_cellfill_agg_udf(
             break
     if conf is None:
         return None
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1086,6 +1087,64 @@ def _custom_cellfill_agg_udf(
         cells, _parse_k(k), _parse_method(method), _parse_power(power), _k_loop_fn
     )
     return _cellfill.encode(filled)
+
+
+# --- the array forms: gbx_<grid>_cellfill_array -------------------------------------------------------------------
+# A scalar over ONE array of (cellid, value) structs, the array twin of the aggregate above. A plain row UDF reads the
+# BIGINT ids exactly (the aggregate's float64 batches cannot), so a NULL id beside big ids is skipped, not refused.
+
+
+def _fill_array_type(cellid_type):
+    return ArrayType(
+        StructType(
+            [StructField("cellid", cellid_type), StructField("value", DoubleType())]
+        )
+    )
+
+
+def _array_rows(cells):
+    return ((c["cellid"], c["value"]) for c in cells if c is not None)
+
+
+@udf(returnType=_fill_array_type(LongType()))
+def _h3_cellfill_array_udf(cells, k=None, method=None, power=None):
+    if cells is None:
+        return None
+    return _cellfill.fill_cells(_array_rows(cells), k, method, power, _h3_k_loop)
+
+
+@udf(returnType=_fill_array_type(LongType()))
+def _quadbin_cellfill_array_udf(cells, k=None, method=None, power=None):
+    if cells is None:
+        return None
+    return _cellfill.fill_cells(_array_rows(cells), k, method, power, _quadbin.k_loop)
+
+
+@udf(returnType=_fill_array_type(StringType()))
+def _bng_cellfill_array_udf(cells, k=None, method=None, power=None):
+    if cells is None:
+        return None
+    parsed = (
+        (_bng.parse_safe(str(c)), v) for c, v in _array_rows(cells) if c is not None
+    )
+    filled = _cellfill.fill_cells(
+        ((c, v) for c, v in parsed if c is not None), k, method, power, _bng.k_loop
+    )
+    return None if filled is None else [(_bng.format(c), v) for c, v in filled]
+
+
+@udf(returnType=_fill_array_type(LongType()))
+def _custom_cellfill_array_udf(cells, grid, k=None, method=None, power=None):
+    if cells is None or grid is None:
+        return None
+    conf = _custom.conf_from_row(grid)
+    return _cellfill.fill_cells(
+        _array_rows(cells),
+        k,
+        method,
+        power,
+        lambda cid, d: _custom.k_loop(conf, cid, d),
+    )
 
 
 # ============================================================================
@@ -1125,12 +1184,16 @@ def _h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if geom is None or resolution is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    resolution = _whole_res("gbx_h3_geomkring", resolution)
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a geometry that is not finite has no cells
     try:
         return sorted(
             _h3mod.geom_expand(
                 "ring",
                 geom,
-                int(resolution),
+                resolution,
                 int(k),
                 mode or "boundary-out",
                 coverage or "coveras",
@@ -1147,12 +1210,16 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if geom is None or resolution is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    resolution = _whole_res("gbx_h3_geomkloop", resolution)
+    geom, finite = _parse_finite(geom)
+    if not finite:
+        return None  # a geometry that is not finite has no cells
     try:
         return sorted(
             _h3mod.geom_expand(
                 "loop",
                 geom,
-                int(resolution),
+                resolution,
                 int(k),
                 mode or "boundary-out",
                 coverage or "coveras",
@@ -1166,534 +1233,34 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
 
 @udtf(returnType="cellid: bigint")
 class _H3GeomKRingExplode:
-    """SQL-LATERAL UDTF: geometry-aware h3 k-ring, one row per cell id."""
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
 
     def eval(self, geom, resolution, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or resolution is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in sorted(
-                _h3mod.geom_expand(
-                    "ring",
-                    geom,
-                    int(resolution),
-                    int(k),
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad geometry DATA -> zero rows
+        for c in _h3_geomkring(geom, resolution, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: bigint")
 class _H3GeomKLoopExplode:
-    """SQL-LATERAL UDTF: geometry-aware h3 k-loop, one row per cell id."""
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
 
     def eval(self, geom, resolution, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or resolution is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in sorted(
-                _h3mod.geom_expand(
-                    "loop",
-                    geom,
-                    int(resolution),
-                    int(k),
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad cell ids DATA -> zero rows
-
-
-def _registrar_groups() -> List[_register.Group]:
-    quadbin = {
-        "gbx_quadbin_pointascell": lambda s: s.udf.register(
-            "gbx_quadbin_pointascell", _pointascell_udf
-        ),
-        "gbx_quadbin_resolution": lambda s: s.udf.register(
-            "gbx_quadbin_resolution", _resolution_udf
-        ),
-        "gbx_quadbin_distance": lambda s: s.udf.register(
-            "gbx_quadbin_distance", _distance_udf
-        ),
-        "gbx_quadbin_aswkb": lambda s: s.udf.register("gbx_quadbin_aswkb", _aswkb_udf),
-        "gbx_quadbin_centroid": lambda s: s.udf.register(
-            "gbx_quadbin_centroid", _centroid_udf
-        ),
-        "gbx_quadbin_cellunion": lambda s: s.udf.register(
-            "gbx_quadbin_cellunion", _cellunion_udf
-        ),
-        "gbx_quadbin_kring": lambda s: s.udf.register(
-            "gbx_quadbin_kring", _kring, ArrayType(LongType())
-        ),
-        "gbx_quadbin_kloop": lambda s: s.udf.register(
-            "gbx_quadbin_kloop", _kloop, ArrayType(LongType())
-        ),
-        "gbx_quadbin_polyfill": lambda s: s.udf.register(
-            "gbx_quadbin_polyfill", _polyfill, ArrayType(LongType())
-        ),
-        "gbx_quadbin_tessellate": lambda s: s.udf.register(
-            "gbx_quadbin_tessellate", _tessellate, ArrayType(QUADBIN_CELL_SCHEMA)
-        ),
-        "gbx_quadbin_cellunion_agg": lambda s: s.udf.register(
-            "gbx_quadbin_cellunion_agg", _cellunion_agg_udf
-        ),
-        "gbx_quadbin_cellfill": lambda s: s.udf.register(
-            "gbx_quadbin_cellfill", _quadbin_cellfill_agg_udf
-        ),
-        "gbx_quadbin_geomkring": lambda s: s.udf.register(
-            "gbx_quadbin_geomkring", _quadbin_geomkring, ArrayType(LongType())
-        ),
-        "gbx_quadbin_geomkloop": lambda s: s.udf.register(
-            "gbx_quadbin_geomkloop", _quadbin_geomkloop, ArrayType(LongType())
-        ),
-        "gbx_quadbin_geomkringexplode": lambda s: s.udtf.register(
-            "gbx_quadbin_geomkringexplode", _QuadbinGeomKRingExplode
-        ),
-        "gbx_quadbin_geomkloopexplode": lambda s: s.udtf.register(
-            "gbx_quadbin_geomkloopexplode", _QuadbinGeomKLoopExplode
-        ),
-    }
-    bng = {
-        "gbx_bng_pointascell": lambda s: s.udf.register(
-            "gbx_bng_pointascell", _bng_pointascell_udf
-        ),
-        "gbx_bng_eastnorthasbng": lambda s: s.udf.register(
-            "gbx_bng_eastnorthasbng", _bng_eastnorthasbng_udf
-        ),
-        "gbx_bng_cellarea": lambda s: s.udf.register(
-            "gbx_bng_cellarea", _bng_cellarea_udf
-        ),
-        "gbx_bng_distance": lambda s: s.udf.register(
-            "gbx_bng_distance", _bng_distance_udf
-        ),
-        "gbx_bng_euclideandistance": lambda s: s.udf.register(
-            "gbx_bng_euclideandistance", _bng_euclideandistance_udf
-        ),
-        "gbx_bng_aswkb": lambda s: s.udf.register("gbx_bng_aswkb", _bng_aswkb_udf),
-        "gbx_bng_aswkt": lambda s: s.udf.register("gbx_bng_aswkt", _bng_aswkt_udf),
-        "gbx_bng_centroid": lambda s: s.udf.register(
-            "gbx_bng_centroid", _bng_centroid_udf
-        ),
-        "gbx_bng_cellintersection": lambda s: s.udf.register(
-            "gbx_bng_cellintersection", _bng_cellintersection_udf
-        ),
-        "gbx_bng_cellunion": lambda s: s.udf.register(
-            "gbx_bng_cellunion", _bng_cellunion_udf
-        ),
-        "gbx_bng_kring": lambda s: s.udf.register(
-            "gbx_bng_kring", _bng_kring, ArrayType(StringType())
-        ),
-        "gbx_bng_kloop": lambda s: s.udf.register(
-            "gbx_bng_kloop", _bng_kloop, ArrayType(StringType())
-        ),
-        "gbx_bng_polyfill": lambda s: s.udf.register(
-            "gbx_bng_polyfill", _bng_polyfill, ArrayType(StringType())
-        ),
-        "gbx_bng_geomkring": lambda s: s.udf.register(
-            "gbx_bng_geomkring", _bng_geomkring, ArrayType(StringType())
-        ),
-        "gbx_bng_geomkloop": lambda s: s.udf.register(
-            "gbx_bng_geomkloop", _bng_geomkloop, ArrayType(StringType())
-        ),
-        "gbx_bng_tessellate": lambda s: s.udf.register(
-            "gbx_bng_tessellate", _bng_tessellate, ArrayType(BNG_CHIP_SCHEMA)
-        ),
-        "gbx_bng_kringexplode": lambda s: s.udtf.register(
-            "gbx_bng_kringexplode", _BngKRingExplode
-        ),
-        "gbx_bng_kloopexplode": lambda s: s.udtf.register(
-            "gbx_bng_kloopexplode", _BngKLoopExplode
-        ),
-        "gbx_bng_geomkringexplode": lambda s: s.udtf.register(
-            "gbx_bng_geomkringexplode", _BngGeomKRingExplode
-        ),
-        "gbx_bng_geomkloopexplode": lambda s: s.udtf.register(
-            "gbx_bng_geomkloopexplode", _BngGeomKLoopExplode
-        ),
-        "gbx_bng_tessellateexplode": lambda s: s.udtf.register(
-            "gbx_bng_tessellateexplode", _BngTessellateExplode
-        ),
-        "gbx_bng_cellunion_agg": lambda s: s.udf.register(
-            "gbx_bng_cellunion_agg", _bng_cellunion_agg_udf
-        ),
-        "gbx_bng_cellintersection_agg": lambda s: s.udf.register(
-            "gbx_bng_cellintersection_agg", _bng_cellintersection_agg_udf
-        ),
-        "gbx_bng_cellfill": lambda s: s.udf.register(
-            "gbx_bng_cellfill", _bng_cellfill_agg_udf
-        ),
-    }
-    custom = {
-        "gbx_custom_grid": lambda s: s.udf.register(
-            "gbx_custom_grid", _custom_grid_udf
-        ),
-        "gbx_custom_pointascell": lambda s: s.udf.register(
-            "gbx_custom_pointascell", _custom_pointascell_udf
-        ),
-        "gbx_custom_cellaswkb": lambda s: s.udf.register(
-            "gbx_custom_cellaswkb", _custom_cellaswkb_udf
-        ),
-        "gbx_custom_cellaswkt": lambda s: s.udf.register(
-            "gbx_custom_cellaswkt", _custom_cellaswkt_udf
-        ),
-        "gbx_custom_centroid": lambda s: s.udf.register(
-            "gbx_custom_centroid", _custom_centroid_udf
-        ),
-        "gbx_custom_polyfill": lambda s: s.udf.register(
-            "gbx_custom_polyfill", _custom_polyfill, ArrayType(LongType())
-        ),
-        "gbx_custom_kring": lambda s: s.udf.register(
-            "gbx_custom_kring", _custom_kring, ArrayType(LongType())
-        ),
-        "gbx_custom_kloop": lambda s: s.udf.register(
-            "gbx_custom_kloop", _custom_kloop, ArrayType(LongType())
-        ),
-        "gbx_custom_distance": lambda s: s.udf.register(
-            "gbx_custom_distance", _custom_distance_udf
-        ),
-        "gbx_custom_cellfill": lambda s: s.udf.register(
-            "gbx_custom_cellfill", _custom_cellfill_agg_udf
-        ),
-        "gbx_custom_geomkring": lambda s: s.udf.register(
-            "gbx_custom_geomkring", _custom_geomkring, ArrayType(LongType())
-        ),
-        "gbx_custom_geomkloop": lambda s: s.udf.register(
-            "gbx_custom_geomkloop", _custom_geomkloop, ArrayType(LongType())
-        ),
-        "gbx_custom_geomkringexplode": lambda s: s.udtf.register(
-            "gbx_custom_geomkringexplode", _CustomGeomKRingExplode
-        ),
-        "gbx_custom_geomkloopexplode": lambda s: s.udtf.register(
-            "gbx_custom_geomkloopexplode", _CustomGeomKLoopExplode
-        ),
-    }
-    h3 = {
-        "gbx_h3_cellfill": lambda s: s.udf.register(
-            "gbx_h3_cellfill", _h3_cellfill_agg_udf
-        ),
-        # H3 geometry-aware kring/kloop (light-only). Geom-taking UDFs — the
-        # h3 library does the polyfill + neighbour walk in Python, so these run
-        # anywhere with no Databricks product-function dependency.
-        "gbx_h3_geomkring": lambda s: s.udf.register(
-            "gbx_h3_geomkring", _h3_geomkring, ArrayType(LongType())
-        ),
-        "gbx_h3_geomkloop": lambda s: s.udf.register(
-            "gbx_h3_geomkloop", _h3_geomkloop, ArrayType(LongType())
-        ),
-        "gbx_h3_geomkringexplode": lambda s: s.udtf.register(
-            "gbx_h3_geomkringexplode", _H3GeomKRingExplode
-        ),
-        "gbx_h3_geomkloopexplode": lambda s: s.udtf.register(
-            "gbx_h3_geomkloopexplode", _H3GeomKLoopExplode
-        ),
-    }
-    return [
-        (lambda: _env.assert_h3_available(), h3),
-        (lambda: _env.assert_quadbin_available(), quadbin),
-        (lambda: _env.assert_bng_available(), bng),
-        (lambda: _env.assert_custom_available(), custom),
-    ]
-
-
-def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> None:
-    """Register the pygx grid SQL functions (Serverless-safe: udf/udtf only).
-
-    Args:
-        spark: Spark session (uses the active session if not provided).
-        only: Optional list of function names to register (instead of all).
-            Accepts SQL names (``gbx_bng_polyfill``) or short names
-            (``bng_polyfill``), case-insensitively. ``None`` registers everything;
-            ``[]`` registers nothing. An unrecognized name raises ``ValueError``.
-            A sub-module's availability guard runs only when >=1 of its functions
-            is selected.
-    """
-    if spark is None:
-        spark = SparkSession.builder.getOrCreate()
-    _register.run_groups(_registrar_groups(), spark, only)
-    globals()["_gbx_registered"] = True
+        for c in _h3_geomkloop(geom, resolution, k, mode, coverage) or ():
+            yield (c,)
 
 
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_pointascell(
-    longitude: ColLike, latitude: ColLike, resolution: ColLike
-) -> Column:
-    """Quadbin cell (LONG) for the WGS84 longitude/latitude point at `resolution`."""
-    return f.call_function(
-        "gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution)
-    )
-
-
-def quadbin_resolution(cell: ColLike) -> Column:
-    """Resolution (INT) of a quadbin cell."""
-    return f.call_function("gbx_quadbin_resolution", _col(cell))
-
-
-def quadbin_kring(cell: ColLike, k: ColLike) -> Column:
-    """ARRAY<LONG> of cells within ring distance `k` of `cell` (includes center)."""
-    return f.call_function("gbx_quadbin_kring", _col(cell), _col(k))
-
-
-def quadbin_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Chebyshev grid distance (INT) between two same-resolution cells."""
-    return f.call_function("gbx_quadbin_distance", _col(cellid1), _col(cellid2))
-
-
-def quadbin_polyfill(geom: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<LONG> of cells covering the geometry's envelope at `resolution`."""
-    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(resolution))
-
-
-def quadbin_aswkb(cell: ColLike) -> Column:
-    """Cell boundary polygon as EWKB (SRID 4326) BINARY."""
-    return f.call_function("gbx_quadbin_aswkb", _col(cell))
-
-
-def quadbin_centroid(cell: ColLike) -> Column:
-    """Cell centroid point as EWKB (SRID 4326) BINARY."""
-    return f.call_function("gbx_quadbin_centroid", _col(cell))
-
-
-def quadbin_cellunion(cells: ColLike) -> Column:
-    """Union of an ARRAY<LONG> of cell boundaries as EWKB (SRID 4326) BINARY."""
-    return f.call_function("gbx_quadbin_cellunion", _col(cells))
-
-
-def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<STRUCT<cell:LONG, geom:BINARY>> chips clipping the geometry per cell."""
-    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(resolution))
-
-
-def quadbin_cellunion_agg(cellid: ColLike) -> Column:
+def _light_quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregator: union a group's cell boundaries into one EWKB (SRID 4326) BINARY."""
     return _cellunion_agg_udf(_col(cellid))
 
 
-def quadbin_geomkring(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-ring around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
-    ``_dilate.MODES``.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``:
-    ``"coveras"`` (overlap), ``"polyfill"`` (centroid), ``"core"`` (fully contained).
-    """
-    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
-    # does not misinterpret them as unresolved column references.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_quadbin_geomkring",
-        _col(geom),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
+# --- BNG aggregate Column wrappers (the scalars are gridx.bng.functions) --------------------
 
 
-def quadbin_geomkloop(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-loop (hollow shell) around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). See :func:`quadbin_geomkring`.
-    coverage: coverage basis (default ``"coveras"``). See :func:`quadbin_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_quadbin_geomkloop",
-        _col(geom),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
-
-
-# The two *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier).
-
-_QUADBIN_EXPLODE_HINT = (
-    "Light quadbin {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def quadbin_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_quadbin_geomkringexplode(geom, res, k). No Column form."""
-    raise NotImplementedError(
-        _QUADBIN_EXPLODE_HINT.format(
-            name="quadbin_geomkringexplode", udtf="gbx_quadbin_geomkringexplode"
-        )
-    )
-
-
-def quadbin_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_quadbin_geomkloopexplode(geom, res, k). No Column form."""
-    raise NotImplementedError(
-        _QUADBIN_EXPLODE_HINT.format(
-            name="quadbin_geomkloopexplode", udtf="gbx_quadbin_geomkloopexplode"
-        )
-    )
-
-
-# --- BNG Column wrappers (mirror heavy gridx.bng.functions) ----------------------------------
-# Cell ids are STRING; geometry outputs are plain WKB (EPSG:27700, no SRID).
-
-
-def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
-    """BNG cell id (STRING) for the centroid of a geometry (EPSG:27700)."""
-    return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
-
-
-def bng_eastnorthasbng(
-    easting: ColLike, northing: ColLike, resolution: ColLike
-) -> Column:
-    """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `resolution`."""
-    return f.call_function(
-        "gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution)
-    )
-
-
-def bng_cellarea(cellid: ColLike) -> Column:
-    """Cell area in square KILOMETRES (DOUBLE)."""
-    return f.call_function("gbx_bng_cellarea", _col(cellid))
-
-
-def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Manhattan grid distance (LONG) between two BNG cells (edge-size units)."""
-    return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
-
-
-def bng_euclideandistance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Chebyshev grid distance (LONG) between two BNG cells (edge-size units)."""
-    return f.call_function("gbx_bng_euclideandistance", _col(cellid1), _col(cellid2))
-
-
-def bng_aswkb(cellid: ColLike) -> Column:
-    """Cell boundary polygon as plain WKB (no SRID) BINARY."""
-    return f.call_function("gbx_bng_aswkb", _col(cellid))
-
-
-def bng_aswkt(cellid: ColLike) -> Column:
-    """Cell boundary polygon as WKT (STRING)."""
-    return f.call_function("gbx_bng_aswkt", _col(cellid))
-
-
-def bng_centroid(cellid: ColLike) -> Column:
-    """Cell centroid point as plain WKB (no SRID) BINARY."""
-    return f.call_function("gbx_bng_centroid", _col(cellid))
-
-
-def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
-    """Per-cell chip intersection STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function(
-        "gbx_bng_cellintersection", _col(left_chip), _col(right_chip)
-    )
-
-
-def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:
-    """Per-cell chip union STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function("gbx_bng_cellunion", _col(left_chip), _col(right_chip))
-
-
-def bng_kring(cellid: ColLike, k: ColLike) -> Column:
-    """ARRAY<STRING> of cells within ring distance `k` (includes center)."""
-    return f.call_function("gbx_bng_kring", _col(cellid), _col(k))
-
-
-def bng_kloop(cellid: ColLike, k: ColLike) -> Column:
-    """ARRAY<STRING> of the hollow ring of cells at exact distance `k`."""
-    return f.call_function("gbx_bng_kloop", _col(cellid), _col(k))
-
-
-def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<STRING> of cells whose centroid is contained by the geometry."""
-    return f.call_function("gbx_bng_polyfill", _col(geom), _col(resolution))
-
-
-def bng_geomkring(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<STRING> k-ring around a geometry's covering chips.
-
-    mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
-    ``_dilate.MODES``. ``"boundary-out"`` retains the existing get_chips path
-    (byte-identical with the heavy tier); the 5 other modes use the engine.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
-    """
-    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
-    # does not misinterpret them as unresolved column references.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_bng_geomkring", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
-    )
-
-
-def bng_geomkloop(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<STRING> k-loop around a geometry's covering chips.
-
-    mode: dilation mode (default ``"boundary-out"``). See :func:`bng_geomkring`.
-    coverage: coverage basis (default ``"coveras"``). See :func:`bng_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
-    )
-
-
-def bng_tessellate(
-    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = True
-) -> Column:
-    """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell.
-
-    keep_core_geom (default True, matches heavy): when True, a fully-interior
-    cell's chip holds its core-geometry WKB; when False the chip is null.
-    """
-    return f.call_function(
-        "gbx_bng_tessellate", _col(geom), _col(resolution), _col(keep_core_geom)
-    )
-
-
-def bng_cellunion_agg(input_chip: ColLike) -> Column:
+def _light_bng_cellunion_agg(input_chip: ColLike) -> Column:
     """Aggregator: union a group's same-cell chips into one dissolved-chip WKB BINARY.
 
     (Light grouped-agg cannot return a STRUCT; emits the dissolved chip geometry,
@@ -1702,63 +1269,9 @@ def bng_cellunion_agg(input_chip: ColLike) -> Column:
     return f.call_function("gbx_bng_cellunion_agg", _col(input_chip))
 
 
-def bng_cellintersection_agg(input_chip: ColLike) -> Column:
+def _light_bng_cellintersection_agg(input_chip: ColLike) -> Column:
     """Aggregator: intersect a group's same-cell chips into one dissolved-chip WKB BINARY."""
     return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
-
-
-# The five *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier). They
-# exist here as importable names for binding parity, but raise NotImplementedError
-# pointing to the registered UDTF; invoke them via SQL LATERAL instead.
-
-_EXPLODE_HINT = (
-    "Light BNG {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def bng_kringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kringexplode(cellid, k). No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(name="bng_kringexplode", udtf="gbx_bng_kringexplode")
-    )
-
-
-def bng_kloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kloopexplode(cellid, k). No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(name="bng_kloopexplode", udtf="gbx_bng_kloopexplode")
-    )
-
-
-def bng_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkringexplode(geom, res, k) t. No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(
-            name="bng_geomkringexplode", udtf="gbx_bng_geomkringexplode"
-        )
-    )
-
-
-def bng_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkloopexplode(geom, res, k) t. No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(
-            name="bng_geomkloopexplode", udtf="gbx_bng_geomkloopexplode"
-        )
-    )
-
-
-def bng_tessellateexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_tessellateexplode(geom, res) t. No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(
-            name="bng_tessellateexplode", udtf="gbx_bng_tessellateexplode"
-        )
-    )
 
 
 # --- Custom-grid Column wrappers (mirror heavy gridx.custom.functions) ------------------------
@@ -1766,169 +1279,12 @@ def bng_tessellateexplode(*args, **kwargs) -> Column:
 # supplies all 8 args (defaulting srid=-1) so the validating @udf sees a fixed arity.
 
 
-def custom_grid(
-    bound_x_min: ColLike,
-    bound_x_max: ColLike,
-    bound_y_min: ColLike,
-    bound_y_max: ColLike,
-    cell_splits: ColLike,
-    root_cell_size_x: ColLike,
-    root_cell_size_y: ColLike,
-    srid: ColLike = -1,
-) -> Column:
-    """Build a custom-grid spec STRUCT (validated eagerly). srid=-1 means no CRS."""
-    return f.call_function(
-        "gbx_custom_grid",
-        _col(bound_x_min),
-        _col(bound_x_max),
-        _col(bound_y_min),
-        _col(bound_y_max),
-        _col(cell_splits),
-        _col(root_cell_size_x),
-        _col(root_cell_size_y),
-        _col(srid),
-    )
-
-
-def custom_pointascell(point: ColLike, grid: ColLike, resolution: ColLike) -> Column:
-    """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `resolution`."""
-    return f.call_function(
-        "gbx_custom_pointascell", _col(point), _col(grid), _col(resolution)
-    )
-
-
-def custom_cellaswkb(cell: ColLike, grid: ColLike) -> Column:
-    """Cell footprint polygon as plain WKB (no SRID) BINARY."""
-    return f.call_function("gbx_custom_cellaswkb", _col(cell), _col(grid))
-
-
-def custom_cellaswkt(cell: ColLike, grid: ColLike) -> Column:
-    """Cell footprint polygon as WKT (STRING)."""
-    return f.call_function("gbx_custom_cellaswkt", _col(cell), _col(grid))
-
-
-def custom_centroid(cell: ColLike, grid: ColLike) -> Column:
-    """Cell centroid point as plain WKB (no SRID) BINARY."""
-    return f.call_function("gbx_custom_centroid", _col(cell), _col(grid))
-
-
-def custom_polyfill(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<BIGINT> of cells whose center is contained by the geometry."""
-    return f.call_function(
-        "gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution)
-    )
-
-
-def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
-    """ARRAY<BIGINT> of cells within Chebyshev ring distance `k` (includes center)."""
-    return f.call_function("gbx_custom_kring", _col(cell), _col(grid), _col(k))
-
-
-def quadbin_kloop(cell: ColLike, k: ColLike) -> Column:
-    """ARRAY<LONG> of cells at EXACTLY Chebyshev distance `k` (hollow ring; k=0=[cell])."""
-    return f.call_function("gbx_quadbin_kloop", _col(cell), _col(k))
-
-
-def custom_kloop(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
-    """ARRAY<BIGINT> of custom-grid cells at EXACTLY Chebyshev distance `k` (hollow ring)."""
-    return f.call_function("gbx_custom_kloop", _col(cell), _col(grid), _col(k))
-
-
-def custom_distance(cell1: ColLike, grid: ColLike, cell2: ColLike) -> Column:
-    """Chebyshev grid-ring distance (BIGINT) between two custom-grid cells: max(|dx|,|dy|)."""
-    return f.call_function("gbx_custom_distance", _col(cell1), _col(grid), _col(cell2))
-
-
-def custom_geomkring(
-    geom: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-ring around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
-    ``_dilate.MODES``.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
-    """
-    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
-    # does not misinterpret them as unresolved column references.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_custom_geomkring",
-        _col(geom),
-        _col(grid),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
-
-
-def custom_geomkloop(
-    geom: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-loop (hollow shell) around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). See :func:`custom_geomkring`.
-    coverage: coverage basis (default ``"coveras"``). See :func:`custom_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_custom_geomkloop",
-        _col(geom),
-        _col(grid),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
-
-
-# The two *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier).
-
-_CUSTOM_EXPLODE_HINT = (
-    "Light custom {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def custom_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_custom_geomkringexplode(geom, grid, res, k). No Column form."""
-    raise NotImplementedError(
-        _CUSTOM_EXPLODE_HINT.format(
-            name="custom_geomkringexplode", udtf="gbx_custom_geomkringexplode"
-        )
-    )
-
-
-def custom_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_custom_geomkloopexplode(geom, grid, res, k). No Column form."""
-    raise NotImplementedError(
-        _CUSTOM_EXPLODE_HINT.format(
-            name="custom_geomkloopexplode", udtf="gbx_custom_geomkloopexplode"
-        )
-    )
-
-
 # --- cellfill Column wrappers ------------------------------------------------
 # All four grids. Returns BINARY-encoded (cellid, value) list; decode with
 # _cellfill.decode.  k default 1, method default 'mean', power default 2.0.
 
 
-def h3_cellfill(
+def _light_h3_cellfill(
     cellid: ColLike,
     value: ColLike,
     k: ColLike = 1,
@@ -1948,7 +1304,7 @@ def h3_cellfill(
     )
 
 
-def quadbin_cellfill(
+def _light_quadbin_cellfill(
     cellid: ColLike,
     value: ColLike,
     k: ColLike = 1,
@@ -1967,7 +1323,7 @@ def quadbin_cellfill(
     )
 
 
-def bng_cellfill(
+def _light_bng_cellfill(
     cellid: ColLike,
     value: ColLike,
     k: ColLike = 1,
@@ -1986,7 +1342,7 @@ def bng_cellfill(
     )
 
 
-def custom_cellfill(
+def _light_custom_cellfill(
     cellid: ColLike,
     value: ColLike,
     grid: ColLike,
@@ -2007,78 +1363,8 @@ def custom_cellfill(
     )
 
 
-# --- H3 geometry-aware kring/kloop Column wrappers --------------------------
-# Geom-taking, exactly like the other grids: geom column + resolution + k
-# [+ mode]. The registered gbx_h3_geomkring/kloop UDFs do the whole job in
-# Python via the h3 library (polyfill + neighbour walk) — no Databricks product
-# functions, runs anywhere. gridx.h3.functions.geomkring/geomkloop are thin
-# aliases of these.
+def __getattr__(name):
+    """A removed public name: say where it went (no alias keeps working)."""
+    from databricks.labs.gbx import _moved
 
-
-def h3_geomkring(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> h3 geometry-aware k-ring around a geometry's covering cells.
-
-    geom: WKB BINARY or WKT STRING geometry column. resolution: H3 res 0..15.
-    k: ring distance (0 = covering set only). mode: dilation mode (default
-    "boundary-out"), one of the 6 modes.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_h3_geomkring", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
-    )
-
-
-def h3_geomkloop(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> h3 geometry-aware k-loop (hollow shell at exactly k steps).
-
-    See :func:`h3_geomkring`. Returns cells at EXACTLY k steps.
-    coverage: coverage basis (default ``"coveras"``). See :func:`h3_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_h3_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
-    )
-
-
-# The two *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier).
-
-_H3_EXPLODE_HINT = (
-    "Light h3 {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def h3_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_h3_geomkringexplode(geom, resolution, k[, mode]). No Column form."""
-    raise NotImplementedError(
-        _H3_EXPLODE_HINT.format(
-            name="h3_geomkringexplode", udtf="gbx_h3_geomkringexplode"
-        )
-    )
-
-
-def h3_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_h3_geomkloopexplode(geom, resolution, k[, mode]). No Column form."""
-    raise NotImplementedError(
-        _H3_EXPLODE_HINT.format(
-            name="h3_geomkloopexplode", udtf="gbx_h3_geomkloopexplode"
-        )
-    )
+    return _moved.removed_name(__name__, name)

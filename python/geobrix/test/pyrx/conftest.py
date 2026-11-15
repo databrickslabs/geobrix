@@ -8,6 +8,7 @@ something is wrong with the layering.
 import logging
 import os
 import sys
+import tempfile
 
 import numpy as np
 import pytest
@@ -80,6 +81,39 @@ def make_geotiff_bytes(width=4, height=3, count=1, epsg=4326, nodata=-9999.0):
             for b in range(1, count + 1):
                 ds.write(data + (b - 1) * 100, b)
         return mf.read()
+
+
+def cog_errors(data, strict=True):
+    """GDAL's COG validator (``osgeo_utils``, through ``databricks.labs.gbx._osgeo``) on COG bytes
+    or a path: its errors, and its warnings too when ``strict``. Skips with the helper's reason
+    where GDAL's Python bindings do not import (the macOS host, the PyPI-stack CI shard).
+
+    Bytes are written to a file first, so the validator only opens a path and shares nothing
+    with rasterio: it may run on another GDAL than rasterio's (``same_libgdal=False``; the dev
+    container's system osgeo), where a rasterio ``MemoryFile`` would not be visible.
+
+    GDAL's validator is looser than rio-cogeo's on one check: an untiled file 513 to 1024 pixels
+    wide is no error here (GDAL only errors on stripes wider than 1024). The rows feed COG-driver
+    output, which is tiled; a row on other large output must not rely on that check.
+    """
+    from databricks.labs.gbx import _osgeo
+
+    try:
+        validator = _osgeo.utils(
+            "samples.validate_cloud_optimized_geotiff",
+            "the COG check",
+            same_libgdal=False,
+        )
+    except _osgeo.OsgeoUnavailable as exc:
+        pytest.skip(str(exc))
+    with tempfile.TemporaryDirectory() as d:
+        path = data
+        if isinstance(data, (bytes, bytearray)):
+            path = os.path.join(d, "cog.tif")
+            with open(path, "wb") as fh:
+                fh.write(data)
+        warnings, errors, _details = validator.validate(str(path), full_check=True)
+    return errors + (warnings if strict else [])
 
 
 @pytest.fixture(scope="session")

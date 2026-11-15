@@ -67,7 +67,7 @@ Get detailed raster information with the GDAL CLI. Example using a TIF from [sam
   outputConstant="gdalinfo_cli_output"
 />
 
-Other useful flags: `gdalinfo -json`, `gdalinfo -stats`, `gdalinfo -checksum`. **Integration with GeoBrix:** after inspecting, load the same path with `spark.read.format("gdal").load(...)`. (The `gdal` reader is part of the heavyweight tier — see [Choosing an Execution Tier](../api/execution-tiers).)
+Other useful flags: `gdalinfo -json`, `gdalinfo -stats`, `gdalinfo -checksum`. **Integration with GeoBrix:** after inspecting, load the same path with `spark.read.format("raster_gbx").load(...)`. See the [Raster Reader](../readers/raster).
 
 ---
 

@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.gridx.grid
 
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import com.uber.h3core.util.GeoCoord
-import com.uber.h3core.{H3Core, LengthUnit}
+import com.uber.h3core.H3Core
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.util.GeometryEditor
 import org.locationtech.jts.geom.{Coordinate, Geometry, MultiPolygon, Polygon}
@@ -18,8 +18,21 @@ import scala.util.{Success, Try}
   */
 object H3 extends GridSystem {
 
-    /** Edge length in km for the given resolution. */
-    def edgeLength(res: Int): Double = h3.edgeLength(res, LengthUnit.km)
+    /** Average hexagon edge length in km for the given resolution: the H3 v4 table
+      * (`getHexagonEdgeLengthAvgKm`), the same doubles the Python `h3` (v4) returns from
+      * `average_hexagon_edge_length`. The JVM ships h3-java 3.7.3 (what DBR installs), whose
+      * `edgeLength(res, km)` is the older v3 table (r7: 1.2206 km against 1.4065 km), so a canvas
+      * sized from it differed from the Python level's. */
+    def edgeLength(res: Int): Double = {
+        require(res >= 0 && res < H3.AvgEdgeLengthKm.length, s"H3 resolution must be 0..15; got $res")
+        H3.AvgEdgeLengthKm(res)
+    }
+
+    /** H3 v4 average hexagon edge lengths, km, by resolution 0..15. */
+    private val AvgEdgeLengthKm: Array[Double] = Array(
+        1281.256011, 483.0568391, 182.5129565, 68.97922179, 26.07175968, 9.854090990, 3.724532667,
+        1.406475763, 0.531414010, 0.200786148, 0.075863783, 0.028663897, 0.010830188, 0.004092010,
+        0.001546100, 0.000584169)
 
     /** CRS for H3 (WGS84). */
     def crsID: Int = 4326

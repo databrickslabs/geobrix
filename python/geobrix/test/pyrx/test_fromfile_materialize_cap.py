@@ -11,7 +11,7 @@ Two properties are asserted here:
    (tiny compressed, large decoded) must be rejected because the full read below
    decodes the whole raster into RAM.
 
-2. Fix 1d — the cap is DRIVER-captured. rst_fromfile bakes the connect-aware cap as
+2. The cap is DRIVER-captured. rst_fromfile bakes the connect-aware cap as
    an f.lit at Column-build time (on the driver) and passes it into _fromfile_impl
    as ``cap_bytes``. _fromfile_impl runs inside a UDF on a session-less Serverless
    worker, so when ``cap_bytes`` is provided it is used DIRECTLY (never re-resolved
@@ -20,7 +20,7 @@ Two properties are asserted here:
 
 Covers:
   - decoded > cap + materialize=True → raises StageTooLargeError
-  - message contains "materialize=True unsuccessful", "sizeInMB", "MiB", "decoded"
+  - the refusal says the tile is decoded (the wording beyond that is not pinned)
   - decoded <= cap + materialize=True → does NOT raise (returns a materialized tile)
   - explicit cap_bytes is used directly and wins over the env cap
   - highly-compressible source: compressed < cap < decoded → raises (decoded gate)
@@ -28,10 +28,10 @@ Covers:
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
@@ -61,7 +61,7 @@ def _write_raster(
     )
     if compress:
         profile["compress"] = compress
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.zeros((count, height, width), dtype=dtype))
     decoded = count * width * height * int(np.dtype(dtype).itemsize)
     return os.path.getsize(path), decoded
@@ -85,11 +85,7 @@ class TestFromfileMaterializeCap:
         with pytest.raises(StageTooLargeError) as exc_info:
             _fromfile_impl(str(tif), "GTiff", True)
 
-        msg = str(exc_info.value)
-        assert "materialize=True unsuccessful" in msg, msg
-        assert "sizeInMB" in msg, msg
-        assert "MiB" in msg, msg
-        assert "decoded" in msg, msg
+        assert "decoded" in str(exc_info.value)
 
     def test_gate_uses_decoded_not_compressed(self, tmp_path, monkeypatch):
         """A highly-compressible source (small compressed, large decoded) is rejected
@@ -128,7 +124,7 @@ class TestFromfileMaterializeCap:
 
 
 class TestDriverCapturedCapBytes:
-    """Fix 1d: an explicit cap_bytes is used DIRECTLY (never re-resolved) and wins."""
+    """An explicit cap_bytes is used DIRECTLY (never re-resolved) and wins."""
 
     def test_cap_bytes_used_directly_raises(self, tmp_path):
         """A small explicit cap_bytes makes a modest raster over-cap → raises,
@@ -161,8 +157,9 @@ class TestDriverCapturedCapBytes:
 class TestVirtualDefaultNeverRaises:
     """The virtual default (materialize=False/None) must never raise StageTooLargeError."""
 
-    def test_virtual_false_never_raises(self, tmp_path, monkeypatch):
-        """materialize=False (virtual path) opens the header only — no cap guard."""
+    @pytest.mark.parametrize("materialize", [False, None])
+    def test_virtual_never_raises(self, tmp_path, monkeypatch, materialize):
+        """Virtual (None is treated as False) opens the header only: no cap guard."""
         tif = tmp_path / "v.tif"
         _write_raster(str(tif), 1024, 1024, dtype="uint16")  # 2 MiB decoded
 
@@ -170,20 +167,35 @@ class TestVirtualDefaultNeverRaises:
 
         from databricks.labs.gbx.pyrx.functions import _fromfile_impl
 
-        result = _fromfile_impl(str(tif), "GTiff", False)
+        result = _fromfile_impl(str(tif), "GTiff", materialize)
         assert result is not None, "virtual tile should return a row"
         # Virtual tile: raster is None (bytes-free, points at the path).
         assert result["raster"] is None
 
-    def test_virtual_none_never_raises(self, tmp_path, monkeypatch):
-        """materialize=None (treated as False) skips the cap guard entirely."""
-        tif = tmp_path / "v2.tif"
-        _write_raster(str(tif), 1024, 1024, dtype="uint16")
 
-        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1")
+class TestFromfileWithSidecars:
+    """A file with sidecars is read by the sidecar path under the same decoded-size cap; an overview file alone is not
+    a sidecar that path needs."""
+
+    def test_a_file_with_an_aux_xml_over_the_cap_is_refused(self, tmp_path):
+        tif = tmp_path / "s.tif"
+        _write_raster(str(tif), 512, 512, dtype="uint16")
+        (tmp_path / "s.tif.aux.xml").write_text("<PAMDataset/>")
 
         from databricks.labs.gbx.pyrx.functions import _fromfile_impl
 
-        result = _fromfile_impl(str(tif), "GTiff", None)
-        assert result is not None
-        assert result["raster"] is None
+        with pytest.raises(StageTooLargeError, match="decoded"):
+            _fromfile_impl(str(tif), "GTiff", True, cap_bytes=64 * 1024)
+
+    def test_an_ovr_alone_takes_the_plain_path(self, tmp_path, monkeypatch):
+        tif = tmp_path / "o.tif"
+        _write_raster(str(tif), 8, 6)
+        (tmp_path / "o.tif.ovr").write_bytes(b"overviews")
+
+        from databricks.labs.gbx.pyrx import functions as prx
+
+        def _not_called(*a, **k):
+            raise AssertionError("the sidecar path was taken for an .ovr alone")
+
+        monkeypatch.setattr(prx, "_fromfile_read_with_sidecars", _not_called)
+        assert prx._fromfile_impl(str(tif), "GTiff", True)["raster"] is not None

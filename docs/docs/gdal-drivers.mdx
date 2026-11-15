@@ -1,0 +1,65 @@
+---
+title: GDAL drivers as provided
+---
+
+import Link from '@docusaurus/Link';
+
+# GDAL drivers as provided
+
+The GeoBrix env wheel ships one GDAL build. This page lists the drivers of that build, with what each can do.
+Use it to check whether a format is in the wheel before you install anything.
+
+The list shows the drivers **as provided**. It does not change when you add or remove packages.
+To see the drivers your current environment can run, call [`gbx_drivers()`](./api/general-functions#drivers).
+That function reads GDAL as it runs now, so its rows can differ from this table.
+Its `shipped` column is false for a driver that is not in this list.
+
+GeoBrix tests some drivers through its distributed readers and writers, and the tables mark them as <span className="gbx-tested">Tested</span>.
+A driver that is not tested may work, but it is use-at-your-own-risk.
+The tested set describes this release, not the environment you run in, so `gbx_drivers()` reports it in its `tested` column.
+The env wheel's GDAL has no Parquet or GeoParquet, Arrow, HDF4 (MODIS), LIBKML or PostgreSQL driver.
+
+GeoBrix [turns off](./security#7-raster-data-other-principals-can-write) some drivers by default and does not register them.
+They are not in the driver tables, and `gbx_drivers()` does not return them either.
+See [GeoBrix Opt-In Drivers](./gdal-drivers/other#geobrix-opt-in-drivers) for the list, the risk and the opt-out.
+
+```sql
+SELECT driver, description, requires FROM gbx_drivers() WHERE NOT available
+```
+
+## How to read the tables
+
+- **Can** lists what the driver does: `read` when GDAL can open a dataset, and `write` when it can create or copy one.
+  For a raster, `tile bytes` means that a raster of the driver can be held as the bytes of a tile.
+- **Requires** names what the driver needs besides the data file. A format with sidecar files names them here.
+- **Why** names what an unavailable driver needs: a service, a program or a plugin that this runtime lacks.
+- **Tested with GeoBrix** lists the GeoBrix reader, writer or function that the tests used. A tested row has a green tint and the label <span className="gbx-tested">Tested</span>, so colour is not the only cue.
+- **GeoBrix guidance** names the built-in reader, writer or function to use for the format, and what it covers. It links the pages that explain it. `gbx_drivers()` returns the same note in `guidance`, and the links in `docs`.
+- The vector and the raster page each have three groups: available and tested, available and not tested, and unavailable.
+- A driver for both rasters and vectors is on both pages, and each row links to the other one. It can be tested as one kind only.
+
+{/* BEGIN GENERATED drivers: edit manifest/functions.json, then run gbx:manifest:gen */}
+## Formats GeoBrix handles without a GDAL driver
+
+These GeoBrix readers, writers and functions do not use the GDAL driver of the same format.
+Their path does not depend on the driver rows on the pages below.
+A format that GeoBrix reads through rasterio or pyogrio, such as GeoTIFF or GeoPackage, uses its driver.
+
+| Format | GDAL driver | What GeoBrix uses instead | Where |
+|---|---|---|---|
+| <Link id="builtin-zarr"></Link>Zarr | [`Zarr`](./gdal-drivers/raster#raster-zarr) | The zarr package, with tensorstore or zarrs as optional engines. | `zarr_gbx` (reader and writer), `gbx_zarr_read`, `gbx_zarr_write` |
+| <Link id="builtin-netcdf"></Link>netCDF | [`netCDF`](./gdal-drivers/raster#raster-netcdf) | xarray with the netCDF4 engine to read, and netCDF4 to write. The COG writer and raster functions that open a netCDF file still use the GDAL driver. | `netcdf_gbx` (reader and writer) |
+| <Link id="builtin-pmtiles"></Link>PMTiles | [`PMTiles`](./gdal-drivers/vector#vector-pmtiles) | The pmtiles package. | `pmtiles_gbx` (reader and writer), `gbx_pmtiles_agg`, `pmtiles_info` |
+| <Link id="builtin-mvt"></Link>Mapbox Vector Tiles | [`MVT`](./gdal-drivers/vector#vector-mvt) | The mapbox-vector-tile package. | `gbx_st_asmvt`, `gbx_st_asmvt_pyramid`. The PMTiles writer stores the encoded tiles as they are. |
+| <Link id="builtin-exif"></Link>EXIF and GPS image metadata | [`JPEG`](./gdal-drivers/raster#raster-jpeg) | Pillow and exifread. The JPEG driver reads pixels only. | `exif_gbx` (reader) |
+| <Link id="builtin-lidar"></Link>LiDAR point clouds (LAS and LAZ) | none | The laspy package. | `lidar_gbx` (reader and writer) |
+
+## Driver tables
+
+The drivers of the env wheel's GDAL build are on three pages, by what they handle.
+Each page of vector or raster drivers has three groups: available and tested, available and not tested, and unavailable.
+
+- [Vector drivers](./gdal-drivers/vector): 61 drivers, 16 tested with GeoBrix, 38 available and not tested, 7 unavailable.
+- [Raster drivers](./gdal-drivers/raster): 125 drivers, 23 tested with GeoBrix, 102 available and not tested, 0 unavailable.
+- [Other drivers](./gdal-drivers/other): 3 drivers that handle neither rasters nor vectors, and the drivers that are off by default.
+{/* END GENERATED drivers */}

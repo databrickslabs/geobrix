@@ -1,4 +1,4 @@
-"""Task 1: session-free enumeration core — _accept_basename + list_local_files.
+"""Session-free enumeration core — _accept_basename + list_local_files.
 
 Also covers the listing-efficiency fix (need_size=False):
   - list_local_files must never stat individual files (FUSE overhead prevention).

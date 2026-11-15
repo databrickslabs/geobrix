@@ -28,9 +28,10 @@ from databricks.labs.gbx.ds.file_gbx import materialize_decision
     returns available-minus-reserve bytes; `override_mb` / `GBX_DENSE_ALLOC_MAX_MB` wins.
     Concurrency/GPU-slot math stays in `mvs.recommend_dense_allocation` on top.
 - `materialize_decision(size_bytes, kind, spark=None, cap_bytes=None)` — **worker-side,
-  binary cap**: Serverless/Connect 64 MiB, classic 256 MiB. Handles `worker_read` and
-  `cog_write` — intentionally NOT `budget_for` intents (a worker cannot measure its
-  ~1 GB task quota; the empirically bisected binary cap is the correct mechanism).
+  binary cap**: Serverless/Connect 64 MiB, classic 256 MiB. `kind` is `read`, `write`,
+  `ingest` or `cog_write` (a worker read gate is `read`). These are intentionally NOT `budget_for`
+  intents (a worker cannot measure its ~1 GB task quota; the empirically bisected binary cap is the
+  correct mechanism).
   `cog_write` additionally enforces a driver-side COG conversion ceiling
   (`_COG_DRIVER_MAX_BYTES` = 10 GiB default, `GBX_COG_DRIVER_MAX_BYTES` override).
   Does NOT read `/proc/meminfo`. Callers pre-capture the cap on the driver and pass it
@@ -39,6 +40,12 @@ from databricks.labs.gbx.ds.file_gbx import materialize_decision
   classic 1536 MiB / none 0). Handles `tile_split` — intentionally NOT a `budget_for`
   intent (no RAM probe; pure strategy-to-bytes table lookup). Used by `ds/raster.py` to
   size tiles before decode.
+- `block_cache_bytes(strategy="auto", *, ceiling=128 MiB)` — **size of GDAL's raster block
+  cache** for a block of work that reads one tile: 1/16 of `decoded_budget_bytes(strategy)`
+  (`none` is sized for the runtime), under the ceiling. The sites that bound the cache (raster
+  reader opens, STAC window download, COG file conversion) pass it to
+  `pyrx._env.capped_block_cache`, never to `rasterio.Env(GDAL_CACHEMAX=...)`: rasterio counts
+  that value in BYTES and puts the old size back only for an outermost Env.
 
 ## Patterns the QC check flags (level: FAIL) outside `budget.py` / `file_gbx.py` / `mvs.py`
 

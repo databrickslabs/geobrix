@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx.bng
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
@@ -13,8 +14,7 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
     test("BNG_ expressions should run in spark sql without errors") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val df = spark
             .createDataFrame(
@@ -45,8 +45,6 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               bng_cellunion(nonCoreCell, nonCoreCell),
               bng_centroid(df("cellId")),
               bng_distance(df("cellId"), df("cellId")),
-              bng_eastnorthasbng(lit(100000), lit(200000), lit(3)),
-              bng_eastnorthasbng(lit(100000), lit(200000), lit("50m")),
               bng_euclideandistance(df("cellId"), df("cellId")),
               bng_geomkring(lit(wkbLit), lit(1), lit(1)),
               bng_geomkloop(lit(wkbLit), lit(1), lit(1)),
@@ -72,49 +70,10 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
 
     }
 
-    test("BNG_ aggregator expressions should run in spark sql without errors") {
-        spark.sparkContext.setLogLevel("ERROR")
-        import functions._
-        bng.functions.register(spark)
-        functions.register(spark)
-
-        val df = spark
-            .createDataFrame(
-              Seq(
-                ("TQ388791", 0.01)
-              )
-            )
-            .toDF("cellId", "value")
-
-        def runQuery(df: DataFrame): Unit = {
-            val wkbLit = JTS.toWKB(JTS.fromWKT("POLYGON ((0 0, 2 0, 2 1, 0 1, 0 0))"))
-            val coreCell = struct(df("cellId"), lit(true), lit(wkbLit))
-            df
-                .withColumn("gen", explode(array(lit(1), lit(2), lit(3))))
-                .withColumn("dummy", lit(1))
-                .withColumn("cell", coreCell)
-                .repartition(10)
-                .groupBy("dummy")
-                .agg(
-                  bng_cellunion_agg(col("cell")).as("unionCore"),
-                  bng_cellintersection_agg(col("cell")).as("intersectCore")
-                )
-                .write
-                .format("noop")
-                .mode("overwrite")
-                .save()
-        }
-
-        runQuery(df)
-        runQuery(df.withColumn("cellId", lit(BNG.parse("TQ388791"))))
-
-    }
-
     test("BNG_ generator expressions should run in spark sql without errors") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val df = spark
             .createDataFrame(

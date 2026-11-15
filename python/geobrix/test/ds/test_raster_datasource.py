@@ -1,7 +1,8 @@
 """Integration tests for the raster_gbx DataSource (uses local Spark)."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
@@ -39,7 +40,7 @@ def _write_sample(path, width=4, height=3):
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
         nodata=-9999.0,
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
@@ -110,7 +111,7 @@ def test_read_directory_one_partition_per_file(spark, tmp_path):
 def test_corrupt_file_fails_fast_materialized(spark, tmp_path):
     """A corrupt file raises at collect() time when using materialised tiles.
 
-    Task 2 note: with virtualTiles=true (the default), read() now defers the
+    Note: with virtualTiles=true (the default), read() defers the
     rasterio.open for whole-file virtual tiles, so a corrupt file only raises
     when the tile is materialized by a downstream pixel op (not at collect()
     time).  This test uses virtualTiles=false to preserve "fails fast" coverage
@@ -149,7 +150,7 @@ def test_multi_tile_split_matches_plan_layout(spark, tmp_path):
         crs="EPSG:4326",
         transform=from_origin(0.0, 0.0, 1.0, 1.0),
     )
-    with rasterio.open(str(f), "w", **profile) as ds:
+    with open_raster(str(f), "w", **profile) as ds:
         ds.write(data)
 
     # Expected count via plan_layout (decoded-size budget, the new semantics for sizeInMB).
@@ -242,7 +243,7 @@ def test_multi_tile_subwindows_are_reencoded(spark, tmp_path):
         crs="EPSG:4326",
         transform=from_origin(0.0, 0.0, 1.0, 1.0),
     )
-    with rasterio.open(str(f), "w", **profile) as ds:
+    with open_raster(str(f), "w", **profile) as ds:
         ds.write(data)
     raw = f.read_bytes()
 
@@ -272,7 +273,7 @@ def _write_big_incompressible(path, side=2048):
         crs="EPSG:4326",
         transform=from_origin(0.0, 0.0, 1.0, 1.0),
     )
-    with rasterio.open(str(path), "w", **profile) as ds:
+    with open_raster(str(path), "w", **profile) as ds:
         ds.write(data)
 
 
@@ -438,14 +439,14 @@ def test_gtiff_writer_has_no_cog_option(tmp_path):
 
 
 def test_file_and_cog_registered():
-    from databricks.labs.gbx.ds.register import _SOURCES
+    from databricks.labs.gbx.manifest import datasource_classes
 
-    names = {s.name() for s in _SOURCES}
+    names = {s.name() for s in datasource_classes()}
     assert "file_gbx" in names and "cog_gbx" in names
 
 
 # ---------------------------------------------------------------------------
-# Task 4: session-free enumeration via file_gbx core
+# Session-free enumeration via file_gbx core
 # ---------------------------------------------------------------------------
 
 
@@ -474,3 +475,14 @@ def test_raster_reader_filter_regex_still_composes(tmp_path):
     (tmp_path / "drop_2023.tif").write_bytes(b"x")
     r = RasterGbxReader({"path": str(tmp_path), "filterRegex": r".*_2024\.tif$"})
     assert r._list_source_files() == [str(tmp_path / "keep_2024.tif")]
+
+
+def test_filter_regex_matching_no_file_reads_zero_rows(spark, tmp_path):
+    _write_sample(str(tmp_path / "s0.tif"))
+    spark.dataSource.register(RasterGbxDataSource)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("filterRegex", r".*\.nomatch$")
+        .load(str(tmp_path))
+    )
+    assert df.count() == 0

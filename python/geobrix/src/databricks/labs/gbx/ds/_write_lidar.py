@@ -106,6 +106,15 @@ def _resolve_write_cols(schema: StructType, options: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _unparsable_part(path: str, exc: BaseException) -> ValueError:
+    """The error for a merge part laspy cannot parse: names the file, says how to proceed."""
+    return ValueError(
+        f"lidar_gbx merge: {os.path.basename(path)} could not be read as a LAS/LAZ file "
+        f"({type(exc).__name__}: {exc}). Fix: remove or repair that file (a stray or "
+        "truncated part in the merge directory), then run the merge again."
+    )
+
+
 def _laz_point_count(path: str) -> int:
     """Open a LAS/LAZ file and return its header point count."""
     import laspy
@@ -209,7 +218,7 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
     """
     import laspy
 
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
     # Infer CRS from the first part when the caller did not supply one.
     if crs is None and inputs:
@@ -425,7 +434,7 @@ def _merge_laz_parts_seam(
     """
     import laspy
 
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
     if not inputs:
         return 0
@@ -474,7 +483,7 @@ def _merge_laz_parts_seam(
     )
 
     if len(kx) == 0:
-        return 0  # nothing survived; caller (Task 6) retains parts, skips publish
+        return 0  # nothing survived; caller retains parts, skips publish
     if has_rgb:
         write_xyzrgb_laz(
             tmp_path,
@@ -572,7 +581,7 @@ class LidarGbxWriter(DataSourceWriter):
         return fallback
 
     def _encode_part(self, tmp_path: str, xs, ys, zs, rs, gs, bs) -> str:
-        from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+        from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
         x = np.asarray(xs, dtype=np.float64)
         y = np.asarray(ys, dtype=np.float64)
@@ -854,6 +863,22 @@ class LidarGbxWriter(DataSourceWriter):
             raise ValueError(
                 f"lidar_gbx merge: no .laz/.las files under {self.path} to merge."
             )
+
+        # The parts of a post-hoc merge are files this job did not write. Refuse, by name, any LAZ
+        # part the decoder must not be given (the reader's own guard) before laspy opens one: a
+        # garbled chunk table or a dense run of 0xFF bytes can end the process, not raise.
+        from databricks.labs.gbx.ds.lidar import check_laz
+
+        for p in parts:
+            label = f"lidar_gbx merge: {os.path.basename(p)}"
+            try:
+                check_laz(p, label)
+            except ValueError as exc:
+                if label in str(exc):  # check_laz already named the part
+                    raise
+                raise _unparsable_part(p, exc) from exc
+            except Exception as exc:  # laspy could not read the header at all
+                raise _unparsable_part(p, exc) from exc
 
         # Scan every part's point format to detect heterogeneous RGB/XYZ mixes.
         # A merged LAS has a single point format; mixing RGB and XYZ-only parts

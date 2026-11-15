@@ -11,7 +11,7 @@ show_help() {
     echo "Usage: gbx:test:primitive-databricks [--no-wait] [--help]"
     echo "Uploads the primitive runner notebook and runs it on CLUSTER_ID."
     echo "Options: --no-wait  Submit and exit without waiting."
-    echo "Config: notebooks/tests/databricks_cluster_config.env (CLUSTER_ID, GBX_BUNDLE_VOLUME_*, optional GBX_RUNNER_DIR, GBX_PRIMITIVE_RUNNER_NOTEBOOK)"
+    echo "Config: examples/tests/databricks_cluster_config.env (CLUSTER_ID, GBX_BUNDLE_VOLUME_*, optional GBX_RUNNER_DIR, GBX_PRIMITIVE_RUNNER_NOTEBOOK)"
 }
 
 NO_WAIT=""
@@ -24,5 +24,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$PROJECT_ROOT" || exit 1
-python notebooks/tests/push_and_run_primitive_on_cluster.py $NO_WAIT
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+gbx_export_cluster_config
+# Needs databricks-sdk and Python >= 3.11: see gbx_python_with_sdk in common.sh.
+gbx_python_with_sdk || exit 1
+"${GBX_SDK_PYTHON[@]}" examples/tests/push_and_run_primitive_on_cluster.py $NO_WAIT
 exit $?

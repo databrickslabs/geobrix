@@ -1,6 +1,7 @@
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -13,11 +14,9 @@ def _materialized_tile_df(spark):
     """One-row DataFrame with a materialized tile struct column named 'tile'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     raster = make_geotiff_bytes(width=8, height=8, count=2, epsg=4326)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def test_plan_grid_windows_no_overlap_exact_grid():
@@ -90,6 +89,30 @@ def test_retile_uneven_edges():
     assert (2, 2) in sizes and (1, 1) in sizes
 
 
+def test_located_variants_pair_each_tile_with_its_window():
+    # The *_located generators yield (window, bytes): the window is the tile's pixel
+    # window in the parent, so its size is the tile's size and its offset places the
+    # tile's georeferencing; the plain iterators yield the very same bytes.
+    from rasterio.windows import Window
+
+    with _serde.open_tile(make_geotiff_bytes(width=5, height=4, epsg=4326)) as ds:
+        located = list(tiling.iter_retile_located(ds, 2, 2))
+        plain = tiling.retile(ds, 2, 2)
+        overlap = list(tiling.iter_to_overlapping_tiles_located(ds, 2, 2, 50))
+        made = list(tiling.iter_make_tiles_located(ds, 1))
+        bands = list(tiling.iter_separate_bands_indexed(ds))
+        for win, b in located + overlap + made:
+            col, row, w, h = win
+            with _serde.open_tile(b) as o:
+                assert (o.width, o.height) == (w, h)
+                assert o.transform == ds.window_transform(Window(col, row, w, h))
+        assert [b for _, b in located] == plain
+        assert [w for w, _ in located] == tiling.plan_grid_windows(5, 4, 2, 2, 0)
+        assert [w for w, _ in overlap] == tiling.plan_grid_windows(5, 4, 2, 2, 50)
+        assert [w for w, _ in made] == [(0, 0, 5, 4)]
+        assert [i for i, _ in bands] == list(range(1, ds.count + 1))
+
+
 def _dims(parts):
     out = []
     for b in parts:
@@ -108,7 +131,7 @@ def test_overlapping_tiles():
 
 
 def _heavy_overlap_windows(size, tile_dim, overlap_pct):
-    """Reference port of heavy OverlappingTiles.generateWindows (one axis).
+    """Reference rule of the former JVM tooverlappingtiles windows (one axis).
 
     overlapWidth = ceil(tile_dim * overlap_pct / 100); step = tile_dim - overlap;
     starts enumerated as Scala ``0 until size by step``.
@@ -171,7 +194,7 @@ def _square_geotiff_bytes(side, count, dtype="float32"):
 
 
 def _heavy_count(width, height, size_bytes, dest_mib):
-    """Reference port of BalancedSubdivision.getTileSize + ReTile tile count.
+    """Reference rule of the former JVM maketiles: tile size and tile count.
 
     Power-of-4 split: smallest k (capped at 4^(k+1) <= 512) such that
     size_bytes >> (2*k) <= limit; nx = ny = 2**k; tiles via ceil-div.
@@ -240,16 +263,16 @@ def test_get_tile_size_positive_mb_still_splits():
 # FILE-aware UDTF tests: file_ref=NULL (FILE unavailable) → FUSE fallback.
 # These guard that adding file_ref as a trailing eval parameter does not alter
 # behavior when FILE is not available (file_supported=False on local[2]).
-# The FILE stream fast path is validated on-cluster in Task 9.
+# The FILE stream fast path is validated on-cluster.
 # ---------------------------------------------------------------------------
 
 
 def test_rst_separatebands_file_unavailable_unchanged(spark):
     """Separatebands UDTF: file_ref=NULL → same band count as pre-change."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _materialized_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_sepbands")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_sepbands, "
@@ -261,10 +284,10 @@ def test_rst_separatebands_file_unavailable_unchanged(spark):
 
 def test_rst_retile_file_unavailable_unchanged(spark):
     """Retile UDTF: file_ref=NULL → same sub-tile count as pre-change."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _materialized_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_retile")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_retile, " "LATERAL gbx_rst_retile(tile, 4, 4) t"
@@ -275,10 +298,10 @@ def test_rst_retile_file_unavailable_unchanged(spark):
 
 def test_rst_tooverlappingtiles_file_unavailable_unchanged(spark):
     """ToOverlappingTiles UDTF: file_ref=NULL → non-zero output unchanged."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _materialized_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_overlap")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_overlap, "
@@ -294,7 +317,7 @@ def test_rst_maketiles_file_unavailable_unchanged(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     # 512x512 float32 encoded ~2 MiB; at size_in_mb=1 → power-of-4 k=1 → 4 tiles
     side = 512
@@ -314,9 +337,9 @@ def test_rst_maketiles_file_unavailable_unchanged(spark):
             dst.write(data, 1)
         raster = mf.read()
     df = spark.createDataFrame([(raster,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_maketiles")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_maketiles, "

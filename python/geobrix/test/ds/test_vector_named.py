@@ -2,7 +2,6 @@ import json
 import os
 
 from databricks.labs.gbx.ds import vector as V
-from databricks.labs.gbx.ds.register import register
 
 
 def test_named_drivers_preset():
@@ -17,7 +16,9 @@ def test_named_drivers_preset():
 
 
 def test_geojson_gbx_reads(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = os.path.join(str(tmp_path), "pts.geojson")
     with open(p, "w") as f:
         json.dump(

@@ -13,21 +13,22 @@ rst_fromcontent (no JAR required).
 """
 
 from _fixtures import single_band_tile_df, multiband_tile_df
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 # ============================================================================
 # Generator Functions (UDTFs via LATERAL)
 # ============================================================================
 
 
-def rst_retile_python_light_example(spark):
+def rst_retile_python_example(spark):
     """Retile a raster into uniform dimensions (UDTF via LATERAL).
 
     Generator function: invoke via SQL LATERAL, not df.select.
     Returns one row per sub-tile (each sub-tile is a v2-Tile struct).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # Explode raster into 64x64-pixel tiles (returns array of tiles)
     return spark.sql(
@@ -35,7 +36,7 @@ def rst_retile_python_light_example(spark):
     ).take(3)
 
 
-rst_retile_python_light_example_output = """
+rst_retile_python_example_output = """
 +------+--------------+-----+----------------------+
 |cellid|raster        |path |...                   |
 +------+--------------+-----+----------------------+
@@ -45,15 +46,45 @@ rst_retile_python_light_example_output = """
 """
 
 
-def rst_tooverlappingtiles_python_light_example(spark):
+def rst_retile_of_a_derived_tile_python_example(spark):
+    """Retile a tile that another function made (subquery, then LATERAL).
+
+    On Serverless a SQL function cannot be an argument of a table-function call.
+    Compute the tile in a CTE, then call the generator on that column.
+    """
+    from databricks.labs import gbx
+
+    gbx.register(spark)
+    single_band_tile_df(spark).createOrReplaceTempView("rasters")
+    return spark.sql(
+        """
+        WITH tagged AS (
+          SELECT gbx_rst_setsrid(tile, 32618) AS tile FROM rasters
+        )
+        SELECT t.* FROM tagged, LATERAL gbx_rst_retile(tile, 64, 64) t
+        """
+    ).take(3)
+
+
+rst_retile_of_a_derived_tile_python_example_output = """
++------+--------------+-----+----------------------+
+|cellid|raster        |path |...                   |
++------+--------------+-----+----------------------+
+|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
++------+--------------+-----+----------------------+
+(one row per sub-tile of the tile that gbx_rst_setsrid returned)
+"""
+
+
+def rst_tooverlappingtiles_python_example(spark):
     """Create overlapping tiles for edge-aware processing (UDTF via LATERAL).
 
     Overlap percentage is applied to tile dimensions for seamless processing.
     Returns one row per overlapping tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # 64x64 tiles with 8% overlap
     return spark.sql(
@@ -62,7 +93,7 @@ def rst_tooverlappingtiles_python_light_example(spark):
     ).take(3)
 
 
-rst_tooverlappingtiles_python_light_example_output = """
+rst_tooverlappingtiles_python_example_output = """
 +------+--------------+-----+----------------------+
 |cellid|raster        |path |...                   |
 +------+--------------+-----+----------------------+
@@ -72,15 +103,15 @@ rst_tooverlappingtiles_python_light_example_output = """
 """
 
 
-def rst_separatebands_python_light_example(spark):
+def rst_separatebands_python_example(spark):
     """Separate multi-band raster into individual bands (UDTF via LATERAL).
 
     Each band is returned as a separate v2-Tile struct.
     Uses the multiband fixture (3 bands: red, NIR, green).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     multiband_tile_df(spark).createOrReplaceTempView("multiband_rasters")
     # Explode multiband raster into individual band tiles
     return spark.sql(
@@ -88,7 +119,7 @@ def rst_separatebands_python_light_example(spark):
     ).collect()
 
 
-rst_separatebands_python_light_example_output = """
+rst_separatebands_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -98,15 +129,15 @@ rst_separatebands_python_light_example_output = """
 """
 
 
-def rst_polygonize_python_light_example(spark):
+def rst_polygonize_python_example(spark):
     """Extract polygons from raster regions (UDTF via LATERAL).
 
     One row per contiguous-value region: (geom_wkb, value). band and
     connectedness (4 or 8) are required arguments in the light tier.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # Polygonize band 1 with 4-connectivity.
     return spark.sql(
@@ -114,7 +145,7 @@ def rst_polygonize_python_light_example(spark):
     ).take(3)
 
 
-rst_polygonize_python_light_example_output = """
+rst_polygonize_python_example_output = """
 +---------+-----+
 |geom_wkb |value|
 +---------+-----+
@@ -124,15 +155,63 @@ rst_polygonize_python_light_example_output = """
 """
 
 
-def rst_maketiles_python_light_example(spark):
+def rst_polygonize_connectedness_python_example(spark):
+    """Count the regions of a checkerboard with 4- and 8-connectedness.
+
+    Pixels that touch at a corner are separate regions with 4 and one region
+    with 8. Returns the two counts.
+    """
+    import numpy as np
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs import gbx
+    from databricks.labs.gbx.rasterx import functions as rx_api
+
+    gbx.register(spark)
+    # 2 x 2 pixels: 1 and 2 on the diagonals.
+    data = np.array([[1, 2], [2, 1]], dtype="uint8")
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=2,
+            height=2,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:4326",
+            transform=from_origin(0, 2, 1, 1),
+        ) as ds:
+            ds.write(data, 1)
+        raster_bytes = mf.read()
+    df = spark.createDataFrame([(raster_bytes,)], ["raster"])
+    df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")).createOrReplaceTempView(
+        "checkerboard"
+    )
+    counts = [
+        spark.sql(
+            f"SELECT count(*) AS n FROM checkerboard, LATERAL gbx_rst_polygonize(tile, 1, {c}) t"
+        ).first()["n"]
+        for c in (4, 8)
+    ]
+    return counts
+
+
+rst_polygonize_connectedness_python_example_output = """
+[4, 2]
+(four single-pixel regions with 4-connectedness; two diagonal regions with 8)
+"""
+
+
+def rst_maketiles_python_example(spark):
     """Subdivide raster into tiles by approximate size (UDTF via LATERAL).
 
     Size is in MB; the tile grid is derived from the MB budget.
     Returns one row per sub-tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
 
-    rx.register(spark)
+    gbx.register(spark)
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # Subdivide raster into approximately 1.0 MB tiles
     return spark.sql(
@@ -140,7 +219,7 @@ def rst_maketiles_python_light_example(spark):
     ).collect()
 
 
-rst_maketiles_python_light_example_output = """
+rst_maketiles_python_example_output = """
 +------+--------------+-----+----------------------+
 |cellid|raster        |path |...                   |
 +------+--------------+-----+----------------------+
@@ -150,21 +229,21 @@ rst_maketiles_python_light_example_output = """
 """
 
 
-def rst_rasterize_python_light_example(spark):
+def rst_rasterize_python_example(spark):
     """Burn geometry into a raster tile (column-returning, not UDTF).
 
     This is NOT a generator — it returns a single tile struct from geometry.
     Takes a WKB/WKT geometry and a burn value; produces a rasterized tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs import gbx
     from pyspark.sql import Row, functions as f
 
-    rx.register(spark)
+    gbx.register(spark)
     # Create a small synthetic geometry DataFrame with WKT polygon
     df = spark.createDataFrame([Row(geom="POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))")])
     # Rasterize a square polygon (value=1.0, extent=(0,0,10,10), 10x10 pixels, EPSG:4326)
     result = df.select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.col("geom"),
             f.lit(1.0),
             f.lit(0.0),
@@ -179,7 +258,7 @@ def rst_rasterize_python_light_example(spark):
     return result[0]["tile"]
 
 
-rst_rasterize_python_light_example_output = """
+rst_rasterize_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

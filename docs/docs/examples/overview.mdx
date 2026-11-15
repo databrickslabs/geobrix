@@ -19,12 +19,26 @@ End-to-end, runnable notebook walkthroughs. Each links to the notebook source on
 | [Helios — Tiling to PMTiles](../notebooks/helios) | Four-notebook San Francisco series: vector, raster basemap, terrain scoring, and a sharded PMTiles mosaic. |
 | [Vapor-Eyes — Permian Methane](../notebooks/vapor-eyes) | Screen a satellite methane signal over the Permian Basin down to the leaking operator. |
 | [Orthomosaic Photogrammetry](../notebooks/orthomosaic) | Build a georeferenced orthomosaic from a drone image dataset: `exif_gbx` telemetry extraction, GSD estimation, sparse SfM, orthomosaic GeoTIFF, COG conversion, and PMTiles packaging — capped off with an optional GeoSAM segmentation step (`gbx.models`) that turns the published orthomosaic into georeferenced object polygons, in-notebook or via a served GPU endpoint. |
+| [Weather Features with Zarr](../notebooks/zarr-weather-features) | Register an ERA5-like weather cube in place as a transactional Zarr store, sample 100 sites into a features table, write a derived wind speed back as a new variable in one transaction, read an earlier version, map it as raster tiles clipped with `rst_clip`, and tag the version for training. |
+
+:::tip Lakeflow SDP pipelines
+[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow) and
+[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow) also ship as production Lakeflow SDP
+bundles whose bronze layer is an Auto Loader streaming table over the landed files. To keep your
+own tables in sync with a landing folder, see [Ingestion Pipelines](../ingestion/overview).
+:::
 
 ## Apps
 
 | App | What it does |
 |---|---|
 | [Genie Map](./genie-map) | Databricks App (React + kepler.gl) that turns Vapor-Eyes methane gold data into an interactive map you can query by natural language. |
+
+## Unity Catalog SQL
+
+| Examples | What they cover |
+|---|---|
+| [Unity Catalog SQL examples](./uc-functions) | Twelve SQL files of ready-made queries, one per category, for the GeoBrix [Unity Catalog functions](../api/uc-functions). Install the functions, then run them in the SQL editor. |
 
 ## Next Steps
 

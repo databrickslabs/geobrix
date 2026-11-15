@@ -1,12 +1,16 @@
-"""Unit tests for CF NetCDF helpers (no Spark)."""
+"""What the netcdf_gbx readers make of CF files: grids as tiles, points and curvilinear grids as points."""
 
 import logging
 
 import numpy as np
 import pytest
 from netCDF4 import Dataset
+from pyspark.sql.types import DoubleType, FloatType, IntegerType
+from rasterio.io import MemoryFile
 
-from databricks.labs.gbx.ds import _netcdf
+from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
+from databricks.labs.gbx.ds.netcdf import NetcdfRasterReader
+from databricks.labs.gbx.ds.raster import _FilePartition
 
 
 def _write_regular_grid(path):
@@ -50,48 +54,6 @@ def _write_curvilinear(path):
         v[:] = np.arange(6, dtype="float32").reshape(2, 3)
 
 
-def test_classify_grid(tmp_path):
-    p = str(tmp_path / "grid.nc")
-    _write_regular_grid(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        assert _netcdf.classify(ds, "ch4") == _netcdf.GRID
-
-
-def test_classify_points(tmp_path):
-    p = str(tmp_path / "pts.nc")
-    _write_points(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        assert _netcdf.classify(ds, "value") == _netcdf.POINTS
-
-
-def test_classify_curvilinear(tmp_path):
-    p = str(tmp_path / "curv.nc")
-    _write_curvilinear(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        assert _netcdf.classify(ds, "ch4") == _netcdf.CURVILINEAR
-
-
-def test_grid_transform_crs_north_up(tmp_path):
-    p = str(tmp_path / "grid.nc")
-    _write_regular_grid(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        transform, crs = _netcdf.grid_transform_crs(ds, "ch4")
-    assert crs == "EPSG:4326"
-    # origin at (lon min - half px, lat max + half px); px = 0.5
-    assert transform.a == pytest.approx(0.5)  # x pixel size
-    assert transform.e == pytest.approx(-0.5)  # y pixel size (north-up => negative)
-    assert transform.c == pytest.approx(9.75)  # ulx = 10.0 - 0.25
-    assert transform.f == pytest.approx(50.25)  # uly = 50.0 + 0.25
-
-
-def test_array_2d_is_north_up(tmp_path):
-    p = str(tmp_path / "grid.nc")
-    _write_regular_grid(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        arr = _netcdf.array_2d(ds, "ch4")
-    np.testing.assert_allclose(arr, np.arange(12, dtype="float32").reshape(3, 4))
-
-
 def _write_grid_with_time(path, ntime=3):
     """Regular grid with a leading time dim of size ntime; slice t is all-t."""
     with Dataset(path, "w") as ds:
@@ -106,76 +68,6 @@ def _write_grid_with_time(path, ntime=3):
         lon[:] = [10.0, 10.5, 11.0, 11.5]
         v = ds.createVariable("ch4", "f4", ("time", "lat", "lon"), fill_value=-9999.0)
         v[:] = np.stack([np.full((3, 4), t, dtype="float32") for t in range(ntime)])
-
-
-def test_array_2d_warns_and_reads_first_slice_on_multi_time(tmp_path, caplog):
-    """A leading time dim > 1 → array_2d reads slice 0 (unchanged) AND warns."""
-    p = str(tmp_path / "time.nc")
-    _write_grid_with_time(p, ntime=3)
-    with _netcdf.open_dataset(p, None) as ds:
-        with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds._netcdf"):
-            arr = _netcdf.array_2d(ds, "ch4")
-    # Behavior unchanged: only the first time slice (all zeros) is read.
-    np.testing.assert_allclose(arr, np.zeros((3, 4), dtype="float32"))
-    # The silent drop is now surfaced: a warning names the dim and its size.
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any(
-        "time" in m and "size 3" in m for m in msgs
-    ), f"expected a dropped-dimension warning naming time/size 3; got {msgs}"
-
-
-def test_array_2d_no_warn_on_singleton_leading_dim(tmp_path, caplog):
-    """A size-1 leading dim (e.g. S5P time=1) is squeezed silently — no warning."""
-    p = str(tmp_path / "time1.nc")
-    _write_grid_with_time(p, ntime=1)
-    with _netcdf.open_dataset(p, None) as ds:
-        with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds._netcdf"):
-            arr = _netcdf.array_2d(ds, "ch4")
-    np.testing.assert_allclose(arr, np.zeros((3, 4), dtype="float32"))
-    assert not [
-        r for r in caplog.records if "leading dimension" in r.getMessage()
-    ], "a size-1 leading dim should not warn"
-
-
-def test_point_arrays_flatten(tmp_path):
-    p = str(tmp_path / "pts.nc")
-    _write_points(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        lon, lat, attrs, srid = _netcdf.point_arrays(ds, ["value"])
-    assert srid == "4326"
-    assert lon.shape == (5,) and lat.shape == (5,)
-    np.testing.assert_allclose(attrs["value"], np.arange(5, dtype="float32"))
-
-
-def test_point_arrays_curvilinear_ravel(tmp_path):
-    p = str(tmp_path / "curv.nc")
-    _write_curvilinear(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        lon, lat, attrs, srid = _netcdf.point_arrays(ds, ["ch4"])
-    assert lon.shape == (6,) and lat.shape == (6,)
-    np.testing.assert_allclose(attrs["ch4"], np.arange(6, dtype="float32"))
-
-
-def test_point_arrays_grid_meshgrid(tmp_path):
-    # A regular grid coerced to points: lon(4) x lat(3) -> 12 aligned points.
-    p = str(tmp_path / "grid.nc")
-    _write_regular_grid(p)
-    with _netcdf.open_dataset(p, None) as ds:
-        lon, lat, attrs, srid = _netcdf.point_arrays(ds, ["ch4"])
-    assert lon.shape == (12,) and lat.shape == (12,) and attrs["ch4"].shape == (12,)
-    # first cell is (lon=10.0, lat=50.0)
-    assert lon[0] == pytest.approx(10.0) and lat[0] == pytest.approx(50.0)
-
-
-def test_np_to_spark_types():
-    from pyspark.sql.types import DoubleType, FloatType, IntegerType
-
-    assert isinstance(_netcdf.np_to_spark(np.dtype("float32")), FloatType)
-    assert isinstance(_netcdf.np_to_spark(np.dtype("float64")), DoubleType)
-    assert isinstance(_netcdf.np_to_spark(np.dtype("int32")), IntegerType)
-
-
-# --- readable_variables / select_variables -----------------------------------
 
 
 def _grid_two_vars(path):
@@ -193,24 +85,150 @@ def _grid_two_vars(path):
             v[:] = np.arange(12, dtype="float32").reshape(3, 4)
 
 
-def test_readable_variables_raster_enumerates_all_grids(tmp_path):
-    f = tmp_path / "g.nc"
-    _grid_two_vars(str(f))
-    with _netcdf.open_dataset(str(f), None) as ds:
-        assert sorted(_netcdf.readable_variables(ds, "raster")) == ["ch4", "co"]
-        # coordinate variables are never returned
-        assert "lat" not in _netcdf.readable_variables(ds, "raster")
+def raster_rows(path, **options):
+    """(variable, transform, crs, pixels) of each tile the raster reader yields."""
+    reader = NetcdfRasterReader({"path": path, **options})
+    out = []
+    for source, (_, raster_bytes, meta) in reader.read(_FilePartition(path, -1)):
+        with MemoryFile(bytes(raster_bytes)) as mf, mf.open() as ds:
+            out.append((source.split(":")[-1], ds.transform, str(ds.crs), ds.read(1)))
+    return out
 
 
-def test_select_variables_absent_option_returns_all(tmp_path):
-    f = tmp_path / "g.nc"
-    _grid_two_vars(str(f))
-    with _netcdf.open_dataset(str(f), None) as ds:
-        assert sorted(_netcdf.select_variables(ds, {}, "raster")) == ["ch4", "co"]
+def vector_rows(path, **options):
+    """(schema, rows) of the vector reader; a row is (*variables, wkb, srid, proj)."""
+    reader = NetcdfVectorReader({"path": path, **options})
+    return reader.schema(), [
+        r for part in reader.partitions() for r in reader.read(part)
+    ]
 
 
-def test_select_variables_filters_to_named(tmp_path):
-    f = tmp_path / "g.nc"
-    _grid_two_vars(str(f))
-    with _netcdf.open_dataset(str(f), None) as ds:
-        assert _netcdf.select_variables(ds, {"variable": "co"}, "raster") == ["co"]
+def test_a_regular_grid_is_a_north_up_tile_in_wgs84(tmp_path):
+    p = str(tmp_path / "grid.nc")
+    _write_regular_grid(p)
+    ((var, transform, crs, pixels),) = raster_rows(p)
+    assert (var, crs) == ("ch4", "EPSG:4326")
+    # origin at (lon min - half px, lat max + half px); px = 0.5, north-up => negative y size
+    assert (transform.a, transform.e, transform.c, transform.f) == pytest.approx(
+        (0.5, -0.5, 9.75, 50.25)
+    )
+    np.testing.assert_allclose(pixels, np.arange(12, dtype="float32").reshape(3, 4))
+
+
+def test_a_south_up_grid_is_flipped_to_north_up(tmp_path):
+    p = str(tmp_path / "south_up.nc")
+    with Dataset(p, "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [49.0, 49.5, 50.0]  # ascending: the first row is the southern one
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        ds.createVariable("ch4", "f4", ("lat", "lon"))[:] = np.arange(
+            12, dtype="float32"
+        ).reshape(3, 4)
+    ((_, transform, _, pixels),) = raster_rows(p)
+    np.testing.assert_allclose(
+        pixels, np.arange(12, dtype="float32").reshape(3, 4)[::-1]
+    )
+    assert (transform.e, transform.f) == pytest.approx((-0.5, 50.25))
+
+
+@pytest.mark.parametrize("ntime", [3, 1], ids=["many_steps_warn", "one_step_is_silent"])
+def test_a_leading_time_dim_reads_its_first_slice_and_warns_when_it_drops_steps(
+    tmp_path, caplog, ntime
+):
+    p = str(tmp_path / "time.nc")
+    _write_grid_with_time(p, ntime=ntime)
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds._netcdf"):
+        ((_, _, _, pixels),) = raster_rows(p)
+    np.testing.assert_allclose(pixels, np.zeros((3, 4), dtype="float32"))
+    msgs = [
+        r.getMessage() for r in caplog.records if "leading dimension" in r.getMessage()
+    ]
+    assert bool(msgs) is (ntime > 1)
+    assert not msgs or any("time" in m and "size 3" in m for m in msgs), msgs
+
+
+# file -> (variable, points, first point (lon, lat), values in order) as the vector reader flattens it
+POINTS = {
+    "points": (_write_points, "value", 5, (10.0, 50.0), np.arange(5)),
+    "curvilinear_ravel": (_write_curvilinear, "ch4", 6, (10.0, 50.0), np.arange(6)),
+}
+
+
+@pytest.mark.parametrize(
+    "write,name,n,first,values", POINTS.values(), ids=POINTS.keys()
+)
+def test_the_vector_reader_flattens_points_and_curvilinear_grids(
+    tmp_path, write, name, n, first, values
+):
+    import shapely
+
+    p = str(tmp_path / "f.nc")
+    write(p)
+    schema, rows = vector_rows(p, variable=name)
+    assert schema.fieldNames() == [name, "geom_0", "geom_0_srid", "geom_0_srid_proj"]
+    assert len(rows) == n
+    assert {r[-2] for r in rows} == {"4326"} and {r[-1] for r in rows} == {"EPSG:4326"}
+    g = shapely.from_wkb(rows[0][-3])
+    assert (g.x, g.y) == pytest.approx(first)
+    np.testing.assert_allclose([r[0] for r in rows], values)
+
+
+def test_a_points_file_has_no_raster_and_a_grid_has_no_points(tmp_path):
+    pts, grid = str(tmp_path / "pts.nc"), str(tmp_path / "grid.nc")
+    _write_points(pts)
+    _write_regular_grid(grid)
+    assert raster_rows(pts) == []
+    assert vector_rows(grid)[1] == []
+
+
+def test_point_arrays_coerces_a_regular_grid_to_a_meshgrid(tmp_path):
+    """Kept as a kernel test: the readers never reach it (the vector reader takes no grid variable, see above),
+    so no read exercises this branch of point_arrays."""
+    from databricks.labs.gbx.ds import _netcdf
+
+    p = str(tmp_path / "grid.nc")
+    _write_regular_grid(p)
+    with _netcdf.open_dataset(p, None) as ds:
+        lon, lat, attrs, srid = _netcdf.point_arrays(ds, ["ch4"])
+    assert srid == "4326"
+    assert lon.shape == (12,) and lat.shape == (12,) and attrs["ch4"].shape == (12,)
+    assert lon[0] == pytest.approx(10.0) and lat[0] == pytest.approx(
+        50.0
+    )  # the first cell is (10.0, 50.0)
+
+
+@pytest.mark.parametrize(
+    "dtype,spark_type",
+    [("f4", FloatType), ("f8", DoubleType), ("i4", IntegerType)],
+    ids=["float", "double", "int"],
+)
+def test_attribute_columns_take_the_variables_type(tmp_path, dtype, spark_type):
+    p = str(tmp_path / "t.nc")
+    with Dataset(p, "w") as ds:
+        ds.createDimension("obs", 2)
+        for name in ("latitude", "longitude"):
+            v = ds.createVariable(name, "f8", ("obs",))
+            v.standard_name = name
+            v[:] = [1.0, 2.0]
+        ds.createVariable("value", dtype, ("obs",))[:] = [1, 2]
+    schema, _ = vector_rows(p, variable="value")
+    assert isinstance(schema["value"].dataType, spark_type)
+
+
+# --- which variables a read takes ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "options,want",
+    [({}, ["ch4", "co"]), ({"variable": "co"}, ["co"])],
+    ids=["all_grids_never_the_coordinates", "named_variable"],
+)
+def test_a_read_takes_every_grid_variable_or_the_named_one(tmp_path, options, want):
+    p = str(tmp_path / "g.nc")
+    _grid_two_vars(p)
+    assert sorted(v for v, *_ in raster_rows(p, **options)) == want

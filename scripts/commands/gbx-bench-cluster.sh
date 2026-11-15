@@ -3,40 +3,53 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
+gbx_snapshot_exec "${BASH_SOURCE[0]}" "$@"   # run from a copy: an edit during the run cannot change it
+# In the snapshot's run the code is the snapshot's, the state (venv, logs, local build) the source tree's.
+SNAP_ROOT="$PROJECT_ROOT"
+PROJECT_ROOT="${GBX_SOURCE_ROOT:-$PROJECT_ROOT}"
 
 PASS_ARGS=()
+LOG_PATH=""
 show_help() {
     show_banner "gbx:bench:cluster"
     cat <<'EOF'
 Submit the heavy-vs-light benchmark as a one-off notebook job to a Databricks
 cluster (the cluster + artifacts must be provisioned by the operator per the
 installation docs). Results land in the bench_results Delta table + out_dir on
-the configured Volume. Reads notebooks/tests/databricks_cluster_config.env.
+the configured Volume. Reads examples/tests/databricks_cluster_config.env.
 
 Usage: bash scripts/commands/gbx-bench-cluster.sh [options]
 Options:
   --cluster-id <id>     Target cluster (overrides CLUSTER_ID from config)
-  --run-id <id>         Run id (default cluster)
-  --functions <csv>     rst_* names (overrides --set)
+  --profile <name>      Databricks config profile (overrides DATABRICKS_CONFIG_PROFILE and the config file)
+  --run-id <id>         Run id (default: one of its own per launch, cluster-<date>-<time>-<4 hex>;
+                        --resume needs the run id it resumes)
+  --functions <csv>     rst_* names (overrides --set); with --grid-bng-only, bng_* names
+                        pick which BNG legs run (no bng_* name = all legs)
   --set <core|full>     Selection tier: core (fast default) or full (default core)
   --modes <m>           pure-core | spark-path | both (default both)
   --row-counts <csv>    Spark-path row ladder (default 10,100,1000,10000)
-  --warmup <n>          Warmup iters (default 2)
-  --measured <n>        Measured iters (default 5)
+  --warmup <n>          Pure-core warmup iters (default 1)
+  --measured <n>        Pure-core measured iters (default 3)
+  --spark-warmup <n>    Spark-path warmup iters (default 1)
+  --spark-measured <n>  Spark-path measured iters (default 1)
   --heavyweight-only    Skip the lightweight leg
-  --lightweight-only    Skip the heavyweight leg (use on ARM clusters)
-  --benchmark-readers   Also run reader benchmarks (raster_gbx vs gdal)
+  --lightweight-only    Skip the heavyweight leg (use on a cluster with no GeoBrix JAR)
+  --benchmark-readers   Also run reader benchmarks (raster_gbx)
   --readers-only        Run ONLY the reader benchmark (no fn benchmarks)
   --benchmark-pmtiles   Also run PMTiles writer benchmark (pmtiles_gbx vs pmtiles)
   --pmtiles-only        Run ONLY the PMTiles benchmark (no fn benchmarks)
-  --benchmark-vector    Also run vector reader benchmark (light *_gbx vs heavy *_ogr)
+  --benchmark-vector    Also run vector reader benchmark (the light *_gbx readers and writers)
   --vector-only         Run ONLY the vector reader benchmark (no fn benchmarks)
-  --benchmark-netcdf    Also run NetCDF reader benchmark (light netcdf_gbx vs heavy netcdf_gdal)
+  --benchmark-netcdf    Also run NetCDF reader benchmark (light netcdf_gbx)
   --netcdf-only         Run ONLY the NetCDF reader benchmark (no fn benchmarks)
   --benchmark-lidar     Also run LiDAR reader+writer benchmark (light lidar_gbx only)
   --lidar-only          Run ONLY the LiDAR reader+writer benchmark (no fn benchmarks)
   --benchmark-exif      Also run EXIF reader benchmark (light exif_gbx only)
   --exif-only           Run ONLY the EXIF reader benchmark (no fn benchmarks)
+  --benchmark-grid-bng  Also run the BNG grid benchmark (light pygx vs heavy gridx.bng)
+  --grid-bng-only       Run ONLY the BNG grid benchmark; each explode leg checks its query
+                        reaches its own tier before timing
   --input-tile <mode>   Input tile for the light spark-path leg: materialized (default) or virtual
   --disable-file        Set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg; use with --input-tile virtual)
   --grouped-file        Also run the grouped FILE-amortization benchmark (rst_clip_grouped +
@@ -45,6 +58,20 @@ Options:
   --grouped-file-only   Run ONLY the grouped FILE-amortization benchmark (no fn benchmarks)
   --multiwindow-corpus <path>  Multiwindow COG corpus dir (holds cog_multiwindow_manifest.json).
                         Default: <corpus>/bench-corpus-cog-multiwindow.
+  --levels <set>        Also run the levels leg for one set of functions (S session functions,
+                        G generators, A aggregates, H DataFrame helpers, SE the GDAL spec engine's
+                        rows, IO the tile reads, or a function family of the manifest such as
+                        raster-accessor or grid-scalar):
+                        every form of that set at each execution level the compute offers
+                        (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog) at 1x/4x/16x, with
+                        the attribution split (serialization, Python eval, shuffle, spill, memory,
+                        GC, worker RSS) in the row. Tile inputs come from <corpus>/rows. L1/L2
+                        need the geobrix JAR on the cluster.
+  --levels-only         Run ONLY the levels leg (no fn benchmarks, no heavy tests JAR)
+  --levels-scales <csv> Multiples of each form's base row count the levels leg times (default: the set's own ladder, IO 1,4,10, else 1,4,16)
+  --levels-forms <csv>  Time only the forms with these names (the `form` column). Default: every form.
+  --levels-uc <c.s>     catalog.schema holding the L4 (Unity Catalog) functions. Without it the L4
+                        forms record a skipped row.
   --file-matrix         Also run the FILE-access matrix: GeoTIFF + GeoPackage reads across
                         file_mode in (fuse, external, managed). Light-only (pure Python).
   --file-matrix-only    Run ONLY the FILE matrix benchmark (no fn benchmarks)
@@ -62,41 +89,117 @@ Options:
                         (managed/external legs yield na_by_design on FUSE-only tiers).
   --gpkg-corpus <path>  GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
                         Default: <corpus>/bench-corpus-gpkg.
+  --benchmark-zarr      Also run the Zarr benchmark (light only): R1-R3 reads of the ERA5 store
+                        against one GeoTIFF per hour, W1-W2 writes, the shard-index and
+                        sample-density probes (cases in bench/spec.py ZARR_CASES)
+  --zarr-only           Run ONLY the Zarr benchmark (no fn benchmarks)
+  --zarr-store <path>   The plain ERA5 store (default <volume>/_probe/zarr-spike/read/era5/
+                        era5_v3_shard_zstd.zarr)
+  --zarr-cog-dir <path> Its GeoTIFF-per-hour copy, staged on first use (default
+                        <volume>/_probe/zarr/bench/cog_hourly)
+  --zarr-scratch <path> Directory the write legs fill and empty (default
+                        <volume>/_probe/zarr/bench/scratch/<run-id>)
+  --zarr-schema <c.s>   Schema of the write legs' manifest tables, each dropped after its run
+                        (default <catalog>.gbx_zarr_scratch)
+  --zarr-cases <csv>    Cases to run (default R1,R2,R3,W1,W2)
+  --zarr-reps <n>       Runs per leg, the first cold (default 3)
+  --zarr-ladder <csv>   Also run the size-ladder read and write legs (ZL-R1..ZL-R5, ZL-W1..ZL-W6) on these rungs (of 10MB..10GB). Alone, it runs only
+                        the ladder (it implies --zarr-only and drops R1..W2 unless --zarr-cases is given)
+  --zarr-ladder-family <csv>  county_wind and/or global_11km (default both)
+  --zarr-ladder-root <path>   Stores <family>/<rung>.zarr, from gbx:bench:gen-data --zarr-ladder (default
+                        <volume>/_probe/zarr/ladder)
+  --zarr-ladder-cases <csv>   ZL-R1 full table, ZL-R2 box, ZL-R3 100 sites, ZL-R4 wind speed + mean, ZL-R5 one hour as a tile;
+                        ZL-W1 table of cells to a manifest store, ZL-W2 to a plain store, ZL-W3 baseline (tasks write staged shards),
+                        ZL-W4 / ZL-W5 append a day to the manifest / plain store, ZL-W1s/W2s/W4s/W5s the same by pack+stage, ZL-W6 the blocks recipe (read blocks, wind speed per block, plain store) (default: all)
+  --zarr-ladder-scratch <path>  Where the write legs put their stores, emptied by them (default <volume>/_probe/zarr/ladder_out/<run-id>)
+  --zarr-ladder-generate      The job makes the ladder stores that are missing (on the driver's local disk, then copied to the root)
+  --zarr-ladder-budget-mib <n>  Plan the reads with this decoded unit budget (the planner packs chunks into tasks up to it)
+  --extras <csv>        geobrix extras the notebook installs after the wheel (default: the
+                        runtime's Zarr extras with a Zarr leg, else light-dbr19)
+  --new-cluster         Run on a job cluster made for this run; it ends with the run.
+                        --spark-version (default 19.x-scala2.13), --node-type (default
+                        m6gd.xlarge), --num-workers (default 1), --access-mode
+                        dedicated|standard (default dedicated), --on-demand (AWS: every
+                        node on demand, none of them a spot node taken back mid-run).
+                        A node type with no local disk (m5, m6g, m6i) gets one 100 GB
+                        GENERAL_PURPOSE_SSD EBS volume; --ebs-volume-type|count|size override it.
+                        The m5ad family is not supported.
+  --with-jar            With --new-cluster: install the staged GeoBrix JAR on the job cluster as a
+                        library (the JVM levels L1/L2 of a --levels run need it). --jar-path <path>
+                        names another JAR (default <volume>/geobrix/<version>/jar/geobrix-<version>-jar-with-dependencies.jar)
   --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
                         Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).
                         Only used with --serverless.
   --no-wait             Submit without blocking on completion
+  --log <path>          Write the output to a log (filename -> test-logs/<name>)
+  --no-smoke            Skip the smoke stage (logged). By default a SMOKE run goes first: each form of the
+                        --levels set once at --smoke-rows rows plus a worker-side import check; only a clean
+                        smoke submits the real run (exit 4 otherwise)
+  --smoke-only          Run the smoke stage and stop (exit 0 when clean): proves a compute and a launch cheaply
+  --smoke-rows <n>      Rows per form at the smoke (default 16)
+  --smoke-timeout-min <n>  Time limit of the smoke run (default 15)
+  --smoke-allow-errors  A form's error row at the smoke does not stop the real run
+  --skip-preflight      Skip the local preflight (logged): the environment spec names the wheel, the staged wheel
+                        is the local build, the probe SQL runs on a local Spark, no client input above the cap
+                        (exit 5 when a check fails)
+  --timeout-min <n>     Time limit of the real run (default 360)
+  --form-cap-min <n>    The watchdog cancels the run when one form runs longer (default 15; the smoke 5)
+  --stale-min <n>       ... or when the notebook's heartbeat stops changing for this long (default 5);
+                        either prints `STALLED: <form> after <m> min` and the driver stack, exit 3, no retry
+  --no-fail-fast        Run each form through all its scales, as before, with nothing stopped early. By default
+                        (levels runs) the rungs run breadth first and the notebook stops a rung itself:
+  --bar-factor <x>      a rung projected (previous rung x scale ratio x this) past --rung-cap-min is skipped (default 1.5)
+  --rung-cap-min <n>    the most one rung may take; past its deadline it is interrupted and recorded over-bar (default 20)
+  --setup-cap-min <n>   the most a rung's setup may take at 1x (x the scale, held to the rung cap); past it, setup-bound (default 10)
+  --purpose "<why>"     REQUIRED on a launch: what the run tests and why (heads the notebook, rides on the run name; --explain-only may omit it)
+  --pool <name>         lease an idle cluster of the pool (gbx:bench:pool) instead of making one; --pool-wait-min <n> to wait (default 30)
+  --mode isolate|explore  isolate (default): timing-grade, one run on its compute; explore: parts may share a cluster, rows flagged and never
+                        compared with isolated ones. --concurrent <n> (needs explore) and --part <name> are written on the rows
+  --warmup-skip-s <n>   a rung whose projected run is over n seconds skips its warmup (default 120; 0 keeps every warmup)
+  --split-by fn         with --levels <set>: one job per function of the set, all started at once (run id <run>-<function>)
+  --inject-stall <s>    TEST ONLY: add a form that sleeps s seconds on the driver (proves the watchdog)
   --help, -h            Show help
+
+Environment: GBX_PYRX_VENV=<dir> runs the launcher on that venv instead of .venv-pyrx (Python 3.11+;
+databricks-sdk is added on top when the venv lacks it).
 
 NOTE: this submits a job to a real cluster (or Serverless) and consumes compute. For classic
 cluster runs the operator must have provisioned the cluster and filled databricks_cluster_config.env.
-For --serverless, set DATABRICKS_CONFIG_PROFILE to a workspace with Serverless enabled (e.g. dogfood).
+For --serverless, pass --profile (or set DATABRICKS_CONFIG_PROFILE) for a workspace with Serverless enabled (e.g. dogfood).
+The wheel is the env wheel staged by `gbx:data:stage-wheel --env <N> --versioned`
+(<volume>/geobrix/<version>/env<N>/) when it is there, else <volume>/geobrix-<version>+env<N>-py3-none-any.whl;
+GBX_BUNDLE_WHEEL_VOLUME_PATH overrides both.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do case $1 in
     --help|-h) show_help; exit 0 ;;
     --cluster-id) export CLUSTER_ID="$2"; shift 2 ;;
+    --profile)
+        if [[ $# -lt 2 ]]; then echo "ERROR: --profile needs a value" >&2; exit 2; fi
+        # wins over the config file (the launcher fills DATABRICKS_CONFIG_PROFILE from it only when the environment
+        # has none) and goes to the launcher too
+        export DATABRICKS_CONFIG_PROFILE="$2"; PASS_ARGS+=(--profile "$2"); shift 2 ;;
+    --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     *) PASS_ARGS+=("$1"); shift ;;
 esac; done
 
 cd "$PROJECT_ROOT"
 show_banner "gbx:bench:cluster"
+setup_log_file "$LOG_PATH"
 
-CONFIG="notebooks/tests/databricks_cluster_config.env"
-if [[ ! -f "$CONFIG" ]]; then
-    echo "ERROR: $CONFIG not found. Copy notebooks/tests/databricks_cluster_config.example.env and fill it." >&2
+CONFIG="examples/tests/databricks_cluster_config.env"
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+if ! GBX_CLUSTER_CONFIG_ENV="$(gbx_resolve_untracked "$CONFIG")" || [[ ! -f "$GBX_CLUSTER_CONFIG_ENV" ]]; then
+    echo "ERROR: $CONFIG not found. Copy examples/tests/databricks_cluster_config.example.env and fill it." >&2
     exit 1
 fi
+export GBX_CLUSTER_CONFIG_ENV
 
 echo "Submitting benchmark job (this runs on a real cluster and costs compute)..."
-# The launcher imports the bench package (-> pyrx -> rasterio) and the
-# databricks SDK, so it must run in the project's .venv-pyrx (which has both),
-# not the ambient python. Fall back to system python only if the venv is absent.
-PYBIN="python"
-if [[ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]]; then
-    PYBIN="$PROJECT_ROOT/.venv-pyrx/bin/python"
-fi
-"$PYBIN" notebooks/tests/push_and_run_bench_on_cluster.py "${PASS_ARGS[@]}"
+# The launcher imports the bench package (-> pyrx -> rasterio) and the databricks SDK: it runs
+# on the project's .venv-pyrx with the SDK layered over it (see gbx_python_with_sdk in common.sh).
+gbx_python_with_sdk || exit 1
+"${GBX_SDK_PYTHON[@]}" "$SNAP_ROOT/examples/tests/push_and_run_bench_on_cluster.py" "${PASS_ARGS[@]}"
 exit $?

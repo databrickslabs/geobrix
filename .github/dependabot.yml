@@ -16,6 +16,11 @@ updates:
     directory: "/python/geobrix"
     schedule:
       interval: "weekly"
+    # Raise a floor only when the new release is needed to keep the current
+    # constraint resolvable. Without this, Dependabot bumps every `>=` floor in
+    # pyproject.toml to the latest release, which forces package moves on
+    # runtimes that preinstall an older version (the per-runtime base packages).
+    versioning-strategy: increase-if-necessary
     # Labs lockdown policy: wait 7 days after a release before opening a PR
     # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
     cooldown:

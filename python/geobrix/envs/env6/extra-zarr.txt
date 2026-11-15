@@ -1,0 +1,13 @@
+# [zarr]: Zarr transactional stores (gbx.zarr) on DBR 19, DBR 19 ML and Serverless environment 6: the plain
+# wheel's [zarr_dbr19] pins as they stand. Their floors are at or below what those runtimes ship (numpy>=2,
+# typing_extensions>=4.14, packaging>=22, google-crc32c>=1.5, pyyaml), so nothing preinstalled moves, and none of
+# them needs a package this wheel vendors. Each is minor-capped because zarrs subclasses zarr internals and
+# documents no zarr ceiling: widen a cap only after a re-test. No env5 twin: Zarr targets DBR 19 and env 6 only.
+zarr>=3.4.1,<3.5
+numcodecs>=0.17,<0.18
+zarrs>=0.2.3,<0.3
+tensorstore>=0.1.85,<0.2
+obstore>=0.11,<0.13
+ml_dtypes>=0.5,<1
+msgspec>=0.19,<1
+donfig>=0.8,<1

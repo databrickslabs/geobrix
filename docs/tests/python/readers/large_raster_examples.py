@@ -21,7 +21,7 @@ SPLIT_DEFAULT = """# Default: reader auto-splits large rasters on a decoded-memo
 # splitStrategy=auto resolves to 'serverless' (512 MiB/tile) or 'classic'
 # (1 536 MiB/tile) based on the cluster environment.  Small files that fit
 # in the budget are read as a single whole-image tile.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 df = spark.read.format("raster_gbx").load(
@@ -72,9 +72,9 @@ with tempfile.TemporaryDirectory() as out:
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs import gbx
 
-    register(spark)
+    gbx.register(spark)
 
 
 def read_large_raster_defaults(spark, path=None):
@@ -119,6 +119,7 @@ def read_large_raster_cog_output(spark, path=None):
         spark.read.format("raster_gbx")
         .option("sizeInMB", "1")
         .option("tileFormat", "cog")
+        .option("virtualTiles", "false")  # encoded tiles; virtual tiles carry no bytes
         .load(path or SAMPLE_RASTER_SINGLE)
     )
     rows = df.collect()

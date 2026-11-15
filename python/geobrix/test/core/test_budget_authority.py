@@ -1,8 +1,6 @@
 """Tests for the budget_for() authority in pyrx/core/budget.py.
 
-Phase 1 covers driver_merge intent only.  Duplicate coverage of the
-_merge_budget_bytes helper in test_lidar_writer.py is intentional — Task 2
-removes those originals once the lidar writer delegates here.
+Covers the driver_merge and dense_alloc intents.
 """
 
 import pytest
@@ -13,7 +11,7 @@ _MID_CLOUD_BYTES = 1024 * _MIB  # ~1 GiB mid-size cloud
 
 def _patch_infra(monkeypatch, avail_mb, gpu):
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        "databricks.labs.gbx.rasterx.mvs.gpu_infra",
         lambda: {
             "host_ram_available_mb": avail_mb,
             "host_ram_mb": avail_mb,
@@ -28,7 +26,7 @@ def test_driver_merge_override_wins(monkeypatch):
     from databricks.labs.gbx.pyrx.core.budget import budget_for
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        "databricks.labs.gbx.rasterx.mvs.gpu_infra",
         lambda: (_ for _ in ()).throw(RuntimeError("probe must not be called")),
     )
     d = budget_for("driver_merge", 0, override_mb="100")
@@ -61,7 +59,7 @@ def test_driver_merge_probe_failure_floor(monkeypatch):
     def _raise():
         raise RuntimeError("nvidia-smi: command not found")
 
-    monkeypatch.setattr("databricks.labs.gbx.pyrx.mvs.gpu_infra", _raise)
+    monkeypatch.setattr("databricks.labs.gbx.rasterx.mvs.gpu_infra", _raise)
     d = budget_for("driver_merge", 0, override_mb=None)
     assert d.budget_bytes == _MERGE_FALLBACK_BYTES
 
@@ -85,11 +83,12 @@ def test_driver_merge_guard_raises_in_task_context(monkeypatch):
 def test_unknown_intent_raises():
     from databricks.labs.gbx.pyrx.core.budget import budget_for
 
+    # worker-side kinds belong to materialize_decision, so they are unknown intents here too
     with pytest.raises(ValueError):
-        budget_for("worker_read", 0)  # Phase 2 intent — not implemented in Phase 1
+        budget_for("no_such_intent", 0)
 
 
-# --- dense_alloc intent (Task 1) ---
+# --- dense_alloc intent ---
 
 _INFRA_GPU1 = {
     "host_ram_available_mb": 30 * 1024,  # 30 GiB available
@@ -128,7 +127,7 @@ def test_dense_alloc_override_mb_wins(monkeypatch):
 
     # override_mb must win without touching the infra probe
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        "databricks.labs.gbx.rasterx.mvs.gpu_infra",
         lambda: (_ for _ in ()).throw(RuntimeError("probe must not be called")),
     )
     d = budget_for("dense_alloc", override_mb="200")

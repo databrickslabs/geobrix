@@ -1,0 +1,5 @@
+{
+ "note": "The env wheels' size budget is soft. gbx:build:wheel prints each wheel's size and its delta against the last build, and fails a wheel over budget_mb unless an entry of 'justified' for its env (ceiling_mb, reason, date) covers it; a wheel past its ceiling fails again until a new entry justifies the growth. Both architectures' payload is in each wheel, so the budget is for the pair.",
+ "budget_mb": 100,
+ "justified": []
+}

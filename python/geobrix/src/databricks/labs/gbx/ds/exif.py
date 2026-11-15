@@ -7,6 +7,7 @@ Serverless-safe: session-free partitions()/read(); one InputPartition per file.
 Uses no forbidden Spark internal APIs — safe on Spark Connect / Serverless.
 """
 
+import logging
 import os
 import struct
 import warnings
@@ -23,11 +24,13 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _listing
+from databricks.labs.gbx.ds import _arrow_utc, _listing, _quarantine
 from databricks.labs.gbx.ds.file_gbx import list_local_files
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+_LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -63,29 +66,19 @@ EXIF_QC_SCHEMA = StructType(
 # Extensions recognized as camera images for EXIF extraction.
 _EXIF_EXTS = (".jpg", ".jpeg", ".tif", ".tiff")
 
+# Bytes at the end of a JPEG searched for its end marker (see _jpeg_problem).
+_JPEG_TAIL = 64 * 1024
+
 
 def _exif_arrow_schema(spark_schema: StructType) -> "pa.Schema":
-    """Build a pyarrow schema from a Spark ``StructType`` without a session timezone.
+    """Arrow schema of a Spark ``StructType`` without a session timezone.
 
-    ``pyspark.sql.pandas.types.to_arrow_schema`` funnels ``TimestampType`` through
-    ``to_arrow_type``, which asserts a non-null session timezone — unset on
-    Spark-Connect / Serverless DataSource workers, so it raises ``AssertionError``
-    there. This reader plans session-free, so we map ``TimestampType`` to a fixed
-    UTC arrow type ourselves (matching ``timestamp_utc=True`` semantics; naive EXIF
-    datetimes are treated as UTC wall-clock) and defer every other field to
-    ``to_arrow_type`` (which needs no timezone).
+    This reader plans session-free (a Spark-Connect / Serverless DataSource worker has
+    no session timezone for PySpark to type ``TimestampType`` with), so the timestamp
+    is the shared UTC mapping in ``_arrow_utc``; naive EXIF datetimes are treated as
+    UTC wall-clock.
     """
-    import pyarrow as pa
-    from pyspark.sql.pandas.types import to_arrow_type
-
-    fields = []
-    for f in spark_schema.fields:
-        if isinstance(f.dataType, TimestampType):
-            arrow_type = pa.timestamp("us", tz="UTC")
-        else:
-            arrow_type = to_arrow_type(f.dataType)
-        fields.append(pa.field(f.name, arrow_type, nullable=f.nullable))
-    return pa.schema(fields)
+    return _arrow_utc.arrow_schema_utc(spark_schema)
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +146,43 @@ def _encode_point_wkb(lon: float, lat: float) -> bytes:
 # ---------------------------------------------------------------------------
 # DataSource V2 partitioning
 # ---------------------------------------------------------------------------
+
+
+# Frame headers (SOF0-SOF15 but DHT C4, JPG C8, DAC CC): one must come before
+# the scan for a file to be a JPEG.
+_SOF_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_MAX_HEADER_SEGMENTS = 256
+
+
+def _jpeg_frame_problem(fh) -> Optional[str]:
+    """Walk the marker segments after SOI (``fh`` positioned after it) up to the
+    frame header; None when one is found, else what went wrong. Reads only the
+    segment headers (seeking over their payloads)."""
+    for _ in range(_MAX_HEADER_SEGMENTS):
+        b = fh.read(1)
+        if not b:
+            return "the file ends before the frame header"
+        if b != b"\xff":
+            return f"a header segment does not start with a marker (0x{b[0]:02X})"
+        while b == b"\xff":  # the marker's FF and any fill bytes
+            b = fh.read(1)
+        if not b:
+            return "the file ends before the frame header"
+        marker = b[0]
+        if marker in _SOF_MARKERS:
+            return None
+        if marker in (0xD9, 0xDA):  # EOI / SOS before any frame header
+            return "no frame header (SOF) before the image data"
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:  # markers without a length
+            continue
+        head = fh.read(2)
+        if len(head) < 2:
+            return "the file ends inside a header segment"
+        length = struct.unpack(">H", head)[0]
+        if length < 2:
+            return f"a header segment declares {length} bytes"
+        fh.seek(length - 2, 1)
+    return "no frame header in the first header segments"
 
 
 class _ExifFilePartition(InputPartition):
@@ -258,6 +288,8 @@ class ExifGbxReader(DataSourceReader):
         return [_ExifFilePartition(f) for f in files]
 
     def read(self, partition: "_ExifFilePartition") -> Iterator["pa.RecordBatch"]:
+        if _listing.is_empty_plan(partition):
+            return
         if self.mode == "metadata":
             yield from self._read_metadata(partition.file_path)
         elif self.mode == "qc":
@@ -269,20 +301,36 @@ class ExifGbxReader(DataSourceReader):
                 stacklevel=2,
             )
 
+    def _skip(self, message: str, error_class: str, detail: str, exc=None) -> None:
+        """A file this reader cannot use: skipped with a warning, or (with a
+        read_paths hook, ``on_error="skip"``) a bad record of the file -- unless
+        ``exc`` is an environment error (memory, a module, I/O), which then
+        fails the read."""
+        hook = _quarantine.hook_of(self)
+        if hook is not None:
+            if exc is not None:
+                _quarantine.reraise_environment(exc)
+            hook(None, error_class, detail)
+        else:
+            warnings.warn(message, stacklevel=3)
+
     def _open_file(self, local: str):
         """Return (stat_result, exifread_tags) or raise/warn and return None."""
         try:
             st = _listing._retry_transient(lambda: os.stat(local))
             if st.st_size == 0:
-                warnings.warn(
+                self._skip(
                     f"exif_gbx: skipping empty file {local!r} (0 bytes)",
-                    stacklevel=2,
+                    _quarantine.UNREADABLE_FILE,
+                    "empty file (0 bytes)",
                 )
                 return None, None
         except Exception as exc:  # noqa: BLE001
-            warnings.warn(
+            self._skip(
                 f"exif_gbx: skipping unreadable file {local!r}: {exc}",
-                stacklevel=2,
+                _quarantine.error_class(exc),
+                _quarantine.describe(exc),
+                exc,
             )
             return None, None
 
@@ -297,11 +345,42 @@ class ExifGbxReader(DataSourceReader):
             with fh:
                 return st, exifread.process_file(fh, details=False)
         except Exception as exc:  # noqa: BLE001
-            warnings.warn(
+            self._skip(
                 f"exif_gbx: skipping file with unreadable EXIF {local!r}: {exc}",
-                stacklevel=2,
+                _quarantine.error_class(exc),
+                _quarantine.describe(exc),
+                exc,
             )
             return None, None
+
+    def _jpeg_problem(self, local: str, size: int) -> Optional[str]:
+        """Why a ``.jpg`` / ``.jpeg`` file is not a JPEG, or None: it must start
+        with the SOI marker (FFD8) and its header segments must lead to a frame
+        header (SOFn, any precision, 12-bit included). Nothing is decoded, so an
+        image too large for PIL to open is still a JPEG. A missing end marker
+        (FFD9) in the last 64 KiB is only a warning: a truncated scan still has
+        its metadata, and a Motion Photo carries an MP4 after the image. Other
+        extensions (TIFF) are not checked."""
+        if not local.lower().endswith((".jpg", ".jpeg")):
+            return None
+        fh = _listing._retry_transient(lambda: open(local, "rb"))  # noqa: WPS515
+        with fh:
+            if fh.read(2) != b"\xff\xd8":
+                return "no JPEG start marker (FFD8): not a JPEG file"
+            problem = _jpeg_frame_problem(fh)
+            if problem is not None:
+                return f"the JPEG header cannot be decoded: {problem}"
+            fh.seek(max(2, size - _JPEG_TAIL))
+            ended = b"\xff\xd9" in fh.read()
+        if not ended:
+            _LOG.warning(
+                "exif_gbx: %s has no JPEG end marker (FFD9) in its last %d bytes: "
+                "truncated, or data follows the image (a Motion Photo); its "
+                "metadata is read",
+                local,
+                _JPEG_TAIL,
+            )
+        return None
 
     def _build_metadata_row(self, local: str, source: str, tags) -> dict:
         """Parse EXIF tags into a dict matching EXIF_META_SCHEMA (no pixel decode)."""
@@ -369,9 +448,18 @@ class ExifGbxReader(DataSourceReader):
         local = _listing.to_local_path(file_path)
         source = _listing.to_spark_uri(file_path)
 
-        _, tags = self._open_file(local)
+        st, tags = self._open_file(local)
         if tags is None:
             return
+        hook = _quarantine.hook_of(self)
+        if hook is not None:
+            # Metadata mode reads no pixels, so a truncated or non-JPEG file
+            # still gives a row; with read_paths' on_error="skip" it is a bad
+            # record of the file instead.
+            problem = self._jpeg_problem(local, st.st_size)
+            if problem is not None:
+                hook(None, _quarantine.NOT_JPEG, problem)
+                return
 
         row = self._build_metadata_row(local, source, tags)
         yield pa.RecordBatch.from_pylist(
@@ -383,7 +471,10 @@ class ExifGbxReader(DataSourceReader):
         import pyarrow as pa
 
         from databricks.labs.gbx.ds.file_gbx import materialize_decision
-        from databricks.labs.gbx.pyrx.imagery import image_brightness, image_sharpness
+        from databricks.labs.gbx.rasterx.imagery import (
+            image_brightness,
+            image_sharpness,
+        )
 
         local = _listing.to_local_path(file_path)
         source = _listing.to_spark_uri(file_path)
@@ -399,6 +490,13 @@ class ExifGbxReader(DataSourceReader):
             st.st_size, kind="read", cap_bytes=self._qc_cap_bytes
         )
         if decision != "stream":
+            if _quarantine.hook_of(self) is not None:
+                # Not bad data: the task cannot hold it. Fail the read loudly.
+                raise _quarantine.FileTooLarge(
+                    f"{local}: file size {st.st_size} bytes exceeds the memory cap "
+                    "for reading an image whole (exif_gbx qc mode); use a classic "
+                    "cluster for large images, or mode='metadata'"
+                )
             warnings.warn(
                 f"exif_gbx qc: skipping {local!r} — file size {st.st_size} bytes "
                 "exceeds the Serverless materialize cap; use a classic cluster "
@@ -413,9 +511,11 @@ class ExifGbxReader(DataSourceReader):
             with fh:
                 raw = fh.read()
         except Exception as exc:  # noqa: BLE001
-            warnings.warn(
+            self._skip(
                 f"exif_gbx qc: skipping {local!r} — cannot read bytes: {exc}",
-                stacklevel=2,
+                _quarantine.error_class(exc),
+                _quarantine.describe(exc),
+                exc,
             )
             return
 

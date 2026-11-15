@@ -34,7 +34,7 @@ def _closure_consts(fn):
 
 
 # ---------------------------------------------------------------------------
-# Task 4 (original): _udf.py pandas_udf/scalar_udf factories
+# _udf.py pandas_udf/scalar_udf factories
 # ---------------------------------------------------------------------------
 
 

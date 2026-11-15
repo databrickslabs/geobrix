@@ -25,13 +25,13 @@ import databricks.labs.gbx.pyrx.functions as functions_module
 # the front-door itself (or a byte-length contract), so they are not v1 leaks.
 _ALLOWLIST = {
     # rst_maketiles: the power-of-4 split count keys on the encoded GTiff byte
-    # length (heavy BalancedSubdivision parity), so the UDTF materialises the
+    # length (the rule of the former JVM maketiles), so the UDTF materialises the
     # tile through the front-door FIRST (ot._to_virtual_tile + materialize_to_bytes
     # for a virtual tile; verbatim bytes otherwise) and opens those bytes with
     # a length it can measure. The open is on front-door-obtained bytes, not on
     # tile["raster"].
     "_serde.open_tile(raster)": 1,
-    # _merge_bytes / _combineavg_bytes / _frombands_bytes (Task 5 corrupt-skip):
+    # _merge_bytes / _combineavg_bytes / _frombands_bytes (corrupt-skip):
     # each helper validates that a member's bytes are openable before adding them
     # to the collective list that agg_core opens all-at-once. The variable
     # `candidate` holds front-door-obtained bytes (ot.materialize_to_bytes(vt).raster
@@ -44,7 +44,13 @@ _ALLOWLIST = {
     # (_uf_merge, _uf_combineavg, _uf_frombands) + 3 pandas_udf FILE variants
     # (_merge_agg_file_udf, _combineavg_agg_file_udf, _frombands_agg_file_udf)
     # add 6 more pre-validation opens on front-door-obtained bytes = 14 total.
-    "_serde.open_tile(candidate)": 14,
+    # Each probe passes ``gate=False``: it only asks "do these bytes open?", and the
+    # decode that follows (agg_core's open of the collected members) applies the read
+    # cap, so the probe must not refuse first (a merge or combine refuses an over-cap
+    # member there, never drops it). Same bytes, same purpose; only the cap skip is new.
+    # The table functions' `_member_bytes` is a 15th probe of the same kind: it opens the front-door bytes
+    # `_tile_raster_bytes` returns (a virtual tile is materialized first), to drop a member that does not open.
+    "_serde.open_tile(candidate, gate=False)": 15,
 }
 
 # The v1 shared UDF builders in _udf.py. Every registered rst_* function was
@@ -85,7 +91,11 @@ def test_only_allowlisted_open_tile_calls_remain():
     """Every surviving ``_serde.open_tile(`` call is on the explicit allowlist."""
     src = _functions_source()
     # Count each distinct open_tile(...) call form.
-    calls = re.findall(r"_serde\.open_tile\([^)]*\)", src)
+    # Whitespace-normalised: the formatter wraps a long call over lines.
+    calls = [
+        re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", re.sub(r"\s+", " ", c)))
+        for c in re.findall(r"_serde\.open_tile\([^)]*\)", src)
+    ]
     unexpected = []
     counts = {}
     for c in calls:

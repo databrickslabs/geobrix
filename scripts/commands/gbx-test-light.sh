@@ -1,0 +1,75 @@
+#!/bin/bash
+# gbx:test:light - Run the light-tier Python tests (pyrx, pyvx, pygx, ds, zarr, ...) natively on
+# the host. A thin front for gbx:test:pyrx, whose default is only test/pyrx: with no --path this
+# runs every light dir in one pytest process, in the order of the unsharded pytest line
+# of the light CI action (.github/actions/pyrx_build/action.yml; CI itself runs the dirs as parallel shards).
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+source "$SCRIPT_DIR/common.sh"
+
+show_help() {
+    show_banner "GeoBrix: Light-tier Tests (host venv, no JAR)"
+    echo -e "${CYAN}Usage:${NC}"
+    echo -e "  ${GREEN}gbx:test:light${NC} ${YELLOW}[options]${NC}"
+    echo ""
+    echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable (default: every light dir, in one process, in the unsharded CI order)"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with '(not integration) and (not perf)' (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / merge cases), which the unit loop skips; pass it on a full run before a push"
+    echo -e "  ${GREEN}--docker${NC}               Run in the dev container instead of the host venv (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
+    print_lock_help
+    echo -e "  ${GREEN}--help${NC}                 Show this help"
+    echo ""
+    echo -e "${CYAN}Environment:${NC}"
+    echo -e "  ${YELLOW}GBX_PYRX_VENV=<dir>${NC}  Use this venv instead of .venv-pyrx (create it with the same variable: gbx:venv:sync)"
+    echo ""
+    echo -e "${CYAN}Other pytest options:${NC}"
+    echo -e "  Set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (e.g. '--durations=20 --junitxml=test-logs/light.xml')"
+    echo ""
+    echo -e "${CYAN}Examples:${NC}"
+    echo -e "  ${YELLOW}gbx:test:light --path python/geobrix/test/zarr/test_manifest.py${NC}"
+    echo -e "  ${YELLOW}gbx:test:light --log light.log${NC}"
+    echo ""
+}
+
+ARGS=()
+HAS_PATH=0
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --path|--log|--markers)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Option $1 needs a value${NC}" >&2
+                exit 2
+            fi
+            [[ $1 == --path ]] && HAS_PATH=1
+            ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        *)
+            ARGS+=("$1")   # --docker, --no-wait, and unknown options (gbx:test:pyrx rejects those)
+            shift
+            ;;
+    esac
+done
+
+if [[ $HAS_PATH -eq 0 ]]; then
+    # The CI light phase runs: pytest test/pyrx test/ds ... -m "not integration" -v (from python/geobrix).
+    CI_ACTION="$PROJECT_ROOT/.github/actions/pyrx_build/action.yml"
+    LIGHT_DIRS=$(grep -E '^[[:space:]]*pytest test/' "$CI_ACTION" 2>/dev/null | head -1 | grep -oE 'test/[A-Za-z0-9_]+' | sed 's|^test/||')
+    if [[ -z "$LIGHT_DIRS" ]]; then
+        echo -e "${RED}Could not read the light test dirs from the pytest line of $CI_ACTION${NC}" >&2
+        exit 1
+    fi
+    while IFS= read -r d; do
+        ARGS+=(--path "python/geobrix/test/$d/")
+    done <<< "$LIGHT_DIRS"
+fi
+
+exec bash "$SCRIPT_DIR/gbx-test-pyrx.sh" "${ARGS[@]}"

@@ -1,0 +1,764 @@
+"""The deferred workspace cleanup (examples/tests/_workspace_sweep.py, gbx:workspace:sweep).
+
+A launcher keeps a run's notebooks when the run ends, so the run page still opens them. The sweep removes
+them once they are older than the window (60 min; 24 h for a run that did not succeed). A fake workspace
+records every call: nothing here talks to Databricks.
+"""
+
+import importlib
+import re
+import subprocess
+import sys
+from types import SimpleNamespace
+
+import pytest
+from conftest import REPO_ROOT
+
+ME = "me@example.com"
+ROOT = f"/Users/{ME}/jobs/geobrix"
+LEGACY = f"/Users/{ME}/GeoBrix"  # where the launchers put their notebooks before the job root moved
+NOW = 2_000_000_000.0
+MIN = 60.0
+HOST = "https://example.cloud.databricks.com"
+
+
+class NotFound(Exception):
+    pass
+
+
+class FakeW:
+    """workspace (list, get_status, delete), files (a Volume tree), jobs.list_runs: as much as the sweep uses."""
+
+    def __init__(self):
+        self.objects = {}  # path -> (object_type, modified_at in ms or None)
+        self.volume = set()  # Volume file paths
+        self.active = []  # notebook paths of active runs
+        self.deleted = []
+        self.folders_deleted = []  # empty folders pruned
+        self.list_runs_error = None
+        self.config = SimpleNamespace(host=HOST)
+        w = self
+
+        class Workspace:
+            def list(self, path, recursive=False):
+                if path not in w.objects or w.objects[path][0] != "DIRECTORY":
+                    raise NotFound(f"Path ({path}) doesn't exist.")
+                kids = [p for p in w.objects if p.rsplit("/", 1)[0] == path]
+                return [w._info(p) for p in sorted(kids)]
+
+            def get_status(self, path):
+                if path not in w.objects:
+                    raise NotFound(f"Path ({path}) doesn't exist.")
+                return w._info(path)
+
+            def delete(self, path, recursive=False):
+                kids = [p for p in w.objects if p.startswith(path + "/")]
+                if kids and not recursive:
+                    raise RuntimeError(f"{path} is not empty")
+                # an empty folder removed by the sweep's folder pruning (not recursive) is not an item delete
+                (w.folders_deleted if not recursive and w.objects.get(path, ("",))[0] == "DIRECTORY" else w.deleted).append(path)
+                for p in kids + [path]:
+                    w.objects.pop(p, None)
+
+        class Files:
+            def list_directory_contents(self, path):
+                seen = {}
+                for f in w.volume:
+                    if f.startswith(path + "/"):
+                        head = f[len(path) + 1 :].split("/", 1)
+                        seen[f"{path}/{head[0]}"] = len(head) > 1
+                if not seen:
+                    raise NotFound(path)
+                return [SimpleNamespace(path=p, is_directory=d) for p, d in sorted(seen.items())]
+
+            def delete(self, path):
+                w.deleted.append(path)
+                w.volume.discard(path)
+
+            def delete_directory(self, path):
+                w.deleted.append(path + "/")
+
+        class Jobs:
+            def list_runs(self, active_only=False, expand_tasks=False, **kw):
+                assert active_only and expand_tasks
+                if w.list_runs_error:
+                    raise w.list_runs_error
+                return [
+                    SimpleNamespace(tasks=[SimpleNamespace(notebook_task=SimpleNamespace(notebook_path=p), spark_python_task=None)])
+                    for p in w.active
+                ]
+
+        self.workspace, self.files, self.jobs = Workspace(), Files(), Jobs()
+        self.current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name=ME))
+
+    def _info(self, path):
+        kind, mtime = self.objects[path]
+        return SimpleNamespace(path=path, object_type=SimpleNamespace(value=kind), modified_at=mtime)
+
+    def mkdir(self, path):
+        """An empty folder and the folders above it."""
+        return self.add(path, kind="DIRECTORY")
+
+    def add(self, path, age_min=None, kind="NOTEBOOK"):
+        """An object and the folders above it; ``age_min`` is how long ago it was modified."""
+        parts = path.strip("/").split("/")
+        for i in range(1, len(parts)):
+            self.objects.setdefault("/" + "/".join(parts[:i]), ("DIRECTORY", None))
+        self.objects[path] = (kind, None if age_min is None else int((NOW - age_min * MIN) * 1000))
+        return path
+
+
+@pytest.fixture
+def sw(monkeypatch, tmp_path):
+    monkeypatch.setenv("GBX_WS_SWEEP_LEDGER", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.delenv("GBX_WS_SWEEP_AT_LAUNCH", raising=False)
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    sys.modules.pop("_workspace_sweep", None)
+    return importlib.import_module("_workspace_sweep")
+
+
+def _sweep(sw, w, **kw):
+    lines = []
+    kw.setdefault("now", NOW)
+    report = sw.sweep(w, me=ME, out=lines.append, **kw)
+    return report, "\n".join(lines)
+
+
+# ---- the window ----------------------------------------------------------------------------------------------------
+
+
+def test_an_item_younger_than_the_window_is_kept(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=30)
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and nb in w.objects
+    assert re.search(rf"KEPT {re.escape(nb)}: younger than 60 min", out)
+
+
+def test_an_item_older_than_the_window_is_deleted_and_named(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=61)
+    tst = w.add(f"{ROOT}/runners/tests_r2_serverless.ipynb", age_min=90)
+    report, out = _sweep(sw, w)
+    assert sorted(w.deleted) == sorted([nb, tst])
+    assert f"DELETED {nb}" in out and f"DELETED {tst}" in out
+    assert sorted(report.deleted) == sorted([nb, tst])
+
+
+def test_older_than_moves_the_window(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=30)
+    _sweep(sw, w, older_than_s=20 * MIN)
+    assert w.deleted == [nb]
+
+
+def test_dry_run_deletes_nothing_and_says_what_it_would(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    report, out = _sweep(sw, w, dry_run=True)
+    assert w.deleted == [] and nb in w.objects
+    assert f"WOULD DELETE {nb}" in out and report.deleted == [nb]
+
+
+# ---- the prefixes ---------------------------------------------------------------------------------------------------
+
+
+def test_an_item_outside_the_prefixes_is_never_deleted(sw):
+    w = FakeW()
+    keep = [
+        w.add(f"/Users/{ME}/geobrix_bench_runner_r1.ipynb", age_min=999),  # the home root, not jobs/geobrix/bench
+        w.add(f"/Users/{ME}/Other/tests_r1_serverless.ipynb", age_min=999),  # a runner name in a folder not ours
+        w.add(f"{ROOT}/bench/gbx_hs_diag", age_min=999),  # a hand-made notebook in the bench folder
+        w.add(f"{ROOT}/eo-series/01_ingest", age_min=999),  # a user's own folder under the job root
+        w.add("/Users/other@example.com/jobs/geobrix/bench/geobrix_bench_runner_r1.ipynb", age_min=999),  # another user
+        w.add("/Shared/jobs/geobrix/bench/geobrix_bench_runner_r1.ipynb", age_min=999),
+    ]
+    # a recorded path outside the job root is refused too (a --ws-dir somewhere else)
+    sw.record(w, [keep[0], keep[1], "/Shared/x"], scope="notebooks", now=NOW - 999 * MIN)
+    report, out = _sweep(sw, w)
+    assert w.deleted == []
+    assert all(p in w.objects for p in keep)
+    assert f"SKIPPED {keep[0]}: outside" in out
+
+
+def test_the_tests_folder_from_gbx_runner_dir_is_a_prefix(sw):
+    w = FakeW()
+    rd = f"/Workspace{ROOT}/gbx-beta-dbr-v0.2.0/sample-data/tests"
+    nb = w.add(f"{ROOT}/gbx-beta-dbr-v0.2.0/sample-data/tests/tests_r1_serverless.ipynb", age_min=120)
+    other = w.add(f"{ROOT}/gbx-beta-dbr-v0.2.0/sample-data/tests/_stage_distinct_var_corpus", age_min=999)
+    _sweep(sw, w, runner_dir=rd)
+    assert w.deleted == [nb] and other in w.objects
+
+
+def test_a_runner_dir_outside_the_job_root_is_refused(sw):
+    w = FakeW()
+    nb = w.add(f"/Users/{ME}/elsewhere/tests_r1_serverless.ipynb", age_min=999)
+    report, out = _sweep(sw, w, runner_dir=f"/Users/{ME}/elsewhere")
+    assert w.deleted == [] and nb in w.objects and "outside" in out
+
+
+def test_scope_limits_the_sweep_to_its_own_prefix(sw):
+    w = FakeW()
+    b = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    t = w.add(f"{ROOT}/runners/tests_r1_serverless.ipynb", age_min=120)
+    _sweep(sw, w, scopes=("bench",))
+    assert w.deleted == [b] and t in w.objects
+
+
+# ---- active runs ----------------------------------------------------------------------------------------------------
+
+
+def test_an_item_used_by_an_active_run_is_kept(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=300)
+    w.active = [f"/Workspace{nb}"]  # a run may name it with the /Workspace prefix
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and f"KEPT {nb}: used by an active run" in out
+
+
+def test_a_folder_holding_an_active_runs_notebook_is_kept(sw):
+    w = FakeW()
+    folder = f"{ROOT}/uc-it-0123456789ab"
+    w.add(f"{folder}/uc_it_install", age_min=300)
+    w.active = [f"{folder}/uc_it_install"]
+    _sweep(sw, w)
+    assert w.deleted == [] and folder in w.objects
+
+
+def test_no_active_run_listing_means_nothing_is_deleted(sw):
+    w = FakeW()
+    w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=300)
+    w.list_runs_error = RuntimeError("503 Service Unavailable")
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and report.error and "nothing deleted" in out
+
+
+# ---- the ledger: run-end windows and recorded paths ---------------------------------------------------------------
+
+
+def test_a_succeeded_run_is_kept_60_min_after_it_ends(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=300)  # imported 5 h ago; the run just ended
+    sw.release(w, [nb], scope="bench", succeeded=True, now=NOW, out=lambda s: None)
+    _sweep(sw, w, now=NOW + 59 * MIN)
+    assert w.deleted == []
+    _sweep(sw, w, now=NOW + 61 * MIN)
+    assert w.deleted == [nb]
+
+
+def test_a_failed_run_keeps_its_notebook_24_hours(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/runners/mutation_r1.ipynb", age_min=120)
+    sw.release(w, [nb], scope="runners", succeeded=False, now=NOW, out=lambda s: None)
+    report, out = _sweep(sw, w, now=NOW + 23 * 60 * MIN)
+    assert w.deleted == [] and f"KEPT {nb}: held until" in out
+    _sweep(sw, w, now=NOW + 25 * 60 * MIN)
+    assert w.deleted == [nb]
+
+
+def test_a_recorded_notebooks_serverless_import_is_swept_but_its_neighbours_are_not(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/serverless-run/probe_x", age_min=120)
+    mine = w.add(f"{ROOT}/serverless-run/hand_made", age_min=999)  # never recorded: not the runner's
+    sw.record(w, [nb], scope="notebooks", now=NOW - 120 * MIN)
+    _sweep(sw, w)
+    assert w.deleted == [nb] and mine in w.objects
+
+
+def test_a_forgotten_import_is_never_swept_by_record(sw):
+    """--keep-notebooks drops an earlier run's record of the same path."""
+    w = FakeW()
+    nb = w.add(f"{ROOT}/serverless-run/probe_x", age_min=120)
+    sw.record(w, [nb], scope="notebooks", now=NOW - 120 * MIN)
+    sw.forget(w, [nb])
+    _sweep(sw, w)
+    assert w.deleted == [] and nb in w.objects
+
+
+def test_a_recorded_import_beside_an_active_run_is_kept(sw):
+    """A notebooks-serverless dependency (a %run target) sits beside the notebook that runs it."""
+    w = FakeW()
+    dep = w.add(f"{ROOT}/eo-jobrun/config_nb", age_min=300)
+    main = w.add(f"{ROOT}/eo-jobrun/01_main", age_min=300)
+    sw.record(w, [dep, main], scope="notebooks", now=NOW - 300 * MIN)
+    w.active = [main]
+    _sweep(sw, w)
+    assert w.deleted == []
+
+
+def test_the_ledger_forgets_what_was_deleted_or_is_gone(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/serverless-run/probe_x", age_min=120)
+    sw.record(w, [nb, f"{ROOT}/serverless-run/gone"], scope="notebooks", now=NOW - 120 * MIN)
+    _sweep(sw, w)
+    assert sw.load_ledger(HOST) == {}
+
+
+def test_another_workspaces_record_is_left_alone(sw):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/serverless-run/probe_x", age_min=120)
+    other = FakeW()
+    other.config.host = "https://other.cloud.databricks.com"
+    sw.record(other, [nb], scope="notebooks", now=NOW - 120 * MIN)
+    _sweep(sw, w)
+    assert w.deleted == [] and len(sw.load_ledger(other.config.host)) == 1
+
+
+def test_a_uc_gate_folder_is_removed_whole_after_its_window(sw):
+    w = FakeW()
+    folder = f"{ROOT}/uc-it-0123456789ab"
+    w.add(f"{folder}/uc_it_install", age_min=120)
+    young = f"{ROOT}/uc-it-ba9876543210"
+    w.add(f"{young}/uc_it_install", age_min=10)
+    _sweep(sw, w)
+    assert w.deleted == [folder] and young in w.objects and f"{folder}/uc_it_install" not in w.objects
+
+
+def test_a_uc_gate_folder_follows_the_hold_on_its_notebook(sw):
+    w = FakeW()
+    folder = f"{ROOT}/uc-it-0123456789ab"
+    nb = w.add(f"{folder}/uc_it_install", age_min=120)
+    sw.release(w, [nb], scope="notebooks", succeeded=False, now=NOW, out=lambda s: None)
+    _sweep(sw, w)
+    assert w.deleted == []
+
+
+def test_a_lakeflow_connector_test_folder_is_removed_whole_after_its_window(sw):
+    # Fail on revert: without the lfc rule, gbx:test:lakeflow-connector's pipeline-source folders stay forever.
+    w = FakeW()
+    folder = f"{ROOT}/lfc-it-0123456789ab"
+    w.add(f"{folder}/ingest.py", age_min=120)
+    young = f"{ROOT}/lfc-it-ba9876543210"
+    w.add(f"{young}/ingest.py", age_min=10)
+    _sweep(sw, w)
+    assert w.deleted == [folder] and young in w.objects
+
+
+def test_a_failed_lakeflow_connector_test_folder_is_held_24_h(sw):
+    w = FakeW()
+    folder = f"{ROOT}/lfc-it-0123456789ab"
+    w.add(f"{folder}/ingest.py", age_min=120)
+    sw.release(w, [folder], scope="lfc", succeeded=False, now=NOW - 120 * MIN, out=lambda s: None)
+    _sweep(sw, w)
+    assert w.deleted == [] and folder in w.objects
+
+
+def test_a_failed_mutation_stage_on_the_volume_is_held_then_swept(sw):
+    w = FakeW()
+    stage = "/Volumes/c/s/v/mutation-runs/mut-r1"
+    w.volume |= {f"{stage}/geobrix.whl", f"{stage}/out/rows.json"}
+    sw.release(w, [stage], scope="runners", succeeded=False, kind="volume", now=NOW, out=lambda s: None)
+    _sweep(sw, w, now=NOW + 60 * MIN)
+    assert w.deleted == []
+    _sweep(sw, w, now=NOW + 25 * 60 * MIN)
+    assert f"{stage}/geobrix.whl" in w.deleted and f"{stage}/" in w.deleted and not w.volume
+
+
+def test_a_recorded_volume_path_outside_a_stage_folder_is_refused(sw):
+    w = FakeW()
+    w.volume |= {"/Volumes/c/s/v/sample-data/geobrix.whl"}
+    sw.release(w, ["/Volumes/c/s/v/sample-data"], scope="runners", succeeded=True, kind="volume", now=NOW - 999 * MIN, out=lambda s: None)
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and "outside" in out
+
+
+def test_max_deletes_bounds_a_launch_time_sweep(sw):
+    w = FakeW()
+    for i in range(5):
+        w.add(f"{ROOT}/bench/geobrix_bench_runner_r{i}.ipynb", age_min=120)
+    _sweep(sw, w, max_deletes=2)
+    assert len(w.deleted) == 2
+
+
+def test_the_launch_time_sweep_never_fails_a_launch(sw, capsys):
+    w = FakeW()
+    w.list_runs_error = RuntimeError("boom")
+    assert sw.sweep_at_launch(w, ("bench",)) is not None
+    w.current_user = None  # a client that cannot even say who it is
+    assert sw.sweep_at_launch(w, ("bench",)) is None
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_the_launch_time_sweep_removes_old_items_of_its_scope(sw, capsys):
+    w = FakeW()
+    old = w.add(f"{ROOT}/bench/geobrix_bench_runner_old.ipynb", age_min=3 * 60)
+    sw.sweep_at_launch(w, ("bench",), now=NOW)
+    assert w.deleted == [old] and old in capsys.readouterr().out
+
+
+# ---- the legacy root ----------------------------------------------------------------------------------------------
+
+
+def test_the_job_root_is_the_one_helper_and_not_the_legacy_folder(sw):
+    assert sw.root_of(ME) == ROOT == f"/Users/{ME}/jobs/geobrix"
+    assert sw.legacy_root_of(ME) == LEGACY and sw.root_of(ME) != LEGACY
+
+
+def test_runner_items_under_the_legacy_root_are_swept_too(sw):
+    w = FakeW()
+    bench = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    corpus = w.add(f"{LEGACY}/bench/geobrix_gen_corpus_r2_smoke.ipynb", age_min=120)
+    tst = w.add(f"{LEGACY}/runners/tests_r3_serverless.ipynb", age_min=120)
+    uc = f"{LEGACY}/uc-it-0123456789ab"
+    w.add(f"{uc}/uc_it_install", age_min=120)
+    new = w.add(f"{ROOT}/bench/geobrix_bench_runner_r4.ipynb", age_min=120)
+    _sweep(sw, w)
+    assert sorted(w.deleted[:5]) == sorted([bench, corpus, tst, uc, new])
+
+
+def test_a_young_or_held_legacy_item_is_kept(sw):
+    w = FakeW()
+    young = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=10)
+    held = w.add(f"{LEGACY}/runners/mutation_r2.ipynb", age_min=300)
+    sw.release(w, [held], scope="runners", succeeded=False, now=NOW, out=lambda s: None)
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and young in w.objects and held in w.objects
+    assert f"KEPT {young}: younger than 60 min" in out and f"KEPT {held}: held until" in out
+
+
+def test_the_legacy_root_never_loses_a_non_runner_item(sw):
+    w = FakeW()
+    keep = [
+        w.add(f"{LEGACY}/Antimeridian", age_min=999),  # your own notebooks
+        w.add(f"{LEGACY}/DAIS-gbx-dbr-16.4", age_min=999),
+        w.add(f"{LEGACY}/bench/gbx_hs_diag", age_min=999),  # hand-made, in a runner folder
+        w.add(f"{LEGACY}/eo-series/01_ingest", age_min=999),
+        w.add(f"{LEGACY}/geobrix_bench_runner_r1.ipynb", age_min=999),  # a runner name at the root, not in bench/
+    ]
+    old = w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=999)
+    report, out = _sweep(sw, w)
+    assert report.deleted == [old]
+    assert all(p in w.objects for p in keep) and LEGACY in w.objects and report.pruned == [f"{LEGACY}/runners"]
+    assert f"{LEGACY}/bench" in w.objects and f"{LEGACY}/eo-series" in w.objects  # they still hold an item of yours
+
+
+def test_a_recorded_legacy_import_is_swept_but_its_neighbours_are_not(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/serverless-run/probe_x", age_min=120)
+    mine = w.add(f"{LEGACY}/serverless-run/hand_made", age_min=999)
+    sw.record(w, [nb], scope="notebooks", now=NOW - 120 * MIN)
+    _sweep(sw, w)
+    assert w.deleted == [nb] and mine in w.objects
+
+
+def test_a_runner_dir_under_the_legacy_root_is_a_prefix(sw):
+    w = FakeW()
+    rd = f"/Workspace{LEGACY}/gbx-beta/tests"
+    nb = w.add(f"{LEGACY}/gbx-beta/tests/tests_r1_serverless.ipynb", age_min=120)
+    other = w.add(f"{LEGACY}/gbx-beta/tests/_stage_corpus", age_min=999)
+    _sweep(sw, w, runner_dir=rd)
+    assert w.deleted == [nb] and other in w.objects
+
+
+def test_the_legacy_default_runner_folder_is_swept_when_a_runner_dir_is_set(sw):
+    w = FakeW()
+    old = w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=120)
+    _sweep(sw, w, runner_dir=f"/Workspace{ROOT}/elsewhere")
+    assert w.deleted[0] == old
+
+
+def test_the_legacy_root_is_removed_when_the_sweep_empties_it(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    tst = w.add(f"{LEGACY}/runners/tests_r2_serverless.ipynb", age_min=120)
+    uc = f"{LEGACY}/uc-it-0123456789ab"
+    w.add(f"{uc}/uc_it_install", age_min=120)
+    report, out = _sweep(sw, w)
+    assert LEGACY not in w.objects and not [p for p in w.objects if p.startswith(LEGACY)]
+    assert w.folders_deleted[-1] == LEGACY
+    assert sorted(report.pruned) == sorted([f"{LEGACY}/bench", f"{LEGACY}/runners", LEGACY])
+    assert sorted(report.deleted) == sorted([nb, tst, uc])  # the folders are not counted as deletes
+    assert f"DELETED {LEGACY} (empty folder)" in out
+
+
+def test_the_legacy_root_stays_while_a_runner_item_is_still_held(sw):
+    w = FakeW()
+    old = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    young = w.add(f"{LEGACY}/runners/tests_r2_serverless.ipynb", age_min=5)
+    report, _ = _sweep(sw, w)
+    assert report.deleted == [old] and young in w.objects and LEGACY in w.objects
+    assert f"{LEGACY}/bench" not in w.objects  # its empty runner folder goes; the root and the other folder stay
+
+
+def test_an_empty_folder_of_any_name_is_pruned_and_a_folder_with_an_item_is_kept(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/hub-run-helios")  # an old --ws-dir folder, already empty
+    w.mkdir(f"{ROOT}/my-empty-folder")
+    mine = w.add(f"{LEGACY}/hub-run-eo-series/01_ingest", age_min=999)  # holds a notebook of yours
+    report, out = _sweep(sw, w)
+    assert f"{LEGACY}/hub-run-helios" not in w.objects and f"{ROOT}/my-empty-folder" not in w.objects
+    assert mine in w.objects and f"{LEGACY}/hub-run-eo-series" in w.objects and LEGACY in w.objects
+    assert sorted(report.pruned) == sorted([f"{LEGACY}/hub-run-helios", f"{ROOT}/my-empty-folder"])
+    assert report.deleted == []
+
+
+def test_nested_empty_folders_under_the_job_root_are_pruned_bottom_up(sw):
+    w = FakeW()
+    w.mkdir(f"{ROOT}/x/y/z")
+    w.mkdir(f"{ROOT}/x/y")
+    w.mkdir(f"{ROOT}/x")
+    keep = w.add(f"{ROOT}/k/deep/01_main", age_min=999)
+    w.mkdir(f"{ROOT}/k/deep/empty")
+    report, out = _sweep(sw, w)
+    assert w.deleted == []
+    assert w.folders_deleted == [f"{ROOT}/k/deep/empty", f"{ROOT}/x/y/z", f"{ROOT}/x/y", f"{ROOT}/x"]
+    assert keep in w.objects and ROOT in w.objects and f"{ROOT}/k/deep" in w.objects
+
+
+def test_a_users_nested_empty_folder_in_a_legacy_subtree_is_kept(sw):
+    """The incident: GeoBrix/gbx-beta-dbr-17.3/EO Series/out/WIP and GeoBrix/gbx-beta-dbr-v0.2.0/... VHR-10 are the user's."""
+    w = FakeW()
+    users = [
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/EO Series/out/WIP"),
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/EO Series/out/WIP (1)"),
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-v0.2.0/Raster DE -  xView/VHR-10"),
+        w.mkdir(f"{LEGACY}/my-empty-folder"),  # not a launcher folder name
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/runners"),  # a launcher name, but not a direct child of the root
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/bench"),
+    ]
+    w.add(f"{LEGACY}/gbx-beta-dbr-17.3/EO Series/01_ingest", age_min=999)
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and w.folders_deleted == [] and report.pruned == []
+    assert all(p in w.objects for p in users) and LEGACY in w.objects
+
+
+def test_a_users_empty_folder_beside_an_emptied_runner_folder_is_kept(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/gbx-beta/sample-data/tests/tests_r1_serverless.ipynb", age_min=120)
+    wip = w.mkdir(f"{LEGACY}/gbx-beta/sample-data/WIP")
+    sibling = w.mkdir(f"{LEGACY}/gbx-beta/sample-data/tests/my-empty")
+    _sweep(sw, w, runner_dir=f"/Workspace{LEGACY}/gbx-beta/sample-data/tests")
+    assert wip in w.objects and sibling in w.objects  # nothing of the user's goes, so every folder above stays
+    assert f"{LEGACY}/gbx-beta/sample-data/tests/tests_r1_serverless.ipynb" not in w.objects
+
+
+def test_the_folders_a_sweep_emptied_and_their_empty_ancestors_are_pruned_in_the_legacy_root(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/gbx-beta/sample-data/tests/tests_r1_serverless.ipynb", age_min=120)
+    keep = w.add(f"{LEGACY}/gbx-other/01_ingest", age_min=999)
+    report, out = _sweep(sw, w, runner_dir=f"/Workspace{LEGACY}/gbx-beta/sample-data/tests")
+    assert w.folders_deleted == [f"{LEGACY}/gbx-beta/sample-data/tests", f"{LEGACY}/gbx-beta/sample-data", f"{LEGACY}/gbx-beta"]
+    assert keep in w.objects and LEGACY in w.objects
+
+
+@pytest.mark.parametrize("name", [
+    "hub-run-x", "hub-run-helios", "uc-it-0123456789ab", "uc-showcase-run", "serverless-run", "python-task", "runners",
+    "bench", "wc-coverage-diag", "ortho-london-20261105", "eo-series-run-0123abc", "probe-run-20261105",
+])
+def test_an_empty_launcher_folder_directly_under_the_legacy_root_is_pruned(sw, name):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/{name}")
+    keep = w.add(f"{LEGACY}/Antimeridian", age_min=999)
+    report, out = _sweep(sw, w)
+    assert f"{LEGACY}/{name}" not in w.objects and report.pruned == [f"{LEGACY}/{name}"]
+    assert keep in w.objects and LEGACY in w.objects
+
+
+@pytest.mark.parametrize("name", [
+    "hub-run", "uc-it", "uc-showcase", "serverless", "python-tasks", "bench2", "wc-diag", "ortho-london-2026", "eo-series",
+    "my-run-notes", "probe-run-xyz", "WIP", "EO Series", "Raster DE -  xView",
+])
+def test_an_empty_folder_not_named_like_a_launcher_folder_is_kept(sw, name):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/{name}")
+    _sweep(sw, w)
+    assert f"{LEGACY}/{name}" in w.objects and w.folders_deleted == []
+
+
+def test_a_launcher_named_folder_that_holds_something_is_kept(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/hub-run-eo/01_main", age_min=999)
+    w.mkdir(f"{LEGACY}/hub-run-eo/out/WIP")  # never descended into to prune
+    _sweep(sw, w)
+    assert f"{LEGACY}/hub-run-eo/out/WIP" in w.objects and f"{LEGACY}/hub-run-eo" in w.objects
+
+
+def test_the_legacy_root_goes_only_when_nothing_at_all_is_left(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/hub-run-a")
+    w.mkdir(f"{LEGACY}/hub-run-b")
+    _sweep(sw, w)
+    assert LEGACY not in w.objects and w.folders_deleted[-1] == LEGACY
+    w2 = FakeW()
+    w2.mkdir(f"{LEGACY}/hub-run-a")
+    w2.mkdir(f"{LEGACY}/WIP")
+    _sweep(sw, w2)
+    assert f"{LEGACY}/hub-run-a" not in w2.objects and LEGACY in w2.objects and f"{LEGACY}/WIP" in w2.objects
+
+
+def test_an_empty_folder_an_active_run_uses_is_kept(sw):
+    w = FakeW()
+    folder = f"{LEGACY}/hub-run-x"
+    w.mkdir(folder)
+    w.active = [f"{folder}/01_main"]  # the run's notebook is not listed (not imported yet / a copy)
+    _sweep(sw, w)
+    assert folder in w.objects and LEGACY in w.objects
+
+
+def test_no_folder_is_pruned_after_an_error(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/hub-run-helios")
+    nb = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    real = w.workspace.delete
+
+    def boom(path, recursive=False):
+        raise RuntimeError("403")
+
+    w.workspace.delete = boom
+    report, out = _sweep(sw, w)
+    assert report.errors == [nb] and report.pruned == [] and f"{LEGACY}/hub-run-helios" in w.objects
+    w.workspace.delete = real
+
+
+def test_the_launch_time_sweep_prunes_no_folder(sw):
+    w = FakeW()
+    w.mkdir(f"{ROOT}/serverless-run")  # another launch made it and has not uploaded yet
+    sw.sweep_at_launch(w, ("bench",), now=NOW)
+    assert f"{ROOT}/serverless-run" in w.objects
+
+
+def test_an_active_run_under_the_legacy_root_keeps_it(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=300)
+    w.active = [nb]
+    _sweep(sw, w)
+    assert w.deleted == [] and LEGACY in w.objects
+
+
+def test_a_dry_run_names_the_empty_folders_but_removes_nothing(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    report, out = _sweep(sw, w, dry_run=True)
+    assert w.deleted == [] and nb in w.objects and LEGACY in w.objects
+    assert f"WOULD DELETE {nb}" in out and f"WOULD DELETE {LEGACY} (empty folder)" in out
+
+
+def test_no_legacy_root_means_the_job_roots_emptied_folder_alone_is_pruned(sw):
+    w = FakeW()
+    w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    report, out = _sweep(sw, w)
+    assert report.pruned == [f"{ROOT}/bench"] and ROOT in w.objects and w.folders_deleted == [f"{ROOT}/bench"]
+    assert f"{LEGACY}" not in out
+
+
+def test_the_job_root_itself_is_never_pruned(sw):
+    w = FakeW()
+    w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    report, out = _sweep(sw, w)
+    assert ROOT in w.objects and f"{ROOT}/bench" not in w.objects  # its emptied folder goes, the root stays
+    assert report.pruned == [f"{ROOT}/bench"] and f"DELETED {ROOT} " not in out
+
+
+# ---- the full report -----------------------------------------------------------------------------------------------
+
+
+def test_the_full_report_is_written_to_a_file_with_every_line(sw, tmp_path):
+    w = FakeW()
+    old = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    young = w.add(f"{ROOT}/bench/geobrix_bench_runner_r2.ipynb", age_min=5)
+    w.mkdir(f"{LEGACY}/hub-run-x")
+    outside = w.add(f"/Users/{ME}/Other/x", age_min=999)
+    sw.record(w, [outside], scope="notebooks", now=NOW - 999 * MIN)
+    path = tmp_path / "logs" / "report.log"
+    console = []
+    rep = sw.sweep_with_report(w, me=ME, report_path=path, header="Sweeping", out=console.append, now=NOW)
+    text = path.read_text()
+    assert text.splitlines()[0] == "Sweeping"
+    assert f"DELETED {old}" in text and f"KEPT {young}: younger than 60 min" in text
+    assert f"DELETED {LEGACY}/hub-run-x (empty folder)" in text and f"SKIPPED {outside}" in text
+    assert "Summary: deleted 1, pruned 2 empty folder(s)" in text
+    assert text.strip().splitlines()[1:] == [c for c in console if not c.startswith("Full report:")]
+    assert f"Full report: {path}" in console and rep.deleted == [old]
+
+
+def test_a_dry_run_writes_its_report_too(sw, tmp_path):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    path = tmp_path / "dry.log"
+    sw.sweep_with_report(w, me=ME, report_path=path, out=lambda s: None, dry_run=True, now=NOW)
+    assert f"WOULD DELETE {nb}" in path.read_text() and nb in w.objects
+
+
+def test_the_report_is_written_even_when_the_sweep_raises(sw, tmp_path, monkeypatch):
+    w = FakeW()
+    path = tmp_path / "boom.log"
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sw, "sweep", boom)
+    with pytest.raises(RuntimeError):
+        sw.sweep_with_report(w, me=ME, report_path=path, header="Sweeping", out=lambda s: None)
+    assert path.read_text().strip() == "Sweeping"
+
+
+def test_the_default_report_path_is_a_timestamped_log_under_test_logs(sw):
+    p = sw.default_report_path("oauth-fe", now=NOW)
+    assert p.parent == REPO_ROOT / "test-logs"
+    assert re.fullmatch(r"workspace-sweep-oauth-fe-\d{8}T\d{6}Z\.log", p.name)
+
+
+# ---- the launchers no longer delete at run end ---------------------------------------------------------------------
+
+
+LAUNCHERS = [
+    "push_and_run_tests_on_cluster.py",
+    "push_and_run_bench_on_cluster.py",
+    "push_and_run_mutation_on_cluster.py",
+    "push_and_run_corpus_gen_on_serverless.py",
+    "run_notebooks_serverless.py",
+    "uc_integration.py",
+]
+
+
+@pytest.mark.parametrize("name", LAUNCHERS)
+def test_a_launcher_no_longer_deletes_workspace_items_at_run_end(name):
+    src = (REPO_ROOT / "examples" / "tests" / name).read_text()
+    assert "workspace.delete(" not in src, f"{name} deletes a workspace item itself; record it for the sweep instead"
+
+
+@pytest.mark.parametrize("name", LAUNCHERS)
+def test_a_launcher_records_its_notebooks_and_sweeps_at_launch(name):
+    src = (REPO_ROOT / "examples" / "tests" / name).read_text()
+    if name == "uc_integration.py":  # the notebooks-serverless run it starts records and sweeps
+        return
+    assert "sweep_at_launch(" in src and ("release(" in src or "_release_notebook(" in src), name
+
+
+def test_the_bench_launcher_keeps_and_records_the_notebook_of_a_finished_run(sw, monkeypatch, capsys):
+    monkeypatch.setenv("GBX_WS_SWEEP_AT_LAUNCH", "0")
+    bench = importlib.import_module("push_and_run_bench_on_cluster")
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=5)
+    bench._release_notebook(w, nb, succeeded=True)
+    assert w.deleted == [] and nb in w.objects
+    assert nb in sw.load_ledger(HOST)
+    assert "gbx:workspace:sweep" in capsys.readouterr().out
+
+
+# ---- the command ----------------------------------------------------------------------------------------------------
+
+
+CMD = REPO_ROOT / "scripts" / "commands" / "gbx-workspace-sweep.sh"
+
+
+def test_the_command_prints_help():
+    res = subprocess.run(["bash", str(CMD), "--help"], capture_output=True, text=True)
+    assert res.returncode == 0
+    for opt in ("--profile", "--older-than", "--dry-run", "--scope", "--report-file", "--log", "--help"):
+        assert opt in res.stdout, opt
+
+
+def test_the_command_needs_a_profile():
+    res = subprocess.run(["bash", str(CMD), "--dry-run"], capture_output=True, text=True)
+    assert res.returncode == 2 and "--profile" in res.stderr
+
+
+@pytest.mark.parametrize("text, secs", [("60m", 3600), ("90", 5400), ("2h", 7200), ("1d", 86400), ("45s", 45)])
+def test_older_than_parses_minutes_hours_and_days(sw, text, secs):
+    assert sw.parse_age(text) == secs
+
+
+def test_a_bad_older_than_is_refused(sw):
+    with pytest.raises(ValueError):
+        sw.parse_age("soon")

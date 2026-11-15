@@ -5,7 +5,7 @@ title: TX RRC Wells Downloader
 
 ## TX RRC Wells Downloader
 
-`WellsDownloader` fetches **Texas Railroad Commission (TX RRC) well surface-hole locations** (the `WellSHL` layer) for any bounding-box AOI from an **open ArcGIS REST FeatureServer** and stages them as a single merged GeoJSON in a Unity Catalog Volume.
+`WellsDownloader` fetches **Texas Railroad Commission (TX RRC) well surface-hole locations** (the `WellSHL` layer) for any bounding-box AOI from an **open ArcGIS REST FeatureServer**. It stages them as a single merged GeoJSON in a Unity Catalog Volume.
 
 WellSHL carries each well's surface location plus operator, lease, field, and county attributes — useful for attributing a detected methane plume to nearby oil & gas infrastructure. The service is **public — no authentication required**.
 
@@ -24,7 +24,7 @@ WellSHL carries each well's surface location plus operator, lease, field, and co
 
 1. **`discover(bbox, page_size=1000)`** — pages the FeatureServer (`resultOffset` / `resultRecordCount`, honoring `exceededTransferLimit`) for wells intersecting the AOI and returns the **count** of matching features. This is a driver-side count only — no file is written.
 
-2. **`download(bbox, out_dir, page_size=1000)`** — pages the same query (requesting `f=geojson`, so ArcGIS reprojects the service's native EPSG:2277 to WGS84 lon/lat automatically), merges every page into a single `wells.geojson` under `out_dir`, and validates it (non-empty and above a size floor). Returns a one-row metadata DataFrame: `out_file_path`, `feature_count`, `is_out_file_valid`, `last_update`.
+2. **`download(bbox, out_dir, page_size=1000)`** — pages the same query (requesting `f=geojson`, so ArcGIS reprojects the service's native EPSG:2277 to WGS84 lon/lat automatically). It merges every page into a single `wells.geojson` under `out_dir` and validates it (non-empty and above a size floor). Returns a one-row metadata DataFrame: `out_file_path`, `feature_count`, `is_out_file_valid`, `last_update`.
 
 3. **`repair(bbox, out_dir, page_size=1000)`** — re-downloads only if `wells.geojson` is missing or below the size floor; otherwise returns the existing file's metadata unchanged.
 
@@ -112,7 +112,7 @@ download_wells_aoi(
 
 ## Copy-Paste Example
 
-The example below fetches TX RRC well surface-hole locations for a Delaware Basin (Permian, TX) AOI, then ranks the nearest wells to a point of interest — the pattern used to attribute a detected methane plume to candidate operator wells.
+The example below fetches TX RRC well surface-hole locations for a Delaware Basin (Permian, TX) AOI. It then ranks the nearest wells to a point of interest. This is the pattern used to attribute a detected methane plume to candidate operator wells.
 
 ```python
 from pyspark.sql import functions as F
@@ -182,11 +182,11 @@ candidates.select("operator", "lease", "field", "dist_m").show()
 ```
 
 :::tip Reuse for other ArcGIS FeatureServers
-`WellsDownloader(service_url=...)` accepts any ArcGIS REST FeatureServer query endpoint that supports `f=geojson` paging — pass a different `service_url` to reuse the same discover/download/read pattern against another state's well registry or a different feature layer entirely.
+`WellsDownloader(service_url=...)` accepts any ArcGIS REST FeatureServer query endpoint that supports `f=geojson` paging. Pass a different `service_url` to reuse the same discover/download/read pattern against another state's well registry or a different feature layer entirely.
 :::
 
 ---
 
 ## Notebook Reference
 
-`WellsDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 04) to shortlist candidate operator well pads near a quantified EMIT plume's origin, ranked by distance with native Databricks `st_distancesphere`.
+`WellsDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 04) to shortlist candidate operator well pads near a quantified EMIT plume's origin. The pads are ranked by distance with native Databricks `st_distancesphere`.

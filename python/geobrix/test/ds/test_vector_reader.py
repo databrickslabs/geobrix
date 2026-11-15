@@ -1,11 +1,10 @@
 import json
 import os
+from test._volume_safe import written_locally
 from unittest.mock import patch
 
 import pytest
 from shapely import from_wkb
-
-from databricks.labs.gbx.ds.register import register
 
 _GJ = {
     "type": "FeatureCollection",
@@ -33,7 +32,9 @@ def _gj_path(tmp):
 
 
 def test_vector_gbx_reads_wkb_schema(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = _gj_path(str(tmp_path))
     df = spark.read.format("vector_gbx").load(p)
     assert df.columns == ["name", "pop", "geom_0", "geom_0_srid", "geom_0_srid_proj"]
@@ -44,8 +45,28 @@ def test_vector_gbx_reads_wkb_schema(spark, tmp_path):
     assert df.count() == 2
 
 
+@pytest.mark.parametrize("as_wkb", ["true", "false"])
+def test_vector_gbx_reads_a_layer_with_no_geometry_as_a_table(spark, tmp_path, as_wkb):
+    """A CSV with X and Y columns has no geometry in GDAL (the open options that make a point are not passed): the
+    rows come back with a NULL geometry instead of failing on the missing column."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    p = os.path.join(str(tmp_path), "xy.csv")
+    with open(p, "w") as f:
+        f.write("X,Y,name\n10,50,a\n11,51,b\n")
+    df = spark.read.format("vector_gbx").option("asWKB", as_wkb).load(p)
+    assert df.columns == ["X", "Y", "name", "geom_0", "geom_0_srid", "geom_0_srid_proj"]
+    rows = df.orderBy("name").collect()
+    assert [r["name"] for r in rows] == ["a", "b"]
+    assert [r["X"] for r in rows] == ["10", "11"]
+    assert all(r["geom_0"] is None for r in rows)
+
+
 def test_vector_gbx_wkt_option(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = _gj_path(str(tmp_path))
     df = spark.read.format("vector_gbx").option("asWKB", "false").load(p)
     g = df.orderBy("name").collect()[0]["geom_0"]
@@ -53,7 +74,9 @@ def test_vector_gbx_wkt_option(spark, tmp_path):
 
 
 def test_vector_gbx_chunksize_reads_all(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = _gj_path(str(tmp_path))
     df = spark.read.format("vector_gbx").option("chunkSize", "1").load(p)
     # One partition per FILE now (not per offset-chunk): splitting a single GeoJSON by
@@ -65,7 +88,9 @@ def test_vector_gbx_chunksize_reads_all(spark, tmp_path):
 
 
 def test_ogr_gbx_reads_directory(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = os.path.join(str(tmp_path), "many")
     os.makedirs(d)
     for k in range(3):
@@ -125,12 +150,13 @@ def test_shapefile_gbx_reads_directory_of_shp_zip(spark, tmp_path):
     """A directory of copy_*.shp.zip files is enumerated and read by shapefile_gbx.
     Each .shp.zip contains a small shapefile written by the shapefile_gbx writer so
     the round-trip exercises the actual path the scaled bench uses."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import (
         generate_polygon_seed,
         transcode_vector_seed,
     )
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     n_features = 10
     seed_df = generate_polygon_seed(spark, n_features)
     seeds = transcode_vector_seed(
@@ -152,7 +178,7 @@ def test_shapefile_gbx_reads_directory_of_shp_zip(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# FILE access mode tests (Task 2: make access option honest — managed/external
+# FILE access mode tests (the access option is honest — managed/external
 # reject with a pointer to vector_file_read; auto/fuse read via FUSE unchanged)
 # ---------------------------------------------------------------------------
 
@@ -191,46 +217,36 @@ def _read_all(rdr):
     return tbl.to_pydict()
 
 
-def test_vector_gbx_access_managed_rejected(tmp_path):
-    """DataSource reader is FUSE-only; access='managed' points the caller at the
-    function-layer vector_file_read (mirrors the FUSE-only writer's rejection)."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-    with pytest.raises(ValueError, match="vector_file_read"):
-        VectorGbxReader({"path": p, "access": "managed"})
+def _fuse_only(mode):
+    return rf"access='{mode}' is not supported on the df\.read\.format\('\w+'\) reader \(FUSE-only, session-less on Spark Connect\)\. Use the function-layer API instead: from databricks\.labs\.gbx\.vectorx\.file_read import vector_file_read\."
 
 
-def test_vector_gbx_access_external_rejected(tmp_path):
-    """DataSource reader is FUSE-only; access='external' points the caller at the
-    function-layer vector_file_read."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-    with pytest.raises(ValueError, match="vector_file_read"):
-        VectorGbxReader({"path": p, "access": "external"})
-
-
-def test_vector_gbx_access_auto_reads_fuse(tmp_path):
-    """access='auto' reads correctly (unchanged FUSE behavior)."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    rows = _read_all(VectorGbxReader({"path": p, "access": "auto"}))
-
-    assert sorted(rows["id"]) == [1, 2]
+# access -> the pattern of the sentence it is refused with, or None when it reads the two features
+ACCESS = {
+    "auto": None,
+    "fuse": None,
+    "managed": _fuse_only("managed"),
+    "external": _fuse_only("external"),
+    "bogus": r"\w+ 'access' option must be 'auto', 'fuse', 'managed', or 'external'; got 'bogus'",
+}
 
 
-def test_vector_gbx_access_fuse_reads_fuse(tmp_path):
-    """'fuse' is an explicit synonym for the default FUSE read."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
+@pytest.mark.parametrize("reader", ["VectorGbxReader", "_GeoJSONReader"])
+@pytest.mark.parametrize("access,refused", ACCESS.items(), ids=ACCESS.keys())
+def test_the_reader_is_fuse_only_and_refuses_the_function_layer_modes(
+    tmp_path, reader, access, refused
+):
+    """The reader takes 'auto' and its synonym 'fuse' and reads; 'managed' and 'external' are refused at
+    construction, whatever the runtime, with a pointer to vector_file_read; any other word is refused.
+    """
+    from databricks.labs.gbx.ds import vector
 
-    p = _gj_file_path(str(tmp_path))
-
-    rows = _read_all(VectorGbxReader({"path": p, "access": "fuse"}))
-
-    assert sorted(rows["id"]) == [1, 2]
+    cls, p = getattr(vector, reader), _gj_file_path(str(tmp_path))
+    if refused:
+        with pytest.raises(ValueError, match=refused):
+            cls({"path": p, "access": access})
+    else:
+        assert sorted(_read_all(cls({"path": p, "access": access}))["id"]) == [1, 2]
 
 
 def test_members_generic_read_excludes_shapefile_sidecars(tmp_path):
@@ -259,146 +275,275 @@ def test_members_generic_read_excludes_shapefile_sidecars(tmp_path):
     assert members == [str(d / "roads.shp")], members
 
 
-def test_vector_staging_amortized_once_per_source(tmp_path):
-    """Multiple partitions targeting the same source file stage it only once.
-
-    Verifies the module-level _VEC_STAGED_FILES cache: calling _staged() repeatedly
-    with the same path triggers shutil.copy only on the first call.
-    """
-    import shutil
-
+def test_vector_staging_amortized_once_per_source(tmp_path, monkeypatch):
+    """Wiring: the reader stages through the shared bounded StageCache, so
+    repeated partitions of one source copy it once (the cache itself is tested
+    centrally in test_local_temp.py)."""
     from databricks.labs.gbx.ds import vector as vec_mod
     from databricks.labs.gbx.ds.vector import VectorGbxReader
+    from databricks.labs.gbx.pyrx.core.local_temp import StageCache
 
     p = _gj_file_path(str(tmp_path))
-
-    # Use a plain GeoJSON reader but force _needs_stage=True to test the caching path
-    # without requiring a real GPKG binary.
-    copy_count = {"n": 0}
-    original_copy = shutil.copy
+    copies = []
 
     def counting_copy(src, dst):
-        copy_count["n"] += 1
-        return original_copy(src, dst)
+        copies.append(src)
+        vec_mod._copy_vec_source(src, dst)
 
-    # Clear the module-level cache before the test.
-    saved = dict(vec_mod._VEC_STAGED_FILES)
-    vec_mod._VEC_STAGED_FILES.clear()
-    try:
-        rdr = VectorGbxReader({"path": p})
-
-        with (
-            patch.object(rdr, "_needs_stage", return_value=True),
-            patch(
-                "databricks.labs.gbx.ds.vector.shutil.copy", side_effect=counting_copy
-            ),
-        ):
-            # First staged call: should copy.
-            with rdr._staged(p) as local_a:
-                pass
-            # Second staged call with same path: should HIT the cache, no copy.
-            with rdr._staged(p) as local_b:
-                pass
-
-        assert (
-            copy_count["n"] == 1
-        ), f"Expected shutil.copy called once (amortization), got {copy_count['n']}"
-        # Both calls yielded the same local path from the cache.
-        assert local_a == local_b
-    finally:
-        # Restore the module-level cache to its prior state.
-        vec_mod._VEC_STAGED_FILES.clear()
-        vec_mod._VEC_STAGED_FILES.update(saved)
+    monkeypatch.setattr(
+        vec_mod, "_VEC_STAGE", StageCache("gbx_vecstage_t_", counting_copy)
+    )
+    rdr = VectorGbxReader({"path": p})
+    with patch.object(rdr, "_needs_stage", return_value=True):
+        with rdr._staged(p) as local_a:
+            pass
+        with rdr._staged(p) as local_b:
+            pass
+    assert copies == [p] and local_a == local_b
 
 
-def test_vector_access_invalid_option_raises():
-    """An unrecognized 'access' option raises ValueError at __init__ time."""
-    import tempfile
+def test_vector_reader_restages_a_source_replaced_in_place(tmp_path):
+    """Wiring: the reader's StageCache validates the source signature, so a GPKG
+    replaced at the same path is read fresh in the same worker process."""
+    import pyarrow as pa
+    import pyogrio
+    import shapely
 
     from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = str(tmp_path / "pts.gpkg")
+
+    def write(n, bump_s):
+        if os.path.exists(p):
+            os.remove(p)
+        tbl = pa.table({"geom": shapely.to_wkb(shapely.points(range(n), range(n)))})
+        with written_locally(p) as _local:
+            pyogrio.write_arrow(
+                tbl,
+                _local,
+                layer="pts",
+                driver="GPKG",
+                geometry_name="geom",
+                geometry_type="Point",
+                crs="EPSG:4326",
+            )
+        st = os.stat(p)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + bump_s * 1_000_000_000))
+
+    def count():
+        rdr = VectorGbxReader({"path": p, "driverName": "GPKG"})
+        return sum(b.num_rows for part in rdr.partitions() for b in rdr.read(part))
+
+    write(5, 0)
+    assert count() == 5
+    write(3, 5)
+    assert count() == 3
+
+
+# ---------------------------------------------------------------------------
+# Coded-value domain field handling (#128)
+# ---------------------------------------------------------------------------
+
+
+# Fixtures (conftest.py) write real OGR coded-value domains via osgeo. pyogrio
+# 0.13 / GDAL 3.12 returns a sorted non-negative Integer domain (asc) as
+# dictionary<string, int32> whose INDICES ARE THE STORED CODES, and the unsorted
+# (uns) / negative (neg) / String (scode) domains as plain codes -- so a reader
+# cannot rely on the Arrow dictionary for descriptions. Row 4 is all-NULL.
+_CODES = {
+    "asc": [1, 2, 3, None],
+    "uns": [10, 33, 7, None],
+    "neg": [-1, 0, 1, None],
+    "scode": ["A", "B", None, "A"],
+}
+_DESCRIPTIONS = {
+    "asc": ["one", "two", "three", None],
+    "uns": ["ten", "thirtythree", "seven", None],
+    "neg": ["minus", "zero", "plus", None],
+    "scode": ["Alpha", "Bravo", None, "Alpha"],
+}
+_PLAIN = [100, 200, 300, None]
+_RANGE = [5, 6, 7, None]
+_CODED_READERS = {"gdb": "_FileGdbReader", "gpkg": "_GpkgReader"}
+_CODED_FORMATS = {"gdb": "file_gdb_gbx", "gpkg": "gpkg_gbx"}
+
+
+@pytest.fixture(params=["gdb", "gpkg"])
+def coded_src(request):
+    """(kind, path) for each real coded-domain fixture."""
+    fixture = {"gdb": "gdb_with_coded_domains", "gpkg": "gpkg_with_coded_domains"}
+    return request.param, request.getfixturevalue(fixture[request.param])
+
+
+def _coded_reader(kind, path, mode=None):
+    from databricks.labs.gbx.ds import vector as vec
+
+    opts = {"path": path}
+    if mode:
+        opts["codedDomains"] = mode
+    return getattr(vec, _CODED_READERS[kind])(opts)
+
+
+def _read_table(rdr):
+    import pyarrow as pa
+
+    return pa.Table.from_batches([b for p in rdr.partitions() for b in rdr.read(p)])
+
+
+def _assert_schema_matches_data(rdr, tbl):
+    """schema() (what Spark is told) must declare exactly the Arrow types read()
+    emits, or Spark rejects / mis-reads the batches."""
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    declared = to_arrow_schema(rdr.schema())
+    assert declared.names == tbl.schema.names
+    for name in declared.names:
+        assert declared.field(name).type == tbl.schema.field(name).type, name
+
+
+def test_vector_coded_domain_default_returns_codes_with_declared_types(coded_src):
+    """Default codedDomains='code': every coded field yields its exact stored
+    codes in the declared OGR type (Integer stays IntegerType, not string), and
+    schema() agrees with the data read() produces."""
+    from pyspark.sql.types import IntegerType, StringType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path)
+    tbl = _read_table(rdr)
+    for col, codes in _CODES.items():
+        assert tbl.column(col).to_pylist() == codes, col
+    types = {f.name: f.dataType for f in rdr.schema().fields}
+    for col in ("asc", "uns", "neg"):
+        assert types[col] == IntegerType(), col
+    assert types["scode"] == StringType()
+    _assert_schema_matches_data(rdr, tbl)
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_nulls_preserved(coded_src, mode):
+    """A NULL in a coded field stays NULL in both modes (never 0, -1, or the
+    description of some code)."""
+    kind, path = coded_src
+    tbl = _read_table(_coded_reader(kind, path, mode))
+    for col in ("asc", "uns", "neg"):
+        assert tbl.column(col).to_pylist()[3] is None, col
+    assert tbl.column("scode").to_pylist()[2] is None
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_non_domain_fields_unchanged(coded_src, mode):
+    """A plain field (no domain) is untouched in both modes: values and type."""
+    from pyspark.sql.types import IntegerType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path, mode)
+    tbl = _read_table(rdr)
+    assert tbl.column("plain").to_pylist() == _PLAIN
+    assert {f.name: f.dataType for f in rdr.schema().fields}["plain"] == IntegerType()
+
+
+def test_vector_coded_domain_description_mode_returns_strings(coded_src):
+    """codedDomains='description' maps EVERY coded field (dictionary-encoded or
+    plain, integer or string domain) to its domain description, and schema()
+    declares StringType for exactly those fields."""
+    from pyspark.sql.types import IntegerType, StringType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path, "description")
+    tbl = _read_table(rdr)
+    for col, descs in _DESCRIPTIONS.items():
+        assert tbl.column(col).to_pylist() == descs, col
+    types = {f.name: f.dataType for f in rdr.schema().fields}
+    for col in _DESCRIPTIONS:
+        assert types[col] == StringType(), col
+    assert types["plain"] == IntegerType()
+    _assert_schema_matches_data(rdr, tbl)
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_spark_read(spark, coded_src, mode):
+    """End-to-end through Spark: the declared schema and the batches agree, so
+    collect() returns the expected values (a mismatch fails the Arrow read)."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    kind, path = coded_src
+    gbx_manager.register_sources(spark)
+    df = spark.read.format(_CODED_FORMATS[kind]).option("codedDomains", mode).load(path)
+    rows = df.select(*_CODES, "plain").collect()
+    expected = _CODES if mode == "code" else _DESCRIPTIONS
+    for col, vals in expected.items():
+        assert [r[col] for r in rows] == vals, col
+    assert [r["plain"] for r in rows] == _PLAIN
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_range_domain_passes_through(coded_src, mode):
+    """A field bound to a RANGE domain carries domain metadata too, but has no
+    codes: it stays an integer field with its stored values in both modes."""
+    from pyspark.sql.types import IntegerType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path, mode)
+    tbl = _read_table(rdr)
+    assert tbl.column("rng").to_pylist() == _RANGE
+    assert {f.name: f.dataType for f in rdr.schema().fields}["rng"] == IntegerType()
+    _assert_schema_matches_data(rdr, tbl)
+
+
+def test_vector_coded_domain_unresolvable_domain_raises(coded_src, monkeypatch):
+    """Description mode never silently falls back to codes: a field whose coded
+    domain is missing from the source's definitions fails with a clear error."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    kind, path = coded_src
+    monkeypatch.setattr(vec, "_read_coded_domains", lambda *a, **k: {})
+    rdr = _coded_reader(kind, path, "description")
+    with pytest.raises(ValueError, match="could not be resolved"):
+        _read_table(rdr)
+
+
+def test_vector_coded_domain_description_from_gdb_zip(gdb_with_coded_domains, tmp_path):
+    """Description mode resolves domains through the zipped-FileGDB form too."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    zpath = str(tmp_path / "coded.gdb.zip")
+    vec._zip_gdb_bundle(gdb_with_coded_domains, zpath)
+    tbl = _read_table(_coded_reader("gdb", zpath, "description"))
+    for col, descs in _DESCRIPTIONS.items():
+        assert tbl.column(col).to_pylist() == descs, col
+
+
+def test_vector_gpkg_domains_without_constraints_table(tmp_path):
+    """A GeoPackage with no gpkg_data_column_constraints table has no domain
+    definitions (not an error)."""
+    import geopandas as gpd
+    import shapely
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = str(tmp_path / "nodom.gpkg")
+    with written_locally(path) as _local:
+        gpd.GeoDataFrame({"a": [1]}, geometry=[shapely.Point(0, 0)], crs=4326).to_file(
+            _local, driver="GPKG"
+        )
+    assert vec._read_gpkg_domains(path) == {}
+
+
+def test_vector_coded_domain_option_rejects_invalid_value():
+    """Invalid codedDomains option value raises ValueError with clear message."""
+    import tempfile
+
+    from databricks.labs.gbx.ds.vector import _GeoJSONReader
 
     with tempfile.NamedTemporaryFile(suffix=".geojson", delete=False) as f:
         f.write(b'{"type":"FeatureCollection","features":[]}')
         tmppath = f.name
 
     try:
-        with pytest.raises(ValueError, match="access.*option must be"):
-            VectorGbxReader({"path": tmppath, "access": "bogus"})
+        with pytest.raises(ValueError, match="codedDomains.*code.*description"):
+            _GeoJSONReader({"path": tmppath, "codedDomains": "invalid"})
     finally:
         os.unlink(tmppath)
-
-
-# ---------------------------------------------------------------------------
-# IMPORTANT-1: driver-side capability probe — read() must NOT re-probe tier
-# ---------------------------------------------------------------------------
-
-
-def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
-    """read() works correctly after Task 2: access='managed' rejects at __init__ time.
-
-    After Task 2, access='managed'/'external' raise at __init__ with a pointer
-    to vector_file_read.  The FUSE path (access='auto') must still read data
-    normally.  This is the regression guard that the full read path works.
-    """
-    import pyarrow as pa
-
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    # access='managed' must raise — reject at construction time.
-    with pytest.raises(ValueError, match="vector_file_read"):
-        VectorGbxReader({"path": p, "access": "managed"})
-
-    # FUSE path (auto) must still work end-to-end.
-    rdr = VectorGbxReader({"path": p, "access": "auto"})
-    parts = rdr.partitions()
-    batches = [b for part in parts for b in rdr.read(part)]
-    tbl = pa.Table.from_batches(batches)
-    assert tbl.num_rows == 2
-
-
-def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
-    """access='auto' reads data correctly (no error).
-
-    After Task 4 no tier probe is made in __init__, so no mock is needed.
-    """
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    # Must not raise — auto mode, no probe in __init__.
-    rdr = VectorGbxReader({"path": p, "access": "auto"})
-    rows = _read_all(rdr)
-
-    assert sorted(rows["id"]) == [1, 2]
-
-
-# ---------------------------------------------------------------------------
-# Task 4 (no-reprobe) + Task 2 (managed/external rejection) regression guards
-# ---------------------------------------------------------------------------
-
-
-def test_vector_reader_managed_external_rejected_unconditionally(tmp_path):
-    """access='managed'/'external' must ALWAYS raise with a pointer to vector_file_read.
-
-    After Task 2, the DataSource reader is declared FUSE-only.  The rejection is
-    unconditional — it does not matter what tier the runtime is, nor whether a
-    SparkSession is present.  The old test (no_false_break_on_connect) asserted
-    that managed/external did NOT raise; that behavior is now intentionally changed.
-    """
-    from databricks.labs.gbx.ds import vector as vec
-
-    p = str(tmp_path / "pts.geojson")
-    (tmp_path / "pts.geojson").write_bytes(
-        b'{"type":"FeatureCollection","features":[]}'
-    )
-
-    with pytest.raises(ValueError, match="vector_file_read"):
-        vec._GeoJSONReader({"path": p, "access": "managed"})
-
-    with pytest.raises(ValueError, match="vector_file_read"):
-        vec._GeoJSONReader({"path": p, "access": "external"})
 
 
 def test_vector_members_via_shared_core(tmp_path):
@@ -411,3 +556,815 @@ def test_vector_members_via_shared_core(tmp_path):
     r = vec._GeoJSONReader({"path": str(tmp_path)})
     members = r._members()
     assert members == [str(tmp_path / "a.geojson"), str(tmp_path / "b.json")]
+
+
+# ---------------------------------------------------------------------------
+# Streaming reads + byte-bounded batches (#127)
+# ---------------------------------------------------------------------------
+
+
+def _points_gpkg(path, n):
+    import geopandas as gpd
+    import shapely
+
+    with written_locally(path) as _local:
+        gpd.GeoDataFrame(
+            {"id": list(range(n)), "name": [f"n{i}" for i in range(n)]},
+            geometry=[shapely.Point(i, i) for i in range(n)],
+            crs=4326,
+        ).to_file(_local, driver="GPKG")
+    return path
+
+
+def _read_batches(rdr):
+    return [b for p in rdr.partitions() for b in rdr.read(p)]
+
+
+def test_vector_stream_reads_layer_in_chunksize_batches(tmp_path, monkeypatch):
+    """read() streams the layer via pyogrio.open_arrow in chunkSize batches (never a
+    whole-layer read_arrow) and the rows equal a single-batch read."""
+    import pyarrow as pa
+    import pyogrio
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 25)
+    whole = pa.Table.from_batches(_read_batches(vec._GpkgReader({"path": path})))
+
+    def _no_read_arrow(*a, **k):
+        raise AssertionError("read() must stream with open_arrow, not read_arrow")
+
+    monkeypatch.setattr(pyogrio, "read_arrow", _no_read_arrow)
+    batches = _read_batches(vec._GpkgReader({"path": path, "chunkSize": "4"}))
+    assert len(batches) == 7 and all(b.num_rows <= 4 for b in batches)
+    assert pa.Table.from_batches(batches).equals(whole)
+
+
+def test_vector_stream_byte_budget_slices_batches(tmp_path, monkeypatch):
+    """A batch whose variable-width bytes exceed the budget is yielded as several
+    slices: each holds at most the budget (or is a single larger row), rows in order."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 20)
+    whole = pa.Table.from_batches(_read_batches(vec._GpkgReader({"path": path})))
+    monkeypatch.setattr(vec, "_ARROW_BATCH_BYTES_LIMIT", 200)
+    batches = _read_batches(vec._GpkgReader({"path": path}))
+    assert len(batches) > 1
+    for b in batches:
+        var_bytes = sum(
+            pc.sum(pc.binary_length(b.column(c))).as_py() for c in ("name", "geom")
+        )
+        assert b.num_rows == 1 or var_bytes <= 200
+    assert pa.Table.from_batches(batches).equals(whole)
+
+
+def test_vector_stream_byte_budget_applies_in_wkt_mode(tmp_path, monkeypatch):
+    """WKT output is larger than its WKB source, so WKT mode slices on a smaller
+    budget; the decoded geometries match the single-batch read."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 20)
+    opts = {"path": path, "asWKB": "false"}
+    whole = pa.Table.from_batches(_read_batches(vec._GpkgReader(opts)))
+    monkeypatch.setattr(vec, "_ARROW_BATCH_BYTES_LIMIT", 800)
+    batches = _read_batches(vec._GpkgReader(opts))
+    assert len(batches) > 1
+    assert pa.Table.from_batches(batches).equals(whole)
+
+
+def test_vector_stream_value_over_offset_limit_raises(tmp_path, monkeypatch):
+    """A single value too large for a Spark binary/string row fails with a clear
+    error naming the layer, the column and the feature -- before Spark sees it."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 5)
+    monkeypatch.setattr(vec, "_ARROW_OFFSET_LIMIT", 10)
+    with pytest.raises(
+        ValueError, match=r"Feature 0 in layer .* over the 10-byte limit"
+    ):
+        _read_batches(vec._GpkgReader({"path": path}))
+
+
+def test_vector_stream_empty_layer_yields_declared_schema(tmp_path):
+    """An empty layer yields one empty batch carrying the declared schema."""
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 3)
+    rdr = vec._GpkgReader({"path": path, "where": "id < 0"})
+    batches = _read_batches(rdr)
+    assert len(batches) == 1 and batches[0].num_rows == 0
+    assert batches[0].schema.names == to_arrow_schema(rdr.schema()).names
+
+
+def test_vector_stream_partition_feature_range(tmp_path):
+    """A partition with a feature range (skip/count) streams exactly those features
+    -- open_arrow takes no max_features, so the reader stops the stream itself."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 25)
+    rdr = vec._GpkgReader({"path": path, "chunkSize": "4"})
+    (p,) = rdr.partitions()
+    part = vec._ChunkPartition(p.path, p.driver, p.layer, p.as_wkb, 5, 7)
+    tbl = pa.Table.from_batches(list(rdr.read(part)))
+    assert tbl.column("id").to_pylist() == list(range(5, 12))
+
+
+def test_vector_coded_domain_unknown_code_falls_back_to_its_text():
+    """Description mode never drops a value: a code missing from its domain comes
+    back as the code's text, and NULL stays NULL."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    out = vec._map_codes_to_descriptions(
+        pa.array([1, 99, None], pa.int32()), [("1", "one")]
+    )
+    assert out.to_pylist() == ["one", "99", None]
+
+
+def test_vector_ogr_time_fields_read_as_text(spark, tmp_path):
+    """OGR Time fields (e.g. GeoJSON "12:34:56") read as strings in GDAL's format
+    (HH:MM:SS, plus .sss with milliseconds) -- Spark has no TIME type -- and the
+    declared schema agrees with the data (it used to fail with getLong)."""
+    from pyspark.sql.types import StringType
+
+    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs.gbx.ds import vector as vec
+
+    p = tmp_path / "t.geojson"
+    p.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"t": t},
+                        "geometry": {"type": "Point", "coordinates": [i, i]},
+                    }
+                    for i, t in enumerate(["12:34:56", "07:08:09.250", None])
+                ],
+            }
+        )
+    )
+    rdr = vec._GeoJSONReader({"path": str(p)})
+    assert rdr.schema()["t"].dataType == StringType()
+    gbx_manager.register_sources(spark)
+    rows = spark.read.format("geojson_gbx").load(str(p)).select("t").collect()
+    assert [r["t"] for r in rows] == ["12:34:56", "07:08:09.250", None]
+
+
+# ---------------------------------------------------------------------------
+# The reader's OGR driver: forced, never passed as an open option
+# ---------------------------------------------------------------------------
+
+
+def _write_layer(path, driver, n=3):
+    """A point layer with ``id`` / ``name`` fields, written by pyogrio."""
+    import pyarrow as pa
+    import pyogrio
+    import shapely
+
+    xs = list(range(n))
+    tbl = pa.table(
+        {
+            "geometry": shapely.to_wkb(shapely.points(xs, xs)),
+            "id": xs,
+            "name": [f"n{i}" for i in xs],
+        }
+    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver=driver,
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+    return path
+
+
+def _gdal_warnings(caught):
+    """GDAL warnings that every clean open used to emit (not a data problem)."""
+    noise = ("open option DRIVER", "non conformant file extension")
+    return [str(w.message) for w in caught if any(n in str(w.message) for n in noise)]
+
+
+_NAMED = [
+    ("shapefile_gbx", "ESRI Shapefile", "pts.shp"),
+    ("geojson_gbx", "GeoJSON", "pts.geojson"),
+    ("geojsonl_gbx", "GeoJSONSeq", "pts.geojsonl"),
+    ("gpkg_gbx", "GPKG", "pts.gpkg"),
+    ("file_gdb_gbx", "OpenFileGDB", "pts.gdb"),
+]
+
+
+def _source(name):
+    from databricks.labs.gbx.manifest import datasource_classes
+
+    return {s.name(): s for s in datasource_classes()}[name]
+
+
+@pytest.mark.parametrize("fmt,driver,fname", _NAMED)
+@pytest.mark.parametrize("domains", ["code", "description"])
+def test_vector_reads_pass_no_driver_open_option(tmp_path, fmt, driver, fname, domains):
+    """pyogrio's read functions take no ``driver`` argument: a ``driver=`` keyword
+    is passed on as the GDAL open option DRIVER, which the drivers reject with a
+    warning on every open and never use to pick the driver. schema() (both coded
+    domain modes) and read() must open without it."""
+    import warnings
+
+    path = _write_layer(str(tmp_path / fname), driver)
+    ds = _source(fmt)({"path": path, "codedDomains": domains})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert {"id", "name"} <= set(ds.schema().fieldNames())
+        assert sum(b.num_rows for b in _read_batches(ds.reader(None))) == 3
+    assert _gdal_warnings(caught) == []
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname",
+    [
+        ("geojson_gbx", "GeoJSON", "src.geojson"),
+        ("geojsonl_gbx", "GeoJSONSeq", "src.geojsonl"),
+        ("gpkg_gbx", "GPKG", "src.gpkg"),
+    ],
+)
+def test_vector_forced_driver_reads_a_misnamed_file(tmp_path, fmt, driver, fname):
+    """The reader's driver is forced, whatever the file is named: GDAL alone picks
+    the CSV driver for a GeoJSON (or GeoJSONSeq) file named data.csv and reads it as
+    a garbled 0-row CSV layer."""
+    import shutil
+    import warnings
+
+    misnamed = str(tmp_path / "data.csv")
+    shutil.copyfile(_write_layer(str(tmp_path / fname), driver), misnamed)
+    ds = _source(fmt)({"path": misnamed})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert {"id", "name"} <= set(ds.schema().fieldNames())
+        batches = _read_batches(ds.reader(None))
+    assert sum(b.num_rows for b in batches) == 3
+    assert _gdal_warnings(caught) == []
+
+
+@pytest.mark.parametrize(
+    "fmt,want", [("shapefile_gbx", "ESRI Shapefile"), ("file_gdb_gbx", "OpenFileGDB")]
+)
+def test_vector_named_reader_rejects_a_file_of_another_format(tmp_path, fmt, want):
+    """ESRI Shapefile and OpenFileGDB have no GDAL prefix that forces them (GDAL
+    picks them by extension), so a file GDAL opens with another driver is rejected
+    instead of being read as that format."""
+    path = _write_layer(str(tmp_path / "pts.geojson"), "GeoJSON")
+    with pytest.raises(
+        ValueError, match=rf"pts\.geojson.*{want}.*GeoJSON driver.*geojson_gbx"
+    ):
+        _source(fmt)({"path": path}).schema()
+
+
+def test_vector_gpkg_path_with_colons_opens(tmp_path):
+    """GDAL's ``GPKG:<file>:<table>`` syntax splits on ':' -- the forced path keeps a
+    file name with colons (a timestamped delivery) whole."""
+    d = tmp_path / "2026-10-17T10:00:00"
+    d.mkdir()
+    path = _write_layer(str(d / "run:1.gpkg"), "GPKG")
+    ds = _source("gpkg_gbx")({"path": path})
+    assert {"id", "name"} <= set(ds.schema().fieldNames())
+    assert sum(b.num_rows for b in _read_batches(ds.reader(None))) == 3
+
+
+# --- the GeoJSON family, equivalent drivers, and driver names in any case -----
+
+
+def _features(n=3):
+    return [
+        {
+            "type": "Feature",
+            "properties": {"id": i, "name": f"n{i}"},
+            "geometry": {"type": "Point", "coordinates": [i, i]},
+        }
+        for i in range(n)
+    ]
+
+
+def _esrijson(path, n=3):
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "geometryType": "esriGeometryPoint",
+                "spatialReference": {"wkid": 4326},
+                "fields": [
+                    {"name": "id", "type": "esriFieldTypeInteger"},
+                    {"name": "name", "type": "esriFieldTypeString"},
+                ],
+                "features": [
+                    {
+                        "attributes": {"id": i, "name": f"n{i}"},
+                        "geometry": {"x": i, "y": i},
+                    }
+                    for i in range(n)
+                ],
+            },
+            f,
+        )
+    return path
+
+
+def _topojson(path, n=3):
+    geoms = [
+        {
+            "type": "Point",
+            "coordinates": [i, i],
+            "properties": {"id": i, "name": f"n{i}"},
+        }
+        for i in range(n)
+    ]
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "type": "Topology",
+                "objects": {"pts": {"type": "GeometryCollection", "geometries": geoms}},
+                "arcs": [],
+            },
+            f,
+        )
+    return path
+
+
+def _jsonfg(path, n=3):
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "type": "FeatureCollection",
+                "conformsTo": ["http://www.opengis.net/spec/json-fg-1/0.2/conf/core"],
+                "features": [
+                    {**ft, "id": i, "time": None, "place": None}
+                    for i, ft in enumerate(_features(n))
+                ],
+            },
+            f,
+        )
+    return path
+
+
+def _seq(path, n=3):
+    with open(path, "w") as f:
+        f.write("\n".join(json.dumps(ft) for ft in _features(n)) + "\n")
+    return path
+
+
+def _rows_and_fields(ds):
+    names = set(ds.schema().fieldNames())
+    return sum(b.num_rows for b in _read_batches(ds.reader(None))), names
+
+
+@pytest.mark.parametrize(
+    "fname,make",
+    [
+        ("pts.geojsonl", _seq),  # GeoJSONSeq file, no multi
+        ("seq.geojson", _seq),  # GeoJSONSeq content named .geojson
+        ("esri.json", _esrijson),
+        ("topo.json", _topojson),
+        ("esri.csv", _esrijson),  # misnamed: forced with the family's prefixes
+        ("topo.csv", _topojson),
+        ("seq.csv", _seq),
+        ("fg.json", _jsonfg),  # JSON-FG, a GeoJSON superset (GDAL's JSONFG driver)
+        ("fg.csv", _jsonfg),
+    ],
+)
+def test_geojson_reader_reads_the_geojson_family(tmp_path, fname, make):
+    """geojson_gbx reads GeoJSON, GeoJSONSeq, ESRIJSON and TopoJSON: whichever of
+    them GDAL detects, or (for a file named for another format) the first of them
+    whose GDAL prefix opens it."""
+    from databricks.labs.gbx.ds import paths as P
+
+    path = make(str(tmp_path / fname))
+    rows, names = _rows_and_fields(_source("geojson_gbx")({"path": path}))
+    assert rows == 3 and {"id", "name"} <= names
+    expected = P.path_schema("geojson_gbx", None, path)
+    assert (
+        sum(
+            b.num_rows
+            for b in P.iter_path_batches(path, None, "geojson_gbx", None, expected)
+        )
+        == 3
+    )
+
+
+@pytest.mark.parametrize(
+    "driver_name,write_driver,fname",
+    [
+        ("gpkg", "GPKG", "pts.gpkg"),
+        ("geojson", "GeoJSON", "pts.geojson"),
+        ("esri shapefile", "ESRI Shapefile", "pts.shp"),
+        ("SQLite", "GPKG", "pts.gpkg"),  # GDAL picks GPKG: equivalent
+        ("FileGDB", "OpenFileGDB", "pts.gdb"),  # read with OpenFileGDB
+    ],
+)
+def test_vector_driver_name_any_case_and_equivalent_drivers(
+    tmp_path, driver_name, write_driver, fname
+):
+    path = _write_layer(str(tmp_path / fname), write_driver)
+    ds = _source("vector_gbx")({"path": path, "driverName": driver_name})
+    rows, names = _rows_and_fields(ds)
+    assert rows == 3 and {"id", "name"} <= names
+
+
+def test_vector_driver_name_kml_reads_what_libkml_opens(tmp_path):
+    path = tmp_path / "a.kml"
+    path.write_text(
+        '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        "<Placemark><name>a</name><Point><coordinates>1,2</coordinates></Point>"
+        "</Placemark></Document></kml>"
+    )
+    ds = _source("vector_gbx")({"path": str(path), "driverName": "KML"})
+    rows, names = _rows_and_fields(ds)
+    assert rows == 1 and "Name" in names
+
+
+def test_vector_unknown_driver_name_lists_close_matches(tmp_path):
+    ds = _source("vector_gbx")(
+        {"path": str(tmp_path / "a.geojson"), "driverName": "GeoJSN"}
+    )
+    with pytest.raises(
+        ValueError, match=r"'GeoJSN' is not an OGR vector driver.*'GeoJSON'"
+    ):
+        ds.schema()
+
+
+@pytest.mark.parametrize(
+    "fname,content,detected",
+    [
+        ("data.csv", b"id,WKT\n1,POINT (1 1)\n", r"with the CSV driver.*'CSV'"),
+        ("data.bin", bytes(range(256)) * 4, r"not recognize it as GeoJSON/GeoJSONSeq"),
+    ],
+)
+def test_geojson_reader_rejects_a_non_geojson_file_saying_why(
+    tmp_path, fname, content, detected
+):
+    """A file no GeoJSON-family driver opens fails with the file, the requested
+    driver and what GDAL made of it -- not a bare pyogrio error."""
+    path = tmp_path / fname
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match=rf"{fname}.*'GeoJSON'.*{detected}"):
+        _source("geojson_gbx")({"path": str(path)}).schema()
+
+
+@pytest.mark.parametrize("fmt", ["geojson_gbx", "vector_gbx"])
+def test_vector_read_paths_opens_a_geojson_once(tmp_path, monkeypatch, fmt):
+    """The per-file schema check and the read open a GeoJSON once: every open of
+    a GeoJSON parses the whole file."""
+    import pyogrio
+
+    from databricks.labs.gbx.ds import paths as P
+
+    a = _write_layer(str(tmp_path / "a.geojson"), "GeoJSON")
+    b = _write_layer(str(tmp_path / "b.geojson"), "GeoJSON")
+    expected = P.path_schema(fmt, None, a)
+    opens = []
+    for fn in ("read_info", "read_arrow", "open_arrow"):
+
+        def spy(path, *args, _real=getattr(pyogrio, fn), _fn=fn, **kw):
+            opens.append((_fn, str(path)))
+            return _real(path, *args, **kw)
+
+        monkeypatch.setattr(pyogrio, fn, spy)
+    rows = sum(x.num_rows for x in P.iter_path_batches(b, None, fmt, None, expected))
+    assert rows == 3
+    assert [o for o in opens if o[1].endswith("b.geojson")] == [("open_arrow", b)]
+
+
+def test_vector_reader_reads_a_members_info_once(tmp_path, monkeypatch):
+    import pyogrio
+
+    path = _write_layer(str(tmp_path / "pts.gpkg"), "GPKG")
+    rdr = _source("gpkg_gbx")({"path": path}).reader(None)
+    calls = []
+    real = pyogrio.read_info
+    monkeypatch.setattr(
+        pyogrio, "read_info", lambda *a, **k: calls.append(a) or real(*a, **k)
+    )
+    rdr.schema()
+    rdr.declared_schema()
+    assert len(calls) == 1
+
+
+def test_vector_misnamed_gpkg_resolves_coded_domains(gpkg_with_coded_domains, tmp_path):
+    """Description mode reads a misnamed GeoPackage's domain definitions through
+    the same forced driver as its features."""
+    import shutil
+
+    misnamed = str(tmp_path / "data.csv")
+    shutil.copyfile(gpkg_with_coded_domains, misnamed)
+    want = _read_table(_coded_reader("gpkg", gpkg_with_coded_domains, "description"))
+    rdr = _coded_reader("gpkg", misnamed, "description")
+    got = _read_table(rdr)
+    for col in _DESCRIPTIONS:
+        assert got.column(col).to_pylist() == want.column(col).to_pylist(), col
+    _assert_schema_matches_data(rdr, got)
+
+
+@pytest.mark.parametrize("fmt", ["geojson_gbx", "shapefile_gbx", "vector_gbx"])
+def test_vector_missing_file_is_reported_missing(tmp_path, fmt):
+    """A path that does not exist fails as missing, not as a driver mismatch."""
+    from pyogrio.errors import DataSourceError
+
+    opts = {"path": str(tmp_path / "gone"), "driverName": "GeoJSON"}
+    with pytest.raises(DataSourceError, match="No such file"):
+        _source(fmt)(opts if fmt == "vector_gbx" else {"path": opts["path"]}).schema()
+
+
+@pytest.mark.parametrize(
+    "fname,text,error",
+    [
+        # misnamed: only the lenient GeoJSONSeq prefix opens it, as empty records
+        ("data.csv", '{"a": 1}', r"no features/fields found in .*data\.csv"),
+        # named for the family: GDAL itself rejects it
+        ("obj.geojsonl", '{"a": 1}\n{"a": 2}\n', r"obj\.geojsonl.*not recognized"),
+    ],
+)
+def test_geojson_reader_rejects_json_without_features(tmp_path, fname, text, error):
+    """Plain JSON objects are no GeoJSON: they fail, and never define a schema with
+    no fields (rows with no geometry)."""
+    from databricks.labs.gbx.ds import paths as P
+
+    path = tmp_path / fname
+    path.write_text(text)
+    with pytest.raises(Exception, match=error):
+        P.path_schema("geojson_gbx", None, str(path))
+
+
+def test_geojson_reader_reads_features_without_properties(tmp_path):
+    """Features with mixed geometry types and no properties report no fields and
+    an Unknown geometry type too -- they are still read."""
+    path = tmp_path / "mixed.geojson"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {}, "geometry": g}
+                    for g in (
+                        {"type": "Point", "coordinates": [0, 0]},
+                        {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                    )
+                ],
+            }
+        )
+    )
+    rows, names = _rows_and_fields(_source("geojson_gbx")({"path": str(path)}))
+    assert rows == 2 and "geom_0" in names
+
+
+def _count_opens(monkeypatch):
+    """Record every pyogrio open (read_info / read_arrow / open_arrow) as (fn, path)."""
+    import pyogrio
+
+    opens = []
+    for fn in ("read_info", "read_arrow", "open_arrow"):
+
+        def spy(path, *args, _real=getattr(pyogrio, fn), _fn=fn, **kw):
+            opens.append((_fn, str(path)))
+            return _real(path, *args, **kw)
+
+        monkeypatch.setattr(pyogrio, fn, spy)
+    return opens
+
+
+def _zipped_shapefile(tmp_path, zip_name):
+    import zipfile
+
+    shp = _write_layer(str(tmp_path / "pts.shp"), "ESRI Shapefile")
+    out = str(tmp_path / zip_name)
+    with zipfile.ZipFile(out, "w") as z:
+        for ext in (".shp", ".shx", ".dbf", ".prj"):
+            z.write(os.path.splitext(shp)[0] + ext, "pts" + ext)
+    return out
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname",
+    [
+        ("vector_gbx", "GML", "a.gml"),
+        ("vector_gbx", "FlatGeobuf", "a.fgb"),
+        ("vector_gbx", "MapInfo File", "a.tab"),
+        ("shapefile_gbx", None, "a.zip"),
+        ("shapefile_gbx", None, "a.shp.zip"),
+    ],
+)
+def test_vector_read_opens_a_file_with_no_detection_open(
+    tmp_path, monkeypatch, fmt, driver, fname
+):
+    """A driver GDAL picks by itself (no prefix to force it with) and a zipped
+    shapefile are opened as named at read time -- no read_info detection open
+    first (for GML that is a full parse)."""
+    if fname.endswith(".zip"):
+        path = _zipped_shapefile(tmp_path, fname)
+    else:
+        path = _write_layer(str(tmp_path / fname), driver)
+    opts = {"path": path, **({"driverName": driver} if driver else {})}
+    rdr = _source(fmt)(opts).reader(None)  # what an executor builds
+    opens = _count_opens(monkeypatch)
+    assert sum(b.num_rows for b in _read_batches(rdr)) == 3
+    assert [fn for fn, _ in opens] == ["open_arrow"]
+
+
+def test_vector_csv_driver_name_opens_a_csv_as_named(tmp_path, monkeypatch):
+    path = tmp_path / "a.csv"
+    path.write_text("id,name\n1,x\n")
+    rdr = _source("vector_gbx")({"path": str(path), "driverName": "CSV"}).reader(None)
+    opens = _count_opens(monkeypatch)
+    assert rdr._source_name(str(path), str(path)) == str(path)
+    assert opens == []
+
+
+def test_vector_csv_driver_name_still_forces_a_misnamed_csv(tmp_path):
+    """The CSV driver reads only .csv/.tsv/.psv by itself: another name needs the
+    CSV: prefix, so the detection open stays for it."""
+    path = tmp_path / "a.txt"
+    path.write_text("id,name\n1,x\n")
+    rdr = _source("vector_gbx")({"path": str(path), "driverName": "CSV"}).reader(None)
+    assert rdr._source_name(str(path), str(path)) == f"CSV:{path}"
+
+
+def test_vector_featureless_check_parses_a_misnamed_file_once(tmp_path, monkeypatch):
+    """Features of mixed geometry and no properties need a sampled read to tell
+    them from empty records; a misnamed file is checked when its driver is forced
+    and again at the schema stage -- one parse, not two."""
+    path = tmp_path / "mixed.csv"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {}, "geometry": g}
+                    for g in (
+                        {"type": "Point", "coordinates": [0, 0]},
+                        {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                    )
+                ],
+            }
+        )
+    )
+    rdr = _source("geojson_gbx")({"path": str(path)}).reader(None)
+    opens = _count_opens(monkeypatch)
+    assert "geom_0" in rdr.schema().fieldNames()
+    assert [fn for fn, _ in opens].count("read_arrow") == 1
+
+
+def test_featureless_json_error_leads_with_it_and_drops_the_csv_hint(tmp_path):
+    """A JSON object named .csv is opened by GDAL's CSV driver, but reading it as
+    CSV is no remedy: the error says it holds no features and nothing else."""
+    path = tmp_path / "data.csv"
+    path.write_text('{"a": 1}')
+    with pytest.raises(ValueError) as err:
+        _source("geojson_gbx")({"path": str(path)}).schema()
+    msg = str(err.value)
+    assert "no features/fields found" in msg
+    assert "CSV driver" not in msg and "driverName='CSV'" not in msg
+    assert "Read it with" not in msg
+
+
+# --- a file that cannot be opened is named in the error ------------------------
+
+
+def _truncate(path, keep=0.5):
+    data = open(path, "rb").read()
+    with open(path, "wb") as f:
+        f.write(data[: int(len(data) * keep)])
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname",
+    [
+        ("geojson_gbx", "GeoJSON", "cut.geojson"),
+        ("geojsonl_gbx", "GeoJSONSeq", "cut.geojsonl"),
+        ("gpkg_gbx", "GPKG", "cut.gpkg"),
+        ("vector_gbx", "GeoJSON", "cut.json"),
+    ],
+)
+def test_vector_corrupt_file_with_a_native_extension_names_the_file(
+    tmp_path, fmt, driver, fname
+):
+    """A truncated file with the right extension is opened as named: the error says
+    which file (GDAL's own message does not always), keeps GDAL's message and its
+    type, and chains the GDAL error as the cause."""
+    from pyogrio.errors import DataSourceError
+
+    if fname.endswith(".geojsonl"):
+        path = str(tmp_path / fname)
+        open(path, "w").write('{"type":"Feature","pro')
+    else:
+        path = _write_layer(str(tmp_path / fname), driver)
+        _truncate(path, 0.4 if fname.endswith(".gpkg") else 0.5)
+    opts = {"path": path, **({"driverName": driver} if fmt == "vector_gbx" else {})}
+    with pytest.raises(DataSourceError) as err:
+        _source(fmt)(opts).schema()
+    assert path in str(err.value)
+    assert type(err.value.__cause__) is DataSourceError
+
+
+def test_vector_corrupt_geojson_keeps_gdals_message_as_the_cause(tmp_path):
+    from pyogrio.errors import DataSourceError
+
+    path = _write_layer(str(tmp_path / "cut.geojson"), "GeoJSON")
+    _truncate(path)
+    with pytest.raises(DataSourceError) as err:
+        _source("geojson_gbx")({"path": path}).schema()
+    assert str(err.value).startswith(f"{path}: ")
+    assert "Failed to read GeoJSON data" in str(err.value)
+    assert type(err.value.__cause__) is DataSourceError
+    assert path not in str(err.value.__cause__)
+
+
+def test_vector_corrupt_file_names_the_file_at_read_time_too(tmp_path):
+    """An executor opens the file with no schema() first: the read names it too."""
+    from pyogrio.errors import DataSourceError
+
+    path = _write_layer(str(tmp_path / "cut.geojson"), "GeoJSON")
+    _truncate(path)
+    rdr = _source("geojson_gbx")({"path": path}).reader(None)
+    with pytest.raises(DataSourceError) as err:
+        _read_batches(rdr)
+    assert path in str(err.value)
+
+
+def test_vector_error_that_already_names_the_file_is_not_prefixed_again(tmp_path):
+    from pyogrio.errors import DataSourceError
+
+    path = tmp_path / "obj.geojsonl"
+    path.write_text('{"a": 1}\n{"a": 2}\n')
+    with pytest.raises(DataSourceError) as err:
+        _source("geojson_gbx")({"path": str(path)}).schema()
+    assert str(err.value).count("obj.geojsonl") == 1
+
+
+def _zipped_gdb(tmp_path, zip_name):
+    import shutil
+
+    _write_layer(str(tmp_path / "pts.gdb"), "OpenFileGDB")
+    base = str(tmp_path / "zipped")
+    shutil.make_archive(base, "zip", str(tmp_path), "pts.gdb")
+    out = str(tmp_path / zip_name)
+    os.replace(base + ".zip", out)
+    return out
+
+
+_KML = (
+    '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+    "<Placemark><name>a</name><Point><coordinates>1,2</coordinates></Point>"
+    "</Placemark></Document></kml>"
+)
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname,rows",
+    [
+        ("file_gdb_gbx", None, "pts_gdb.zip", 3),  # a zipped FileGDB is not .gdb.zip
+        ("vector_gbx", "KML", "doc.xml", 1),  # KML named for its XML
+    ],
+)
+def test_vector_family_with_no_prefix_skips_the_detection_open(
+    tmp_path, monkeypatch, fmt, driver, fname, rows
+):
+    """OpenFileGDB, Shapefile and KML have an extension entry but no GDAL prefix to
+    force them: a name outside the entry can only be opened as named (or fail the
+    way schema() already did), so an executor's read opens it once, not detect
+    first."""
+    if fname.endswith(".zip"):
+        path = _zipped_gdb(tmp_path, fname)
+    else:
+        path = str(tmp_path / fname)
+        open(path, "w").write(_KML)
+    opts = {"path": path, **({"driverName": driver} if driver else {})}
+    rdr = _source(fmt)(opts).reader(None)  # what an executor builds
+    opens = _count_opens(monkeypatch)
+    assert sum(b.num_rows for b in _read_batches(rdr)) == rows
+    assert [fn for fn, _ in opens] == ["open_arrow"]
+
+
+def test_vector_family_with_no_prefix_still_rejects_other_formats_at_schema(tmp_path):
+    """Skipping the detection open at read time does not let schema() pass a file
+    of another format: _info_for still checks the driver GDAL opened it with."""
+    path = _write_layer(str(tmp_path / "pts.dat"), "GeoJSON")
+    with pytest.raises(ValueError, match=r"pts\.dat.*OpenFileGDB.*GeoJSON driver"):
+        _source("vector_gbx")({"path": path, "driverName": "OpenFileGDB"}).schema()
+
+
+def test_vector_family_with_no_prefix_keeps_the_unrecognized_hint(tmp_path):
+    path = tmp_path / "pts.gdb.txt"
+    path.write_bytes(bytes(range(256)) * 4)
+    with pytest.raises(ValueError, match=r"pts\.gdb\.txt.*does not recognize it as"):
+        _source("file_gdb_gbx")({"path": str(path)}).schema()

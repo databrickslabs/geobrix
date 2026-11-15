@@ -33,27 +33,23 @@ def vectorx_registered(spark):
     Registers:
     - ``vectorx`` (heavy tier): TIN, MVT, CRS functions
     - ``vectorx.jts.legacy`` (heavy tier): ``gbx_st_legacyaswkb``
-    - ``pyvx`` (light tier): light-only functions including the antimeridian
-      family (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split``)
+    - the manager: the antimeridian, cleaning and coverage functions
+      (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split`` and the rest) and
+      the generators (the MVT pyramid and the TIN functions), each on the best level this session offers
 
-    The light registration must come after the heavy registration so the last
-    write to the SQL function registry wins; both tiers register the same
-    ``gbx_st_*`` SQL names, and pyvx's scalar UDFs override the heavy
-    expressions for the light-only antimeridian functions (which have no heavy
-    counterpart).
+    The manager registration comes after the heavy registration so the last
+    write to the SQL function registry wins; both register the same
+    ``gbx_st_*`` SQL names.
 
     Also creates the four canonical fixture views used by the SQL examples.
     """
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx.jts.legacy import (
-        functions as legacy_vx,
-    )  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as pyvx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
     from ._fixtures import create_setup_views_vectorx_heavy  # noqa: PLC0415
 
-    vx.register(spark)
-    legacy_vx.register(spark)
-    pyvx.register(
+    gbx_manager.register_family(spark, ('gbx_st_',))
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx_register(
         spark,
         only=[
             "gbx_st_shiftlongitude",
@@ -68,6 +64,15 @@ def vectorx_registered(spark):
             "gbx_st_snap",
             "gbx_st_coverageisvalid",
             "gbx_st_coverageinvalidedges",
+            # the array forms of the aggregates
+            "gbx_st_asmvt_array",
+            "gbx_st_coverageisvalid_array",
+            "gbx_st_coverageinvalidedges_array",
+            # the generators are table functions (FROM t, LATERAL f(...)), installed by the manager
+            "gbx_st_asmvt_pyramid",
+            "gbx_st_triangulate",
+            "gbx_st_interpolateelevationbbox",
+            "gbx_st_interpolateelevationgeom",
         ],
     )
     create_setup_views_vectorx_heavy(spark)
@@ -88,6 +93,40 @@ def test_st_asmvt_sql_example(vectorx_registered):
     mvt = result[0]["mvt"]
     assert mvt is not None, "st_asmvt should return non-null MVT bytes"
     assert len(mvt) > 0, "MVT bytes should be non-empty"
+
+
+def _decoded_layer(mvt_bytes, layer="layer"):
+    """The layer's features as (shapely WKT, properties) pairs, in a stable order."""
+    import mapbox_vector_tile  # noqa: PLC0415
+    from shapely import from_geojson  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    tile = mapbox_vector_tile.decode(bytes(mvt_bytes), default_options={"y_coord_down": True})
+    feats = tile[layer]["features"]
+    return sorted(
+        (from_geojson(json.dumps(f["geometry"])).wkt, tuple(sorted(f["properties"].items())))
+        for f in feats
+    )
+
+
+def test_st_asmvt_array_sql_example(vectorx_registered):
+    """Run the ``gbx_st_asmvt_array`` SQL example; the layer holds the fixture's two features.
+
+    The ``mvt_features`` fixture has 2 rows in tile (z=0, x=0, y=0). The array form decodes to the
+    same features and attributes as the aggregate ``gbx_st_asmvt`` over the same rows.
+    """
+    spark = vectorx_registered
+    result = spark.sql(_statement(vectorx_functions_sql.st_asmvt_array_sql_example())).collect()
+    assert len(result) == 1
+    mvt = result[0]["mvt"]
+    assert mvt is not None and len(mvt) > 0, "st_asmvt_array should return non-empty MVT bytes"
+    got = _decoded_layer(mvt)
+    assert got == [
+        ("POINT (100 100)", (("id", 1), ("name", "a"))),
+        ("POINT (200 200)", (("id", 2), ("name", "b"))),
+    ]
+    agg = spark.sql(_statement(vectorx_functions_sql.st_asmvt_sql_example())).collect()
+    assert got == _decoded_layer(agg[0]["mvt"]), "array form and aggregate differ"
 
 
 def test_st_asmvt_pyramid_sql_example(vectorx_registered):
@@ -268,8 +307,8 @@ def test_st_legacyaswkb_sql_example(vectorx_registered):
 
 # ---------------------------------------------------------------------------
 # Antimeridian family — st_shiftlongitude, st_wrapx, st_split
-# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
-# All three tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# The fixture above registers these through the manager.
+# All three tests use inline WKT string inputs; the functions accept WKT/EWKT
 # strings directly via parse_geom, so no ST_AsBinary/ST_GeomFromText wrapper
 # is needed in these Docker-executable examples.
 # ---------------------------------------------------------------------------
@@ -342,8 +381,8 @@ def test_st_split_sql_example(vectorx_registered):
 
 # ---------------------------------------------------------------------------
 # Geometry validity family — st_makevalid, st_explainvalidity
-# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
-# Both tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# The fixture above registers these through the manager.
+# Both tests use inline WKT string inputs; the functions accept WKT/EWKT
 # directly via parse_geom, so no ST_AsBinary wrapper is needed.
 # ---------------------------------------------------------------------------
 
@@ -403,7 +442,7 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
     ST_GeomFromWKB) that are available on DBR 17.3+ but not in vanilla Spark.
     The structural test checks the SQL string is non-empty and references all three
     antimeridian functions.  The integration test builds the equivalent chain using
-    the pyvx Python Column API + shapely to confirm the geometry result is correct.
+    the vectorx Python Column API + shapely to confirm the geometry result is correct.
     """
     # Part 1: structural — the example SQL string is non-empty and references all functions.
     # ST_XMax is the conditional guard that applies wrapx only to pieces with x > 180;
@@ -421,7 +460,7 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
 
     # Part 2: integration — the full chain produces a valid normalized geometry
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
     from shapely.ops import unary_union  # noqa: PLC0415
 
@@ -496,8 +535,8 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
 # ---------------------------------------------------------------------------
 # Geometry cleaning family — st_simplifypreservetopology, st_removerepeatedpoints,
 #                            st_reduceprecision, st_node, st_snap
-# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
-# All tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# The fixture above registers these through the manager.
+# All tests use inline WKT string inputs; the functions accept WKT/EWKT
 # directly via parse_geom, so no ST_AsBinary wrapper is needed.
 # ---------------------------------------------------------------------------
 
@@ -602,8 +641,8 @@ def test_st_snap_sql_example(vectorx_registered):
 
 # ---------------------------------------------------------------------------
 # Coverage validity family — st_coverageisvalid, st_coverageinvalidedges
-# These are light-only (pyvx tier) grouped-aggregate SQL UDFs registered in
-# the fixture above.  Both tests use the coverage_parcels / coverage_overlap
+# These are grouped-aggregate SQL functions the fixture above registers
+# through the manager.  Both tests use the coverage_parcels / coverage_overlap
 # fixture views created by create_setup_views_vectorx_heavy.
 # ---------------------------------------------------------------------------
 
@@ -643,3 +682,32 @@ def test_coverageinvalidedges_sql_example(vectorx_registered):
     assert len(bad_edges) > 0, "bad_edges WKB bytes should be non-empty"
     geom = wkb_loads(bytes(bad_edges), hex=False)
     assert not geom.is_empty, "Invalid edges geometry should be non-empty for overlapping polygons"
+
+
+def test_coverageisvalid_array_sql_example(vectorx_registered):
+    """The array form says ``true`` for the valid coverage, as the aggregate does."""
+    spark = vectorx_registered
+    result = spark.sql(
+        _statement(vectorx_functions_sql.st_coverageisvalid_array_sql_example())
+    ).collect()
+    assert len(result) == 1
+    assert result[0]["is_valid"] is True
+    agg = spark.sql(_statement(vectorx_functions_sql.st_coverageisvalid_sql_example())).collect()
+    assert agg[0]["is_valid"] is result[0]["is_valid"]
+
+
+def test_coverageinvalidedges_array_sql_example(vectorx_registered):
+    """The array form returns the overlap's invalid edges, the same geometry as the aggregate."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    result = spark.sql(
+        _statement(vectorx_functions_sql.st_coverageinvalidedges_array_sql_example())
+    ).collect()
+    assert len(result) == 1
+    edges = wkb_loads(bytes(result[0]["bad_edges"]))
+    assert not edges.is_empty, "overlapping polygons have invalid edges"
+    agg = spark.sql(
+        _statement(vectorx_functions_sql.st_coverageinvalidedges_sql_example())
+    ).collect()
+    assert edges.equals(wkb_loads(bytes(agg[0]["bad_edges"])))

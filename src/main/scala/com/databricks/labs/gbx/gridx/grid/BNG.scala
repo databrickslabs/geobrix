@@ -3,9 +3,11 @@ package com.databricks.labs.gbx.gridx.grid
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.GeometryTypeEnum._
 import com.databricks.labs.gbx.vectorx.jts.{GeometryTypeEnum, JTS}
-import org.apache.spark.sql.types._
+import org.apache.spark.sql.types.{BinaryType, BooleanType, DataType, DecimalType, DoubleType, FloatType, IntegerType, LongType, StringType, StructField, StructType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom._
+import org.locationtech.jts.geom.util.PolygonExtracter
+import org.locationtech.jts.operation.union.UnaryUnionOp
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -28,6 +30,15 @@ import scala.util.{Success, Try}
   */
 //noinspection ScalaWeakerAccess
 object BNG extends GridSystem {
+
+    /** The type a BNG resolution argument reaches `eval` as: a STRING stays a STRING (a size name or the digits
+      * of an index), a fractional number becomes its text (so `3.5` is refused naming the value, never truncated
+      * to 3), a BIGINT becomes its digits too (a cast to INT would wrap a huge value into a valid index; as
+      * digits it is range-checked and refused naming the value), and any other type is an INT index. */
+    def resolutionInputType(t: DataType): DataType = t match {
+        case StringType | DoubleType | FloatType | LongType | _: DecimalType => StringType
+        case _                                                               => IntegerType
+    }
 
     /** StructType for a BNG cell: cellid (idType), core (Boolean), chip (Binary). */
     def cellType(idType: DataType): StructType =
@@ -380,7 +391,11 @@ object BNG extends GridSystem {
       *   Cell ID in this grid system.
       */
     def pointToCellID(eastings: Double, northings: Double, resolution: Int): Long = {
-        require(!eastings.isNaN && !northings.isNaN, throw new IllegalStateException("NaN coordinates are not supported."))
+        // NaN and the infinities have no cell: a data error, which every caller turns into NULL.
+        require(
+          java.lang.Double.isFinite(eastings) && java.lang.Double.isFinite(northings),
+          throw new IllegalStateException("Non-finite coordinates are not supported.")
+        )
         val eastingsInt = eastings.toInt
         val northingsInt = northings.toInt
         val eLetter: Int = math.floor(eastingsInt / 100000).toInt
@@ -491,7 +506,7 @@ object BNG extends GridSystem {
         val nLetter: Int = letterMap.indexOf(letterRow)
 
         if (cellID.length == 1) {
-            encode(eLetter, 0, 0, 0, 0, 1, -1)
+            encode(eLetter, nLetter, 0, 0, 0, 1, -1)
         } else {
             val suffix = cellID.slice(cellID.length - 2, cellID.length)
             val quadrant: Int = if (quadrants.contains(suffix) && cellID.length > 2) quadrants.indexOf(suffix) else 0
@@ -581,6 +596,8 @@ object BNG extends GridSystem {
       */
     def getX(digits: Seq[Int], edgeSize: Int): Int = {
         val n = digits.length
+        // a 500 km square: 1(##)(##) holds the 100 km letter indices of its south-west corner
+        if (n < 6) return digits.slice(1, 3).mkString.toInt * 100000
         val k = (n - 6) / 2
         val xDigits = digits.slice(1, 3) ++ digits.slice(5, 5 + k)
         val quadrant = digits.last
@@ -602,6 +619,7 @@ object BNG extends GridSystem {
       */
     def getY(digits: Seq[Int], edgeSize: Int): Int = {
         val n = digits.length
+        if (n < 6) return digits.slice(3, 5).mkString.toInt * 100000
         val k = (n - 6) / 2
         val yDigits = digits.slice(3, 5) ++ digits.slice(5 + k, 5 + 2 * k)
         val quadrant = digits.last
@@ -675,7 +693,8 @@ object BNG extends GridSystem {
         val nShift = 10
         val id =
             if (resolution == -1) {
-                (idPlaceholder + eLetter * eLetterShift) / 100 + quadrant
+                // a 500 km square: the 100 km letter indices of its south-west corner, 1(##)(##); S, T, N, O, H, J
+                10000.0 + Math.floorDiv(eLetter, 5) * 5 * 100 + Math.floorDiv(nLetter, 5) * 5
             } else {
                 idPlaceholder + eLetter * eLetterShift + nLetter * nLetterShift + eBin * eShift + nBin * nShift + quadrant
             }
@@ -809,6 +828,69 @@ object BNG extends GridSystem {
         result
     }
 
+    /**
+      * Chips for the border cells of a tessellation: each candidate cell is clipped to `geometry`; a cell
+      * the geometry covers entirely is promoted to a core cell. Empty clips are dropped.
+      *
+      * The clip and the boundary cleanup are collection-aware (`JTS.intersection`, `JTS.difference`):
+      * a valid polygon can clip to a GeometryCollection (polygons plus a boundary line or point) or a
+      * MultiPolygon, and plain JTS overlay rejects a GeometryCollection operand.
+      *
+      * With `keepCoreGeom` false a promoted cell has no geometry, so its chip is `null` and must survive
+      * the empty-clip filter (a `null` chip is not an empty one).
+      *
+      * @param clip
+      *   how a cell polygon is clipped to the geometry; overridable so a test can force the promotion branch.
+      */
+    private[grid] def borderChips(
+        cells: Seq[Long],
+        geometry: Geometry,
+        keepCoreGeom: Boolean,
+        clip: (Geometry, Geometry) => Geometry = (cell, geom) => JTS.intersection(cell, geom)
+    ): Seq[(Long, Boolean, Geometry)] = {
+        cells.map(cell => {
+            val cellGeom = cellIdToGeometry(cell)
+            val intersect = clip(cellGeom, geometry)
+            if (intersect.isEmpty) (cell, false, intersect)
+            else {
+                val adjusted =
+                    if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
+                        JTS.difference(intersect, cellGeom.getBoundary)
+                    } else {
+                        intersect
+                    }
+                // Tolerance is set to 0.1 to account for floating point precision issues
+                // BNG coordinates are integers, so we can use a relatively large tolerance
+                // as coordinates will be in meters and tolerance is a fraction of a meter.
+                val isCore = adjusted.equalsExact(cellGeom, 0.1)
+                if (isCore) {
+                    if (keepCoreGeom) (cell, true, cellGeom)
+                    else (cell, true, null)
+                } else {
+                    (cell, false, adjusted)
+                }
+            }
+        }).filterNot(c => c._3 != null && c._3.isEmpty)
+    }
+
+    /**
+      * The polygonal part of `geometry`, used to carve and bound a tessellation.
+      *
+      * A GeometryCollection has no boundary and no single erosion (JTS rejects `getBoundary` on it, and eroding
+      * its members one by one would leave a seam of non-core cells where two polygons share an edge). So it is
+      * carved as the union of its polygonal leaves, at any nesting depth; the lines and points it holds still
+      * reach the chips through `borderChips`. Any other geometry is returned as is, and a collection with no
+      * polygon gives an empty polygon.
+      */
+    private[grid] def polygonalPart(geometry: Geometry): Geometry = {
+        if (geometry.getGeometryType != "GeometryCollection") geometry
+        else {
+            val polygons = PolygonExtracter.getPolygons(geometry)
+            if (polygons.isEmpty) geometry.getFactory.createPolygon()
+            else UnaryUnionOp.union(polygons, geometry.getFactory)
+        }
+    }
+
     // TODO: This needs some optimization, as now it is moved to BNG and we can
     //      avoid generic logic that was introducing some overhead.
     def tessellate(
@@ -817,9 +899,10 @@ object BNG extends GridSystem {
         keepCoreGeom: Boolean
     ): Iterator[(Long, Boolean, Geometry)] = {
 
-        val inGeomType = geometry.getGeometryType
+        val inputDimension = geometry.getDimension
         val radius = getBufferRadius(geometry, resolution)
-        val carvedGeometry = geometry.buffer(-radius)
+        val polygonal = polygonalPart(geometry)
+        val carvedGeometry = polygonal.buffer(-radius)
 
         // add 1% to the radius to ensure union of carved and border geometries does not have holes inside the original geometry areas
         val borderGeometry =
@@ -830,7 +913,7 @@ object BNG extends GridSystem {
                 )
             } else {
                 JTS.simplify(
-                  geometry.getBoundary.buffer(radius * 1.01),
+                  polygonal.getBoundary.buffer(radius * 1.01),
                   0.01 * radius
                 )
             }
@@ -846,31 +929,11 @@ object BNG extends GridSystem {
             val coreGeom = if (keepCoreGeom) cellIdToGeometry(cell) else null
             (cell, true, coreGeom)
         })
-        val borderChips = borderIndices.map(cell => {
-            val cellGeom = cellIdToGeometry(cell)
-            val intersect = cellGeom.intersection(geometry)
-            if (intersect.isEmpty) (cell, false, intersect)
-            else {
-                val adjusted =
-                    if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
-                        intersect.difference(cellGeom.getBoundary)
-                    } else {
-                        intersect
-                    }
-                // Tolerance is set to 0.1 to account for floating point precision issues
-                // BNG coordinates are integers, so we can use a relatively large tolerance
-                // as coordinates will be in meters and tolerance is a fraction of a meter.
-                val isCore = adjusted.equalsExact(cellGeom, 0.1)
-                if (isCore) {
-                    if (keepCoreGeom) (cell, true, cellGeom)
-                    else (cell, true, null)
-                } else {
-                    (cell, false, adjusted)
-                }
-            }
-        }).filterNot(_._3.isEmpty)
+        val borderChips = this.borderChips(borderIndices, geometry, keepCoreGeom)
 
-        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getGeometryType == inGeomType)
+        // Keep chips of the input's dimension: clipping a Polygon can legitimately produce a MultiPolygon (and
+        // vice versa), while the boundary-only points and lines of a grid-aligned input are dropped (mosaic#423).
+        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getDimension == inputDimension)
     }
 
 }

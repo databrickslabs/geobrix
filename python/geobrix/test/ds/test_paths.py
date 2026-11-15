@@ -1,0 +1,1307 @@
+"""read_paths: per-path reads over a DataFrame of file paths (batch + streaming)."""
+
+import json
+import os
+import shutil
+from datetime import datetime, timezone
+from test._volume_safe import open_raster, written_locally
+
+import pyarrow as pa
+import pytest
+from pyspark.sql.types import StructType
+
+from databricks.labs.gbx.ds import paths as P
+
+# A missing file is retried with a linear back-off (~22 s a call); the tests need the retries only.
+pytestmark = pytest.mark.usefixtures("no_backoff_sleep")
+
+# Streaming file sources need an explicit schema (binaryFile's fixed layout).
+_BINARY_SCHEMA = "path string, modificationTime timestamp, length long, content binary"
+
+# Longest an availableNow test stream may run before it is stopped and failed.
+_STREAM_TIMEOUT_S = 300
+
+
+def _await(query):
+    """Wait for an availableNow query; it is always stopped, and one still running
+    after _STREAM_TIMEOUT_S fails the test instead of blocking the run."""
+    try:
+        done = query.awaitTermination(_STREAM_TIMEOUT_S)
+        assert done, f"{query.name} still running: {query.status}"
+    finally:
+        query.stop()
+
+
+def _geojson(path, n, extra_prop=None):
+    feats = []
+    for i in range(n):
+        props = {"name": f"f{i}", "v": i}
+        if extra_prop:
+            props[extra_prop] = "x"
+        feats.append(
+            {
+                "type": "Feature",
+                "properties": props,
+                "geometry": {"type": "Point", "coordinates": [i, i]},
+            }
+        )
+    with open(path, "w") as f:
+        json.dump({"type": "FeatureCollection", "features": feats}, f)
+    return path
+
+
+def _paths_df(spark, files):
+    rows = [
+        (
+            f"dbfs:{p}" if p.startswith("/") else p,
+            datetime.fromtimestamp(os.stat(p).st_mtime, tz=timezone.utc),
+        )
+        for p in files
+    ]
+    return spark.createDataFrame(rows, "path string, modificationTime timestamp")
+
+
+def _batch_read(spark, fmt, path, **opts):
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    r = spark.read.format(fmt)
+    for k, v in opts.items():
+        r = r.option(k, v)
+    return r.load(path)
+
+
+def test_resolve_format_suffix_optional_any_case():
+    assert (
+        P.resolve_format("gpkg_gbx")
+        is P.resolve_format("GPKG")
+        is P.resolve_format("gpkg")
+    )
+    with pytest.raises(ValueError, match="Supported"):
+        P.resolve_format("cog_gbx_nope")
+
+
+def test_every_supported_format_is_a_registered_reader():
+    for name in P.SUPPORTED_FORMATS:
+        assert P.resolve_format(name).name() == name
+
+
+def test_iter_path_batches_handles_timestamp_columns(exif_jpeg):
+    # exif_gbx has a TIMESTAMP column; the expected Arrow schema needs a timezone.
+    batches = list(P.iter_path_batches(str(exif_jpeg), 1_000_000, "exif_gbx", {}))
+    assert sum(b.num_rows for b in batches) == 1
+    assert batches[0].schema.field("timestamp").type == pa.timestamp("us", tz="UTC")
+
+
+def test_resolve_format_rejects_unsupported_reader():
+    with pytest.raises(ValueError, match="file_gbx"):
+        P.resolve_format("file_gbx")
+
+
+def test_read_paths_lineage_strips_scheme_and_keeps_mtime(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 2)
+    got = P.read_paths(_paths_df(spark, [a]), "geojson").collect()
+    assert {r[P.SOURCE_PATH_COL] for r in got} == {a}
+    want = int(os.stat(a).st_mtime)
+    assert all(int(r[P.SOURCE_MTIME_COL].timestamp()) == want for r in got)
+
+
+def test_read_paths_no_mtime_col_gives_null(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    df = spark.createDataFrame([(a,)], "path string")
+    got = P.read_paths(df, "geojson_gbx", mtime_col=None).collect()
+    assert got[0][P.SOURCE_MTIME_COL] is None
+
+
+def test_read_paths_lineage_off(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    got = P.read_paths(_paths_df(spark, [a]), "geojson_gbx", lineage=False)
+    assert not [c for c in got.columns if c.startswith("_source_")]
+
+
+def test_read_paths_gpkg_layer_option(spark, tmp_path):
+    import pyogrio
+    import shapely
+
+    p = str(tmp_path / "z.gpkg")
+    tbl = pa.table(
+        {"geom": shapely.to_wkb(shapely.points([0, 1], [0, 1])), "k": [1, 2]}
+    )
+    with written_locally(p) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+    got = P.read_paths(_paths_df(spark, [p]), "gpkg_gbx", {"layerName": "pts"})
+    assert got.count() == 2
+
+
+def test_read_paths_exif(spark, exif_jpeg):
+    got = P.read_paths(_paths_df(spark, [str(exif_jpeg)]), "exif_gbx").collect()
+    assert len(got) == 1 and got[0][P.SOURCE_PATH_COL] == str(exif_jpeg)
+
+
+def test_read_paths_schema_mismatch_names_file(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    b = _geojson(str(tmp_path / "b.geojson"), 1, extra_prop="surprise")
+    with pytest.raises(Exception, match=r"b\.geojson.*surprise"):
+        P.read_paths(_paths_df(spark, [a, b]), "geojson_gbx", schema_path=a).collect()
+
+
+def test_read_paths_streaming_requires_schema_path(spark, tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    stream = spark.readStream.format("binaryFile").schema(_BINARY_SCHEMA).load(str(d))
+    with pytest.raises(ValueError, match="schema_path"):
+        P.read_paths(stream, "geojson_gbx")
+
+
+def test_read_paths_streaming_available_now(spark, tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    a = _geojson(str(d / "a.geojson"), 3)
+    stream = (
+        spark.readStream.format("binaryFile")
+        .schema(_BINARY_SCHEMA)
+        .option("pathGlobFilter", "*.geojson")
+        .load(str(d))
+        .select("path", "modificationTime")
+    )
+    out = P.read_paths(stream, "geojson_gbx", schema_path=a)
+    q = (
+        out.writeStream.format("memory")
+        .queryName("rp_stream")
+        .trigger(availableNow=True)
+        .option("checkpointLocation", str(tmp_path / "ck"))
+        .start()
+    )
+    _await(q)
+    assert spark.table("rp_stream").count() == 3
+
+
+def test_read_paths_num_partitions(spark, tmp_path):
+    files = [_geojson(str(tmp_path / f"{i}.geojson"), 1) for i in range(4)]
+    got = P.read_paths(_paths_df(spark, files), "geojson_gbx", num_partitions=3)
+    assert (
+        got.rdd.getNumPartitions() == 3
+    )  # test-only RDD use; the module never touches .rdd
+
+
+def test_read_paths_empty_df(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    empty = spark.createDataFrame([], "path string, modificationTime timestamp")
+    assert P.read_paths(empty, "geojson_gbx", schema_path=a).count() == 0
+
+
+def test_read_paths_zero_feature_file(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 2)
+    z = _geojson(str(tmp_path / "z.geojson"), 0)
+    assert (
+        P.read_paths(_paths_df(spark, [a, z]), "geojson_gbx", schema_path=a).count()
+        == 2
+    )
+
+
+def test_iter_path_batches_missing_file_skips(tmp_path, caplog):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    expected = P.path_schema("geojson_gbx", None, a)
+    gone = str(tmp_path / "gone.geojson")
+    assert list(P.iter_path_batches(gone, None, "geojson_gbx", None, expected)) == []
+    assert "gone.geojson" in caplog.text
+
+
+def _geojson_props(path, props):
+    feat = {
+        "type": "Feature",
+        "properties": props,
+        "geometry": {"type": "Point", "coordinates": [0, 0]},
+    }
+    with open(path, "w") as f:
+        json.dump({"type": "FeatureCollection", "features": [feat]}, f)
+    return path
+
+
+def test_read_paths_reorders_columns_by_name(spark, tmp_path):
+    a = _geojson_props(str(tmp_path / "a.geojson"), {"a": "A1", "b": "B1"})
+    b = _geojson_props(str(tmp_path / "b.geojson"), {"b": "B2", "a": "A2"})
+    got = P.read_paths(_paths_df(spark, [a, b]), "geojson_gbx", schema_path=a).collect()
+    by_file = {r[P.SOURCE_PATH_COL]: (r["a"], r["b"]) for r in got}
+    assert by_file == {a: ("A1", "B1"), b: ("A2", "B2")}
+
+
+def test_norm_type_accepts_large_variants():
+    assert P._norm_type(pa.large_string()) == pa.string()
+    assert P._norm_type(pa.large_binary()) == pa.binary()
+    assert P._norm_type(pa.large_list(pa.large_string())) == pa.list_(pa.string())
+
+
+def test_check_schema_accepts_large_and_plain_variants():
+    got = pa.schema(
+        [
+            ("s", pa.large_string()),
+            ("b", pa.large_binary()),
+            ("l", pa.large_list(pa.int32())),
+        ]
+    )
+    want = pa.schema(
+        [("s", pa.string()), ("b", pa.binary()), ("l", pa.list_(pa.int32()))]
+    )
+    P._check_schema("x.geojson", got, want)
+
+
+def test_check_schema_changed_type_names_path_and_field():
+    got = pa.schema([("k", pa.int64())])
+    want = pa.schema([("k", pa.string())])
+    with pytest.raises(ValueError, match=r"x\.geojson.*changed types \['k'\]"):
+        P._check_schema("x.geojson", got, want)
+
+
+def test_check_schema_missing_and_extra_fields():
+    want = pa.schema([("a", pa.string()), ("b", pa.string())])
+    with pytest.raises(ValueError, match=r"x\.geojson.*missing \['b'\]"):
+        P._check_schema("x.geojson", pa.schema([("a", pa.string())]), want)
+    with pytest.raises(ValueError, match=r"x\.geojson.*extra \['c'\]"):
+        P._check_schema("x.geojson", pa.schema(list(want) + [("c", pa.string())]), want)
+
+
+def _tif(path, w=64, h=64, value=1):
+    import numpy as np
+    import rasterio
+
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=rasterio.Affine(1, 0, 0, 0, -1, h),
+    )
+    with open_raster(path, "w", **profile) as dst:
+        dst.write(np.full((1, h, w), value, dtype="uint8"))
+    return path
+
+
+def _set_op_safe(df, cols):
+    """exceptAll rejects MAP columns; compare tile.metadata as sorted entries."""
+    from pyspark.sql import functions as F
+
+    meta = F.array_sort(F.map_entries("tile.metadata"))
+    return df.select(cols).withColumn("tile", F.col("tile").withField("metadata", meta))
+
+
+def test_read_paths_gtiff_matches_batch_reader(spark, tmp_path):
+    a = _tif(str(tmp_path / "a.tif"))
+    got = P.read_paths(_paths_df(spark, [a]), "gtiff_gbx")
+    want = _batch_read(spark, "gtiff_gbx", a)
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert got.count() == want.count()
+    assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want, cols)).count() == 0
+
+
+def test_read_paths_raster_splits_a_large_file_across_partitions(spark, tmp_path):
+    from pyspark.sql import functions as F
+
+    a = _tif(str(tmp_path / "big.tif"), w=2048, h=2048)
+    opts = {"tileSize": "512"}  # 16 deterministic windows from one file
+    want_df = _batch_read(spark, "raster_gbx", a, **opts)
+    want = want_df.count()
+    got = P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts, num_partitions=4)
+    assert want == 16 and got.count() == want
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want_df, cols)).count() == 0
+    assert got.rdd.getNumPartitions() == 4  # windows spread after the plan stage
+    # One file's windows land in more than one task (not just 4 empty slots).
+    assert got.select(F.spark_partition_id()).distinct().count() > 1
+
+
+def test_iter_path_batches_converts_raster_rows(tmp_path):
+    # The connector path: one file, every window, tuple rows -> Arrow batches.
+    a = _tif(str(tmp_path / "a.tif"))
+    expected = P.path_schema("gtiff_gbx", {"tileSize": "32"}, a)
+    batches = list(
+        P.iter_path_batches(a, 1_000_000, "gtiff_gbx", {"tileSize": "32"}, expected)
+    )
+    assert sum(b.num_rows for b in batches) == 4
+    assert batches[0].schema.names == [f.name for f in expected.fields]
+    tiles = [t for b in batches for t in b.column("tile").to_pylist()]
+    assert {(t["window"]["col_off"], t["window"]["row_off"]) for t in tiles} == {
+        (0, 0),
+        (32, 0),
+        (0, 32),
+        (32, 32),
+    }
+
+
+def test_plan_rows_round_trip_raster_partitions(tmp_path, caplog):
+    import pickle
+
+    a = _tif(str(tmp_path / "a.tif"))
+    gone = str(tmp_path / "gone.tif")
+    src = pa.RecordBatch.from_arrays(
+        [pa.array([a, gone]), pa.array([1_000_000, None], P._TS)],
+        names=["path", "mtime"],
+    )
+    schema = P.path_schema("raster_gbx", None, a, lineage=False)
+    plan = P._plan_batches("raster_gbx", {"tileSize": "32"}, schema)
+    rows = [r for b in plan(iter([src])) for r in b.to_pylist()]
+    assert {r["path"] for r in rows} == {a} and len(rows) == 4
+    assert "gone.tif" in caplog.text
+    parts = [pickle.loads(r["part"]) for r in rows]
+    assert sorted(p.window for p in parts) == [
+        (0, 0, 32, 32),
+        (0, 32, 32, 32),
+        (32, 0, 32, 32),
+        (32, 32, 32, 32),
+    ]
+    assert all(p.file_path == a for p in parts)
+
+
+def test_read_paths_raster_streaming_two_stage(spark, tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    a = _tif(str(d / "a.tif"))
+    stream = (
+        spark.readStream.format("binaryFile")
+        .schema(_BINARY_SCHEMA)
+        .option("pathGlobFilter", "*.tif")
+        .load(str(d))
+        .select("path", "modificationTime")
+    )
+    out = P.read_paths(
+        stream, "gtiff_gbx", {"tileSize": "32"}, schema_path=a, num_partitions=2
+    )
+    q = (
+        out.writeStream.format("memory")
+        .queryName("rp_raster_stream")
+        .trigger(availableNow=True)
+        .option("checkpointLocation", str(tmp_path / "ck"))
+        .start()
+    )
+    _await(q)
+    got = spark.table("rp_raster_stream").collect()
+    assert len(got) == 4 and {r[P.SOURCE_PATH_COL] for r in got} == {a}
+
+
+def _plan_src(*paths_mtimes):
+    paths, mtimes = zip(*paths_mtimes)
+    return pa.RecordBatch.from_arrays(
+        [pa.array(list(paths)), pa.array(list(mtimes), P._TS)],
+        names=["path", "mtime"],
+    )
+
+
+def test_plan_stage_flushes_at_the_row_cap(spark, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "_PLAN_ROWS_PER_BATCH", 3)
+    a = _tif(str(tmp_path / "big.tif"), w=2048, h=2048)
+    opts = {"tileSize": "512"}
+    schema = P.path_schema("raster_gbx", opts, a, lineage=False)
+    plan = list(P._plan_batches("raster_gbx", opts, schema)(iter([_plan_src((a, 1))])))
+    assert [b.num_rows for b in plan] == [3, 3, 3, 3, 3, 1]
+    # The cap travels with the plan function, so the Spark read flushes too.
+    got = P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts, num_partitions=4)
+    want = _batch_read(spark, "raster_gbx", a, **opts)
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert got.count() == want.count() == 16
+    assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want, cols)).count() == 0
+
+
+def test_read_paths_carries_the_drivers_read_cap_to_every_per_file_reader(
+    spark, tmp_path, monkeypatch
+):
+    """The driver measures the read cap (64 MiB on Serverless) and ``read_paths`` hands it to the readers it builds on
+    the workers; a dropped argument would leave them the lazy cap, and an over-cap file would decode.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+
+    a = _tif(str(tmp_path / "a.tif"), w=64, h=64)  # 4 KiB decoded
+    opts = {"virtualTiles": "false"}
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda *a: 1000)
+    with pytest.raises(Exception, match="retile it first"):
+        P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts).collect()
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda *a: 1 << 20)
+    assert P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts).count() == 1
+
+
+def test_read_paths_raster_lineage_survives_the_shuffle(spark, tmp_path):
+    a = _tif(str(tmp_path / "a.tif"), value=1)
+    b = _tif(str(tmp_path / "b.tif"), value=2)
+    os.utime(a, (1_600_000_000, 1_600_000_000))
+    os.utime(b, (1_700_000_000, 1_700_000_000))
+    got = P.read_paths(
+        _paths_df(spark, [a, b]), "gtiff_gbx", {"tileSize": "32"}, num_partitions=2
+    ).collect()
+    assert len(got) == 8
+    mtime = {a: 1_600_000_000, b: 1_700_000_000}
+    for r in got:
+        assert r[P.SOURCE_PATH_COL] == r["tile"]["path"]
+        assert int(r[P.SOURCE_MTIME_COL].timestamp()) == mtime[r["tile"]["path"]]
+    assert {r[P.SOURCE_PATH_COL] for r in got} == {a, b}
+
+
+def test_read_stage_skips_a_file_deleted_after_planning(tmp_path, caplog, monkeypatch):
+    # One stat attempt: the FUSE retry backoff is not under test here.
+    monkeypatch.setattr(P._listing, "_retry_transient", lambda fn: fn())
+    a = _tif(str(tmp_path / "a.tif"))
+    b = _tif(str(tmp_path / "b.tif"))
+    opts = {"tileSize": "32"}
+    schema = P.path_schema("gtiff_gbx", opts, a)
+    plan = list(
+        P._plan_batches("gtiff_gbx", opts, schema)(
+            iter([_plan_src((a, 1_000_000), (b, 2_000_000))])
+        )
+    )
+    assert sum(x.num_rows for x in plan) == 8
+    os.remove(b)
+    out = list(P._read_planned("gtiff_gbx", opts, schema, True)(iter(plan)))
+    paths = [p for x in out for p in x.column(P.SOURCE_PATH_COL).to_pylist()]
+    assert paths == [a] * 4
+    assert "b.tif" in caplog.text and "no longer exists" in caplog.text
+
+
+@pytest.mark.parametrize("fmt", ["raster_gbx", "gtiff_gbx", "cog_gbx"])
+@pytest.mark.parametrize("opt", ["manifest", "tilesTable", "TILESTABLE"])
+def test_read_paths_rejects_manifest_options_for_raster(spark, tmp_path, opt, fmt):
+    a = _tif(str(tmp_path / "a.tif"))
+    with pytest.raises(ValueError, match=f"(?i){opt}") as info:
+        P.read_paths(_paths_df(spark, [a]), fmt, {opt: "x"})
+    # and says where to read it instead: a tile index has its own function
+    fix = "spark.read.format" if opt == "manifest" else "read_tiles_table"
+    assert fix in str(info.value).split("Fix:")[-1]
+
+
+# --- schema file pick (folder schema_path) ----------------------------------
+
+
+def _schema_names(schema):
+    return [f.name for f in schema.fields]
+
+
+def test_path_schema_folder_opens_only_the_first_matching_file(tmp_path, monkeypatch):
+    d = tmp_path / "landing"
+    d.mkdir()
+    (d / "0_notes.txt").write_text("not a vector file")  # sorts first, no match
+    (d / "_hidden.geojson").write_text("{broken")  # hidden: skipped
+    a = _geojson(str(d / "a.geojson"), 1)
+    _geojson(str(d / "b.geojson"), 1, extra_prop="surprise")  # drifted
+    opened = []
+    real = P._reader_schema
+
+    def spy(fmt, options, path):
+        opened.append(path)
+        return real(fmt, options, path)
+
+    monkeypatch.setattr(P, "_reader_schema", spy)
+    schema = P.path_schema("geojson_gbx", None, str(d))
+    assert opened == [a]
+    assert "surprise" not in _schema_names(schema)
+    assert _schema_names(schema)[-2:] == [P.SOURCE_PATH_COL, P.SOURCE_MTIME_COL]
+
+
+def _shapefile(path, cols):
+    import pyogrio
+    import shapely
+
+    tbl = pa.table({"geometry": shapely.to_wkb(shapely.points([0, 1], [0, 1])), **cols})
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="ESRI Shapefile",
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+    return path
+
+
+def test_path_schema_folder_of_shapefiles_with_different_schemas(tmp_path):
+    # The shapefile reader rejects a folder whose members differ; the schema pick
+    # opens only the first .shp, so a later drifted file cannot block it.
+    d = tmp_path / "shp"
+    d.mkdir()
+    _shapefile(str(d / "a.shp"), {"k": [1, 2]})
+    _shapefile(str(d / "b.shp"), {"other": ["x", "y"]})
+    names = _schema_names(P.path_schema("shapefile_gbx", None, str(d)))
+    assert "k" in names and "other" not in names
+
+
+def test_path_schema_folder_honors_glob(tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    _geojson(str(d / "a_old.geojson"), 1, extra_prop="legacy")  # sorts first
+    _geojson(str(d / "b.geojson"), 1)
+    assert "legacy" in _schema_names(P.path_schema("geojson_gbx", None, str(d)))
+    names = _schema_names(P.path_schema("geojson_gbx", None, str(d), glob="b*"))
+    assert "legacy" not in names and "name" in names
+
+
+def test_path_schema_folder_without_a_match_names_the_pattern(tmp_path):
+    (tmp_path / "x.txt").write_text("x")
+    with pytest.raises(ValueError, match=r"\*\.\{geojson,GEOJSON\}"):
+        P.path_schema("geojson_gbx", None, str(tmp_path))
+
+
+def _gdb(path, cols):
+    """An unzipped File Geodatabase folder with one point layer."""
+    import pyogrio
+    import shapely
+
+    tbl = pa.table({"SHAPE": shapely.to_wkb(shapely.points([0], [0])), **cols})
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="OpenFileGDB",
+            geometry_name="SHAPE",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+    return path
+
+
+# --- each file's schema is checked up front, also when it has no rows --------
+
+
+def _gpkg(path, cols, geom=None):
+    """A GeoPackage point layer: ``cols`` = {name: Arrow array}; ``geom`` = WKB
+    values (default: one point per row of ``cols``, or none)."""
+    import pyogrio
+    import shapely
+
+    n = len(next(iter(cols.values()))) if cols else 0
+    if geom is None:
+        geom = shapely.to_wkb(shapely.points(list(range(n)), list(range(n))))
+    tbl = pa.table({"geom": pa.array(list(geom), pa.binary()), **cols})
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+    return path
+
+
+def test_iter_path_batches_checks_an_empty_layer_against_the_schema(tmp_path):
+    """A layer with no features and no fields (what a FileGDB with a garbled table
+    header reads as) yields no batch; the per-file check still catches it."""
+    good = _gpkg(str(tmp_path / "good.gpkg"), {"k": pa.array([1], pa.int64())})
+    empty = _gpkg(str(tmp_path / "empty.gpkg"), {})
+    expected = P.path_schema("gpkg_gbx", None, good)
+    with pytest.raises(ValueError, match=r"empty\.gpkg.*missing \['k'\]"):
+        list(P.iter_path_batches(empty, None, "gpkg_gbx", None, expected))
+
+
+def test_iter_path_batches_zero_feature_layer_with_the_schema_passes(tmp_path):
+    good = _gpkg(str(tmp_path / "good.gpkg"), {"k": pa.array([1], pa.int64())})
+    none = _gpkg(str(tmp_path / "none.gpkg"), {"k": pa.array([], pa.int64())})
+    expected = P.path_schema("gpkg_gbx", None, good)
+    assert list(P.iter_path_batches(none, None, "gpkg_gbx", None, expected)) == []
+
+
+@pytest.mark.parametrize("fmt", ["geojson_gbx", "vector_gbx"])
+def test_iter_path_batches_zero_feature_geojson_has_no_schema_to_check(tmp_path, fmt):
+    """GeoJSON fields come from the features: an empty FeatureCollection declares
+    none, so it passes (no rows) whichever reader opens it."""
+    a = _geojson(str(tmp_path / "a.geojson"), 2)
+    z = _geojson(str(tmp_path / "z.geojson"), 0)
+    expected = P.path_schema(fmt, None, a)
+    assert list(P.iter_path_batches(z, None, fmt, None, expected)) == []
+
+
+def test_iter_path_batches_garbled_gdb_table_header_fails_the_schema_check(tmp_path):
+    """The corrupt-input case: XOR-garbling the feature table header of a FileGDB
+    makes GDAL read the layer as 0 features and 0 fields, silently."""
+    good = _gdb(str(tmp_path / "good.gdb"), {"k": [1]})
+    bad = str(tmp_path / "bad.gdb")
+    shutil.copytree(good, bad)
+    # The layer's table is the one created last (system tables come first).
+    table = max(f for f in os.listdir(bad) if f.endswith(".gdbtable"))
+    with open(os.path.join(bad, table), "r+b") as fh:
+        head = bytes(b ^ 0x5A for b in fh.read(40))
+        fh.seek(0)
+        fh.write(head)
+    expected = P.path_schema("file_gdb_gbx", None, good)
+    with pytest.raises(ValueError, match=r"bad\.gdb.*schema differs"):
+        list(P.iter_path_batches(bad, None, "file_gdb_gbx", None, expected))
+
+
+def test_read_paths_fails_on_an_empty_layer_naming_it(spark, tmp_path):
+    good = _gpkg(str(tmp_path / "good.gpkg"), {"k": pa.array([1], pa.int64())})
+    empty = _gpkg(str(tmp_path / "empty.gpkg"), {})
+    df = _paths_df(spark, [good, empty])
+    with pytest.raises(Exception, match=r"empty\.gpkg.*missing \['k'\]"):
+        P.read_paths(df, "gpkg_gbx", schema_path=good).collect()
+
+
+def test_plan_stage_checks_each_file_schema(tmp_path):
+    """Two-stage readers are checked once per file, when the file is planned."""
+    from pyspark.sql.types import StringType, StructField
+
+    a = _tif(str(tmp_path / "a.tif"))
+    schema = P.path_schema("gtiff_gbx", {"tileSize": "32"}, a)
+    drifted = StructType(list(schema.fields) + [StructField("x", StringType())])
+    plan = P._plan_batches("gtiff_gbx", {"tileSize": "32"}, drifted)
+    with pytest.raises(ValueError, match=r"a\.tif.*missing \['x'\]"):
+        list(plan(iter([_plan_src((a, 1_000_000))])))
+
+
+def test_path_schema_gdb_folder_is_one_dataset(tmp_path):
+    gdb = _gdb(str(tmp_path / "survey.gdb"), {"k": [1]})
+    assert "k" in _schema_names(P.path_schema("file_gdb_gbx", None, gdb))
+
+
+def test_path_schema_folder_of_gdb_folders_takes_the_first_gdb(tmp_path):
+    """A folder of unzipped .gdb folders: the first .gdb folder (sorted) is the
+    schema dataset for the readers that read one; its files are never matched
+    one by one."""
+    d = tmp_path / "gdbs"
+    d.mkdir()
+    _gdb(str(d / "b.gdb"), {"other": [1]})
+    _gdb(str(d / "a.gdb"), {"k": [1]})
+    _gdb(str(d / "_hidden.gdb"), {"hidden": [1]})
+    for fmt in ("file_gdb_gbx", "vector_gbx"):
+        assert P._schema_file(fmt, str(d)) == str(d / "a.gdb"), fmt
+        names = _schema_names(P.path_schema(fmt, None, str(d)))
+        assert "k" in names and "other" not in names, fmt
+    # A zipped .gdb.zip that sorts first is still taken first.
+    shutil.make_archive(str(d / "0"), "zip", str(d), "b.gdb")
+    os.rename(str(d / "0.zip"), str(d / "0.gdb.zip"))
+    assert P._schema_file("file_gdb_gbx", str(d)) == str(d / "0.gdb.zip")
+    # Other readers do not take a .gdb folder.
+    with pytest.raises(ValueError, match="No file under"):
+        P.path_schema("gpkg_gbx", None, str(d))
+
+
+def test_read_paths_schema_kwarg_skips_schema_resolution(spark, tmp_path, monkeypatch):
+    a = _geojson(str(tmp_path / "a.geojson"), 2)
+    schema = P.path_schema("geojson_gbx", None, a, lineage=False)
+
+    def boom(*a, **k):
+        raise AssertionError("schema resolved again")
+
+    monkeypatch.setattr(P, "path_schema", boom)
+    monkeypatch.setattr(P, "_reader_schema", boom)
+    got = P.read_paths(_paths_df(spark, [a]), "geojson_gbx", schema=schema)
+    assert got.columns[-2:] == [P.SOURCE_PATH_COL, P.SOURCE_MTIME_COL]
+    assert got.count() == 2
+    off = P.read_paths(
+        _paths_df(spark, [a]), "geojson_gbx", schema=schema, lineage=False
+    )
+    assert off.columns == _schema_names(schema)
+    # A stream needs no schema_path when the schema is given.
+    d = tmp_path / "in"
+    d.mkdir()
+    stream = spark.readStream.format("binaryFile").schema(_BINARY_SCHEMA).load(str(d))
+    full = StructType(list(schema.fields) + P._lineage_fields())
+    assert P.read_paths(stream, "geojson_gbx", schema=full).isStreaming
+
+
+# --- default file patterns (Hadoop glob syntax) ------------------------------
+
+_GLOB_NAMES = [
+    "a.gpkg",
+    "a.gpkg-journal",
+    "a.geojson",
+    "a.json",
+    "a.geojsonl",
+    "a.geojsons",
+    "a.shp",
+    "a.shx",
+    "a.dbf",
+    "a.prj",
+    "a.cpg",
+    "a.shz",
+    "a.shp.zip",
+    "a.zip",
+    "a.gdb.zip",
+    "a00000001.gdbtable",
+    "a.las",
+    "a.laz",
+    "a.jpg",
+    "a.jpeg",
+    "a.JPG",
+    "a.tif",
+    "a.tiff",
+    "a.TIF",
+    "a.tif.aux.xml",
+    "a.ovr",
+    "a.nc",
+    "a.nc4",
+    "a.pmtiles",
+    "a.pmtiles.tmp",
+    "notes.txt",
+    # Upper-case extensions are common (camera / drone imagery); mixed case is not.
+    "b.JPEG",
+    "b.Jpg",
+    "b.TIFF",
+    "b.LAS",
+    "b.LAZ",
+    "b.SHP",
+    "b.SHX",
+    "b.GPKG",
+    "b.GEOJSON",
+    "b.JSON",
+    "b.GDB.ZIP",
+    "b.NC",
+    "b.PMTILES",
+]
+
+
+def test_default_globs_per_format():
+    assert P.DEFAULT_GLOBS == {
+        "vector_gbx": (
+            "*.{gpkg,geojson,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
+            "GPKG,GEOJSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
+        ),
+        "shapefile_gbx": "*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}",
+        # Strict: a .json file is GeoJSON only when a glob says so.
+        "geojson_gbx": "*.{geojson,GEOJSON}",
+        "geojsonl_gbx": "*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}",
+        "gpkg_gbx": "*.{gpkg,GPKG}",
+        "file_gdb_gbx": "*.{gdb.zip,GDB.ZIP}",
+        "lidar_gbx": "*.{las,laz,LAS,LAZ}",
+        "exif_gbx": "*.{jpg,jpeg,JPG,JPEG}",
+        "raster_gbx": "*.{tif,tiff,TIF,TIFF}",
+        "gtiff_gbx": "*.{tif,tiff,TIF,TIFF}",
+        "cog_gbx": "*.{tif,tiff,TIF,TIFF}",
+        "netcdf_gbx": "*.{nc,NC}",
+        "pmtiles_gbx": "*.{pmtiles,PMTILES}",  # source="archive"
+    }
+    assert set(P.DEFAULT_GLOBS) == set(P.SUPPORTED_FORMATS)
+    assert P.default_glob("GPKG") == "*.{gpkg,GPKG}"
+
+
+def test_pmtiles_default_glob_follows_the_source_option():
+    """pmtiles_gbx reads .pmtiles archives (source="archive") or renders XYZ tiles
+    from GeoTIFFs (source="raster", whose filterRegex default keeps .tif only), so
+    its pattern, and the reader itself, needs the source option."""
+    archive = P.default_glob("pmtiles", {"source": "archive"})
+    assert archive == "*.{pmtiles,PMTILES}"
+    assert P.default_glob("pmtiles_gbx", {"source": "ARCHIVE"}) == archive
+    assert P.default_glob("pmtiles", {"source": "raster"}) == "*.tif"
+    for opts in (None, {}, {"source": "bogus"}):
+        with pytest.raises(ValueError, match="source.*archive.*raster"):
+            P.default_glob("pmtiles", opts)
+
+
+def test_vector_glob_is_the_union_of_the_vector_globs():
+    vector = [
+        "shapefile_gbx",
+        "geojson_gbx",
+        "geojsonl_gbx",
+        "gpkg_gbx",
+        "file_gdb_gbx",
+    ]
+    for name in _GLOB_NAMES:
+        assert P.glob_match(name, P.DEFAULT_GLOBS["vector_gbx"]) == any(
+            P.glob_match(name, P.DEFAULT_GLOBS[f]) for f in vector
+        ), name
+
+
+def _is_case_insensitive(directory):
+    """True on a case-insensitive filesystem (the macOS default), where a.jpg is a.JPG."""
+    probe = directory / "CaseProbe"
+    probe.write_bytes(b"x")
+    try:
+        return (directory / "caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
+def test_glob_match_agrees_with_spark_path_glob_filter(spark, tmp_path):
+    """The default patterns are Spark pathGlobFilter (Hadoop glob) patterns, and
+    glob_match (the schema-file pick) matches exactly what Spark lists."""
+    if _is_case_insensitive(tmp_path):
+        pytest.skip("case-insensitive filesystem: a.jpg and a.JPG are one file")
+    for name in _GLOB_NAMES:
+        (tmp_path / name).write_bytes(b"x")
+    expected = {
+        "shapefile_gbx": {"a.shp", "a.shz", "a.shp.zip", "b.SHP"},
+        # .json is not GeoJSON by default.
+        "geojson_gbx": {"a.geojson", "b.GEOJSON"},
+        # Lower and upper case match; mixed case (b.Jpg) does not.
+        "exif_gbx": {"a.jpg", "a.jpeg", "a.JPG", "b.JPEG"},
+        "gtiff_gbx": {"a.tif", "a.tiff", "a.TIF", "b.TIFF"},
+        "lidar_gbx": {"a.las", "a.laz", "b.LAS", "b.LAZ"},
+        "gpkg_gbx": {"a.gpkg", "b.GPKG"},
+        "file_gdb_gbx": {"a.gdb.zip", "b.GDB.ZIP"},
+        "cog_gbx": {"a.tif", "a.tiff", "a.TIF", "b.TIFF"},
+        "netcdf_gbx": {"a.nc", "b.NC"},
+        "pmtiles_gbx": {"a.pmtiles", "b.PMTILES"},
+        "pmtiles_gbx raster": {"a.tif"},
+    }
+    patterns = {
+        **P.DEFAULT_GLOBS,
+        "pmtiles_gbx raster": P.default_glob("pmtiles", {"source": "raster"}),
+    }
+    for fmt, glob in patterns.items():
+        listed = {
+            os.path.basename(r[0])
+            for r in spark.read.format("binaryFile")
+            .option("pathGlobFilter", glob)
+            .load(str(tmp_path))
+            .select("path")
+            .collect()
+        }
+        assert listed == {n for n in _GLOB_NAMES if P.glob_match(n, glob)}, fmt
+        assert listed, fmt
+        if fmt in expected:
+            assert listed == expected[fmt], fmt
+
+    # Backslash escapes: Hadoop copies "\\X" into its regex, so an escaped glob
+    # character is literal and an escaped letter is a regex class.
+    esc = tmp_path / "esc"
+    esc.mkdir()
+    for name in _ESCAPE_NAMES:
+        (esc / name).write_bytes(b"x")
+    for glob, want in _ESCAPE_GLOBS.items():
+        listed = {
+            os.path.basename(r[0])
+            for r in spark.read.format("binaryFile")
+            .option("pathGlobFilter", glob)
+            .load(str(esc))
+            .select("path")
+            .collect()
+        }
+        assert listed == want, glob
+        assert {n for n in _ESCAPE_NAMES if P.glob_match(n, glob)} == want, glob
+
+
+_ESCAPE_NAMES = [
+    "a*.x",
+    "ab.x",
+    "a1.x",
+    "ad.x",
+    "a?.x",
+    "a[1].x",
+    "a{b}.x",
+    "a,b.x",
+    "a b.x",
+    "a.x",
+]
+
+_ESCAPE_GLOBS = {
+    r"a\*.x": {"a*.x"},
+    "a*.x": set(_ESCAPE_NAMES),
+    r"a\?.x": {"a?.x"},
+    "a?.x": {"a*.x", "ab.x", "a1.x", "ad.x", "a?.x"},
+    r"a\[1\].x": {"a[1].x"},
+    "a[1].x": {"a1.x"},
+    r"a\{b\}.x": {"a{b}.x"},
+    r"{a\,b,ab}.x": {"a,b.x", "ab.x"},
+    r"a\.x": {"a.x"},
+    r"a\d.x": {"a1.x"},
+    r"a[\d].x": {"a1.x"},
+    r"a\w.x": {"ab.x", "a1.x", "ad.x"},
+    r"a\sb.x": {"a b.x"},
+}
+
+
+@pytest.mark.parametrize(
+    "glob", [r"a\1", r"a\p{L}", r"\Qa\E", r"a\b", "a\\\u00e9", "a[\\S]"]
+)
+def test_glob_escapes_without_an_exact_python_match_are_rejected(glob):
+    with pytest.raises(ValueError, match="unsupported escape"):
+        P.glob_match("a", glob)
+
+
+@pytest.mark.parametrize("glob", ["a\\", "a[b", "{a,b", "[]"])
+def test_malformed_globs_are_rejected(glob):
+    with pytest.raises(ValueError, match="glob"):
+        P.glob_match("a", glob)
+
+
+# --- object-store URIs -------------------------------------------------------
+
+_URIS = [
+    "s3://bucket/a.geojson",
+    "abfss://c@acct.dfs.core.windows.net/a.geojson",
+    "gs://b/a.geojson",
+    # GDAL virtual file systems: os.stat cannot see them either.
+    "/vsis3/bucket/a.geojson",
+    "/vsizip//Volumes/c/s/v/a.zip/a.geojson",
+    "/vsicurl/https://host/a.geojson",
+    # In-memory GDAL files are no file-ingestion input either.
+    "/vsimem/a.geojson",
+]
+
+
+@pytest.mark.parametrize("uri", _URIS)
+def test_object_store_uris_are_rejected_without_retrying(tmp_path, monkeypatch, uri):
+    tries = []
+    monkeypatch.setattr(P._listing, "_retry_transient", lambda fn: tries.append(1))
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    expected = P.path_schema("geojson_gbx", None, a)
+    msg = "read_paths reads Unity Catalog Volume / FUSE paths; got " + uri
+    with pytest.raises(ValueError, match=msg.replace(".", r"\.")):
+        P._exists(uri)
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        list(P.iter_path_batches(uri, None, "geojson_gbx", None, expected))
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        P.path_schema("geojson_gbx", None, uri)
+    tif = _tif(str(tmp_path / "a.tif"))
+    rschema = P.path_schema("gtiff_gbx", None, tif)
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        list(P._plan_batches("gtiff_gbx", {}, rschema)(iter([_plan_src((uri, 1))])))
+    planned = pa.RecordBatch.from_arrays(
+        [pa.array([uri]), pa.array([1], P._TS), pa.array([b"x"], pa.binary())],
+        names=["path", "mtime", "part"],
+    )
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        list(P._read_planned("gtiff_gbx", {}, rschema, True)(iter([planned])))
+    assert tries == []
+
+
+def test_read_paths_object_store_uri_fails_the_query(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    df = spark.createDataFrame(
+        [("s3://bucket/b.geojson", None)], "path string, modificationTime timestamp"
+    )
+    with pytest.raises(Exception, match="Unity Catalog Volume / FUSE paths"):
+        P.read_paths(df, "geojson_gbx", schema_path=a).collect()
+
+
+def test_scheme_prefixed_local_paths_are_accepted(tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    for p in ("dbfs:" + a, "file:" + a, "file://" + a, a):
+        assert P._exists(P._fuse_path(p))
+
+
+# --- streaming increments and exact batch-reader parity ----------------------
+
+
+def test_read_paths_stream_second_run_reads_only_the_new_file(spark, tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    a = _geojson(str(d / "a.geojson"), 3)
+    out, ck = str(tmp_path / "out"), str(tmp_path / "ck")
+
+    def run():
+        stream = (
+            spark.readStream.format("binaryFile")
+            .schema(_BINARY_SCHEMA)
+            .option("pathGlobFilter", "*.geojson")
+            .load(str(d))
+            .select("path", "modificationTime")
+        )
+        _await(
+            P.read_paths(stream, "geojson_gbx", schema_path=a)
+            .writeStream.format("parquet")
+            .option("path", out)
+            .option("checkpointLocation", ck)
+            .trigger(availableNow=True)
+            .start()
+        )
+        rows = spark.read.parquet(out).select(P.SOURCE_PATH_COL).collect()
+        return sorted(r[0] for r in rows)
+
+    assert run() == [a] * 3
+    b = _geojson(str(d / "b.geojson"), 2)
+    assert run() == [a] * 3 + [b] * 2  # run 2 added only b's rows
+
+
+def _comparable(df):
+    """exceptAll rejects MAP columns: compare maps (top level or one struct level
+    down) as sorted entry arrays."""
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import MapType
+
+    cols = []
+    for f in df.schema.fields:
+        if isinstance(f.dataType, MapType):
+            cols.append(F.array_sort(F.map_entries(f.name)).alias(f.name))
+        elif isinstance(f.dataType, StructType) and any(
+            isinstance(s.dataType, MapType) for s in f.dataType.fields
+        ):
+            c = F.col(f.name)
+            for s in f.dataType.fields:
+                if isinstance(s.dataType, MapType):
+                    c = c.withField(
+                        s.name, F.array_sort(F.map_entries(f"{f.name}.{s.name}"))
+                    )
+            cols.append(c.alias(f.name))
+        else:
+            cols.append(F.col(f.name))
+    return df.select(cols)
+
+
+def _gpkg_file(path):
+    import pyogrio
+    import shapely
+
+    tbl = pa.table(
+        {
+            "geom": shapely.to_wkb(shapely.points([0, 1, 2], [0, 1, 2])),
+            "k": [1, 2, 3],
+            "s": ["a", "b", "c"],
+        }
+    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+    return path
+
+
+def _las_file(path):
+    import laspy
+    import numpy as np
+
+    hdr = laspy.LasHeader(point_format=3, version="1.4")
+    hdr.offsets, hdr.scales = [0.0, 0.0, 0.0], [0.01, 0.01, 0.01]
+    las = laspy.LasData(hdr)
+    las.x = np.arange(10.0)
+    las.y = np.arange(10.0) * 2
+    las.z = np.arange(10.0) * 3
+    las.write(path)
+    return path
+
+
+@pytest.mark.parametrize(
+    "fmt,make",
+    [
+        (
+            "geojson_gbx",
+            lambda d: [_geojson(f"{d}/a.geojson", 3), _geojson(f"{d}/b.geojson", 2)],
+        ),
+        ("gpkg_gbx", lambda d: [_gpkg_file(f"{d}/a.gpkg"), _gpkg_file(f"{d}/b.gpkg")]),
+        (
+            "shapefile_gbx",
+            lambda d: [
+                _shapefile(f"{d}/a.shp", {"k": [1, 2]}),
+                _shapefile(f"{d}/b.shp", {"k": [3, 4]}),
+            ],
+        ),
+        ("lidar_gbx", lambda d: [_las_file(f"{d}/a.las"), _las_file(f"{d}/b.las")]),
+    ],
+)
+def test_read_paths_equals_the_batch_reader(spark, tmp_path, fmt, make):
+    files = make(str(tmp_path))
+    got = P.read_paths(_paths_df(spark, files), fmt)
+    want = _batch_read(spark, fmt, str(tmp_path))
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert cols == want.columns
+    g, w = _comparable(got.select(cols)), _comparable(want.select(cols))
+    assert got.count() == want.count() > 0
+    assert g.exceptAll(w).count() == 0 and w.exceptAll(g).count() == 0
+
+
+def test_path_schema_folder_skips_underscore_and_dot_folders(tmp_path):
+    """Folders whose names start with _ or . are pruned from the schema-file pick,
+    as Spark's file sources do: _archive/ and .tmp/ sort first but are skipped."""
+    d = tmp_path / "landing"
+    (d / "_archive").mkdir(parents=True)
+    (d / ".tmp").mkdir()
+    _geojson(str(d / "_archive" / "old.geojson"), 1, extra_prop="archived")
+    _geojson(str(d / ".tmp" / "part.geojson"), 1, extra_prop="partial")
+    a = _geojson(str(d / "a.geojson"), 1)
+    assert P._schema_file("geojson_gbx", str(d)) == a
+    names = _schema_names(P.path_schema("geojson_gbx", None, str(d)))
+    assert "archived" not in names and "partial" not in names
+
+
+# --- the other light readers: COG, NetCDF, PMTiles ---------------------------
+
+
+def _assert_same_rows(got, want):
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert cols == want.columns
+    g, w = _comparable(got.select(cols)), _comparable(want.select(cols))
+    assert got.count() == want.count() > 0
+    assert g.exceptAll(w).count() == 0 and w.exceptAll(g).count() == 0
+
+
+def _union(dfs):
+    out = dfs[0]
+    for df in dfs[1:]:
+        out = out.unionByName(df)
+    return out
+
+
+def test_read_paths_cog_splits_like_the_raster_reader(spark, tmp_path):
+    from pyspark.sql import functions as F
+
+    a = _tif(str(tmp_path / "a.tif"), w=1024, h=1024, value=1)
+    b = _tif(str(tmp_path / "b.tif"), w=1024, h=1024, value=2)
+    opts = {"tileSize": "256"}  # 16 windows per file
+    got = P.read_paths(_paths_df(spark, [a, b]), "cog", opts, num_partitions=4)
+    _assert_same_rows(got, _batch_read(spark, "cog_gbx", str(tmp_path), **opts))
+    assert got.count() == 32
+    # Two-stage: one file's windows are planned first, then spread over tasks.
+    tasks = {}
+    for r in got.select(P.SOURCE_PATH_COL, F.spark_partition_id().alias("t")).collect():
+        tasks.setdefault(r[0], set()).add(r["t"])
+    assert set(tasks) == {a, b} and all(len(t) > 1 for t in tasks.values())
+
+
+def _nc_grid(path, scale=1.0):
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(path, "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        for name in ("ch4", "co"):
+            v = ds.createVariable(name, "f4", ("lat", "lon"), fill_value=-9999.0)
+            v[:] = np.arange(12, dtype="float32").reshape(3, 4) * scale
+    return path
+
+
+def _nc_points(path, start=0.0):
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(path, "w") as ds:
+        ds.createDimension("obs", 5)
+        lat = ds.createVariable("latitude", "f8", ("obs",))
+        lon = ds.createVariable("longitude", "f8", ("obs",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = np.arange(5) * 0.1 + 50.0 + start
+        lon[:] = np.arange(5) * 0.1 + 10.0 + start
+        v = ds.createVariable("ch4", "f4", ("obs",))
+        v[:] = np.arange(5, dtype="float32") + start
+    return path
+
+
+@pytest.mark.parametrize(
+    "mode,make,rows",
+    [
+        # raster: one (source, tile) row per grid variable per file
+        ("raster", lambda d: [_nc_grid(f"{d}/a.nc"), _nc_grid(f"{d}/b.nc", 2.0)], 4),
+        # vector: one point feature per observation
+        ("vector", lambda d: [_nc_points(f"{d}/a.nc"), _nc_points(f"{d}/b.nc", 1)], 10),
+    ],
+)
+def test_read_paths_netcdf_both_modes_equal_the_batch_reader(
+    spark, tmp_path, mode, make, rows
+):
+    files = make(str(tmp_path))
+    opts = {"mode": mode}
+    got = P.read_paths(_paths_df(spark, files), "netcdf", opts, num_partitions=2)
+    _assert_same_rows(got, _batch_read(spark, "netcdf_gbx", str(tmp_path), **opts))
+    assert got.count() == rows
+    assert {r[P.SOURCE_PATH_COL] for r in got.collect()} == set(files)
+
+
+def _png(i):
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.fromarray(np.full((256, 256, 3), 40 + i * 20, dtype="uint8")).save(
+        buf, format="PNG"
+    )
+    return buf.getvalue()
+
+
+def _pmtiles_archive(path, tiles):
+    """A single .pmtiles archive holding ``tiles`` = [(z, x, y, bytes)]."""
+    from pmtiles.tile import Compression, TileType, zxy_to_tileid
+
+    from databricks.labs.gbx.ds.tiles._header import build_header_info
+    from databricks.labs.gbx.ds.tiles.backend import PMTilesBackend
+    from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
+
+    info = build_header_info(
+        [(z, x, y) for z, x, y, _ in tiles],
+        SlippyGrid(),
+        TileType.PNG,
+        Compression.NONE,
+        {},
+    )
+    ordered = sorted((zxy_to_tileid(z, x, y), b) for z, x, y, b in tiles)
+    PMTilesBackend().assemble(iter(ordered), info, path)
+    return path
+
+
+def _rgb_tif(path, w, s, e, n, val):
+    import numpy as np
+    from rasterio.transform import from_bounds
+
+    with open_raster(
+        path,
+        "w",
+        driver="GTiff",
+        width=256,
+        height=256,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(w, s, e, n, 256, 256),
+    ) as ds:
+        ds.write(np.full((3, 256, 256), val, dtype="uint8"))
+    return path
+
+
+def test_read_paths_pmtiles_archive_mode_spreads_an_archive(spark, tmp_path):
+    from pyspark.sql import functions as F
+
+    a = _pmtiles_archive(
+        str(tmp_path / "a.pmtiles"),
+        [(14, 2615 + i, 6330, _png(i % 8)) for i in range(32)],
+    )
+    b = _pmtiles_archive(str(tmp_path / "b.pmtiles"), [(3, 1, 2, _png(7))])
+    opts = {"source": "archive", "tilesPerPartition": "2"}
+    # Two-stage: the plan stage emits one row per group of 2 tiles.
+    schema = P.path_schema("pmtiles_gbx", opts, a)
+    plan = P._plan_batches("pmtiles_gbx", opts, schema)(
+        iter([_plan_src((a, 1_000_000), (b, 2_000_000))])
+    )
+    planned = [p for x in plan for p in x.column("path").to_pylist()]
+    assert planned.count(a) == 16 and planned.count(b) == 1
+    got = P.read_paths(_paths_df(spark, [a, b]), "pmtiles", opts, num_partitions=4)
+    want = _union([_batch_read(spark, "pmtiles_gbx", f, **opts) for f in (a, b)])
+    _assert_same_rows(got, want)
+    assert got.count() == 33
+    # The archive's 16 planned partitions are hashed (on their pickled bytes) over
+    # 4 tasks: all in one task has probability 4 * (1/4)**16, about 1e-9.
+    tasks = got.where(F.col(P.SOURCE_PATH_COL) == a).select(F.spark_partition_id())
+    assert tasks.distinct().count() > 1
+
+
+def test_read_paths_pmtiles_raster_mode_renders_each_file(spark, tmp_path):
+    a = _rgb_tif(str(tmp_path / "a.tif"), -122.50, 37.74, -122.45, 37.79, 120)
+    b = _rgb_tif(str(tmp_path / "b.tif"), -122.45, 37.74, -122.40, 37.79, 220)
+    opts = {"source": "raster", "minZoom": "14", "maxZoom": "14"}
+    opts["tilesPerPartition"] = "2"
+    got = P.read_paths(_paths_df(spark, [a, b]), "pmtiles", opts, num_partitions=2)
+    want = _union([_batch_read(spark, "pmtiles_gbx", f, **opts) for f in (a, b)])
+    _assert_same_rows(got, want)
+    # Each file is rendered on its own: a tile over the seam comes once per file.
+    keys = [(r["z"], r["x"], r["y"]) for r in got.collect()]
+    assert len(keys) > len(set(keys))
+
+
+def test_read_paths_pmtiles_needs_the_source_option(spark, tmp_path):
+    a = _pmtiles_archive(str(tmp_path / "a.pmtiles"), [(3, 1, 2, _png(1))])
+    for opts in (None, {"tilesPerPartition": "2"}, {"source": "tiles"}):
+        with pytest.raises(ValueError, match="source.*archive.*raster"):
+            P.read_paths(_paths_df(spark, [a]), "pmtiles_gbx", opts)
+        with pytest.raises(ValueError, match="source.*archive.*raster"):
+            P.path_schema("pmtiles_gbx", opts, str(tmp_path))

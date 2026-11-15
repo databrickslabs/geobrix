@@ -3,7 +3,7 @@
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 
 # Source common utilities
 source "$SCRIPT_DIR/common.sh"
@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/common.sh"
 # Default values
 PORT=3000
 STOP_FIRST=true
+FORCE=false
 LOG_FILE=""
 
 # Help message
@@ -26,6 +27,7 @@ USAGE:
 OPTIONS:
     --port <number>      Custom port (default: 3000)
     --no-stop-first      Do not stop existing server if port in use (default: stop first, then start)
+    --force              Replace a server on the port even if another checkout started it
     --log <path>         Write output to log file
     --help               Display this help message
 
@@ -39,7 +41,9 @@ EXAMPLES:
 NOTES:
     - Uses 'npm run start' (Docusaurus dev server), NOT 'npm run serve'
     - Edits to MDX, JS, CSS trigger automatic browser refresh
-    - Stop with: gbx:docs:stop
+    - Stops only a server on --port, never other ports
+    - Refuses a server started from another checkout unless --force
+    - Stop with: gbx:docs:stop --port <number>
     - For production-style static serve (no hot reload), use: gbx-docs-serve-local
 
 EOF
@@ -50,11 +54,20 @@ EOF
 while [[ $# -gt 0 ]]; do
     case $1 in
         --port)
+            if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "--port needs a port number (got: ${2:-nothing})" >&2
+                (show_help) >&2
+                exit 2
+            fi
             PORT="$2"
             shift 2
             ;;
         --no-stop-first)
             STOP_FIRST=false
+            shift
+            ;;
+        --force)
+            FORCE=true
             shift
             ;;
         --log)
@@ -83,7 +96,14 @@ print_banner "📚 GeoBrix: Docs Development (Hot Reload)"
 if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
     if [ "$STOP_FIRST" = true ]; then
         echo -e "${CYAN}Port $PORT in use; stopping existing server...${NC}"
-        bash "$SCRIPT_DIR/gbx-docs-stop.sh"
+        STOP_ARGS=(--port "$PORT")
+        [ "$FORCE" = true ] && STOP_ARGS+=(--force)
+        if ! bash "$SCRIPT_DIR/gbx-docs-stop.sh" "${STOP_ARGS[@]}"; then
+            echo -e "${RED}❌ Not replacing the server on port $PORT. To replace it from this checkout:${NC}"
+            echo -e "${YELLOW}     bash $SCRIPT_DIR/gbx-docs-dev.sh --port $PORT --force${NC}"
+            echo -e "${YELLOW}   Or pick a free port: --port <number>${NC}"
+            exit 1
+        fi
         sleep 2
         if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
             echo -e "${RED}❌ Port $PORT still in use after stop. Free it manually: kill -9 \$(lsof -ti:$PORT)${NC}"
@@ -91,7 +111,7 @@ if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
         fi
     else
         echo -e "${RED}❌ Port $PORT is already in use!${NC}"
-        echo -e "${YELLOW}   Run: gbx:docs:stop   or   gbx:docs:dev (default: stop first)${NC}"
+        echo -e "${YELLOW}   Run: gbx:docs:stop --port $PORT   or   gbx:docs:dev (default: stop first)${NC}"
         exit 1
     fi
 fi
@@ -105,7 +125,9 @@ echo -e "${CYAN}   Hot reload: ${GREEN}enabled${NC}"
 print_separator
 
 # Start dev server in background; same PID file pattern as serve so gbx-docs-stop works
-nohup npm run start -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 &
+# The server outlives this script: detach it from every inherited descriptor (stdin, and fd 3, where
+# setup_log_file saves the caller's stdout), or a caller piping this command waits on it forever.
+nohup npm run start -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 < /dev/null 3>&- &
 SERVER_PID=$!
 echo $SERVER_PID > /tmp/docusaurus-$PORT.pid
 
@@ -121,7 +143,7 @@ if ps -p $SERVER_PID > /dev/null 2>&1; then
     echo -e "   Logs:   ${YELLOW}/tmp/docusaurus-$PORT.log${NC}"
     echo ""
     echo -e "${CYAN}💡 Edit MDX/JS/CSS and the browser will refresh automatically.${NC}"
-    echo -e "   Stop: ${YELLOW}gbx:docs:stop${NC}"
+    echo -e "   Stop: ${YELLOW}gbx:docs:stop --port $PORT${NC}"
     print_separator
 else
     echo -e "${RED}❌ Dev server failed to start. Check: /tmp/docusaurus-$PORT.log${NC}"

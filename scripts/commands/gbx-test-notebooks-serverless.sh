@@ -6,21 +6,19 @@
 # and stops on the first failure.
 #
 # Default run (no --notebook or --dir): runs all four Helios notebooks
-# (notebooks/examples/helios/0*.ipynb) with --extra-deps rich.
+# (examples/notebooks/helios/0*.ipynb) on the env6 wheel with --extras stac,vizx and
+# --extra-deps rich and the overturemaps CLI.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$SCRIPT_DIR/common.sh"
+gbx_snapshot_exec "${BASH_SOURCE[0]}" "$@"   # run from a copy: an edit during the run cannot change it
+# In the snapshot's run the code is the snapshot's, the state (venv, logs, notebooks) the source tree's.
+SNAP_ROOT="$PROJECT_ROOT"
+PROJECT_ROOT="${GBX_SOURCE_ROOT:-$PROJECT_ROOT}"
 
-RUNNER_SCRIPT="$PROJECT_ROOT/notebooks/tests/run_notebooks_serverless.py"
-
-# Prefer the project pyrx venv; fall back to system python3
-if [[ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]]; then
-    PYTHON="$PROJECT_ROOT/.venv-pyrx/bin/python"
-else
-    PYTHON="python3"
-fi
+RUNNER_SCRIPT="$SNAP_ROOT/examples/tests/run_notebooks_serverless.py"
 
 show_help() {
     show_banner "GeoBrix: Serverless Notebook Tests"
@@ -37,38 +35,82 @@ show_help() {
     echo -e "                        committed notebook skips (e.g. --set-var FORCE_REBUILD=True);"
     echo -e "                        the committed notebook keeps its defaults. Repeatable."
     echo -e "  ${GREEN}--ws-dir WSPATH${NC}       Workspace folder to import notebooks into."
-    echo -e "                        (default: /Users/<current-user>/GeoBrix/serverless-run)"
-    echo -e "  ${GREEN}--extras CSV${NC}          Geobrix extras whose deps to install"
-    echo -e "                        (default: light_env6,stac,vizx,overture)."
-    echo -e "  ${GREEN}--extra-deps CSV${NC}      Additional pip requirements (comma-separated)."
-    echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel."
+    echo -e "                        (default: /Users/<current-user>/jobs/geobrix/serverless-run)"
+    echo -e "  ${GREEN}--keep-notebooks${NC}      Do not record the imports for gbx:workspace:sweep. By default each stays 60 min"
+    echo -e "                        after its run ends (24 h after a failure), then the sweep removes it."
+    echo -e "  ${GREEN}--extras CSV${NC}          Geobrix extras whose deps to install (default: stac,vizx). With an"
+    echo -e "                        env wheel, that wheel's extras (envs/env<N>/extra-*.txt); no light_*."
+    echo -e "  ${GREEN}--extra-deps CSV${NC}      Additional pip requirements (comma-separated; a specifier keeps"
+    echo -e "                        its own commas, e.g. 'rich,overturemaps>=1.0.2,<2')."
+    echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel (default: the versioned staged env wheel,"
+    echo -e "                        /Volumes/geospatial_docs/geobrix/sample-data/geobrix/<version>/env<N>/geobrix-<version>+env<N>-py3-none-any.whl:"
+    echo -e "                        env6 for --env-version 6 and DBR 19, env5 for --env-version 5 and DBR 17.3/18)."
+    echo -e "                        An env wheel (+env5 / +env6) must match --env-version."
+    echo -e "  ${GREEN}--no-wheel${NC}            Install no geobrix wheel and no --extras, only --extra-deps: for a probe"
+    echo -e "                        notebook that uses plain pyspark. Exclusive with --wheel."
+    echo -e "  ${GREEN}--no-wheel-guard${NC}      Do not add the wheel guard. By default every notebook gets a guard cell after its install that FAILS the"
+    echo -e "                        run when the driver or a Python worker imports another geobrix build than the staged wheel (the"
+    echo -e "                        notebook's own %pip wheel, else --wheel), and on a classic cluster a forced install"
+    echo -e "                        (--force-reinstall --no-deps, geobrix only) goes before each geobrix %pip line, so a same-version"
+    echo -e "                        cluster library cannot stand in for the staged wheel. On an existing cluster with no --wheel and no"
+    echo -e "                        geobrix %pip cell the guard only reports what is imported."
     echo -e "  ${GREEN}--env-version VER${NC}     Serverless environment version (default: 6)."
     echo -e "  ${GREEN}--hardware-accelerator VALUE${NC} Serverless GPU AI Runtime accelerator"
     echo -e "                        (e.g. GPU_1xA10, GPU_1xH100). Omit for CPU Serverless"
     echo -e "                        (default). Pair with a GPU wheel extra via --extras."
-    echo -e "  ${GREEN}--profile PROFILE${NC}     Databricks config profile (default: oauth-fe or"
-    echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
+    echo -e "  ${GREEN}--existing-cluster-id ID${NC} Run on a warm classic cluster (%%pip cells kept)."
+    echo -e "  ${GREEN}--pool NAME${NC}           Run on an idle cluster leased from the pool NAME (gbx:bench:pool); --jar is made its jar. --pool-volume VOLROOT sets the lease Volume."
+    echo -e "  ${GREEN}--new-cluster [VER]${NC}   Run on a classic job cluster made for each run and"
+    echo -e "                        terminated when it ends (%%pip cells kept; prints its id)."
+    echo -e "  ${GREEN}--jar VOLPATH${NC}         --new-cluster library: the JAR, for heavyweight notebooks (also the --jar-task JAR)."
+    echo -e "  ${GREEN}--access-mode MODE${NC}    --new-cluster access: dedicated (default) or standard."
+    echo -e "  ${GREEN}--spark-version VER${NC}   --new-cluster runtime (default: 19.x-scala2.13)."
+    echo -e "  ${GREEN}--node-type TYPE${NC}      --new-cluster node type (default: m5d.xlarge)."
+    echo -e "  ${GREEN}--num-workers N${NC}       --new-cluster workers (default: 1)."
+    echo -e "  ${GREEN}--profile PROFILE${NC}     Databricks config profile (required; DATABRICKS_CONFIG_PROFILE counts as given)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."
+    echo -e "  ${GREEN}--timeout-min N${NC}       Time limit of each run in minutes (default: 60); the Jobs service ends a run that"
+    echo -e "                        outlives it. The launcher runs from a snapshot of its files and notebooks."
     echo -e "  ${GREEN}--no-strip-pip${NC}        Do NOT strip %%pip/%%restart_python cells."
-    echo -e "  ${GREEN}--harvest-outputs${NC}     After each SUCCESS, export and harvest cell outputs"
-    echo -e "                        back into the local .ipynb (aligns by source, preserves"
-    echo -e "                        serialization, strips injected cells)."
+    echo -e "  ${GREEN}--jar-task MAIN${NC}       Run ONE Serverless JAR task with this main class instead of notebooks"
+    echo -e "                        (with --jar VOLPATH, the JAR, and --jar-args CSV, its parameters;"
+    echo -e "                        --env-version 4 or later)."
+    echo -e "  ${GREEN}--python-task PY${NC}      Run ONE spark_python_task (a local .py file) on a new job cluster instead of"
+    echo -e "                        notebooks (needs --new-cluster; --python-args CSV are its parameters). The cluster"
+    echo -e "                        installs --wheel, --jar and each --extra-jar VOLPATH as libraries."
+    echo -e "  ${GREEN}--harvest-outputs${NC}     After each SUCCESS, write THIS run's outputs into the local .ipynb: every covered"
+    echo -e "                        code cell gets exactly its outputs or none; the install cell one line (version, build,"
+    echo -e "                        wheel sha256, runtime); metadata.geobrix_run the provenance; a %%run cell what its"
+    echo -e "                        notebook printed. An unconvertible output writes nothing; a failed harvest exits 1."
+    echo -e "  ${GREEN}--harvest-run-id ID${NC}   Harvest an earlier run of the ONE --notebook instead of running it."
+    echo -e "  ${GREEN}--cells A:B${NC}           Run cells A to B only (from 1, all cells counted, both included; repeat for"
+    echo -e "                        more pieces, each its own run). The setup cells before A run too; a piece that"
+    echo -e "                        needs a skipped cell's name is refused. Harvest writes only the piece's cells."
+    echo -e "  ${GREEN}--prelude LIST${NC}        With --cells: more cells to run before each piece (e.g. 5 or 5,8:9)."
     echo -e "  ${GREEN}--log <path>${NC}          Write output to log (filename → test-logs/<name>)."
     echo -e "  ${GREEN}--help${NC}                This help."
     echo ""
+    echo -e "${CYAN}Environment:${NC}"
+    echo -e "  ${YELLOW}GBX_PYRX_VENV=<dir>${NC}  Run the launcher on this venv instead of .venv-pyrx (Python 3.11+;"
+    echo -e "                      databricks-sdk is added on top when the venv lacks it)"
+    echo ""
     echo -e "${CYAN}Default behavior (no --notebook or --dir):${NC}"
-    echo -e "  Runs all four Helios notebooks (notebooks/examples/helios/0*.ipynb)"
-    echo -e "  with extras=light_env6,stac,vizx,overture and --extra-deps rich."
+    echo -e "  Runs all four Helios notebooks (examples/notebooks/helios/0*.ipynb) on the env6 wheel"
+    echo -e "  with extras=stac,vizx and --extra-deps rich,overturemaps (the Overture CLI fast path)."
     echo ""
     echo -e "${CYAN}Examples:${NC}"
-    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh${NC}"
-    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --log helios.log${NC}"
-    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
-    echo -e "    ${YELLOW}--notebook 'notebooks/examples/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
-    echo -e "    ${YELLOW}--extras light_env6${NC}"
-    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
-    echo -e "    ${YELLOW}--notebook notebooks/examples/orthomosaic/03_segment.ipynb \\${NC}"
-    echo -e "    ${YELLOW}--env-version 5 --extras models_gpu_env5 --hardware-accelerator GPU_1xA10${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe --log helios.log${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe \\${NC}"
+    echo -e "    ${YELLOW}--notebook 'examples/notebooks/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
+    echo -e "    ${YELLOW}--extras vizx${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe \\${NC}"
+    echo -e "    ${YELLOW}--notebook examples/notebooks/orthomosaic/03_segment.ipynb \\${NC}"
+    echo -e "    ${YELLOW}--wheel /Volumes/geospatial_docs/geobrix/sample-data/geobrix/0.6.0/env6/geobrix-0.6.0+env6-py3-none-any.whl \\${NC}"
+    echo -e "    ${YELLOW}--env-version 6 --extras vizx --hardware-accelerator GPU_1xA10 \\${NC}"
+    echo -e "    ${YELLOW}--extra-deps 'torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86'${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe --harvest-outputs \\${NC}"
+    echo -e "    ${YELLOW}--notebook 'examples/notebooks/eo-series/03. Gridded EO Data.ipynb' --cells 1:20 --cells 21:${NC}"
     echo ""
 }
 
@@ -89,7 +131,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --notebook|--dir)
+        --notebook|--dir|--jar-task|--python-task)
             HAS_NOTEBOOK_OR_DIR=true
             RUNNER_ARGS+=("$1" "$2")
             shift 2
@@ -113,11 +155,11 @@ done
 # If no --notebook or --dir supplied, default to the four Helios notebooks.
 # ---------------------------------------------------------------------------
 if [[ "$HAS_NOTEBOOK_OR_DIR" == false ]]; then
-    HELIOS_DIR="$PROJECT_ROOT/notebooks/examples/helios"
+    HELIOS_DIR="$PROJECT_ROOT/examples/notebooks/helios"
     for nb in "$HELIOS_DIR"/0*.ipynb; do
         RUNNER_ARGS+=("--notebook" "$nb")
     done
-    RUNNER_ARGS+=("--extra-deps" "rich")
+    RUNNER_ARGS+=("--extra-deps" "rich,overturemaps>=1.0.2,<2")
 fi
 
 # ---------------------------------------------------------------------------
@@ -126,14 +168,19 @@ fi
 show_banner "GeoBrix: Serverless Notebook Tests"
 setup_log_file "$LOG_PATH"
 
+# The runner needs databricks-sdk and Python >= 3.11 (tomllib): see gbx_python_with_sdk in common.sh.
+# Chosen here, after --help, so help works on a machine with no SDK.
+gbx_python_with_sdk || exit 1
+PYTHON_CMD=("${GBX_SDK_PYTHON[@]}")
+
 echo -e "${CYAN}Runner : ${YELLOW}$RUNNER_SCRIPT${NC}"
-echo -e "${CYAN}Python : ${YELLOW}$PYTHON${NC}"
+echo -e "${CYAN}Python : ${YELLOW}${PYTHON_CMD[*]}${NC}"
 echo ""
 
 # ---------------------------------------------------------------------------
 # Execute
 # ---------------------------------------------------------------------------
-"$PYTHON" "$RUNNER_SCRIPT" "${RUNNER_ARGS[@]}"
+"${PYTHON_CMD[@]}" "$RUNNER_SCRIPT" "${RUNNER_ARGS[@]}"
 EXIT_CODE=$?
 
 echo ""

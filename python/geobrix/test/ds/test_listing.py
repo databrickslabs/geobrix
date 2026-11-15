@@ -107,6 +107,137 @@ def test_retry_sleeps_with_linear_backoff(monkeypatch):
     assert sleeps == [0.5, 1.0, 1.5]
 
 
+def test_a_path_found_missing_is_retried_once_not_once_per_layer(monkeypatch, tmp_path):
+    """A virtual tile's missing /Volumes file paid each layer's full retry budget in turn (2026-11-12: the open probe, then
+    the staging copy, 45 s per task; on Serverless an isoband_missing_path test past 120 s). Once one retry loop ran out on
+    a missing path, the next loops for that path try it once: the budget is paid once, not once per layer.
+    """
+    from databricks.labs.gbx.core import _retry
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(_retry, "_MISSING", {})
+    gone = str(tmp_path / "gbx_missing_tile.tif")
+    with pytest.raises(
+        OSError
+    ):  # a GDAL open names no file: the caller passes the path
+        _listing._retry_transient(
+            lambda: (_ for _ in ()).throw(
+                OSError(f"{gone}: No such file or directory")
+            ),
+            path=gone,
+        )
+    assert sum(sleeps) == pytest.approx(22.5), "the first loop waits its whole budget"
+    calls = []
+
+    def _copy():
+        calls.append(1)
+        with open(gone, "rb"):
+            pass
+
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_copy)  # open() names the file itself
+    assert calls == [1] and sum(sleeps) == pytest.approx(
+        22.5
+    ), "a second loop on the same path does not wait again"
+    # a file that is there again reads at once and clears the record
+    (tmp_path / "gbx_missing_tile.tif").write_bytes(b"x")
+    assert _listing._retry_transient(lambda: open(gone, "rb").read(), path=gone) == b"x"
+    assert gone not in _retry._MISSING
+    # past the hold, a missing path gets its whole budget again (a Volume that lags a write)
+    _retry._MISSING[gone] = _retry._monotonic() - _retry.MISSING_HOLD_S - 1
+    (tmp_path / "gbx_missing_tile.tif").unlink()
+    sleeps.clear()
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_copy)
+    assert sum(sleeps) == pytest.approx(22.5)
+
+
+def test_a_missing_virtual_tile_file_pays_one_budget_through_probe_and_staging(
+    monkeypatch, tmp_path
+):
+    """The two layers a missing /Volumes file met in a row (the direct-open probe, then the staging copy): 22.5 s in all,
+    not 45 s (the probe's GDAL error names no file; it passes the path)."""
+    from databricks.labs.gbx.core import _retry
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.pyrx.core import local_temp
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(_retry, "_MISSING", {})
+    gone = str(tmp_path / "gbx_missing_tile.tif")
+    with pytest.raises(OSError):
+        file_gbx._probe_direct_open(gone)
+    with pytest.raises(FileNotFoundError):
+        local_temp.copy_source_sequential(gone, str(tmp_path / "staged.tif"))
+    assert sum(sleeps) == pytest.approx(22.5)
+
+
+def test_a_retried_spark_task_tries_a_missing_file_once(monkeypatch, tmp_path):
+    """Spark runs a failed task again (4 attempts on Serverless, each in a fresh Python worker, so no record carries
+    over: 2026-11-12, a probe's attempts 0-3 waited 23 s each, 104 s in all). The first attempt waits the budget; a later
+    attempt tries a missing file once. Another I/O error keeps its retries there."""
+    from databricks.labs.gbx.core import _retry
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    gone = str(tmp_path / "gbx_missing_tile.tif")
+    calls = []
+
+    def _open():
+        calls.append(1)
+        with open(gone, "rb"):
+            pass
+
+    monkeypatch.setattr(_retry, "_task_attempt", lambda: 1)
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_open)
+    assert calls == [1] and sleeps == []
+    with pytest.raises(OSError):
+        _listing._retry_transient(
+            lambda: (_ for _ in ()).throw(OSError(5, "Input/output error", gone)),
+            attempts=3,
+        )
+    assert len(sleeps) == 2
+    monkeypatch.setattr(_retry, "_task_attempt", lambda: 0)
+    _retry._MISSING.clear()
+    sleeps.clear()
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_open)
+    assert sum(sleeps) == pytest.approx(
+        22.5
+    ), "the first attempt waits the whole budget"
+
+
+def test_outside_a_spark_task_the_attempt_is_0():
+    from databricks.labs.gbx.core import _retry
+
+    assert _retry._task_attempt() == 0
+
+
+def test_another_failure_on_a_recorded_path_still_retries(monkeypatch, tmp_path):
+    """Only a missing file is recorded: an I/O error that is not ENOENT (a FUSE hiccup) keeps its retries."""
+    from databricks.labs.gbx.core import _retry
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(_retry, "_MISSING", {})
+    p = str(tmp_path / "f.tif")
+    with pytest.raises(OSError):
+        _listing._retry_transient(
+            lambda: (_ for _ in ()).throw(OSError(5, "Input/output error", p)),
+            attempts=3,
+        )
+    assert p not in _retry._MISSING and len(sleeps) == 2
+
+
+def test_retry_transient_lives_in_the_light_core_and_is_re_exported():
+    """The zarr package retries Volume reads without importing the ds package."""
+    from databricks.labs.gbx.core import _retry
+
+    assert _listing._retry_transient is _retry._retry_transient
+
+
 def test_list_files_strips_file_scheme(tree):
     """A scheme-qualified input (columns store dbfs:/file: paths) lists the same
     files as the bare path -- list_files strips the scheme before os.* resolves it."""
@@ -116,7 +247,7 @@ def test_list_files_strips_file_scheme(tree):
 
 
 # ---------------------------------------------------------------------------
-# T1 additions: recursive=False, raise_on_empty=False, internal retry, multi-ext
+# Additions: recursive=False, raise_on_empty=False, internal retry, multi-ext
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +301,7 @@ def test_multi_extension_alternation_regex(tree):
 
 
 # ---------------------------------------------------------------------------
-# Item 1 (SP4 final-fix): non-recursive call on a genuinely missing directory
+# Non-recursive call on a genuinely missing directory
 # ---------------------------------------------------------------------------
 # Before this fix, the non-recursive branch called os.listdir(missing) which raised
 # FileNotFoundError, and _retry_transient caught it and retried 10× (~22 s of linear
@@ -202,3 +333,147 @@ def test_nonrecursive_missing_dir_raise_on_empty_true(tmp_path):
         _listing.list_files(
             missing, filter_regex=".*", recursive=False, raise_on_empty=True
         )
+
+
+def test_first_file_is_the_first_sorted_match_and_stops_there(tmp_path, monkeypatch):
+    for rel in ("a-b.tif", "a/x.tif", "a/y.txt", "b/z.tif", "_skip/0.tif", ".h.tif"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    want = sorted(
+        f
+        for f in _listing.list_files(str(tmp_path))
+        if "/_skip/" not in f and not os.path.basename(f).startswith(".")
+    )
+    seen = []
+
+    def accept(name):
+        seen.append(name)
+        return name.endswith(".tif")
+
+    # Full-path order puts "a-b.tif" before "a/x.tif" ('-' < '/').
+    assert (
+        _listing.first_file(str(tmp_path), accept)
+        == want[0]
+        == str(tmp_path / "a-b.tif")
+    )
+    assert seen == ["a-b.tif"]  # stopped at the first match
+    assert _listing.first_file(
+        "file:" + str(tmp_path), lambda n: n.endswith(".txt")
+    ) == str(tmp_path / "a" / "y.txt")
+    assert _listing.first_file(str(tmp_path), lambda n: n.endswith(".nc")) is None
+    assert _listing.first_file(str(tmp_path / "missing"), lambda n: True) is None
+    one = str(tmp_path / "b" / "z.tif")
+    assert _listing.first_file(one, lambda n: True) == one
+
+
+def test_first_file_takes_an_accepted_directory_as_one_entry(tmp_path):
+    for rel in ("b.gdb/a0.gdbtable", "a.gdb/a0.gdbtable", "_x.gdb/t", "0.txt"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+
+    def is_gdb(name):
+        return name.endswith(".gdb")
+
+    def none(name):
+        return False
+
+    root = str(tmp_path)
+    assert _listing.first_file(root, none, accept_dir=is_gdb) == str(tmp_path / "a.gdb")
+    # Without accept_dir a directory is only walked into.
+    assert _listing.first_file(root, lambda n: n.endswith(".gdbtable")) == str(
+        tmp_path / "a.gdb" / "a0.gdbtable"
+    )
+    # Files and accepted directories share one sorted order ("a.gdb.zip" sorts
+    # before "a.gdb/").
+    (tmp_path / "a.gdb.zip").write_bytes(b"x")
+    assert _listing.first_file(
+        root, lambda n: n.endswith(".gdb.zip"), accept_dir=is_gdb
+    ) == str(tmp_path / "a.gdb.zip")
+
+
+def test_list_files_skip_hidden_prunes_underscore_and_dot_entries(tmp_path):
+    """skip_hidden: names starting with _ or . are skipped, and such directories
+    are not walked into (Spark's file-source convention, as first_file does)."""
+    for rel in (
+        "a.geojson",
+        "_x.geojson",
+        ".y.geojson",
+        "_archive/old.geojson",
+        ".tmp/part.geojson",
+        "sub/b.geojson",
+        "sub/_old/c.geojson",
+        "sub/.cache/d.geojson",
+    ):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    walked = []
+    real_walk = os.walk
+
+    def spy(top, *a, **k):
+        for root, dirs, files in real_walk(top, *a, **k):
+            walked.append(os.path.relpath(root, tmp_path))
+            yield root, dirs, files
+
+    root = str(tmp_path)
+    assert len(_listing.list_files(root)) == 8  # default: everything
+    import unittest.mock as mock
+
+    with mock.patch.object(_listing.os, "walk", spy):
+        got = _listing.list_files(root, skip_hidden=True)
+    assert got == [str(tmp_path / "a.geojson"), str(tmp_path / "sub" / "b.geojson")]
+    assert sorted(walked) == [".", "sub"]  # hidden directories never read
+    # Top level only, too.
+    assert _listing.list_files(root, recursive=False, skip_hidden=True) == [
+        str(tmp_path / "a.geojson")
+    ]
+
+
+def test_a_flat_listing_reads_entry_types_with_the_listing_not_one_stat_per_file(
+    tmp_path, monkeypatch
+):
+    """A folder of tens of thousands of tiles on a Volume took minutes with an isfile() per entry."""
+    for i in range(5):
+        (tmp_path / f"r{i}.tif").write_bytes(b"x")
+    (tmp_path / "_hidden.tif").write_bytes(b"x")
+    (tmp_path / "sub.tif").mkdir()  # a directory named like a tile is not a file
+    calls = []
+    real = os.path.isfile
+
+    def counting(p):
+        calls.append(p)
+        return real(p)
+
+    monkeypatch.setattr(_listing.os.path, "isfile", counting)
+    files = _listing.list_files(
+        str(tmp_path), filter_regex=r".*\.tif$", recursive=False, skip_hidden=True
+    )
+    assert [os.path.basename(f) for f in files] == [f"r{i}.tif" for i in range(5)]
+    assert calls == [
+        str(tmp_path)
+    ], calls  # the folder itself, never one call per entry
+
+
+def test_empty_plan_placeholder_is_none_or_a_bare_input_partition():
+    """Spark passes read() a placeholder when partitions() planned nothing."""
+    from pyspark.sql.datasource import InputPartition
+
+    from databricks.labs.gbx.ds.file import _PathPartition
+
+    assert _listing.is_empty_plan(None)
+    assert _listing.is_empty_plan(InputPartition(None))
+    assert not _listing.is_empty_plan(_PathPartition("/a/b.tif"))
+
+
+def test_a_filter_regex_matching_nothing_plans_and_reads_nothing(tree):
+    """No file matches: no partition, and the placeholder read yields no rows (raster_gbx)."""
+    from pyspark.sql.datasource import InputPartition
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    reader = RasterGbxReader({"path": str(tree), "filterRegex": r".*\.nomatch$"})
+    assert list(reader.partitions()) == []
+    assert list(reader.read(InputPartition(None))) == []
+    assert list(reader.read(None)) == []

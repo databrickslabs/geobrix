@@ -16,6 +16,7 @@ show_help() {
     echo -e "  ${GREEN}--suite <pattern>${NC}      Maven suite pattern (default: tests.docs.scala.*)"
     echo -e "  ${GREEN}--skip-build${NC}           Skip Maven compile before test (mvn test still compiles)"
     echo -e "  ${GREEN}--no-sample-data-root${NC}  Do not set GBX_SAMPLE_DATA_ROOT (use env or full-bundle default)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Log path:${NC}"
@@ -53,6 +54,10 @@ while [[ $# -gt 0 ]]; do
             SET_SAMPLE_DATA_ROOT=false
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -71,6 +76,7 @@ cd "$PROJECT_ROOT"
 show_banner "📚 GeoBrix: Scala Documentation Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 echo -e "${CYAN}🎯 Suite: ${YELLOW}$SUITE_PATTERN${NC}"
 [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping pre-compile (--skip-build)${NC}"
@@ -84,9 +90,9 @@ echo ""
 SAMPLE_DATA_ROOT_MAVEN=""
 [ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_MAVEN="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data && "
 
-MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
+MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
 
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
 EXIT_CODE=$?
 
 echo ""

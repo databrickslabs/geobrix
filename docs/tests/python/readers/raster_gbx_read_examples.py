@@ -1,7 +1,7 @@
 """raster_gbx / gtiff_gbx (lightweight) Reader Examples — single source of truth.
 
 Code shown in docs/docs/readers/raster_gbx.mdx is imported from here. Pure-Python
-DataSource V2 readers; no JAR required (registered via gbx.ds.register).
+DataSource V2 readers; no JAR required (registered by databricks.labs.gbx.register).
 """
 
 from path_config import SAMPLE_DATA_BASE
@@ -9,7 +9,7 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 REGISTER = """# Register the lightweight raster DataSources (once per session)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)"""
 
 READ_RASTER_GBX = """# Catch-all lightweight reader (any rasterio-readable raster)
@@ -33,9 +33,9 @@ df = (spark.read.format("raster_gbx")
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs import gbx
 
-    register(spark)
+    gbx.register(spark)
 
 
 def read_raster_gbx(spark, path=None):
@@ -50,9 +50,16 @@ def read_raster_gbx(spark, path=None):
 
 
 def read_gtiff_gbx(spark, path=None):
-    """Verify READ_GTIFF_GBX: named reader reads a GeoTIFF identically."""
+    """Verify READ_GTIFF_GBX: named reader reads a GeoTIFF identically.
+
+    Materialized tiles (``virtualTiles=false``) carry the GDAL ``driver`` in their
+    metadata; the default virtual tiles are bytes-free references and do not."""
     _register(spark)
-    df = spark.read.format("gtiff_gbx").load(path or SAMPLE_RASTER_PATH)
+    df = (
+        spark.read.format("gtiff_gbx")
+        .option("virtualTiles", "false")
+        .load(path or SAMPLE_RASTER_PATH)
+    )
     assert df.count() >= 1
     assert df.collect()[0]["tile"]["metadata"]["driver"] == "GTiff"
     return df

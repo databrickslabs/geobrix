@@ -1,0 +1,174 @@
+"""A range input is written in a file per compute slot, so a form's scan has the compute's parallelism at every scale."""
+
+from unittest import mock
+
+import pytest
+
+from databricks.labs.gbx.bench import levels_family as fam
+from databricks.labs.gbx.bench import levels_forms as lf
+
+
+def _spark(num_files=32):
+    spark = mock.MagicMock()
+    spark.catalog.tableExists.return_value = False
+    spark.sql.return_value.collect.return_value = [{"numFiles": num_files}]
+    return spark
+
+
+def test_a_table_with_rows_splits_its_files_by_the_slots_and_without_rows_does_not():
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        spark = _spark()
+        df = mock.MagicMock()
+        lf._table(spark, "s", "mvp_in_x", lambda: df, rows=4_000_000)
+        df.write.format.assert_called_with("delta")
+        df.write.format.return_value.option.assert_called_once_with(
+            "maxRecordsPerFile", 125_000
+        )
+        df.write.format.return_value.option.return_value.saveAsTable.assert_called_once()
+
+        df2 = mock.MagicMock()
+        lf._table(
+            _spark(), "s", "mvp_in_y", lambda: df2
+        )  # a tile input: a file per row already
+        df2.write.format.return_value.option.assert_not_called()
+        df2.write.format.return_value.saveAsTable.assert_called_once()
+
+
+def test_the_files_of_a_range_input_follow_the_rows_at_every_scale():
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        sizes = {}
+        for n in (1_000_000, 4_000_000, 16_000_000):
+            df = mock.MagicMock()
+            lf._table(_spark(), "s", f"mvp_in_z{n}", lambda: df, rows=n)
+            per_file = df.write.format.return_value.option.call_args[0][1]
+            sizes[n] = -(-n // per_file)  # files at that cap
+        assert all(
+            32 <= files <= 33 for files in sizes.values()
+        ), sizes  # not 1 / 1 / 4
+
+
+@pytest.mark.parametrize(
+    "builder,args",
+    [
+        (lf._bng_points, ()),
+        (lf._invalid_polys, ()),
+        (lf._bng_polys, ()),
+        (lf._bng_cells(False), ()),
+        (fam._points_arrays, ()),
+        (fam._points_wkt, ()),
+        (fam._mvt_rows, ()),
+        (fam._tin_points, ()),
+    ],
+)
+def test_every_range_input_passes_its_row_count_to_the_table(
+    builder, args, spark_session_local
+):
+    seen = {}
+
+    def table(spark, schema, name, build, **kw):
+        seen.update(kw)
+        return name
+
+    with mock.patch.object(lf, "_table", table):
+        builder(spark_session_local, 1234, "", "s")
+    assert seen.get("rows") == 1234
+
+
+def test_a_virtual_input_compacted_to_one_file_is_read_spread():
+    """Table maintenance can rewrite the 13 KB table of 1000 virtual tiles as ONE file: its scan is then one task and the
+    op runs serially (1019 s for a warmup at 4x). A per-file input with fewer files than partitions is read through a
+    repartitioned view, at the partitions its builder used."""
+    spark = _spark()
+    spark.catalog.tableExists.return_value = True
+    spark.table.return_value.count.return_value = 1000
+    spark.sql.return_value.collect.return_value = [{"numFiles": 1}]
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_virt", lambda: None, per_file=2)
+    assert out != "s.mvp_in_virt" and "." not in out  # a session view
+    spark.table.return_value.repartition.assert_called_once_with(500)
+    spark.table.return_value.repartition.return_value.createOrReplaceTempView.assert_called_once_with(
+        out
+    )
+
+
+def test_a_virtual_input_already_spread_is_read_as_is():
+    spark = _spark()
+    spark.catalog.tableExists.return_value = True
+    spark.table.return_value.count.return_value = 1000
+    spark.sql.return_value.collect.return_value = [{"numFiles": 500}]
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_virt", lambda: None, per_file=2)
+    assert out.startswith("s.mvp_in_virt")
+    spark.table.return_value.repartition.assert_not_called()
+
+
+def test_a_range_input_compacted_below_the_slots_is_read_spread():
+    """Table maintenance compacts a range input too (a 1M-row cells input read as 32 tasks in one run, ONE in the next),
+    and a one-task scan runs every form serially: a range input with fewer files than slots is read repartitioned to
+    the slots."""
+    spark = _spark(num_files=1)
+    spark.catalog.tableExists.return_value = True
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_cells", lambda: None, rows=4_000_000)
+    assert "." not in out  # a session view
+    spark.table.return_value.repartition.assert_called_once_with(32)
+    spark.table.return_value.repartition.return_value.createOrReplaceTempView.assert_called_once_with(
+        out
+    )
+
+
+def test_a_range_input_with_a_file_per_slot_is_read_as_is():
+    spark = _spark(num_files=32)
+    spark.catalog.tableExists.return_value = True
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_cells", lambda: None, rows=4_000_000)
+    assert out.startswith("s.mvp_in_cells")
+    spark.table.return_value.repartition.assert_not_called()
+
+
+def test_a_replicated_tile_input_keeps_its_file_size_at_every_scale(
+    spark_session_local,
+):
+    """The replicated DEM, netCDF and pair inputs were written in a fixed number of partitions, so a file held 16 rows at
+    4x and 64 at 16x (37 MB against 146 MB, one Parquet row group each). The scan reads a row group as ONE columnar batch,
+    and through a Python UDF that made the 16x executors spend 20-45% of their time in garbage collection where the 4x
+    ones spent 2-5%; the same 2048 rows in files of 16 rows ran in 13 s with 3% GC. The rows per file are capped, at
+    every scale, and the table is read as it is (no repartition)."""
+    seen = {}
+
+    def table(spark, schema, name, build, **kw):
+        seen[name] = kw
+        return name
+
+    with (
+        mock.patch.object(lf, "_table", table),
+        mock.patch.object(lf, "client_dataframe", lambda *a, **k: mock.MagicMock()),
+    ):
+        for n in (128, 512, 2048):
+            lf.INPUTS["dem_1024_mem"](spark_session_local, n, "", "s")
+            lf._se_pairs_replicated(512)(spark_session_local, n, "", "s")
+    assert len(seen) == 6
+    for kw in seen.values():
+        assert kw.get("file_rows") == lf.REPLICATED_TILES_PER_FILE
+        assert not kw.get("per_file") and not kw.get("rows")
+
+
+def test_file_rows_caps_the_rows_of_a_file_and_reads_the_table_as_is():
+    spark = _spark(num_files=1)
+    df = mock.MagicMock()
+    out = lf._table(spark, "s", "mvp_in_tiles", lambda: df, file_rows=16)
+    df.write.format.return_value.option.assert_called_once_with("maxRecordsPerFile", 16)
+    assert out.startswith("s.mvp_in_tiles")
+    spark.table.return_value.repartition.assert_not_called()

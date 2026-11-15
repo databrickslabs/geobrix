@@ -1,12 +1,19 @@
 # Source of truth for the geobrix-dev Docker image's Python deps.
-# Consumed by scripts/docker/Dockerfile via:
-#   pip install --require-hashes -r python/geobrix/requirements-dev-container.txt
+# Consumed by scripts/docker/Dockerfile via (the lock for the image's own architecture):
+#   pip install --require-hashes -r python/geobrix/requirements-dev-container.txt          (x86_64)
+#   pip install --require-hashes -r python/geobrix/requirements-dev-container-aarch64.txt  (arm64)
 #
-# Regenerate the hash-pinned lock alongside any edit:
-#   docker exec -it geobrix-dev bash -lc \
-#     'cd /root/geobrix/python/geobrix && \
-#      uv pip compile --generate-hashes --python-version 3.12 \
-#         --output-file requirements-dev-container.txt requirements-dev-container.in'
+# Regenerate BOTH hash-pinned locks alongside any edit (x86_64 first; the aarch64 compile takes its
+# versions from it with -c, so the two pin the same versions), then check them:
+#   cd python/geobrix
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#      --python-platform x86_64-unknown-linux-gnu \
+#      --output-file requirements-dev-container.txt requirements-dev-container.in
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#      --python-platform aarch64-unknown-linux-gnu \
+#      -c requirements-dev-container.txt \
+#      --output-file requirements-dev-container-aarch64.txt requirements-dev-container.in
+#   python3 scripts/ci/check_dev_container_locks.py
 #
 # All versions match scripts/docker/Dockerfile's ENV block (DBR 17.3 LTS-aligned
 # where applicable). GDAL is NOT included — it's built from source and the
@@ -16,9 +23,13 @@
 # `scripts/docker/build_smart.sh --no-cache`, smoke-test.
 
 # --- toolchain ---
+# pip stays at the DBR 17.3 version: `gbx:test:python` installs the extras with it, so extras
+# resolution is exercised the way a DBR 17.3 / env 5 cluster's pip would do it (the Dockerfile
+# bootstraps this exact release by hash). setuptools and wheel are security-patched releases:
+# nothing under test resolves through them.
 pip==25.0.1
-setuptools==74.0.0
-wheel==0.45.1
+setuptools==84.2.1
+wheel==0.46.2
 cython==3.0.12
 build==1.6.1
 
@@ -49,11 +60,21 @@ pystac>=1.9,<2
 rasterio==1.5.0
 rioxarray==0.22.0
 # NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P, ERA5).
-# Keep in lockstep with requirements-light-env6-ci.in and the pyproject [light-base] floor.
-netcdf4==1.7.2
-pdal==3.5.3
-rio-tiler==9.0.6
-rio-cogeo==7.0.2
+# Keep in lockstep with requirements-light-env6-ci.in and the pyproject base-dependency floor.
+netcdf4==1.7.4
+# Zarr transactional stores (test/zarr): the [zarr_dbr19] extra. Ranges MUST match pyproject
+# [zarr_dbr19] and requirements-light-env6-ci.in. gbx:test:python also installs the extra into a
+# container that predates it; baking it here makes that a no-op.
+zarr>=3.4.1,<3.5
+numcodecs>=0.17,<0.18
+zarrs>=0.2.3,<0.3
+tensorstore>=0.1.85,<0.2
+obstore>=0.11,<0.13
+ml_dtypes>=0.5,<1
+msgspec>=0.19,<1
+donfig>=0.8,<1
+# Lockstep with requirements-light-env6-ci.in: the newest rio-tiler the extras admit.
+rio-tiler==9.4.12
 h3==4.5.0
 quadbin==0.2.2
 pmtiles==3.7.0
@@ -65,17 +86,13 @@ contextily==1.6.2
 # folium was removed from [vizx]; do not re-add here.
 mapclassify==2.10.0
 
-# --- contour (scikit-image) + viewshed (xarray-spatial) ---
-scikit-image==0.26.0
-xarray-spatial==0.9.9
-
 # --- lint tooling ---
-black==26.3.1
+black==26.10.1
 isort==8.0.1
 flake8==7.3.0
 
 # --- test tooling ---
-pytest==8.4.2
+pytest==9.1.1
 pytest-cov==7.1.0
 pytest-mock==3.15.1
 pytest-asyncio==1.3.0
@@ -83,21 +100,46 @@ nest-asyncio==1.6.0
 testbook==0.4.2
 
 # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
-# Matches the [light-base] pyproject.toml pin so the dev container exercises the same
+# Matches the pyproject.toml base-dependency floor so the dev container exercises the same
 # version as the light CI environments (requirements-light-env{5,6}-ci.in).
 exifread>=3.0,<4
+
+# --- LiDAR point-cloud reading (lidar_gbx DataSource; laspy + pure-Rust LAZ backend) ---
+# Same pins as requirements-light-env{5,6}-ci.in; lazrs below 0.8.2 prints Rust panics.
+laspy==2.7.0
+lazrs==0.8.2
 
 # --- Jupyter (final stage only) ---
 ipython==8.30.0
 ipykernel==6.29.5
 ipywidgets==7.8.1
 # jupyterlab is not used directly, but ipywidgets 7 -> widgetsnbextension -> notebook
-# requires it; pinned here so it stays explicit and version-audited.
-jupyterlab==4.3.4
-jupyter_server==2.14.1
-jupyter_core==5.7.2
+# requires it; pinned here so it stays explicit and version-audited. The server side of the
+# Jupyter stack (jupyterlab, jupyter_server, tornado, nbconvert) is held at security-patched
+# releases above the DBR 17.3 versions: no GeoBrix code or test goes through it, and the
+# container's notebook runs are not a DBR fidelity target. jupyterlab 4.6.x is the line that
+# carries the patched notebook 7.6.3 (pulled through ipywidgets 7 -> widgetsnbextension), and
+# it still resolves with ipywidgets 7 and pyzmq 25.
+jupyterlab==4.6.4
+jupyter_server==2.21.1
+jupyter_core==5.9.1
 jupyter_client==8.6.3
-tornado==6.4.2
+tornado==6.5.10
 nbformat==5.10.4
-nbconvert==7.16.4
+nbconvert==7.17.2
 pyzmq==25.1.1
+
+# --- transitive packages floored at their security-patched releases ---
+# Only pillow is declared by GeoBrix (pyproject.toml); the Jupyter, STAC and viz closures pull the rest. A floor stops a
+# regenerated lock from resolving below the patched release. pyarrow stays at the DBR 17.3 value
+# above on purpose: the dev container is the Arrow / pandas baseline the Python tests run against.
+pillow>=13.0.0
+certifi>=2026.10.19
+urllib3>=2.8.0
+aiohttp>=3.14.4
+multidict>=6.9.1
+anyio>=4.14.2
+geopy>=2.5.0
+mistune>=3.3.0
+bleach>=6.4.0
+soupsieve>=2.9.0,<3

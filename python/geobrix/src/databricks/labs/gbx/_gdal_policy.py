@@ -1,0 +1,1449 @@
+"""The process-level defence against crafted data: the one choke point for GeoBrix's GDAL.
+
+A table or a Volume another principal wrote can name any file, and a VRT, a tile index or a pipeline in it can name
+more. GDAL opens them through the process's driver registry, with no driver list of its own. So the defence is set
+where GeoBrix first touches GDAL, not per call:
+
+- ``prepare()`` runs when the package is imported (``databricks/labs/gbx/__init__.py``, right after the native payload
+  is served). It imports nothing from GDAL (the light tier's lazy-import contract holds). It puts ``GDAL_SKIP`` (the
+  refused list, added to a user's value) and the two VRT settings in the process environment. GDAL reads ``GDAL_SKIP``
+  when it registers its drivers, so a rasterio or osgeo that registers them after this import (rasterio does at its
+  first open or ``rasterio.Env``, osgeo and pyogrio at their import) never registers a refused one. Where a GDAL is
+  loaded already (a libgdal is mapped into the process, or a GDAL binding is imported where ``/proc`` is absent), it
+  runs ``activate()`` at once, which imports rasterio and osgeo to compare their libgdal.
+- ``activate()`` runs at the first GeoBrix use that needs GDAL (an open made through ``open_data``, the engine's GDAL,
+  ``state()``). It is idempotent and thread-safe. Where the payload's osgeo shares rasterio's libgdal ("full"), it
+  deregisters any refused driver still registered and sets ``GDAL_VRT_ENABLE_RAWRASTERBAND=NO`` and
+  ``GDAL_VRT_ENABLE_PYTHON=NO`` for the process. Without it ("partial": a PyPI rasterio, a dev host), the settings go
+  through rasterio's config; a refused driver cannot be deregistered there, so if rasterio registered its drivers
+  before GeoBrix was imported, ``activate()`` warns once, names the drivers and the fix.
+- ``open_data(fp, mode, **kw)`` is the only way GeoBrix opens a raster by rasterio, and ``open_bytes(data)`` the only
+  way it opens raster bytes. Every read is an open with the allowed drivers as GDAL's driver list, never with the
+  whole registry. In full mode a named file is first identified with the allowed drivers and opened with the one
+  identified, so identify and open cannot disagree. A file no allowed driver reads is refused with the policy's
+  reason; a missing file stays the binding's own I/O error.
+- ``pyogrio()`` returns pyogrio after ``activate()``: GeoBrix's vector reads take it from there.
+
+One switch turns the whole defence off: ``GBX_GDAL_DRIVER_POLICY=off`` in the environment, which this module reads
+(a Python process reads no Spark conf); the JVM's ``GDALManager`` reads the same variable, or
+``spark.databricks.labs.gbx.gdal.driver_policy=off`` in the cluster's Spark config.
+"""
+
+from __future__ import annotations
+
+import collections.abc
+import contextlib
+import contextvars
+import copy
+import functools
+import os
+import re
+import sys
+import threading
+import types
+import uuid
+import warnings
+from typing import Dict, Optional
+from urllib.parse import urlsplit
+
+from databricks.labs.gbx import manifest
+
+ENV = "GBX_GDAL_DRIVER_POLICY"
+SETTINGS = {"GDAL_VRT_ENABLE_RAWRASTERBAND": "NO", "GDAL_VRT_ENABLE_PYTHON": "NO"}
+# The phrase every refusal of this policy ends with (the rows read it).
+REFUSED_PHRASE = "which GeoBrix does not open"
+
+# GDAL's messages for a source the policy stopped, and what GeoBrix calls it. Each is GDAL 3.13.3's own text. "not
+# recognized" is the message for a driver that is not registered (a nested source), so it is read only where a
+# nested source can be the cause (nested=True): a data-named file is judged by its identify, not by a message.
+_NESTED_REFUSALS = (
+    (
+        "not recognized as being in a supported file format",
+        "a source GDAL has no driver for here",
+        True,
+    ),
+    ("VRTRawRasterBand support has been disabled", "a VRT raw band", False),
+    ("explicitly disabled", "a VRT Python pixel function", False),
+    ("uses inline code in the VRT", "a VRT Python pixel function", False),
+)
+
+# GDAL's message for a file no driver in the open's list reads, and for a missing one (GDAL 3.13.3's own text).
+_NOT_RECOGNIZED = "not recognized as being in a supported file format"
+_MISSING = "No such file or directory"
+
+_LOCK = threading.RLock()
+_STATE: Optional[Dict] = None
+_PREPARED = False
+# The connection prefixes of the refused drivers ("GTI:" ...), compared without case: GDAL names the prefix of a driver
+# it does not have as a missing file, so the policy's reason is read from that message. Seeded from the refused names
+# at prepare() (a skipped driver is never registered, so its own prefix cannot be read); a deregistered driver's own
+# prefix is added.
+_DEREGISTERED_PREFIXES: set = set()
+
+
+def gap_warning(by_binding) -> str:
+    """The warning of a partial process where a GDAL binding registered refused drivers before GeoBrix was imported:
+    ``by_binding`` maps the binding (rasterio, pyogrio) to the refused drivers its GDAL has.
+    """
+    found = "; ".join(
+        f"{b}: {', '.join(names)}" for b, names in sorted(by_binding.items())
+    )
+    return (
+        f"GeoBrix's GDAL driver policy cannot remove these drivers from this process ({found}). They were registered "
+        "before databricks.labs.gbx was imported (rasterio registers GDAL's drivers at its first open or "
+        "rasterio.Env, pyogrio at its import). GeoBrix opens each raster file and each tile's bytes with the allowed "
+        "drivers only, but a source that a VRT, an index or a vector file names is opened through that binding's "
+        "whole registry, so a file another principal wrote can still reach them. Fix: import databricks.labs.gbx "
+        "before rasterio opens anything and before pyogrio is imported, or install the GeoBrix env wheel for the "
+        "runtime (its vendored bindings are the ones the policy fully covers)."
+    )
+
+
+class DriverPolicyError(ValueError):
+    """A raster the process-level driver policy refuses. The message names the file, the refused kind, and the
+    policy's reason (``REFUSED_PHRASE``)."""
+
+
+class RemotePathError(DriverPolicyError):
+    """A path that comes from data (a tile's path, a tile index's row, a VRT's source, a vector table's path) and
+    names a remote location the remote-path gate refuses. The message names the location, the switch and the fix.
+    """
+
+
+# The remote-path gate: what a path that comes from data may name. Local and FUSE paths (no scheme: /Volumes,
+# /Workspace, /dbfs, a relative path; the dbfs: and file: spellings), the cloud object stores (and their streaming
+# and Azure URI forms), the archive and gzip wrappers around an allowed path, and GeoBrix's own /vsimem/. Anything
+# else that names a location (/vsicurl/, http(s)://, ftp://, another GDAL virtual file system), at any depth of a
+# wrapper, is refused unless the switch (REMOTE_ENV) allows it.
+REMOTE_ENV = "GBX_ALLOW_REMOTE_PATHS"
+_DATA_SCHEMES = frozenset(
+    {
+        "s3",
+        "s3a",
+        "abfss",
+        "abfs",
+        "az",
+        "gs",
+        "wasbs",
+        "zip",
+        "tar",
+        "gzip",
+        "file",
+        "dbfs",
+    }
+)
+_DATA_VSI = frozenset(
+    {
+        "s3",
+        "s3_streaming",
+        "az",
+        "az_streaming",
+        "adls",
+        "gs",
+        "gs_streaming",
+        "mem",
+        "zip",
+        "tar",
+        "gzip",
+    }
+)
+_SCHEME = re.compile(r"(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://", re.IGNORECASE)
+# The URI schemes rasterio and pyogrio turn into a GDAL file system (their ``SCHEMES``), each read with
+# ``urllib.parse``: a scheme needs no ``//`` there (``https:host/a.tif`` opens as ``/vsicurl/https://host/a.tif``), so
+# the gate reads a path's scheme by the same parse. A scheme they do not know reaches GDAL as written.
+_BINDING_SCHEMES = frozenset(
+    {
+        "file",
+        "zip",
+        "tar",
+        "gzip",
+        "http",
+        "https",
+        "ftp",
+        "s3",
+        "gs",
+        "az",
+        "oss",
+        "adls",
+        "adl",
+        "hdfs",
+        "webhdfs",
+    }
+)
+# a GDAL virtual file system prefix where a file name starts: the start, or after a wrapper's / { " ' : , or a space
+_VSI = re.compile(r"(?:^|(?<=[/{\"':,\s]))/vsi([a-z0-9_]+)", re.IGNORECASE)
+
+
+# The switch as the driver read it, carried into a worker by the UDF, the reader or the closure that runs there (see
+# ``carrying``): a worker never reads the switch itself.
+_CARRIED: contextvars.ContextVar = contextvars.ContextVar(
+    "gbx_remote_paths", default=None
+)
+# The session's read cap (``ds.file_gbx.session_read_cap``), carried from the registration like the switch: None
+# where the driver carried none (each worker then uses its own budget, ``pyrx.core.budget.tile_read_cap``).
+_CARRIED_CAP: contextvars.ContextVar = contextvars.ContextVar(
+    "gbx_carried_read_cap", default=None
+)
+
+
+def carried_read_cap() -> Optional[int]:
+    """The read cap the driver carried into this call, or None."""
+    return _CARRIED_CAP.get()
+
+
+def driver_switch() -> bool:
+    """The remote-path switch as this process's environment sets it (``GBX_ALLOW_REMOTE_PATHS``): read on the driver,
+    where a call is built (``register()``, a reader's planning, ``rst_fromfile``, ``vector_file_read``), and carried to
+    the workers from there."""
+    return os.environ.get(REMOTE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _in_spark_task() -> bool:
+    try:
+        from pyspark import TaskContext
+    except ImportError:  # no pyspark: no Spark task either
+        return False
+    return TaskContext.get() is not None
+
+
+def remote_paths_allowed() -> bool:
+    """Whether a remote path from data may be opened here: the value the driver carried in, else off in a Spark task
+    (a worker never reads the switch itself), else the driver's own switch (``driver_switch``).
+    """
+    value = _CARRIED.get()
+    if value is not None:
+        return value
+    if _in_spark_task():
+        return False
+    return driver_switch()
+
+
+@contextlib.contextmanager
+def carried(allowed: Optional[bool], cap: Optional[int] = None):
+    """The block runs with ``allowed`` as the carried switch and ``cap`` as the carried read cap (None: as it was)."""
+    token = None if allowed is None else _CARRIED.set(bool(allowed))
+    cap_token = None if cap is None else _CARRIED_CAP.set(int(cap))
+    try:
+        yield
+    finally:
+        if cap_token is not None:
+            _CARRIED_CAP.reset(cap_token)
+        if token is not None:
+            _CARRIED.reset(token)
+
+
+def carrying_iter(it, allowed: Optional[bool], cap: Optional[int] = None):
+    """``it``'s items, each produced with ``allowed`` carried (None: as it was); nothing is carried across a yield."""
+    while True:
+        with carried(allowed, cap):
+            try:
+                item = next(it)
+            except StopIteration:
+                return
+        yield item
+
+
+def _carrying_function(func, allowed: bool, cap: Optional[int] = None):
+    """``func`` run with ``allowed`` (and ``cap``) carried; an iterator it returns (an iterator UDF, a UDTF's rows)
+    produces each item with them carried too."""
+
+    @functools.wraps(func)
+    def run(*args, **kwargs):
+        with carried(allowed, cap):
+            result = func(*args, **kwargs)
+        if isinstance(result, collections.abc.Iterator):
+            return carrying_iter(result, allowed, cap)
+        return result
+
+    return run
+
+
+_HANDLER_METHODS = ("__init__", "eval", "terminate", "cleanup")
+
+
+def _carrying_class(cls, allowed: bool, cap: Optional[int] = None):
+    """A UDTF handler class whose methods run with ``allowed`` carried (a class made here is pickled by value)."""
+    own = {
+        name: _carrying_function(getattr(cls, name), allowed, cap)
+        for name in _HANDLER_METHODS
+        if any(name in c.__dict__ for c in cls.__mro__[:-1])
+    }
+    return type(
+        f"{cls.__name__}Carrying", (cls,), {"__module__": cls.__module__, **own}
+    )
+
+
+def carrying(f, allowed: bool, cap: Optional[int] = None):
+    """What a registration takes, for ``f`` with the driver's switch (and read cap, when given) carried into every
+    worker call: a UDF object (``spark.udf.register``), a UDTF (``spark.udtf.register``) or a plain function.
+    """
+    if isinstance(f, CapCarryingCall):  # a Column-API wrapper: the function it wraps
+        f = f._f
+    func = getattr(f, "func", None)
+    if isinstance(
+        func, type
+    ):  # a UDTF: the same registration over a carrying handler class
+        out = copy.copy(f)
+        out.func = _carrying_class(func, allowed, cap)
+        return out
+    if func is not None and hasattr(
+        f, "evalType"
+    ):  # a UDF: the attributes the registration reads
+        return types.SimpleNamespace(
+            func=_carrying_function(func, allowed, cap),
+            returnType=f.returnType,
+            evalType=f.evalType,
+            deterministic=getattr(f, "deterministic", True),
+            asNondeterministic=getattr(f, "asNondeterministic", None),
+        )
+    if callable(f):
+        return _carrying_function(f, allowed, cap)
+    return f
+
+
+def carrying_udf(f, allowed: Optional[bool], cap: Optional[int] = None):
+    """A scalar Python UDF ``f`` (``F.udf``) remade with the switch (and the read cap) carried, for a column a binding
+    builds. ``cap`` is the session's read cap now (``ds.file_gbx.session_read_cap``) unless given.
+    """
+    from pyspark.sql import functions as F
+
+    if cap is None:
+        cap = _session_read_cap_now()
+    return F.udf(_carrying_function(f.func, allowed, cap), f.returnType)
+
+
+def _session_read_cap_now() -> Optional[int]:
+    """The read cap of the session a Column-API call is built on (None: carry none)."""
+    from databricks.labs.gbx.ds.file_gbx import (
+        _resolve_session_for_cap,
+        session_read_cap,
+    )
+
+    return session_read_cap(_resolve_session_for_cap())
+
+
+def is_light_udf(obj) -> bool:
+    """True for a ``udf`` / ``pandas_udf`` / ``udtf`` object (what a registrar hands Spark and a Column call applies)."""
+    func = getattr(obj, "func", None)
+    return func is not None and (isinstance(func, type) or hasattr(obj, "evalType"))
+
+
+class CapCarryingCall:
+    """A module-level light UDF / UDTF as the Column API calls it: each CALL (on the driver, where the session is)
+    remakes the function with the session's read cap carried, as a registration does. Every other use (a
+    registrar's ``carrying``, attribute reads) sees the function as it is."""
+
+    def __init__(self, f):
+        self._f = f
+
+    def __call__(self, *cols):
+        f = self._f
+        for_session = getattr(f, "for_session", None)
+        if (
+            for_session is not None
+        ):  # a UDF whose form the session chooses (a capability): the form it runs
+            from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
+
+            spark = _resolve_session_for_cap()
+            if spark is not None:
+                f = for_session(spark)
+        cap = _session_read_cap_now()
+        return (f if cap is None else _with_cap(f, cap))(*cols)
+
+    def __getattr__(self, name):
+        # only reached for a name not found on the instance: `_f` itself is missing on a copy or an unpickled object
+        # (built without __init__), where reading it here would recurse
+        wrapped = self.__dict__.get("_f")
+        if wrapped is None:
+            raise AttributeError(name)
+        return getattr(wrapped, name)
+
+
+def carrying_call(f, allowed: Optional[bool] = None):
+    """``f`` as a Column-API call builds it: remade with the driver's switch (read now, unless ``allowed`` is given)
+    and the session's read cap carried, as a registration carries them (``carrying_session``). For a UDF a binding
+    builds and applies at once, such as the force-output form of a row; anything that is not a light UDF is returned as
+    it is."""
+    if isinstance(f, CapCarryingCall):
+        f = f._f
+    for_session = getattr(f, "for_session", None)
+    if (
+        for_session is not None
+    ):  # a UDF whose form the session chooses (a capability): the form it runs
+        from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
+
+        spark = _resolve_session_for_cap()
+        if spark is not None:
+            f = for_session(spark)
+    if not is_light_udf(f):
+        return f
+    return _with_cap(
+        f,
+        _session_read_cap_now(),
+        driver_switch() if allowed is None else allowed,
+    )
+
+
+def _with_cap(f, cap: Optional[int], allowed: Optional[bool] = None):
+    """``f`` (a UDF, a pandas UDF or a UDTF) remade with ``cap`` (and ``allowed``, when given) carried; its kind,
+    return type and determinism stay."""
+    if isinstance(
+        f.func, type
+    ):  # a UDTF: the same function over a carrying handler class
+        return carrying(f, allowed, cap)
+    from pyspark.sql.utils import is_remote
+
+    if (
+        is_remote()
+    ):  # Spark Connect (Serverless, standard): the classic class resolves its UDF through SparkContext._jvm
+        from pyspark.sql.connect.udf import UserDefinedFunction
+    else:
+        from pyspark.sql.udf import UserDefinedFunction
+
+    # The class `F.udf` / `F.pandas_udf` build through for this kind of session, with the eval type the original
+    # resolved (from its type hints, or a UDF's own): `F.pandas_udf(func, type, evalType)` would raise PySpark's
+    # SPARK-28264 deprecation warning, and the carrying wrapper has no hints for it to infer from.
+    out = UserDefinedFunction(
+        _carrying_function(f.func, allowed, cap), f.returnType, evalType=f.evalType
+    )._wrapped()
+    return out if getattr(f, "deterministic", True) else out.asNondeterministic()
+
+
+def carry_read_cap_in_column_api(namespace: dict) -> None:
+    """Make every UDF / UDTF object bound in ``namespace`` (a module's ``globals()``) carry the session's read cap when
+    the Column API calls it. The module's registries (dicts holding the same objects) hold the wrappers too, so one name
+    is one object; a registration unwraps them (``carrying``) and carries the cap through ``carrying_session``.
+    """
+    swapped = {}
+    for name, obj in list(namespace.items()):
+        if is_light_udf(obj) and not isinstance(obj, CapCarryingCall):
+            swapped.setdefault(id(obj), CapCarryingCall(obj))
+            namespace[name] = swapped[id(obj)]
+    for value in list(namespace.values()):
+        if isinstance(value, dict):
+            for key, item in list(value.items()):
+                if id(item) in swapped:
+                    value[key] = swapped[id(item)]
+
+
+def carrying_source(cls, allowed: bool, cap: Optional[int] = None):
+    """A DataSource class whose readers carry ``allowed`` (``reader._gbx_remote_allowed``) into their planning, and
+    ``cap`` (``reader._gbx_read_cap``): the driver's connect-aware read cap, which a reader built in a planner process
+    with no active session could not resolve itself."""
+
+    def reader(self, schema):
+        r = cls.reader(self, schema)
+        r._gbx_remote_allowed = allowed
+        r._gbx_read_cap = cap
+        return r
+
+    return type(
+        f"{cls.__name__}Carrying",
+        (cls,),
+        {"__module__": cls.__module__, "reader": reader},
+    )
+
+
+class _CarryingRegistration:
+    """A session's ``udf`` / ``udtf`` as a registrar sees it: ``register`` hands Spark the function with the switch
+    carried (``carrying``); everything else is the session's own."""
+
+    def __init__(self, target, allowed: bool, cap: Optional[int] = None):
+        self._target, self._allowed, self._cap = target, allowed, cap
+
+    def register(self, name, f, *args, **kwargs):
+        return self._target.register(
+            name, carrying(f, self._allowed, self._cap), *args, **kwargs
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+
+class _CarryingSession:
+    """A session as a registrar sees it: its ``udf`` / ``udtf`` registrations carry the driver's switch to the
+    workers; every other attribute is the session's own. Nothing global changes, so a registration made elsewhere
+    (another thread's ``register()``, the user's own UDF) is untouched."""
+
+    def __init__(self, spark, allowed: bool, cap: Optional[int] = None):
+        self._spark, self._allowed, self._cap = spark, allowed, cap
+
+    @property
+    def udf(self):
+        return _CarryingRegistration(self._spark.udf, self._allowed, self._cap)
+
+    @property
+    def udtf(self):
+        return _CarryingRegistration(self._spark.udtf, self._allowed, self._cap)
+
+    def __getattr__(self, name):
+        return getattr(self._spark, name)
+
+
+def real_session(spark):
+    """The session behind a registrar's ``carrying_session`` proxy (any other value as it is): what a check of the
+    session's type (Spark Connect or classic) must judge."""
+    return spark._spark if isinstance(spark, _CarryingSession) else spark
+
+
+def carrying_session(spark, allowed: Optional[bool] = None):
+    """``spark`` for the registrars: each function they register through its ``udf`` / ``udtf`` carries the
+    driver's switch (read now, unless ``allowed`` is given) and the session's read cap
+    (``ds.file_gbx.session_read_cap``). The one point where they hand their functions to Spark.
+
+    Both are captured NOW, at registration, and kept by every function registered through the returned session: a
+    later change of the session's read-cap key reaches the JVM at its next query but not these functions, which
+    need a fresh ``register()``.
+    """
+    from databricks.labs.gbx.pyrx.core.budget import session_read_cap
+
+    return _CarryingSession(
+        spark,
+        driver_switch() if allowed is None else allowed,
+        session_read_cap(real_session(spark)),
+    )
+
+
+def url_scheme(path) -> str:
+    """The scheme rasterio and pyogrio read from a path with `urllib.parse` (no "//" needed): ``zip`` for
+    ``zip:/x.zip``, ``gs`` for ``gs:bucket/x``; empty for a plain path."""
+    return urlsplit(path if isinstance(path, str) else os.fspath(path)).scheme
+
+
+def remote_location(path) -> Optional[str]:
+    """The location a path names that the remote-path gate refuses (``/vsicurl/``, ``https://`` ...), else None.
+    A wrapper is judged by every path it wraps (``/vsizip//vsicurl/...`` names ``/vsicurl/``).
+    """
+    text = path if isinstance(path, str) else os.fspath(path)
+    for m in _VSI.finditer(text):
+        if m.group(1).lower() not in _DATA_VSI:
+            return f"/vsi{m.group(1).lower()}/"
+    for m in _SCHEME.finditer(text):
+        scheme = m.group(1).lower()
+        if any(part not in _DATA_SCHEMES for part in scheme.split("+")):
+            return f"{scheme}://"
+    # the path as the binding opens it: rasterio and pyogrio read the scheme with urllib.parse (no "//" needed)
+    scheme = url_scheme(text)
+    parts = scheme.split("+") if scheme else ()
+    if parts and all(p in _BINDING_SCHEMES for p in parts):
+        if any(p not in _DATA_SCHEMES for p in parts):
+            return f"{scheme}:"
+    return None
+
+
+def data_path(path, what: str = "a path from data"):
+    """``path``, when it is one GeoBrix opens for a path that comes from data; ``RemotePathError`` when it names a
+    remote location (``remote_location``) and the switch is off. The one gate for those paths, run by every opener:
+    ``open_data`` (every raster read), the vector reads of ``pyogrio()``, and the engine's open of a virtual tile's
+    file. ``rst_fromfile`` runs it on its path at once, so a refused URL raises at the first evaluation. An opener is
+    told ``remote_ok=True`` only where the path is not data: a path the caller passed to a driver-side call
+    themselves, or an href ``core._http`` checked."""
+    if path is None or remote_paths_allowed():
+        return path
+    where = remote_location(path)
+    if where is None:
+        return path
+    raise RemotePathError(
+        f"{what}: {os.fspath(path)!r} names a remote location ({where}), which GeoBrix does not open for a path that "
+        "comes from data (a tile's path, a tile index's row, a VRT's source, a vector table's path). Fix: copy the "
+        "data to a Volume or a cloud object store (s3://, abfss://, gs://), or, for data you trust, set "
+        f"{REMOTE_ENV}=true in the driver's environment before register() (and before the column or the read is "
+        "built): the workers get it from there"
+    )
+
+
+def enabled() -> bool:
+    """False when the one switch is set to off in the environment."""
+    return os.environ.get(ENV, "").strip().lower() != "off"
+
+
+@functools.lru_cache(maxsize=1)
+def allowed_names() -> tuple:
+    """Every raster driver GeoBrix opens: the manifest's classification, allowed (never refused)."""
+    return tuple(manifest.load().gdal.allowed_drivers)
+
+
+@functools.lru_cache(maxsize=1)
+def refused_names() -> tuple:
+    """The drivers the policy refuses: deregistered (full) or skipped by the JVM at GDAL's start."""
+    return tuple(manifest.load().gdal.refused_drivers)
+
+
+def chain_text(exc: BaseException) -> str:
+    """The messages of an exception and of what it was raised after. rasterio reports a failed read as 'Read failed.
+    See previous exception' with GDAL's own message in the exception before it, so the reason is read from both.
+    """
+    parts, cur = [], exc
+    while cur is not None and len(parts) < 8:
+        parts.append(str(cur))
+        cur = cur.__cause__ or cur.__context__
+    return " | ".join(parts)
+
+
+def policy_reason(message: str, nested: bool = True) -> Optional[str]:
+    """What the policy refused, for a GDAL message raised while a raster was opened or read; None when the message is
+    not a refusal of the policy (a missing file, a corrupt one)."""
+    if nested and _MISSING in message and _names_a_refused_connection(message):
+        # a refused driver's connection string (GTI:/path) is no file to GDAL: it reports it as missing
+        return "a source GDAL has no driver for here"
+    for needle, what, needs_nested in _NESTED_REFUSALS:
+        if needle in message and (nested or not needs_nested):
+            return what
+    return None
+
+
+def _prefix_pattern(prefixes) -> Optional["re.Pattern"]:
+    if not prefixes:
+        return None
+    alts = "|".join(re.escape(p) for p in sorted(prefixes, key=len, reverse=True))
+    # a name starts at the start of the text, or after a space, a quote, a backtick, a bracket or the chain's |;
+    # a URL (http://...) is no connection string, whatever its scheme spells (as in the at_start branch)
+    return re.compile(rf"(?:^|(?<=[\s'\"`(|]))(?:{alts})(?!//)", re.IGNORECASE)
+
+
+def _names_a_refused_connection(text: str, at_start: bool = False) -> bool:
+    """Whether ``text`` names a refused driver's connection string (``GTI:``, ``WMS:``, ``EEDAI:`` ...) where a file
+    name starts (``at_start``: at the start of ``text`` itself). A file whose name merely ends like one
+    (``missing.mrf``, ``tiles_wms``, ``a.gti``) does not."""
+    if at_start:
+        low = text.lower()
+        # a URL (http://...) is no connection string, whatever its scheme spells
+        return any(
+            low.startswith(p.lower()) and low[len(p) : len(p) + 2] != "//"
+            for p in _DEREGISTERED_PREFIXES
+        )
+    rx = _prefix_pattern(frozenset(_DEREGISTERED_PREFIXES))
+    return rx is not None and rx.search(text) is not None
+
+
+# The GDAL bindings that register GDAL's drivers when they load, for a process with no /proc/self/maps.
+_GDAL_BINDINGS = ("rasterio", "osgeo", "pyogrio", "fiona")
+
+
+def _gdal_loaded() -> bool:
+    """Whether a GDAL is in the process already: a libgdal mapped (Linux ``/proc/self/maps``, which sees a binding
+    whatever its module name), else a GDAL binding imported."""
+    from databricks.labs.gbx import _osgeo
+
+    mapped = _osgeo.mapped_libgdal()
+    if mapped is not None:
+        return bool(mapped)
+    return any(m in sys.modules for m in _GDAL_BINDINGS)
+
+
+def prepare() -> None:
+    """The registration-time part of the policy, applied at package import (see the module docstring). Idempotent.
+    It imports no GDAL binding itself, and sets the environment their driver registration reads; only where a GDAL is
+    loaded already does it run ``activate()``, which imports rasterio and osgeo.
+    """
+    global _PREPARED
+    with _LOCK:
+        if _PREPARED:
+            return
+        _PREPARED = True
+        if not enabled():
+            return
+        _DEREGISTERED_PREFIXES.update(f"{name}:" for name in refused_names())
+        _skip_at_registration()
+        if _gdal_loaded():
+            # a GDAL is loaded already (rasterio, osgeo, pyogrio, fiona ...), and may have registered its drivers: the
+            # skip cannot reach those, so the activation (the deregistration, or the partial-mode warning) runs now
+            activate()
+
+
+def activate() -> Dict:
+    """The process's defence, applied once (see the module docstring). Returns the state: ``mode`` (off, full,
+    partial or none), ``deregistered`` (the names removed) and ``settings`` (the process settings set); a partial
+    state also names ``registered_refused``, the refused drivers rasterio had registered before GeoBrix ran.
+    """
+    global _STATE
+    prepare()
+    with _LOCK:
+        if _STATE is None:
+            _STATE = _apply()
+        return _STATE
+
+
+def state() -> Dict:
+    """The state ``activate()`` settled on (activating it first if needed)."""
+    return activate()
+
+
+# A pyogrio entry point whose first parameter is one of these takes a path: through ``pyogrio()`` each is judged by
+# the remote-path gate first, in every submodule (``core``, ``raw``, ``geopandas`` ...).
+_PATH_PARAMS = frozenset({"path_or_buffer", "path", "path_or_fp"})
+
+
+def _takes_a_path(func) -> bool:
+    import inspect
+
+    try:
+        params = list(inspect.signature(func).parameters)
+    except (
+        TypeError,
+        ValueError,
+    ):  # no signature to read: judged as one that may take a path
+        return True
+    return bool(params) and params[0] in _PATH_PARAMS
+
+
+class _GatedPyogrio:
+    """pyogrio as GeoBrix's vector reads see it: every entry point that takes a path (``_takes_a_path``), in the
+    module and in each of its submodules, judges the path with the remote-path gate first; everything else is
+    pyogrio's own."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        attr = getattr(self._module, name)
+        if isinstance(
+            attr, types.ModuleType
+        ):  # pyogrio.core, .raw, .geopandas ...: judged the same way
+            return _GatedPyogrio(attr)
+        if not callable(attr) or isinstance(attr, type) or not _takes_a_path(attr):
+            return attr
+
+        @functools.wraps(attr)
+        def gated(path_or_buffer, *args, **kwargs):
+            if isinstance(path_or_buffer, (str, os.PathLike)):
+                data_path(path_or_buffer, "a vector file")
+            return attr(path_or_buffer, *args, **kwargs)
+
+        return gated
+
+
+def pyogrio(remote_ok: bool = False):
+    """pyogrio, with the policy active first: GeoBrix's vector reads take the module from here, so the refused drivers
+    are gone before their first open. Each read of a path is judged by the remote-path gate (``data_path``) first,
+    unless ``remote_ok``: a path that is not data (no vector read needs it today: the readers list local and Volume
+    files; a site that would is listed in ``test_open_sites.py``)."""
+    activate()
+    import pyogrio as module
+
+    return module if remote_ok else _GatedPyogrio(module)
+
+
+def _skip_at_registration() -> None:
+    """GDAL_SKIP names the refused drivers, added to a user's value (a user's value cannot remove one), and the two VRT
+    settings go in the environment, where GDAL's driver registration and its config lookups read them.
+    """
+    names = {t for t in re.split(r"[,\s]+", os.environ.get("GDAL_SKIP", "")) if t}
+    os.environ["GDAL_SKIP"] = ",".join(sorted(names | set(refused_names())))
+    os.environ.update(SETTINGS)
+
+
+def _registered_refused() -> Dict[str, list]:
+    """The refused drivers each GDAL binding of this process has registered, by binding: rasterio's registry, and
+    pyogrio's when pyogrio is imported (a PyPI pyogrio bundles a GDAL of its own, and registers every driver at its
+    import). Empty unless a binding registered before ``prepare()`` ran."""
+    import rasterio
+
+    refused = set(refused_names())
+    with rasterio.Env() as env:
+        found = {"rasterio": sorted(refused & set(env.drivers()))}
+    ogr = sys.modules.get("pyogrio")
+    if ogr is not None:
+        try:
+            found["pyogrio"] = sorted(refused & set(ogr.list_drivers()))
+        except (
+            Exception
+        ):  # noqa: BLE001 - a pyogrio that cannot list its drivers names none
+            pass
+    return {b: names for b, names in found.items() if names}
+
+
+def _deregister_mapped(refused) -> Dict[str, list]:
+    """The refused drivers removed, by ``GDALDeregisterDriver(GDALGetDriverByName(name))`` through ctypes, from each
+    libgdal this process maps (Linux ``/proc/self/maps``): a binding that bundles a GDAL of its own (a PyPI pyogrio,
+    rasterio or fiona) and registered its drivers before GeoBrix was imported loses the refused ones too. Each library
+    is reached with ``RTLD_NOLOAD`` (nothing new is loaded); one that is not loaded, or has no such symbols, is skipped.
+    Off Linux (no maps) nothing is removed here, and the partial-mode warning names what stays.
+    """
+    import ctypes
+
+    from databricks.labs.gbx import _osgeo
+
+    removed: Dict[str, list] = {}
+    for path in _osgeo.mapped_libgdal() or ():
+        try:
+            lib = ctypes.CDLL(path, mode=os.RTLD_NOLOAD | os.RTLD_LAZY)
+            get, deregister = lib.GDALGetDriverByName, lib.GDALDeregisterDriver
+        except (OSError, AttributeError):
+            continue
+        get.restype, get.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+        deregister.restype, deregister.argtypes = None, [ctypes.c_void_p]
+        gone = []
+        for name in refused:
+            handle = get(name.encode())
+            if handle:
+                deregister(handle)
+                gone.append(name)
+        if gone:
+            removed[path] = gone
+    return removed
+
+
+def _apply() -> Dict:
+    if not enabled():
+        return {"mode": "off", "deregistered": [], "settings": []}
+    try:
+        from databricks.labs.gbx import _osgeo
+
+        report = _osgeo._same_libgdal_report()
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - no rasterio at all: nothing to defend (the UC sandbox, a manifest user)
+        return {
+            "mode": "none",
+            "deregistered": [],
+            "settings": [],
+            "reason": f"no rasterio: {exc}",
+        }
+    if report.get("shared"):
+        from osgeo import gdal
+
+        deregistered = []
+        for name in refused_names():
+            drv = gdal.GetDriverByName(name)
+            if drv is not None:
+                prefix = drv.GetMetadataItem("DMD_CONNECTION_PREFIX")
+                if prefix:
+                    _DEREGISTERED_PREFIXES.add(prefix)
+                drv.Deregister()
+                deregistered.append(name)
+        for key, value in SETTINGS.items():
+            gdal.SetConfigOption(key, value)
+        # another GDAL in the process (a PyPI pyogrio beside the env wheel's bindings) loses them too
+        foreign = _deregister_mapped(refused_names())
+        return {
+            "mode": "full",
+            "deregistered": deregistered,
+            "deregistered_by": foreign,
+            "settings": sorted(SETTINGS),
+        }
+    import rasterio.env as rio_env
+
+    for key, value in SETTINGS.items():
+        rio_env.set_gdal_config(key, value)
+    foreign = _deregister_mapped(refused_names())
+    by_binding = _registered_refused()
+    if by_binding:
+        # the warning points at the caller's code: frames in this package (and the import machinery) are skipped
+        warnings.warn(
+            gap_warning(by_binding),
+            RuntimeWarning,
+            stacklevel=2,
+            skip_file_prefixes=(os.path.dirname(os.path.abspath(__file__)),),
+        )
+    return {
+        "mode": "partial",
+        "deregistered": sorted(set().union(*foreign.values())),
+        "deregistered_by": foreign,
+        "settings": sorted(SETTINGS),
+        "registered_refused": sorted(set().union(*by_binding.values())),
+        "registered_refused_by": by_binding,
+        "reason": report.get("vsimem_error")
+        or report.get("error")
+        or "osgeo is another GDAL",
+    }
+
+
+def _identify(path: str) -> Optional[str]:
+    """The name of the allowed driver that identifies ``path``, or None (header read only; nothing is opened)."""
+    from osgeo import gdal
+
+    with gdal.ExceptionMgr(useExceptions=False):
+        drv = gdal.IdentifyDriverEx(
+            path, gdal.OF_RASTER, allowed_drivers=list(allowed_names())
+        )
+    return None if drv is None else drv.ShortName
+
+
+def _exists(path: str) -> bool:
+    return os.path.exists(path)
+
+
+def _not_a_raster(what: str, driver: str) -> str:
+    return (
+        f"{what}: is not a raster any driver GeoBrix opens reads (it is a {driver} raster, a driver the policy "
+        f"refuses), {REFUSED_PHRASE}"
+    )
+
+
+# How a refused driver's own file starts, for the refusal's message: an open the policy restricted fails with GDAL's
+# "not recognized" whatever stopped it, so a refusal names a refused driver only when the bytes are that driver's; any
+# other unreadable file or tile (a corrupt one, a format GDAL does not read) keeps the binding's own I/O error.
+_REFUSED_SIGNATURES = (
+    (b"gdal_streamed_alg", "GDALG"),
+    (b"<gdaltileindexdataset", "GTI"),
+    (b"<kml", "KMLSUPEROVERLAY"),
+    (b"<mrf_meta>", "MRF"),
+    (b"<gdal_wms>", "WMS"),
+    (b"<gdal_wmts>", "WMTS"),
+    (b"<wcs_gdal>", "WCS"),
+    (b"<cacheinfo", "ESRIC"),
+    (b'"stac_version"', "STACTA"),
+)
+
+
+def _head(fp, path: Optional[str]) -> bytes:
+    """The first bytes of what an open was given (a named local file, a MemoryFile, a file-like), else b''."""
+    try:
+        if path is not None:
+            if not _exists(path):
+                return b""
+            with open(path, "rb") as fh:
+                return fh.read(4096)
+        if hasattr(fp, "getbuffer"):  # a MemoryFile
+            return bytes(fp.getbuffer()[:4096])
+        if hasattr(fp, "read") and hasattr(fp, "seek") and hasattr(fp, "tell"):
+            pos = fp.tell()
+            try:
+                return fp.read(4096)
+            finally:
+                fp.seek(pos)
+    except Exception:  # noqa: BLE001 - an unreadable head names no refused driver
+        return b""
+    return b""
+
+
+def _refused_format(head: bytes) -> Optional[str]:
+    """The refused driver whose file ``head`` starts like, else None."""
+    low = head.lower()
+    for marker, driver in _REFUSED_SIGNATURES:
+        if marker in low:
+            return driver
+    return None
+
+
+def _refusal(
+    what: str, path: Optional[str], exc: BaseException, fp=None
+) -> Optional[DriverPolicyError]:
+    """The policy's refusal for an error of an open restricted to the allowed drivers, or None (the binding's own
+    error stays: a missing file, a corrupt one, a format GDAL does not read)."""
+    text = chain_text(exc)
+    if _NOT_RECOGNIZED in text and (path is None or path in text):
+        # no allowed driver reads it: the policy's refusal only when the bytes are a refused driver's own
+        driver = _refused_format(_head(fp, path))
+        if driver is None:
+            return None
+        return DriverPolicyError(f"{_not_a_raster(what, driver)} (GDAL: {text})")
+    if _MISSING in text and path is not None and not _exists(path):
+        if _names_a_refused_connection(path, at_start=True):
+            # GTI:/x, WMS:http://..., EEDAI:...: a refused driver's connection string is no file to GDAL
+            return DriverPolicyError(
+                f"{what}: names a source GDAL has no driver for here (a refused driver's connection), "
+                f"{REFUSED_PHRASE} (GDAL: {text})"
+            )
+        # a missing file stays the binding's own I/O error (an OSError, which the read retries catch), even when its
+        # name ends like a refused driver's prefix (missing.mrf, tiles_wms, a.gti)
+        return None
+    reason = policy_reason(text, nested=True)
+    if reason is None:
+        return None
+    return DriverPolicyError(f"{what}: reads {reason}, {REFUSED_PHRASE} (GDAL: {text})")
+
+
+def _requested_drivers(driver, what: str) -> list:
+    """The drivers an open may use: the caller's (each must be allowed), else every allowed driver."""
+    allowed = allowed_names()
+    if driver is None:
+        return list(allowed)
+    names = [driver] if isinstance(driver, str) else list(driver)
+    refused = [n for n in names if n not in allowed]
+    if refused or not names:
+        named = ", ".join(map(str, refused)) or repr(driver)
+        raise DriverPolicyError(
+            f"{what}: driver {named} is one GeoBrix does not open, {REFUSED_PHRASE}"
+        )
+    return names
+
+
+def _read_with(fp, drivers: list, kwargs: dict):
+    """rasterio's read open of ``fp`` with ``drivers`` as GDAL's driver list. ``rasterio.open`` takes one driver name
+    only; every read form of it ends in ``DatasetReader`` (directly, or through ``MemoryFile.open``), which takes the
+    list, so this is that same open with the list passed through."""
+    import rasterio.io as rio_io
+    from rasterio.env import ensure_env_with_credentials
+
+    file_types = tuple(
+        t for t in (rio_io.MemoryFile, getattr(rio_io, "FilePath", None)) if t
+    )
+    if isinstance(fp, file_types):
+        return fp.open(driver=drivers, **kwargs)
+    if hasattr(fp, "read"):
+        # a file-like: as rasterio 1.4+'s open, its bytes go in a MemoryFile that the dataset owns (closed with it).
+        # rasterio 1.3's open streamed a file-like through FilePath instead; this reads it whole and seeks back, so a
+        # non-seekable stream is not supported here (no GeoBrix caller passes one).
+        memfile = rio_io.MemoryFile(fp.read())
+        fp.seek(0)
+        ds = memfile.open(driver=drivers, **kwargs)
+        ds._env.enter_context(memfile)
+        return ds
+    from rasterio._path import _parse_path
+
+    def _reader(name, **kw):
+        return rio_io.DatasetReader(_parse_path(name), driver=drivers, **kw)
+
+    return ensure_env_with_credentials(_reader)(os.fspath(fp), **kwargs)
+
+
+def _open_restricted(fp, mode: str, drivers: list, kwargs: dict):
+    """An open of ``fp`` that can use ``drivers`` only (``mode`` is ``r`` or ``r+``)."""
+    import rasterio
+
+    if len(drivers) == 1:
+        return rasterio.open(fp, mode, driver=drivers[0], **kwargs)
+    if mode == "r":
+        return _read_with(fp, drivers, kwargs)
+    # an update takes one driver: the one a read restricted to the allowed drivers opens it with
+    with _read_with(fp, drivers, {}) as probe:
+        name = probe.driver
+    return rasterio.open(fp, mode, driver=name, **kwargs)
+
+
+def open_data(fp, mode: str = "r", *, remote_ok: bool = False, **kwargs):
+    """``rasterio.open`` for GeoBrix, under the process's driver policy. A read (``r``, ``r+``) of a named path is
+    judged by the remote-path gate first (``data_path``), unless ``remote_ok``: the caller's own path to a
+    driver-side call, or an href ``core._http`` checked (the sites are listed in ``test_open_sites.py``). Every read
+    opens with the allowed drivers as GDAL's driver list: the identified one in full mode, for a named file; the
+    whole allowed list otherwise (a remote or ``/vsi`` name, a ``MemoryFile``, a file-like, a partial process). A
+    ``driver=`` the policy refuses, and a file no allowed driver reads, raise ``DriverPolicyError``. A write (``w``)
+    is ``rasterio.open`` after the activation, as is every open with the policy switched off.
+    """
+    import rasterio
+
+    path = os.fspath(fp) if isinstance(fp, (str, os.PathLike)) else None
+    if mode.startswith("r") and path is not None and not remote_ok:
+        data_path(path, "a raster")
+    state_now = activate()
+    if not mode.startswith("r") or state_now["mode"] == "off":
+        return rasterio.open(fp, mode, **kwargs)
+    what = path or "the raster bytes"
+    explicit = kwargs.pop("driver", None)
+    drivers = _requested_drivers(explicit, what)
+    if explicit is None and path is not None and state_now["mode"] == "full":
+        name = _identify(path)
+        if name is not None:
+            drivers = [name]
+        elif _exists(path):
+            driver = _refused_format(_head(None, path))
+            if driver is not None:
+                raise DriverPolicyError(_not_a_raster(what, driver))
+            # no allowed driver identifies it, and it is no refused driver's: the open below gives GDAL's own error
+    try:
+        ds = _open_restricted(fp, mode, drivers, kwargs)
+    except DriverPolicyError:
+        raise
+    except Exception as exc:
+        refusal = _refusal(what, path, exc, fp)
+        if refusal is not None:
+            raise refusal from None
+        raise
+    if ds.driver not in allowed_names():
+        # defence in depth: an open restricted to the allowed drivers reports one of them
+        ds.close()
+        raise DriverPolicyError(
+            f"{what}: opened by driver {ds.driver}, {REFUSED_PHRASE}"
+        )
+    return ds
+
+
+# The bytes of a TIFF start with one of these: the common tile, never a driver of the refused class.
+_TIFF_MAGICS = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+# Other binary formats a tile can be (PNG, JPEG, GIF, netCDF classic and 64-bit, HDF5): none is a driver of the refused
+# class, and each can hold XML text (an XMP packet, an attribute), so their bytes are not scanned for a marker.
+_BINARY_MAGICS = _TIFF_MAGICS + (
+    b"\x89PNG\r\n\x1a\n",
+    b"\xff\xd8\xff",
+    b"GIF8",
+    b"CDF\x01",
+    b"CDF\x02",
+    b"CDF\x05",
+    b"\x89HDF\r\n\x1a\n",
+)
+_XML_SKIP = re.compile(rb"\s+|<\?.*?\?>|<!--.*?-->", re.S)
+
+
+def _xml_root_at_start(head: bytes) -> bytes:
+    """``head`` from its first XML element: after a BOM, white space, processing instructions (the <?xml ?> prolog,
+    PDS4's <?xml-model ?>) and comments; the rest when there is no element."""
+    pos = 3 if head.startswith(b"\xef\xbb\xbf") else 0
+    while True:
+        m = _XML_SKIP.match(head, pos)
+        if m is None or m.end() == pos:
+            return head[pos:]
+        pos = m.end()
+
+
+# How the bytes of a driver in the refused class start, for a process whose osgeo is not the rasterio's GDAL (the
+# identify below needs it). An XML format's root element is read from the start of the document (after a BOM, white
+# space, the <?xml ?> prolog and any comments), not searched for: a PNG or a netCDF can carry the string in a text
+# chunk or an attribute. A label's first words are read from the start too. The bytes of a known binary format are
+# never scanned. Anything here that is not in the manifest's class is ignored.
+_BYTES_XML = (
+    (b"<VRTDataset", "VRT"),
+    (b"<Dimap_Document", "DIMAP"),
+    (b"<Product_Observational", "PDS4"),
+    (b"<Product_Ancillary", "PDS4"),
+)
+_BYTES_AT_START = (
+    (b"PDS_VERSION_ID", "PDS"),
+    (b"CCSD3ZF", "ISIS2"),
+    (b"LBLSIZE=", "VICAR"),
+    (b"Object = IsisCube", "ISIS3"),
+    (b"DatasetHeader Begin", "ERS"),
+)
+BYTES_FIX = (
+    "Fix: store the tile as a GeoTIFF, or pass a VRT as a virtual tile (a path), which the virtual-tile policy "
+    "judges"
+)
+
+
+@functools.lru_cache(maxsize=1)
+def bytes_refused_light_names() -> tuple:
+    """The drivers the lightweight tier refuses for a tile's bytes: the manifest's ``bytes_refused_light`` class."""
+    return tuple(manifest.load().gdal.bytes_refused_light_drivers)
+
+
+# Why each refused driver is off by default: (reason class, one sentence). The set of drivers is the manifest's
+# `refused` class (`refused_names()`); this map only says why, and `test_drivers.py` holds its keys to that set. The
+# classes and the facts follow docs/docs/security.mdx, section 7.
+REFUSED_WHY = {
+    "GDALG": ("stored pipeline", "Runs a pipeline that the file stores."),
+    "GTI": ("tile index or catalog", "Opens the rasters that a tile index names."),
+    "STACTA": (
+        "tile index or catalog",
+        "Opens the tiled assets that a STAC document names.",
+    ),
+    "STACIT": ("tile index or catalog", "Opens the items that a STAC document names."),
+    "WMS": ("network service", "Fetches from an OGC web map service."),
+    "WMTS": ("network service", "Fetches from an OGC web map tile service."),
+    "WCS": ("network service", "Fetches from an OGC web coverage service."),
+    "OGCAPI": ("network service", "Fetches from an OGC API server."),
+    "HTTP": ("network service", "Fetches a file over HTTP."),
+    "PLMOSAIC": ("remote API", "Calls the Planet Labs mosaics API."),
+    "PLSCENES": ("remote API", "Calls the Planet Labs scenes API."),
+    "EEDAI": ("remote API", "Calls the Earth Engine image API."),
+    "EEDA": ("remote API", "Calls the Earth Engine data API."),
+    "DAAS": ("remote API", "Calls the Airbus Data As A Service API."),
+    "NGW": ("remote API", "Calls a NextGIS Web server."),
+    "WFS": ("remote API", "Fetches from an OGC web feature service."),
+    "CSW": ("remote API", "Fetches from an OGC catalog service."),
+    "KMLSUPEROVERLAY": (
+        "acts on what a file names",
+        "Fetches the NetworkLink or Icon href of a file over HTTP.",
+    ),
+    "ESRIC": (
+        "acts on what a file names",
+        "Fetches a coordinate reference system that the conf.xml gives as a URL.",
+    ),
+    "MRF": (
+        "acts on what a file names",
+        "Opens a source its file names, and writes cache files at paths its file names.",
+    ),
+}
+
+
+# Raster drivers whose bytes cannot be held as a tile, each for a reason of its own (not the other-files class): GDAL
+# identifies the file by its name, which a tile's bytes do not have, or the Python binding opens it with no band. A
+# raster of one of them is read by path (``raster_gbx``, ``gbx_rst_fromfile``).
+BYTES_UNSUPPORTED = {
+    "BAG": "its bytes open as a dataset with no band",
+    "GTX": "GDAL identifies its file by the .gtx extension, which tile bytes do not have",
+    "SRTMHGT": "GDAL identifies its file by the tile name, such as N50E010.hgt, which tile bytes do not have",
+    "MBTiles": "GDAL identifies its file by the .mbtiles extension, which tile bytes do not have",
+}
+
+
+def driver_verdict(name: str, raster: bool) -> tuple:
+    """``(allowed, tile_bytes)`` of a GDAL driver that is registered here, under this process's policy.
+
+    ``allowed``: GeoBrix lets the driver open data. A raster driver must be in the manifest's allowed class; no driver
+    may be in the refused one. ``tile_bytes``: a raster of that driver can be held as a tile's bytes (an allowed
+    raster driver outside the ``bytes_refused_light`` class). With the policy off nothing is refused, so every
+    driver is allowed and every raster driver holds tile bytes. This is the one place ``gbx_drivers`` reads the
+    policy, so the listing cannot drift from what opens.
+    """
+    if not enabled():
+        return True, bool(raster)
+    allowed = name not in refused_names() and (not raster or name in allowed_names())
+    tile_bytes = (
+        bool(raster)
+        and allowed
+        and name not in bytes_refused_light_names()
+        and name not in BYTES_UNSUPPORTED
+    )
+    return allowed, tile_bytes
+
+
+# What a driver in the ``bytes_refused_light`` class needs beside the data (it can name other files).
+BYTES_CLASS_REQUIRES = (
+    "other files beside the data, such as a header, a sidecar or a referenced file: "
+    "its bytes alone are not a tile"
+)
+
+# Raster drivers whose dataset lives in the process, not in bytes or in files (MEM is a pointer to memory, NUMPY wraps an
+# array): they can be neither held as tile bytes nor named by a file, so the other-files note does not describe them.
+IN_PROCESS_RASTER = ("MEM", "NUMPY")
+IN_PROCESS_REQUIRES = (
+    "an in-process dataset that lives in memory: it cannot be held as tile bytes"
+)
+
+# Vector drivers that read a set of files or a folder. GDAL's driver metadata does not say so, so this small map is
+# the one hand-kept list (a test holds every name to a driver of the build). The raster side needs none: its class
+# is the manifest's ``bytes_refused_light``.
+VECTOR_MULTI_FILE = {
+    "ESRI Shapefile": "the .shx and .dbf files beside the .shp file, and the .prj file for the CRS",
+    "MapInfo File": "the .dat, .id and .map files beside the .tab file",
+    "OpenFileGDB": "the whole .gdb folder",
+    "AVCBin": "the whole coverage folder",
+}
+
+
+def driver_requires(name: str, md) -> tuple:
+    """``(requires, usable)`` of a GDAL driver, from its metadata ``md`` (a mapping of GDAL metadata items) and the
+    policy. ``requires`` is the text of what the driver needs that this runtime or the data must supply, or None;
+    ``usable`` is False when the driver cannot work as shipped.
+
+    - A plugin GDAL knows but has not loaded carries ``DMD_PLUGIN_INSTALLATION_MESSAGE``: unusable, and the message
+      is the text.
+    - A driver opened by a connection string (``DMD_CONNECTION_PREFIX``) talks to a service or runs a program that
+      the runtime does not provide: unusable.
+    - A raster driver that lives in the process (``IN_PROCESS_RASTER``) is usable, with the note that it cannot be held
+      as tile bytes.
+    - A raster driver of the ``bytes_refused_light`` class reads other files beside the data: usable, with the note.
+    - A raster driver in ``BYTES_UNSUPPORTED`` cannot be held as tile bytes for a reason of its own: usable by path,
+      with the note.
+    - A vector driver in ``VECTOR_MULTI_FILE`` reads a set of files: usable, with the note.
+    """
+    # Conservative reading (accepted): the presence of the key means the plugin is not loaded. Whether GDAL keeps the
+    # key on a plugin that loaded is unchecked, because the env wheel's build has no deferred plugin to test it on.
+    plugin = md.get("DMD_PLUGIN_INSTALLATION_MESSAGE")
+    if plugin:
+        return str(plugin), False
+    prefix = md.get("DMD_CONNECTION_PREFIX")
+    if prefix:
+        return (
+            f"a service or program this runtime does not provide (it opens a connection string "
+            f"that starts with '{prefix}')",
+            False,
+        )
+    if enabled() and "DCAP_RASTER" in md and name in IN_PROCESS_RASTER:
+        return IN_PROCESS_REQUIRES, True
+    if enabled() and "DCAP_RASTER" in md and name in bytes_refused_light_names():
+        return BYTES_CLASS_REQUIRES, True
+    if enabled() and "DCAP_RASTER" in md and name in BYTES_UNSUPPORTED:
+        return f"as a raster, it is read by path: {BYTES_UNSUPPORTED[name]}", True
+    if name in VECTOR_MULTI_FILE:
+        return VECTOR_MULTI_FILE[name], True
+    return None, True
+
+
+def _bytes_refusal(what: str, driver: str) -> DriverPolicyError:
+    return DriverPolicyError(
+        f"{what}: is a {driver} raster, a format that can name other files, {REFUSED_PHRASE} from tile bytes. "
+        f"{BYTES_FIX}"
+    )
+
+
+# The most bytes the second identify (`_unrecognized_bytes_refusal`) is given. Identify reads a driver's signature, not
+# its pixels, so a tile of any size costs one copy of at most this many bytes when the error is built.
+_IDENTIFY_MAX_BYTES = 1 << 20
+
+
+def _identify_in_class(head, names: tuple) -> Optional[str]:
+    """The driver of ``names`` that identifies ``head`` (a tile's first bytes: bytes or a memoryview) through GDAL, or
+    None. Header only: nothing is opened. Needs the osgeo on rasterio's libgdal (the full mode); any failure is None.
+    """
+    try:
+        from osgeo import gdal
+
+        path = f"/vsimem/gbx_bytes_{uuid.uuid4().hex}"
+        gdal.FileFromMemBuffer(path, head)
+        try:
+            with gdal.ExceptionMgr(useExceptions=False):
+                drv = gdal.IdentifyDriverEx(
+                    path, gdal.OF_RASTER, allowed_drivers=list(names)
+                )
+        finally:
+            gdal.Unlink(path)
+        return None if drv is None else drv.ShortName
+    except (
+        Exception
+    ):  # noqa: BLE001 - no usable osgeo here: the signatures and the driver list decide
+        return None
+
+
+def _class_of_bytes(head: bytes, mode: str) -> Optional[str]:
+    """The refused-class driver the bytes ``head`` are, else None: GDAL's identify where the process has the
+    matching osgeo, then how each driver's bytes start."""
+    names = bytes_refused_light_names()
+    if not names or head.startswith(_BINARY_MAGICS):
+        return None
+    if mode == "full":
+        found = _identify_in_class(head[:4096], names)
+        if found is not None:
+            return found
+    root = _xml_root_at_start(head)
+    for marker, driver in _BYTES_XML:
+        if root.startswith(marker) and driver in names:
+            return driver
+    start = head.lstrip()
+    for marker, driver in _BYTES_AT_START:
+        if start.startswith(marker) and driver in names:
+            return driver
+    return None
+
+
+def _unrecognized_bytes_refusal(memfile, mode: str) -> Optional[DriverPolicyError]:
+    """The refusal for tile bytes the open (restricted to the drivers outside the refused class) did not recognize,
+    when they are a refused driver's: the head-only checks look at the first 4096 bytes, so the bytes (a view of the
+    first ``_IDENTIFY_MAX_BYTES``, not a copy of the tile) go to GDAL's identify once more with the class drivers, and a
+    match names the format. A driver that identifies through a sibling header (ENVI, EHdr: tested on real GDAL) cannot
+    be named from one file's bytes; those and bytes nothing identifies (corrupt, truncated, not a raster) are None and
+    keep the binding's own I/O error. The open already excludes the class, so none of them is read either way.
+    """
+    if mode != "full":
+        return None
+    try:
+        data = memfile.getbuffer()[:_IDENTIFY_MAX_BYTES]
+    except (
+        Exception
+    ):  # noqa: BLE001 - no buffer to hand over: the binding's error stands
+        return None
+    found = _identify_in_class(data, bytes_refused_light_names()) if len(data) else None
+    return None if found is None else _bytes_refusal("the raster bytes", found)
+
+
+def _bytes_drivers(memfile, explicit, mode: str):
+    """The drivers an open of tile bytes may use: the allowed ones less the refused class. A driver the caller named
+    that is in the class, and bytes that are a driver of the class, raise the policy's refusal first.
+    """
+    refused = set(bytes_refused_light_names())
+    what = "the raster bytes"
+    if explicit is not None:
+        named = [explicit] if isinstance(explicit, str) else list(explicit)
+        for name in named:
+            if name in refused:
+                raise _bytes_refusal(what, name)
+        return named
+    driver = _class_of_bytes(_head(memfile, None), mode)
+    if driver is not None:
+        raise _bytes_refusal(what, driver)
+    return [name for name in allowed_names() if name not in refused]
+
+
+# How an HDF5 file (so a NetCDF-4 file) starts, and the name of the root group of a BAG file (HDF5 too).
+_HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+_BAG_ROOT = b"BAG_root"
+
+
+def _bytes_unsupported(name: str) -> DriverPolicyError:
+    """The refusal of the bytes of a raster driver in ``BYTES_UNSUPPORTED``."""
+    return DriverPolicyError(
+        f"the raster bytes: are a {name} raster, and {BYTES_UNSUPPORTED[name]}, "
+        "so they are not held as a tile. Fix: read the file by path with raster_gbx or gbx_rst_fromfile."
+    )
+
+
+def open_bytes(data, **kwargs):
+    """A read of raster bytes under the driver policy: ``data`` is bytes (a tile's raster, an intermediate GeoBrix
+    wrote) or a ``MemoryFile``. The open uses the allowed drivers as GDAL's driver list and checks the driver it
+    reports, as ``open_data`` does. Bytes are held in a ``MemoryFile`` that the returned dataset owns (closed with
+    it); a ``MemoryFile`` passed in stays the caller's. Use it as ``with open_bytes(raw) as ds:``.
+
+    A tile's bytes are data, and the remote-path gate never sees what a VRT or another indirection format names, so
+    the manifest's ``bytes_refused_light`` class is refused: the driver is identified from the bytes first and a
+    driver of the class raises ``DriverPolicyError`` (with a Fix) before anything is opened; the open itself lists
+    the allowed drivers less that class. netCDF, HDF5, HFA, JP2OpenJPEG and GPKG bytes open as before.
+    """
+    import rasterio.io as rio_io
+
+    owned = not isinstance(data, rio_io.MemoryFile)
+    memfile = rio_io.MemoryFile(data) if owned else data
+    try:
+        head = _head(memfile, None)
+        if (
+            kwargs.get("driver") is None
+            and head.startswith(_HDF5_SIGNATURE)
+            and _BAG_ROOT in head
+            and activate()["mode"] != "off"
+        ):
+            # a BAG file is HDF5: from memory the netCDF driver would open it with no band, so it is refused by name
+            raise _bytes_unsupported("BAG")
+        if (
+            kwargs.get("driver") is None
+            and "netCDF" in allowed_names()
+            and _head(memfile, None).startswith(_HDF5_SIGNATURE)
+        ):
+            # NetCDF-4 is an HDF5 file, and from memory (no file name to tell them apart) GDAL can hand it to the
+            # HDF5Image driver, which reads it with an identity geotransform. Try netCDF first, as the same file
+            # opened by path is; bytes it declines (plain HDF5, not a raster) go the way any other bytes go.
+            try:
+                ds = open_bytes(
+                    memfile,
+                    driver="netCDF",
+                    **{k: v for k, v in kwargs.items() if k != "driver"},
+                )
+            except (
+                Exception
+            ):  # noqa: BLE001 - not a netCDF-4 raster: the allowed list decides below
+                ds = None
+            if ds is not None:
+                if owned:
+                    ds._env.enter_context(memfile)
+                return ds
+        mode = activate()["mode"]
+        if mode == "off":
+            # GDAL as GDAL has it, through the MemoryFile's own open (rasterio 1.3's open would take the file-like path)
+            ds = memfile.open(**kwargs)
+        else:
+            driver = _bytes_drivers(memfile, kwargs.pop("driver", None), mode)
+            try:
+                ds = open_data(memfile, "r", driver=driver, **kwargs)
+            except DriverPolicyError:
+                raise
+            except Exception as exc:
+                if _NOT_RECOGNIZED not in chain_text(exc):
+                    raise
+                refusal = _unrecognized_bytes_refusal(memfile, mode)
+                if refusal is None:
+                    raise
+                raise refusal from None
+            if ds.driver in bytes_refused_light_names():
+                # defence in depth: an open restricted to the drivers outside the class reports one of them
+                name = ds.driver
+                ds.close()
+                raise _bytes_refusal("the raster bytes", name)
+            if ds.driver in BYTES_UNSUPPORTED:
+                name = ds.driver
+                ds.close()
+                raise _bytes_unsupported(name)
+    except BaseException:
+        if owned:
+            memfile.close()
+        raise
+    if owned:
+        ds._env.enter_context(memfile)
+    return ds
+
+
+@contextlib.contextmanager
+def refusals_named(what: str):
+    """Around the reads of a raster GeoBrix opened: a GDAL failure that is the policy's (a nested source it stopped, a
+    raw band, a Python pixel function) raises ``DriverPolicyError`` with the reason; any other error passes through.
+    """
+    try:
+        yield
+    except DriverPolicyError:
+        raise
+    except Exception as exc:
+        text = chain_text(exc)
+        reason = policy_reason(text, nested=True)
+        if reason is None:
+            raise
+        raise DriverPolicyError(
+            f"{what}: reads {reason}, {REFUSED_PHRASE} (GDAL: {text})"
+        ) from None

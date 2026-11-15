@@ -8,9 +8,9 @@ The session-start call::
 
     gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids")
 
-is all that is needed — after that, every CRS-handling function on both the
-lightweight (pyrx / pyvx) and heavyweight (rasterx / vectorx) tiers finds the
-grid files automatically.
+is all that is needed for the lightweight functions: after that, every lightweight
+CRS-handling function finds the grid files automatically. The heavyweight
+implementation reads grids from a cluster-local path and cannot read a Volume path.
 
 ## How this works offline
 
@@ -59,25 +59,26 @@ EXPECTED_LAT = 51.5 + 30.0 / 3600.0  # 51.50833...
 def register_custom_grids_example(spark):
     """Register a Volume directory of PROJ grid files at session start, then run a datum-aware transform.
 
-    After calling ``register_proj_grids`` once, every CRS-handling function on
-    both the lightweight and heavyweight tiers finds the grid files automatically.
+    After calling ``register_proj_grids`` once, every lightweight CRS-handling
+    function finds the grid files automatically. The heavyweight implementation
+    reads grids from a cluster-local path, not a Volume path.
     """
-    import databricks.labs.gbx as gbx  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs import gbx
+    from databricks.labs.gbx.vectorx import functions as vx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     # Step 1 — Session start: register the Volume directory that holds your grids.
     # On a real cluster: gbx.register_proj_grids(spark, "/Volumes/catalog/schema/proj-grids")
     gbx.register_proj_grids(spark, GRID_DIR)
 
-    # Step 2 — Register pyvx functions (idempotent; picks up the grid dirs above).
-    vx.register(spark)
+    # Step 2 — Register the GeoBrix functions (idempotent; picks up the grid dirs above).
+    gbx.register(spark)
 
     # Step 3 — Apply a CRS transform that requires the grid.
     # st_transformcrs(geom, target_crs [, source_crs]) reprojects to target_crs.
     geom_df = spark.createDataFrame([(_INPUT_POINT,)], ["geom"])
     result = geom_df.select(
-        vx.st_transformcrs(f.col("geom"), _TARGET_CRS, _GRID_CRS).alias("shifted")
+        vx_api.st_transformcrs(f.col("geom"), _TARGET_CRS, _GRID_CRS).alias("shifted")
     ).first()
 
     return result["shifted"]

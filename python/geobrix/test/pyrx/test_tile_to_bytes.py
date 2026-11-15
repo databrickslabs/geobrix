@@ -11,8 +11,9 @@ The goal is to confirm the optimization (skip the double ZSTD encode/decode) is
 correct: the output pixels + georeference are identical to the reference path.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
@@ -42,7 +43,7 @@ def _write_src(tmp_path, name="src.tif", w=W, h=H, epsg=4326, declare_nodata=Tru
     )
     if declare_nodata:
         profile["nodata"] = -9999.0
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
     return path
 
@@ -168,43 +169,8 @@ def test_virtual_clip_pixels_identical(tmp_path):
     assert np.array_equal(ref_pix, opt_pix)
 
 
-def test_mapalgebra_bytes_virtual_matches_materialized(tmp_path):
-    """_mapalgebra_bytes with virtual inputs gives the same pixel result as with
-    materialized inputs — regression guard for the _tile_to_bytes optimization."""
-    from databricks.labs.gbx.pyrx.functions import _mapalgebra_bytes
-
-    path_a = _write_src(tmp_path, "a.tif")
-    path_b = str(tmp_path / "b.tif")
-
-    # b values = a values * 2
-    with rasterio.open(path_a) as ds:
-        data_a = ds.read(1)
-        prof = ds.profile.copy()
-    with rasterio.open(path_b, "w", **prof) as ds:
-        ds.write((data_a * 2).astype("float32"), 1)
-
-    # Build both virtual and materialized tile inputs (full extent).
-    vt_a = VirtualTile(cellid=0, path=path_a, window=(0, 0, W, H))
-    vt_b = VirtualTile(cellid=0, path=path_b, window=(0, 0, W, H))
-
-    mat_a = ot.materialize_to_bytes(vt_a).raster
-    mat_b = ot.materialize_to_bytes(vt_b).raster
-    mat_ta = VirtualTile(cellid=0, raster=mat_a)
-    mat_tb = VirtualTile(cellid=0, raster=mat_b)
-
-    out_virtual = _mapalgebra_bytes([vt_a.to_row(), vt_b.to_row()], "A + B")
-    out_mat = _mapalgebra_bytes([mat_ta.to_row(), mat_tb.to_row()], "A + B")
-
-    assert out_virtual is not None
-    assert out_mat is not None
-    with _serde.open_tile(out_virtual) as ov, _serde.open_tile(out_mat) as om:
-        assert np.allclose(
-            ov.read(1), om.read(1), atol=1e-5
-        ), "mapalgebra_bytes virtual != materialized"
-
-
 # ---------------------------------------------------------------------------
-# Task 2: window=None deferred whole-file virtual tile
+# window=None deferred whole-file virtual tile
 # ---------------------------------------------------------------------------
 
 
@@ -213,11 +179,11 @@ def test_tile_to_bytes_window_none_full_extent(tmp_path):
 
     A whole-file virtual tile emitted by the deferred read() path carries
     window=None; _tile_to_bytes must resolve that to the full source extent
-    (mirrors the open_tile() fix from Task 1) rather than raising ValueError.
+    (mirrors open_tile()) rather than raising ValueError.
     """
     path = _write_src(tmp_path, "wn.tif", w=W, h=H)
 
-    # Deferred whole-file virtual tile (Task 2: read() emits window=None)
+    # Deferred whole-file virtual tile (read() emits window=None)
     vt_none = VirtualTile(cellid=0, path=path, window=None)
 
     # Explicit full-extent tile (reference for byte-identical comparison)

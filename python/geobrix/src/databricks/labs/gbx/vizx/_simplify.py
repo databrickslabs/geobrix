@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Union
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 log = logging.getLogger(__name__)
@@ -207,8 +208,8 @@ def _ensure_tippecanoe() -> str:
     if bin_path is None:
         raise ImportError(
             "tippecanoe binary not found or not executable. "
-            "Install it via: pip install geobrix[vizx]  "
-            "(which pulls in the tippecanoe manylinux wheel), or "
+            'Install it via the [vizx] extra ("geobrix[vizx] @ <the env wheel>" on '
+            "Databricks, pip install 'geobrix[vizx]' off it: the tippecanoe manylinux wheel), or "
             "brew install tippecanoe (macOS), or build from source."
         )
     return bin_path
@@ -382,13 +383,12 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
     import numpy as np
 
     try:
-        import rasterio
         from rasterio.enums import Resampling
         from rasterio.transform import from_bounds
     except ImportError as exc:
         raise ImportError(
-            "rasterio is required for the raster path. "
-            "Install it via: pip install geobrix[vizx]"
+            "rasterio is required for the raster path: install the env wheel for the runtime "
+            "on Databricks, or pip install geobrix off Databricks"
         ) from exc
 
     raster_max_px = spec["raster_max_px"]
@@ -446,13 +446,15 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                     str(resized.dtype), decoded_bytes=resized.nbytes, compress="auto"
                 )
             )
-            with rasterio.open(out_cog, "w", **_profile) as dst:
+            with open_data(out_cog, "w", **_profile) as dst:
                 dst.write(resized.astype(resized.dtype))
 
         else:
             # File path source
+            from databricks.labs.gbx.pyrx.core import compression as _comp
+
             src_path = str(source)
-            with rasterio.open(src_path) as src:
+            with open_data(src_path, remote_ok=True) as src:  # the caller's own path
                 scale = max(src.width, src.height) / raster_max_px
                 if scale > 1:
                     new_h = max(1, int(src.height / scale))
@@ -465,9 +467,7 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                 transform = src.transform * src.transform.scale(
                     src.width / new_w, src.height / new_h
                 )
-                profile = src.profile.copy()
-
-            from databricks.labs.gbx.pyrx.core import compression as _comp
+                profile = _comp.source_profile(src.profile)
 
             # Route through the compression authority (auto = ZSTD + dtype predictor,
             # size-adaptive level). This is a small (<=raster_max_px) in-cluster render
@@ -486,7 +486,7 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                 blockysize=256,
             )
             profile.update(_comp_opts)
-            with rasterio.open(out_cog, "w", **profile) as dst:
+            with open_data(out_cog, "w", **profile) as dst:
                 dst.write(data)
 
         log.info(

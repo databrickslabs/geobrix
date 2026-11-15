@@ -59,21 +59,36 @@ reader; tracked as a follow-up.
 
 from __future__ import annotations
 
-import atexit
 import json
 import logging
 import os
 import shutil
-import threading
-from typing import Dict, Iterator, Optional, Sequence, Tuple
+from typing import Dict, Iterator, Mapping, Optional, Sequence, Tuple
 
-from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
-from pyspark.sql.types import StringType, StructField, StructType
+from pyspark.sql.datasource import (
+    CaseInsensitiveDict,
+    DataSource,
+    DataSourceReader,
+    InputPartition,
+)
+from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
+from databricks.labs.gbx._gdal_policy import (
+    carried,
+    data_path,
+    driver_switch,
+    open_bytes,
+)
 from databricks.labs.gbx.ds import _encode, _listing
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx import _env, _serde
+from databricks.labs.gbx.pyrx._env import open_raster
 from databricks.labs.gbx.pyrx.core import budget
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    StageCache,
+    copy_source_with_sidecars,
+    new_local_temp_dir,
+    retried_raster_source_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,61 +99,57 @@ logger = logging.getLogger(__name__)
 _MAX_TILE_BYTES = 1932735283  # ~1.8 GiB
 
 # ---------------------------------------------------------------------------
-# Worker-local staging cache (module-level, process-global)
+# Worker-local staging cache (process-global; see local_temp.StageCache)
 # ---------------------------------------------------------------------------
-# Key: original source file_path.  Value: absolute local path of the staged copy.
-# Guarded by _STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
-_STAGED_FILES: Dict[str, str] = {}
-_STAGE_LOCK = threading.Lock()
-# Directory holding all staged files for this process — cleaned at exit.
-_STAGE_DIR: Optional[str] = None
 
 
-def _ensure_stage_dir() -> str:
-    global _STAGE_DIR
-    if _STAGE_DIR is None:
-        _STAGE_DIR = new_local_temp_dir("gbx_stage_")
-        atexit.register(_cleanup_stage_dir)
-    return _STAGE_DIR
+# Each source is staged once and shared by every tile task for it on the worker,
+# within a bounded cache. The signature takes in the sidecars staged with the file, so an edited .aux.xml or .hdr
+# beside an unchanged file is staged again.
+_RASTER_STAGE = StageCache(
+    "gbx_stage_", copy_source_with_sidecars, retried_raster_source_signature
+)
 
 
-def _cleanup_stage_dir() -> None:
-    global _STAGE_DIR
-    if _STAGE_DIR and os.path.isdir(_STAGE_DIR):
-        shutil.rmtree(_STAGE_DIR, ignore_errors=True)
-        _STAGE_DIR = None
+def _is_transient_miss(e: BaseException) -> bool:
+    """A file the mount (a Serverless Volume) briefly does not show, not a file that is bad: worth a retry. GDAL words a
+    missing file as an IO error with no errno."""
+    if isinstance(e, FileNotFoundError):
+        return True
+    text = str(e)
+    return "does not exist in the file system" in text or "No such file" in text
 
 
-def _get_or_stage_file(file_path: str) -> str:
-    """Return worker-local path for *file_path*, staging it if not yet cached.
+def _whole_file_header(path: str) -> tuple:
+    """``(size, crs, width, height, driver, bands, dtype, compression)`` of a whole file read at a worker, with the
+    transient-miss retry of every worker read of a Volume (``_listing._retry_transient``): a miss is retried, a bad file
+    is not (it would wait out the retries for nothing)."""
 
-    Staging is a single sequential ``shutil.copyfileobj`` pass (FUSE-safe on
-    Databricks UC Volumes which don't support per-window seeks).  The local copy
-    is reused by all tile tasks for the same source on the same worker process.
-    """
-    with _STAGE_LOCK:
-        if file_path in _STAGED_FILES:
-            return _STAGED_FILES[file_path]
+    def read():
+        try:
+            from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-        stage_dir = _ensure_stage_dir()
-        # Disambiguate in case two different dirs share a basename.
-        basename = os.path.basename(file_path) or "raster.tif"
-        safe_name = f"{abs(hash(file_path)):x}_{basename}"
-        local_path = os.path.join(stage_dir, safe_name)
+            size = os.path.getsize(path)
+            with open_raster(path) as ds:
+                return (
+                    size,
+                    crs_to_canonical(ds.crs),
+                    ds.width,
+                    ds.height,
+                    ds.driver,
+                    ds.count,
+                    ds.dtypes[0],
+                    str(ds.profile.get("compress") or "DEFLATE").upper(),
+                ), None
+        except OSError as e:
+            if _is_transient_miss(e):
+                raise
+            return None, e
 
-        # UC Volume FUSE can transiently raise FileNotFoundError even when the
-        # file exists (eventual-consistency lag after write). Retry up to 10×.
-        def _do_stage() -> None:
-            with (
-                open(file_path, "rb") as _src,
-                open(local_path, "wb") as _dst,
-            ):
-                shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-
-        _listing._retry_transient(_do_stage)
-
-        _STAGED_FILES[file_path] = local_path
-        return local_path
+    header, error = _listing._retry_transient(read)
+    if error is not None:
+        raise error
+    return header
 
 
 def _numpy_itemsize(dtype: str) -> int:
@@ -272,6 +283,12 @@ class _TilePartition(InputPartition):
         # (native tiles).  A non-empty dict is merged into tile.metadata in
         # read() so downstream ops can dispatch by cell without re-opening.
         "vrt_tags",
+        # Files the planner found in this file's folder (None when not planned from a
+        # folder listing); stamped on virtual tiles as metadata["path_folder_files"].
+        "folder_files",
+        # True when the planner's listing of this file's folder showed no sidecar beside it
+        # (stamped as metadata["path_sidecar_free"]; see pyrx._env.SIDECAR_FREE_KEY).
+        "sidecar_free",
     )
 
     def __init__(
@@ -308,6 +325,44 @@ class _TilePartition(InputPartition):
         self.size_mib = size_mib
         self.tile_format = tile_format
         self.vrt_tags: Optional[dict] = None
+        self.folder_files: Optional[int] = None
+        self.sidecar_free: bool = False
+
+
+# A folder of many files is read in groups: the planner opens no header (that is one serial open per file on the
+# driver, a FUSE round trip each on a Volume) and a task decodes `files_per_task(n)` files in bounded Arrow batches.
+_FILES_PER_TASK_MAX = 8  # the most files in one task (a few ~16 MB tiles each: the batch is bounded by bytes, too)
+_FILES_PER_TASK_FROM = 64  # a task takes n_files // this files, so a folder under 128 files is a task per file
+
+
+def files_per_task(n_files: int) -> int:
+    """How many files one task of a plain read decodes: `n_files // _FILES_PER_TASK_FROM`, at least 1 and never more
+    than `_FILES_PER_TASK_MAX`. A folder under 128 files is one task per file; 1000 files are 125 tasks of 8; the task
+    count then stays at 64 to 128 for folders up to 512 files, so a cluster's cores are not left idle.
+    """
+    return max(1, min(_FILES_PER_TASK_MAX, int(n_files) // _FILES_PER_TASK_FROM))
+
+
+class _BatchPartition(InputPartition):
+    """The whole-file tiles of one task of a plain read (``virtualTiles=false``, no clip, window, tile size or split).
+
+    Planned without opening a file: the task opens each header when it decodes (``materialize_batches``), so the
+    planner's cost does not grow with the file count. ``file_paths`` are in listing order; ``folder_files`` is the
+    count of files the planner found beside each (None when it is under the bound a worker lists up to).
+    """
+
+    window = (
+        None  # a task of whole files: no part of one file (``_quarantine.part_label``)
+    )
+
+    def __init__(self, file_paths, folder_files=None, sidecar_free=None):
+        self.file_paths = list(file_paths)
+        self.folder_files = list(folder_files or [None] * len(self.file_paths))
+        self.sidecar_free = list(sidecar_free or [False] * len(self.file_paths))
+
+    @property
+    def file_path(self) -> str:
+        return self.file_paths[0]
 
 
 # ---------------------------------------------------------------------------
@@ -378,14 +433,13 @@ def _clip_partitions(
 
     Fields: window=envelope, clip_polygon=<WKB bytes>, clip_crs=<resolved>.
     """
-    import rasterio
     import shapely.wkb
 
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.ds._window import window_for_geom
 
     parts: list = []
-    with rasterio.open(file_path) as ds:
+    with open_raster(file_path) as ds:
         for raw in clip_polygons:
             geom = parse_geom(raw)
             if geom is None:
@@ -434,7 +488,6 @@ def _plan_partitions_for_file(
     All window planning happens here so each worker task handles exactly one
     (file, window) pair.
     """
-    import rasterio
 
     # ------------------------------------------------------------------
     # virtualTiles short-circuit: bytes-free partitions.
@@ -459,7 +512,7 @@ def _plan_partitions_for_file(
         # file once — but only on this opt-in path; the no-split default below
         # keeps its lazy, header-free fast path.
         if budget_bytes > 0:
-            with rasterio.open(file_path) as ds:
+            with open_raster(file_path) as ds:
                 width, height = ds.width, ds.height
                 bands = ds.count
                 itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -527,7 +580,7 @@ def _plan_partitions_for_file(
         from rasterio.windows import Window as _W
 
         parts = []
-        with rasterio.open(file_path) as ds:
+        with open_raster(file_path) as ds:
             full = _W(0, 0, ds.width, ds.height)
             for c, r, w, h in windows:
                 try:
@@ -562,7 +615,7 @@ def _plan_partitions_for_file(
         from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
 
         tw, th = int(tile_size[0]), int(tile_size[1])
-        with rasterio.open(file_path) as ds:
+        with open_raster(file_path) as ds:
             W, H = ds.width, ds.height
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -594,7 +647,7 @@ def _plan_partitions_for_file(
     # ------------------------------------------------------------------
     # Normal path: read header metadata, decide whole vs split.
     # ------------------------------------------------------------------
-    with rasterio.open(file_path) as ds:
+    with open_raster(file_path) as ds:
         width, height, driver = ds.width, ds.height, ds.driver
         bands = ds.count
         itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -767,8 +820,9 @@ def _read_manifest_rows(manifest_path: str) -> list:
     ``window`` ([col_off, row_off, width, height]), ``width``, ``height``,
     ``bands``, ``dtype``, ``srid``.
 
-    Parquet: read via ``spark.table()`` / ``spark.read.parquet(...)`` on the
-    driver (Connect-safe); returns a list of ``pyspark.sql.Row`` objects.
+    Parquet (a file, or the directory Spark writes): read with pyarrow, with no Spark
+    session (``partitions()`` runs in a worker that has none); returns a list of dicts,
+    a ``window`` struct column being a dict (see :func:`_row_to_window`).
     """
     import os as _os
 
@@ -776,14 +830,9 @@ def _read_manifest_rows(manifest_path: str) -> list:
     if not _os.path.exists(local):
         raise FileNotFoundError(f"raster_gbx: manifest not found: {manifest_path!r}")
     if local.endswith(".parquet"):
-        from pyspark.sql import SparkSession
+        import pyarrow.parquet as pq
 
-        spark = SparkSession.getActiveSession()
-        if spark is None:
-            raise RuntimeError(
-                "raster_gbx: reading a Parquet manifest requires an active SparkSession."
-            )
-        return spark.read.parquet(local).collect()
+        return pq.read_table(local).to_pylist()
     # JSON (default)
     with open(local) as fh:
         return json.load(fh)
@@ -792,13 +841,21 @@ def _read_manifest_rows(manifest_path: str) -> list:
 def _row_to_window(w) -> Optional[Tuple[int, int, int, int]]:
     """Normalise a manifest row's ``window`` value to a 4-int tuple or None.
 
-    Accepts: None, a 4-element list/tuple [c, r, w, h], or a Spark Row /
-    namedtuple with fields ``col_off``, ``row_off``, ``width``, ``height``.
+    Accepts: None, a 4-element list/tuple [c, r, w, h], a mapping (an Arrow struct)
+    or a Spark Row / namedtuple, the last two with fields ``col_off``, ``row_off``,
+    ``width``, ``height``.
     """
     if w is None:
         return None
     if isinstance(w, (list, tuple)):
         return tuple(int(v) for v in w)  # type: ignore[return-value]
+    if isinstance(w, Mapping):
+        return (
+            int(w["col_off"]),
+            int(w["row_off"]),
+            int(w["width"]),
+            int(w["height"]),
+        )
     # Spark Row / namedtuple
     return (int(w.col_off), int(w.row_off), int(w.width), int(w.height))
 
@@ -831,12 +888,16 @@ def _partitions_from_tile_rows(
     """
     result: list = []
     for row in rows:
-        r: dict = row.asDict() if hasattr(row, "asDict") else dict(row)
+        # recursive: a nested ``window`` Row becomes a mapping, read by field name (a Row
+        # is a tuple, so as it stands its fields would be taken by position).
+        r: dict = row.asDict(recursive=True) if hasattr(row, "asDict") else dict(row)
         path = str(r.get("path") or "")
         if not path:
             raise ValueError(
                 f"raster_gbx manifest/table: row missing 'path' field: {r!r}"
             )
+        # a row's path is data: a remote location is refused here, before any open (the remote-path gate)
+        data_path(path, "raster_gbx manifest/table row")
 
         win = _row_to_window(r.get("window"))
 
@@ -940,6 +1001,8 @@ def _parse_vrt_members(vrt_path: str) -> list:
         else:
             abs_path = os.path.abspath(text)
         if abs_path not in seen:
+            # a member's name is data: a remote location is refused before any open (the remote-path gate)
+            data_path(abs_path, f"raster_gbx: a source of the VRT {vrt_path}")
             seen.add(abs_path)
             paths.append(abs_path)
 
@@ -966,11 +1029,10 @@ def _read_gbx_member_tags(member_path: str) -> dict:
 
     Connect-safe: pure rasterio, no Spark session, no ``_jvm``.
     """
-    import rasterio
 
     tags_out: dict = {}
     try:
-        with rasterio.open(member_path) as ds:
+        with open_raster(member_path) as ds:
             raw = ds.tags()
             if "GBX_CELLID" in raw:
                 tags_out["cellid"] = raw["GBX_CELLID"]
@@ -984,6 +1046,62 @@ def _read_gbx_member_tags(member_path: str) -> dict:
     return tags_out
 
 
+def _table_time_travel(options, *, has_tiles_table: bool):
+    """The ``versionAsOf`` / ``timestampAsOf`` options of a reader: ``(version, timestamp)``.
+
+    Both are ``None`` when unset (a blank value counts as unset). Only one may be set, and
+    only with ``tilesTable``: they pin the Delta version of the table the tiles are read
+    from, and a manifest or a directory walk has no version. The timestamp goes to Delta as
+    given; Delta rejects a malformed one, or one before the table's first commit.
+    """
+    # Spark hands a reader its options with lowercase keys; the helper that matches
+    # them case-insensitively lives with the netcdf reader (which imports this module).
+    from databricks.labs.gbx.ds.netcdf import _option
+
+    # None means unset; a programmatic int 0 is a real version, not a blank.
+    raw_version, timestamp = (
+        "" if value is None else str(value).strip()
+        for value in (
+            _option(options, "versionAsOf", None),
+            _option(options, "timestampAsOf", None),
+        )
+    )
+    if raw_version and timestamp:
+        raise ValueError(
+            "raster_gbx: 'versionAsOf' and 'timestampAsOf' are mutually exclusive; "
+            "supply at most one."
+        )
+    given = "versionAsOf" if raw_version else "timestampAsOf" if timestamp else None
+    if given and not has_tiles_table:
+        raise ValueError(
+            f"raster_gbx: '{given}' requires 'tilesTable'; it pins the version of the "
+            "table the tiles are read from, so it does not apply to 'manifest' or to a "
+            "directory walk."
+        )
+    version = None
+    if raw_version:
+        if not (raw_version.isascii() and raw_version.isdigit()):
+            raise ValueError(
+                f"raster_gbx: 'versionAsOf' must be a non-negative integer; got {raw_version!r}."
+            )
+        version = int(raw_version)
+    return version, (timestamp or None)
+
+
+def _read_tile_index(spark, table: str, version_as_of, timestamp_as_of):
+    """The tile-index table as a DataFrame, at the pinned Delta version if one is given.
+
+    Uses only ``spark.read`` and the session it is given, so it runs on a Spark Connect
+    client as well as on a classic session.
+    """
+    table_reader = spark.read
+    if version_as_of is not None:
+        table_reader = table_reader.option("versionAsOf", str(version_as_of))
+    elif timestamp_as_of is not None:
+        table_reader = table_reader.option("timestampAsOf", timestamp_as_of)
+    return table_reader.table(table)
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")
@@ -991,7 +1109,7 @@ class RasterGbxReader(DataSourceReader):
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
         self.size_mib = int(options.get("sizeInMB", "-1"))
         self.filter_regex = options.get("filterRegex", ".*")
-        # Unified enumeration options (Task 4: session-free file_gbx core).
+        # Unified enumeration options (session-free file_gbx core).
         # These are parsed once in __init__ and consumed by _list_source_files().
         self.recursive = str(options.get("recursive", "true")).lower() == "true"
         self.include_hidden = (
@@ -1035,21 +1153,51 @@ class RasterGbxReader(DataSourceReader):
                 "regular tiling grid only)."
             )
         self.emit_virtual = str(options.get("virtualTiles", "true")).lower() == "true"
-
         # Approach 1 — pre-computed tile input.
         # When manifest or tilesTable is present, partitions() reads tile rows
         # from those sources instead of walking self.path.
         self.manifest = options.get("manifest")
         self.tiles_table = options.get("tilesTable")
-        # skipOrdering: when True, suppress the T8 sort-by-source-path at the end
+        # skipOrdering: when True, suppress the sort-by-source-path at the end
         # of partitions() so rows are returned in manifest/table/walk enumeration
-        # order.  Default False preserves today's always-on sort (B-ORDERHOME).
+        # order.  Default False preserves today's always-on sort.
         self.skip_ordering = str(options.get("skipOrdering", "false")).lower() == "true"
         if self.manifest and self.tiles_table:
             raise ValueError(
                 "raster_gbx: 'manifest' and 'tilesTable' are mutually exclusive; "
                 "supply at most one."
             )
+        # Delta time travel on the tilesTable: re-plan from the exact table version a
+        # pipeline used (as the Zarr reader's version_as_of / timestamp_as_of does).
+        self.version_as_of, self.timestamp_as_of = _table_time_travel(
+            options, has_tiles_table=bool(self.tiles_table)
+        )
+
+    # The driver's read cap, carried in at registration (``_gdal_policy.carrying_source``) or by ``read_paths``: the
+    # planner and per-file readers run where no session may be active, so they must not resolve it themselves.
+    _gbx_read_cap: Optional[int] = None
+    _read_cap_set: Optional[int] = None
+
+    @property
+    def _read_cap(self) -> Optional[int]:
+        """The read cap of a task that decodes at read (64 MiB on Serverless, 256 MiB on classic compute, standard access
+        mode included; None when the read keeps virtual tiles). A worker cannot measure it: it is the cap the driver
+        carried, else (a reader used with no registration) what this process resolves; with no session, as on a worker,
+        the smaller Serverless cap.
+        """
+        if self._read_cap_set is not None:
+            return self._read_cap_set
+        if self.emit_virtual:
+            return None
+        if self._gbx_read_cap is not None:
+            return self._gbx_read_cap
+        from databricks.labs.gbx.ds.file_gbx import lazy_read_cap
+
+        return lazy_read_cap()
+
+    @_read_cap.setter
+    def _read_cap(self, value: Optional[int]) -> None:
+        self._read_cap_set = value
 
     def _list_source_files(self) -> list:
         """Enumerate source files via the session-free file_gbx core.
@@ -1061,13 +1209,28 @@ class RasterGbxReader(DataSourceReader):
         """
         from databricks.labs.gbx.ds.file_gbx import list_local_files
 
+        names_by_folder: Dict[str, list] = {}
         files = list_local_files(
             self.path,
             recursive=self.recursive,
             include_hidden=self.include_hidden,
             extensions=self.extensions,
             path_glob_filter=self.path_glob_filter,
+            names_out=names_by_folder,
         )
+        # Files per folder, from this listing (only files it accepted, so never more than
+        # the folder holds), kept for the folders past the bound a worker lists up to
+        # (pyrx._env.listing_ceiling): stamped on their virtual tiles as a hint that lets a
+        # worker skip listing such a folder (pyrx._env.note_folder_files). A count at or
+        # under the bound changes nothing on a worker, so it is not stamped, and the tile
+        # stays the one read_paths plans for the same file.
+        folder_files: Dict[str, int] = {}
+        for f in files:
+            d = os.path.dirname(f)
+            folder_files[d] = folder_files.get(d, 0) + 1
+        bound = _env.listing_ceiling()
+        self._folder_files = {d: n for d, n in folder_files.items() if n > bound}
+        self._sidecar_free = self._files_without_sidecars(files, names_by_folder)
         if self.filter_regex and self.filter_regex != ".*":
             import re as _re
 
@@ -1079,6 +1242,85 @@ class RasterGbxReader(DataSourceReader):
         # when the load path points directly at it (the .vrt branch in partitions()).
         files = [f for f in files if not f.lower().endswith(".vrt")]
         return files
+
+    def _plan_tile_rows(self, rows, budget_bytes: int) -> list:
+        """Partitions for pre-computed tile rows (a manifest or a tile index).
+
+        The one place those rows are decoded, for ``partitions()`` and for
+        :func:`read_tiles_table`; with the remote-path switch the driver carried in.
+        """
+        with carried(getattr(self, "_gbx_remote_allowed", None)):
+            parts = _partitions_from_tile_rows(
+                rows,
+                emit_virtual=self.emit_virtual,
+                budget_bytes=budget_bytes,
+                clip_polygons=self.clip_polygons,
+                clip_crs=self.clip_crs,
+                windows=self.windows,
+                tile_size=self.tile_size,
+                overlap_percent=self.overlap_percent,
+            )
+        # Layout convention: sort by source file path so tiles from the
+        # same file are adjacent. Maximises per-worker open/stage cache reuse
+        # when a worker processes consecutive partitions from the same source.
+        # None-safe: place None values at the end (deterministic ordering).
+        # skipOrdering=True bypasses this sort (opt-out for pre-ordered tables).
+        if self.skip_ordering:
+            return parts
+        return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
+
+    def _decodes_whole_files(self, budget_bytes: int) -> bool:
+        """A plain read with bytes: whole files, no selector (clip, windows, tile size) and no split budget. Its tiles
+        are decoded at read in bounded batches (:meth:`_read_batch`); any other read plans a tile at a time.
+        """
+        return (
+            not self.emit_virtual
+            and not (self.clip_polygons or self.windows or self.tile_size)
+            and budget_bytes <= 0
+        )
+
+    @staticmethod
+    def _files_without_sidecars(files: list, names_by_folder: dict) -> set:
+        """The files of the folders past GDAL's listing limit that have nothing beside them a GDAL open
+        could pick up (``readdir_mode_for`` gives ``EMPTY_DIR``), from the names the enumeration scanned.
+
+        A worker would list such a folder itself at its second open (the names of a 32,000-file folder
+        take 15 to 60 s on a Volume, once per Python worker) or check each sidecar name by name (1.4 s an
+        open); the planner has the names already, so it says so on the tile (``path_sidecar_free``) and
+        the open takes ``EMPTY_DIR`` with neither. A smaller folder is left to the worker's own listing,
+        which costs less than a second.
+        """
+        cap = _env.listing_cap()
+        from_names = 1000 if cap is None else cap
+        by_folder: Dict[str, list] = {}
+        for f in files:
+            d = os.path.dirname(f)
+            if len(names_by_folder.get(d, ())) > from_names:
+                by_folder.setdefault(d, []).append(f)
+        free: set = set()
+        for d, in_folder in by_folder.items():
+            index = _env._IndexedNames(names_by_folder[d])
+            for f in in_folder:
+                if _env.readdir_mode_for(os.path.basename(f), index) == "EMPTY_DIR":
+                    free.add(f)
+        return free
+
+    def _plan_batches(self, files: list, folder_files: dict) -> list:
+        """One :class:`_BatchPartition` per `files_per_task` consecutive files (listing order). No header is opened."""
+        if self.skip_ordering:
+            order = files
+        else:
+            order = sorted(files)
+        per_task = files_per_task(len(order))
+        free = getattr(self, "_sidecar_free", None) or set()
+        return [
+            _BatchPartition(
+                order[i : i + per_task],
+                [folder_files.get(os.path.dirname(f)) for f in order[i : i + per_task]],
+                [f in free for f in order[i : i + per_task]],
+            )
+            for i in range(0, len(order), per_task)
+        ]
 
     def partitions(self) -> Sequence[InputPartition]:
         resolved_budget = _resolved_budget(self.size_mib, self.strategy)
@@ -1092,28 +1334,21 @@ class RasterGbxReader(DataSourceReader):
 
                 spark = SparkSession.getActiveSession()
                 if spark is None:
+                    # The planner worker that runs partitions() for spark.read has no
+                    # session, so the table cannot be read here; read_tiles_table reads
+                    # it with the caller's session and plans the same tiles.
                     raise RuntimeError(
-                        "raster_gbx: 'tilesTable' requires an active SparkSession."
+                        "raster_gbx: 'tilesTable' cannot be read through spark.read: the "
+                        "read is planned in a worker that has no Spark session to open "
+                        "the table with. Fix: read the tile index with "
+                        "read_tiles_table(spark, table, options) from "
+                        "databricks.labs.gbx.ds.raster; it takes these same options "
+                        "(and format='gtiff_gbx' or 'cog_gbx' for those readers)."
                     )
-                tile_rows = spark.table(self.tiles_table).collect()
-            parts = _partitions_from_tile_rows(
-                tile_rows,
-                emit_virtual=self.emit_virtual,
-                budget_bytes=resolved_budget,
-                clip_polygons=self.clip_polygons,
-                clip_crs=self.clip_crs,
-                windows=self.windows,
-                tile_size=self.tile_size,
-                overlap_percent=self.overlap_percent,
-            )
-            # Layout convention (T8): sort by source file path so tiles from the
-            # same file are adjacent. Maximises per-worker open/stage cache reuse
-            # when a worker processes consecutive partitions from the same source.
-            # None-safe: place None values at the end (deterministic ordering).
-            # skipOrdering=True bypasses this sort (opt-out for pre-ordered tables).
-            if self.skip_ordering:
-                return parts
-            return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
+                tile_rows = _read_tile_index(
+                    spark, self.tiles_table, self.version_as_of, self.timestamp_as_of
+                ).collect()
+            return self._plan_tile_rows(tile_rows, resolved_budget)
 
         # VRT expansion: when the path is a .vrt file, parse the VRT XML to
         # enumerate member paths instead of walking a directory.  Each member
@@ -1131,7 +1366,8 @@ class RasterGbxReader(DataSourceReader):
         # Connect-safe: _parse_vrt_members() does pure Python / stdlib I/O with
         # no Spark session, no _jvm, no .rdd access.
         if self.path.lower().endswith(".vrt"):
-            member_paths = _parse_vrt_members(self.path)
+            with carried(getattr(self, "_gbx_remote_allowed", None)):
+                member_paths = _parse_vrt_members(self.path)
             result: list = []
             for member_path in member_paths:
                 # Read GBX_CELLID / GBX_GRIDSYSTEM from the member header.
@@ -1159,7 +1395,7 @@ class RasterGbxReader(DataSourceReader):
             )
 
         # Default path: walk self.path and plan partitions per file.
-        # Layout convention (T8): sort the final list by file_path so tiles
+        # Layout convention: sort the final list by file_path so tiles
         # from the same source are always adjacent, regardless of walk order.
         # Maximises per-worker rasterio open/stage cache reuse.
         # To control task parallelism or re-align after a join, use
@@ -1167,20 +1403,34 @@ class RasterGbxReader(DataSourceReader):
         # on the read result; n is a parallelism signal (classic ≈ 3–5× cores),
         # never n = file_count.
         files = self._list_source_files()
-        result: list = []
-        for f in files:
-            result.extend(
-                _plan_partitions_for_file(
-                    file_path=f,
-                    budget_bytes=resolved_budget,
-                    clip_polygons=self.clip_polygons,
-                    clip_crs=self.clip_crs,
-                    windows=self.windows,
-                    tile_size=self.tile_size,
-                    overlap_percent=self.overlap_percent,
-                    emit_virtual=self.emit_virtual,
-                )
+        folder_files = getattr(self, "_folder_files", {})
+        if self._decodes_whole_files(resolved_budget):
+            batches = self._plan_batches(files, folder_files)
+            self._sidecar_free = (
+                None  # planned: not shipped to the tasks with the reader
             )
+            return batches
+        result: list = []
+        free = getattr(self, "_sidecar_free", None) or set()
+        self._sidecar_free = None  # planned: not shipped to the tasks with the reader
+        for f in files:
+            n = folder_files.get(os.path.dirname(f))
+            _env.note_folder_files(f, n)  # the planner's own header opens
+            _env.note_sidecar_free(f, f in free)
+            parts = _plan_partitions_for_file(
+                file_path=f,
+                budget_bytes=resolved_budget,
+                clip_polygons=self.clip_polygons,
+                clip_crs=self.clip_crs,
+                windows=self.windows,
+                tile_size=self.tile_size,
+                overlap_percent=self.overlap_percent,
+                emit_virtual=self.emit_virtual,
+            )
+            for p in parts:
+                p.folder_files = n
+                p.sidecar_free = f in free
+            result.extend(parts)
         # None-safe: place None values at the end (deterministic ordering).
         # skipOrdering=True bypasses this sort (opt-out for pre-ordered input).
         if self.skip_ordering:
@@ -1188,15 +1438,14 @@ class RasterGbxReader(DataSourceReader):
         return sorted(result, key=lambda p: (p.file_path is None, p.file_path or ""))
 
     def read(self, partition: "_TilePartition") -> Iterator[Tuple]:
-        import rasterio
-
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
 
-        # Spark's Python DataSource V2 can call read(None) when the partition
-        # list is empty (e.g. all clip polygons miss). Guard and emit nothing.
-        if partition is None:
+        # Spark's Python DataSource V2 calls read once with a placeholder when the partition
+        # list is empty (e.g. all clip polygons miss): None on OSS Spark, a bare InputPartition
+        # (no file_path) on the Databricks runtime. Guard and emit nothing.
+        if _listing.is_empty_plan(partition):
             return
 
         # ------------------------------------------------------------------
@@ -1207,7 +1456,15 @@ class RasterGbxReader(DataSourceReader):
             yield from self._read_legacy(partition)
             return
 
+        if isinstance(partition, _BatchPartition):
+            yield from self._read_batch(partition)
+            return
+
         source = _listing.to_spark_uri(partition.file_path)
+        folder_files = getattr(partition, "folder_files", None)
+        _env.note_folder_files(partition.file_path, folder_files)
+        sidecar_free = bool(getattr(partition, "sidecar_free", False))
+        _env.note_sidecar_free(partition.file_path, sidecar_free)
 
         # ------------------------------------------------------------------
         # Virtual tile: bytes-free emission (path + whole-file window).
@@ -1245,6 +1502,10 @@ class RasterGbxReader(DataSourceReader):
                     "format": "gtiff",
                     "path_file_size": str(file_size),
                 }
+                if folder_files is not None:
+                    meta[_env.FOLDER_FILES_KEY] = str(folder_files)
+                if sidecar_free:
+                    meta[_env.SIDECAR_FREE_KEY] = "1"
                 # Propagate VRT member tags (cellid, gridSystem) when present.
                 # Set by partitions() for quadbin mini-COG members; absent for
                 # native tiles and for partitions built outside the VRT branch.
@@ -1269,7 +1530,7 @@ class RasterGbxReader(DataSourceReader):
                 # window is already set by the planner; dims are needed for
                 # metadata and to confirm the window fits the source extent.
                 file_size = os.path.getsize(partition.file_path)
-                with rasterio.open(partition.file_path) as ds:
+                with open_raster(partition.file_path) as ds:
                     meta = {
                         "sourcePath": partition.file_path,
                         "driver": ds.driver,
@@ -1279,6 +1540,10 @@ class RasterGbxReader(DataSourceReader):
                         "count": str(ds.count),
                         "path_file_size": str(file_size),
                     }
+                    if folder_files is not None:
+                        meta[_env.FOLDER_FILES_KEY] = str(folder_files)
+                    if sidecar_free:
+                        meta[_env.SIDECAR_FREE_KEY] = "1"
                     win = (
                         partition.window
                     )  # always set for non-whole-file virtual tiles
@@ -1313,18 +1578,18 @@ class RasterGbxReader(DataSourceReader):
             from databricks.labs.gbx.pyrx.core import _clip
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-            local_path = _get_or_stage_file(partition.file_path)
-            with rasterio.Env(GDAL_CACHEMAX=128):
-                with rasterio.open(local_path) as ds:
-                    tile_crs = crs_to_canonical(ds.crs)
-                    _cellid, win_bytes, meta = _encode.encode_tile(
-                        ds,
-                        window=partition.window,
-                        source_path=partition.file_path,
-                        all_parents=partition.all_parents,
-                        tile_format="gtiff",
-                    )
-            with MemoryFile(win_bytes) as mf, mf.open() as wds:
+            with _RASTER_STAGE.use(partition.file_path) as local_path:
+                with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
+                    with open_raster(local_path) as ds:
+                        tile_crs = crs_to_canonical(ds.crs)
+                        _cellid, win_bytes, meta = _encode.encode_tile(
+                            ds,
+                            window=partition.window,
+                            source_path=partition.file_path,
+                            all_parents=partition.all_parents,
+                            tile_format="gtiff",
+                        )
+            with MemoryFile(win_bytes) as mf, open_bytes(mf) as wds:
                 clipped = _clip.clip_dataset(
                     wds, partition.clip_polygon, partition.clip_crs
                 )
@@ -1355,10 +1620,14 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         # Passthrough tile: emit original file bytes, no decode.
         # ------------------------------------------------------------------
-        if partition.is_passthrough:
+        # A sidecar that changes the CRS or NoData (a GeoTIFF's .aux.xml) is not in the file's bytes: such a file is
+        # written from the open dataset below, with those values baked in.
+        if partition.is_passthrough and not _env.sidecars_alter_open(
+            partition.file_path
+        ):
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-            with rasterio.open(partition.file_path) as ds:
+            with open_raster(partition.file_path) as ds:
                 tile_crs = crs_to_canonical(ds.crs)
                 width, height = ds.width, ds.height
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
@@ -1395,20 +1664,20 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-        local_path = _get_or_stage_file(partition.file_path)
-
-        with rasterio.Env(GDAL_CACHEMAX=128):
-            with rasterio.open(local_path) as ds:
-                tile_crs = crs_to_canonical(ds.crs)
-                cellid, raster_bytes, meta = _encode.encode_tile(
-                    ds,
-                    window=partition.window,
-                    source_path=partition.file_path,
-                    all_parents=partition.all_parents,
-                    tile_format=partition.emit_fmt,
-                    cog_blocksize=partition.cog_blocksize,
-                    cog_overview_resampling=partition.cog_overview_resampling,
-                )
+        with _RASTER_STAGE.use(partition.file_path) as local_path:
+            with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
+                with open_raster(local_path) as ds:
+                    tile_crs = crs_to_canonical(ds.crs)
+                    window = partition.window or (0, 0, ds.width, ds.height)
+                    cellid, raster_bytes, meta = _encode.encode_tile(
+                        ds,
+                        window=window,
+                        source_path=partition.file_path,
+                        all_parents=partition.all_parents,
+                        tile_format=partition.emit_fmt,
+                        cog_blocksize=partition.cog_blocksize,
+                        cog_overview_resampling=partition.cog_overview_resampling,
+                    )
         # Add tile_size metadata (materialized raster byte length).
         meta["tile_byte_size"] = str(len(raster_bytes))
         # Propagate VRT member tags (cellid, gridSystem) when present.
@@ -1422,23 +1691,159 @@ class RasterGbxReader(DataSourceReader):
                 cellid,
                 raster_bytes,
                 path=partition.file_path,
-                window=partition.window,
+                window=window,
                 metadata=meta,
                 crs=tile_crs,
             ),
         )
 
     # ------------------------------------------------------------------
+    # Decode at read: a task of whole files, in bounded Arrow batches
+    # ------------------------------------------------------------------
+    def _read_batch(self, partition: "_BatchPartition") -> Iterator:
+        """The tiles of a task's files as Arrow batches of ``(source, tile)``, decoded in one Python call by
+        ``tile_batches.materialize_batches``: a batch holds at most ``out_chunk_bytes()`` of decoded bytes, so a
+        task's memory does not grow with its file count.
+
+        A file is the unit of failure. One that cannot be read (a bad file, a refused location, a tile over the read
+        cap) fails the read naming that file; with the bad-record hook ``read_paths`` sets (``on_error="skip"`` or
+        ``"quarantine"``) it is recorded under its own path and left out, and the rows of the other files are kept.
+        An error of the environment (memory, I/O) fails the read either way."""
+        import pyarrow as pa
+
+        from databricks.labs.gbx.ds import _quarantine
+        from databricks.labs.gbx.ds.paths import _arrow_schema
+        from databricks.labs.gbx.pyrx import tile_batches
+        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+        want = _arrow_schema(reader_schema_v2())
+        one = pa.schema([pa.field("tile", want.field("tile").type)])
+        for path, n, free in zip(
+            partition.file_paths,
+            partition.folder_files,
+            getattr(partition, "sidecar_free", None)
+            or [False] * len(partition.file_paths),
+        ):
+            _env.note_folder_files(path, n)
+            _env.note_sidecar_free(path, free)
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {"tile": VirtualTile(cellid=_encode.CELLID_FRESH, path=p).to_row()}
+                for p in partition.file_paths
+            ],
+            schema=one,
+        )
+        sources = [_listing.to_spark_uri(p) for p in partition.file_paths]
+        hook = _quarantine.hook_of(self)
+        set_aside: set = set()
+
+        def decode(tile, cap_bytes):
+            path = tile["path"]
+            diag = _quarantine.Diagnostics()
+            try:
+                with _quarantine.capture(diag):
+                    return self._whole_file_tile(tile, cap_bytes)
+            except RecursionError:
+                raise
+            except Exception as e:  # noqa: BLE001 - this file's, named below
+                _quarantine.name_the_file(e, path)
+                if hook is None:
+                    raise
+                _quarantine.reraise_environment(e)
+                hook(None, _quarantine.error_class(e), _quarantine.describe(e, diag))
+                set_aside.add(path)
+                return _serde.build_error_tile(str(e), _encode.CELLID_FRESH)
+
+        at = 0
+        for out in tile_batches.materialize_batches(
+            [batch], cap_bytes=self._read_cap, decode=decode
+        ):
+            n = out.num_rows
+            tiles, srcs = out.column("tile"), sources[at : at + n]
+            keep = [p not in set_aside for p in partition.file_paths[at : at + n]]
+            at += n
+            if not all(keep):
+                tiles = tiles.filter(pa.array(keep, pa.bool_()))
+                srcs = [s for s, k in zip(srcs, keep) if k]
+            if srcs:
+                yield pa.RecordBatch.from_arrays(
+                    [pa.array(srcs, want.field("source").type), tiles], schema=want
+                )
+
+    def _whole_file_tile(self, tile: dict, cap_bytes) -> dict:
+        """The materialized row of a whole file: a GTiff passes through as the file's own bytes (no decode, colormaps
+        and masks kept), any other driver is re-encoded as a GTiff. Refused over the read cap before the bytes are
+        read, and over the 2 GiB cell limit."""
+        from databricks.labs.gbx.pyrx import tile_batches
+
+        path = tile["path"]
+        size, tile_crs, width, height, driver, bands, dtype, compression = (
+            _whole_file_header(path)
+        )
+        est = _estimate_tile_bytes(width, height, bands, "float32", size)
+        if est > _MAX_TILE_BYTES:
+            raise ValueError(
+                f"raster {path} is ~{est // (1024 * 1024)} MB "
+                f"as a single tile, which exceeds the ~2 GB Spark cell limit; "
+                f"set the reader option sizeInMB=<n> (a positive MB value) to "
+                f"tile it into smaller pieces."
+            )
+        # a GeoTIFF's own bytes stand for it unless a sidecar beside it changes its CRS or NoData (an .aux.xml)
+        passthrough = driver == "GTiff" and not _env.sidecars_alter_open(path)
+        held = (
+            size
+            if passthrough
+            else _estimate_tile_bytes(width, height, bands, dtype, size)
+        )
+        tile_batches.refuse_over_cap(held, cap_bytes, "the tile")
+        if passthrough:
+            cellid, raster_bytes, meta = _encode.passthrough_tile(
+                path,
+                width,
+                height,
+                source_path=path,
+                all_parents="",
+                compression=compression,
+            )
+        else:
+            with _RASTER_STAGE.use(path) as local_path:
+                with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
+                    with open_raster(local_path) as ds:
+                        cellid, raster_bytes, meta = _encode.encode_tile(
+                            ds,
+                            window=(0, 0, width, height),
+                            source_path=path,
+                            all_parents="",
+                            tile_format="gtiff",
+                        )
+        meta["tile_byte_size"] = str(len(raster_bytes))
+        return {
+            "cellid": int(cellid),
+            "raster": raster_bytes,
+            "path": path,
+            "path_mode": None,
+            "window": {
+                "col_off": 0,
+                "row_off": 0,
+                "width": int(width),
+                "height": int(height),
+            },
+            "clip_polygon": None,
+            "clip_crs": None,
+            "crs": tile_crs,
+            "metadata": meta,
+        }
+
+    # ------------------------------------------------------------------
     # Legacy path (backward compat with tests that use _FilePartition directly)
     # ------------------------------------------------------------------
     def _read_legacy(self, partition: "_FilePartition") -> Iterator[Tuple]:
         """Reproduce original one-file-yields-all-tiles behaviour for _FilePartition."""
-        import rasterio
 
         source = _listing.to_spark_uri(partition.file_path)
 
         size_bytes = os.path.getsize(partition.file_path)
-        with rasterio.open(partition.file_path) as ds:
+        with open_raster(partition.file_path) as ds:
             width, height, driver = ds.width, ds.height, ds.driver
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -1494,7 +1899,7 @@ class RasterGbxReader(DataSourceReader):
                 open(local_path, "wb") as _dst,
             ):
                 shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-            with rasterio.open(local_path) as ds:
+            with open_raster(local_path) as ds:
                 if whole:
                     plan_tiles = [(0, 0, width, height)]
                 else:
@@ -1592,3 +1997,160 @@ class RasterGbxDataSource(DataSource):
             compress_level=_compress_level,
             predictor=_predictor,
         )
+
+
+# ---------------------------------------------------------------------------
+# read_tiles_table: read a tile index (tilesTable) with the caller's session
+# ---------------------------------------------------------------------------
+
+# Readers that take a tile index: the catch-all and the two that extend it.
+_TILE_INDEX_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx")
+
+# The columns of a tile index that _partitions_from_tile_rows reads; the rest of the
+# table (FILE columns included) is not sent through Arrow.
+_TILE_INDEX_COLUMNS = ("path", "window", "col_off", "row_off", "width", "height")
+
+# Most tasks read_tiles_table uses by default: more only adds shuffle and scheduling work.
+# The default is two tasks per index row up to this many. Tiles are assigned to tasks by a
+# hash of the tile, so several share a task while others get none; twice as many tasks as
+# rows leaves fewer tasks without a tile and fewer tiles to a task than one task per row.
+_DEFAULT_MAX_TASKS = 256
+
+# Tile-index rows decoded at a time: a path-only row cut into windows (tileSize,
+# sizeInMB) fans out, so this bounds the partitions held in memory at once.
+_PLAN_CHUNK_ROWS = 256
+
+# One row per reader partition: its source path and the pickled partition.
+_TILE_PLAN_SCHEMA = StructType(
+    [StructField("path", StringType(), True), StructField("part", BinaryType(), True)]
+)
+
+
+def _plan_tile_index(reader, budget_bytes: int):
+    """``mapInArrow`` function: tile-index rows -> one ``(path, part)`` row per reader
+    partition, decoded by the reader that ``spark.read`` would have used."""
+    import pickle
+
+    import pyarrow as pa
+
+    out = _arrow_schema(_TILE_PLAN_SCHEMA)
+
+    def _plan(batches):
+        for batch in batches:
+            rows = batch.to_pylist()
+            for i in range(0, len(rows), _PLAN_CHUNK_ROWS):
+                parts = reader._plan_tile_rows(
+                    rows[i : i + _PLAN_CHUNK_ROWS], budget_bytes
+                )
+                if parts:
+                    yield pa.RecordBatch.from_arrays(
+                        [
+                            pa.array([p.file_path for p in parts], pa.string()),
+                            pa.array([pickle.dumps(p) for p in parts], pa.binary()),
+                        ],
+                        schema=out,
+                    )
+
+    return _plan
+
+
+def _read_tile_parts(reader, schema: StructType):
+    """``mapInArrow`` function: planned ``(path, part)`` rows -> the reader's rows."""
+    import pickle
+
+    from databricks.labs.gbx.ds.paths import _read_partition
+
+    def _read(batches):
+        want = _arrow_schema(schema)
+        for batch in batches:
+            for blob in batch.column("part").to_pylist():
+                part = pickle.loads(blob)
+                # A tile whose file is gone fails the read, as it does in the reader.
+                yield from _read_partition(
+                    reader, part, part.file_path, None, schema, want, False
+                )
+
+    return _read
+
+
+def _arrow_schema(schema: StructType):
+    from databricks.labs.gbx.ds.paths import _arrow_schema as arrow_schema
+
+    return arrow_schema(schema)
+
+
+def read_tiles_table(
+    spark,
+    table: str,
+    options: Optional[dict] = None,
+    *,
+    format: str = "raster_gbx",
+    num_partitions: Optional[int] = None,
+):
+    """Read the tiles a Delta tile index lists, with the caller's session.
+
+    ``spark.read.format("raster_gbx").option("tilesTable", table)`` cannot read the table:
+    the read is planned in a worker that has no Spark session. This function reads the
+    table with ``spark``, decodes its rows into tiles exactly as the reader decodes a
+    ``tilesTable`` (``path`` plus a ``window`` struct or flat ``col_off``, ``row_off``,
+    ``width`` and ``height`` columns, or whole files), and returns what the reader returns:
+    a DataFrame of ``(source, tile)``. Nothing is collected to the driver: the table is
+    decoded and read in tasks.
+
+    ``options`` are the reader's options, as on the Raster Reader page: ``virtualTiles``,
+    ``versionAsOf`` or ``timestampAsOf`` (read a pinned version of the table),
+    ``skipOrdering``, ``sizeInMB``, ``tileSize`` and the others. ``format`` is
+    ``"raster_gbx"``, ``"gtiff_gbx"`` or ``"cog_gbx"``.
+
+    The tiles are spread across tasks by tile, not by source file: two tasks per index row,
+    up to 256 (a row cut into several tiles by ``tileSize`` or ``sizeInMB`` counts once), or
+    ``num_partitions`` tasks when given. A tile goes to the task its hash picks, so the tiles of
+    one source file are read in parallel, and some tasks hold several tiles while others hold
+    none. Inside each task the tiles are ordered by source path, so those of one source that
+    share a task are read one after another (``skipOrdering`` of ``"true"`` leaves that order
+    out). A tile whose file is missing fails the read.
+
+    Uses only ``spark.read`` and DataFrame operations (Spark Connect and Serverless safe).
+    """
+    name = (format or "").strip().lower()
+    name = name if name.endswith("_gbx") else name + "_gbx"
+    if name not in _TILE_INDEX_FORMATS:
+        raise ValueError(
+            f"read_tiles_table reads a tile index with {', '.join(_TILE_INDEX_FORMATS)}; "
+            f"got {format!r}. Fix: pass one of those as format."
+        )
+    from databricks.labs.gbx.ds.paths import resolve_format
+
+    # Spark hands a reader its options case-insensitively; so does this.
+    source = resolve_format(name)(
+        CaseInsensitiveDict({**(options or {}), "path": "/", "tilesTable": table})
+    )
+    schema = source.schema()
+    reader = source.reader(schema)
+    # the tile rows are planned on the workers: the driver's remote-path switch goes with the reader
+    reader._gbx_remote_allowed = driver_switch()
+    budget_bytes = _resolved_budget(reader.size_mib, reader.strategy)
+
+    index = _read_tile_index(spark, table, reader.version_as_of, reader.timestamp_as_of)
+    if "path" not in index.columns:
+        raise ValueError(
+            f"{name}: the tile index {table!r} has no 'path' column (it has "
+            f"{index.columns}). Fix: read a table with one row per tile and a 'path' "
+            "column."
+        )
+    index = index.select(*[c for c in _TILE_INDEX_COLUMNS if c in index.columns])
+    planned = index.mapInArrow(
+        _plan_tile_index(reader, budget_bytes), _TILE_PLAN_SCHEMA
+    )
+    # Tiles spread by the per-tile key over two tasks per index row (up to the cap). An
+    # explicit count, repartition(N, column): the Serverless fan-out rule, and AQE does
+    # not coalesce it.
+    tasks = (
+        int(num_partitions)
+        if num_partitions
+        else max(1, min(2 * index.count(), _DEFAULT_MAX_TASKS))
+    )
+    planned = planned.repartition(tasks, "part")
+    if not reader.skip_ordering:
+        planned = planned.sortWithinPartitions("path")
+    return planned.mapInArrow(_read_tile_parts(reader, schema), schema)

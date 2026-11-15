@@ -9,15 +9,15 @@ Stubbing strategy mirrors test_client.py's driver-path approach:
   returns a controlled DataFrame, keeping tests fast and deterministic.
 
 Test coverage:
-  D1 — discover() returns expected columns + item rows
-  D2 — discover(year=X) filters to that year
-  D3 — discover() deduplicates overlapping items
-  DL1 — download() picks the latest vintage (max naip:year)
-  DL2 — download(year=int) selects that specific vintage
-  DL3 — download() passes bbox / bbox_crs / max_mpp to StacClient.download
-  DL4 — download() returned DataFrame carries StacClient.download schema
-  DL5 — download() falls back to max(date) when naip:year is absent
-  E1  — export check: NaipDownloader + download_naip_aoi importable from sample
+  - discover() returns expected columns + item rows
+  - discover(year=X) filters to that year
+  - discover() deduplicates overlapping items
+  - download() picks the latest vintage (max naip:year)
+  - download(year=int) selects that specific vintage
+  - download() passes bbox / bbox_crs / max_mpp to StacClient.download
+  - download() returned DataFrame carries StacClient.download schema
+  - download() falls back to max(date) when naip:year is absent
+  - export check: NaipDownloader + download_naip_aoi importable from sample
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ _FAKE_ITEMS = [
     },
 ]
 
-# Variant: items whose properties omit naip:year (for DL5 fallback test).
+# Variant: items whose properties omit naip:year (for the fallback-year test).
 _FAKE_ITEMS_NO_YEAR = [
     {
         "id": "naip_noyear_2019",
@@ -295,12 +295,12 @@ def _make_download_df(spark, item_ids):
 
 
 # ---------------------------------------------------------------------------
-# D1 — discover() returns expected columns + item rows
+# discover() returns expected columns + item rows
 # ---------------------------------------------------------------------------
 
 
 def test_discover_returns_expected_columns_and_rows(spark):
-    """D1: discover() columns = [item_id, year, item_bbox, href], all 4 items.
+    """discover() columns = [item_id, year, item_bbox, href], all 4 items.
 
     Uses _MockStacClient to avoid tenacity dependency (search_one imports it
     when a real StacClient with _catalog_opener calls the driver-shim path).
@@ -327,12 +327,12 @@ def test_discover_returns_expected_columns_and_rows(spark):
 
 
 # ---------------------------------------------------------------------------
-# D2 — discover(year=X) filters to that year
+# discover(year=X) filters to that year
 # ---------------------------------------------------------------------------
 
 
 def test_discover_year_filter(spark):
-    """D2: discover(year=2020) keeps only 2020 items."""
+    """discover(year=2020) keeps only 2020 items."""
     search_df = _make_search_df(spark, _FAKE_ITEMS)
     mock = _MockStacClient(search_df)
     nd = NaipDownloader(_stac_client=mock)
@@ -346,7 +346,7 @@ def test_discover_year_filter(spark):
 
 
 def test_discover_year_filter_2022(spark):
-    """D2: discover(year=2022) keeps only 2022 items."""
+    """discover(year=2022) keeps only 2022 items."""
     search_df = _make_search_df(spark, _FAKE_ITEMS)
     mock = _MockStacClient(search_df)
     nd = NaipDownloader(_stac_client=mock)
@@ -358,12 +358,12 @@ def test_discover_year_filter_2022(spark):
 
 
 # ---------------------------------------------------------------------------
-# D3 — discover() deduplicates (each item appears exactly once)
+# discover() deduplicates (each item appears exactly once)
 # ---------------------------------------------------------------------------
 
 
 def test_discover_deduplicates_items(spark):
-    """D3: distinct() means the same item_id appears at most once."""
+    """distinct() means the same item_id appears at most once."""
     # Duplicate the fake items to simulate overlapping AOI searches.
     search_df = _make_search_df(spark, _FAKE_ITEMS + _FAKE_ITEMS)
     mock = _MockStacClient(search_df)
@@ -376,12 +376,12 @@ def test_discover_deduplicates_items(spark):
 
 
 # ---------------------------------------------------------------------------
-# DL1 — download() picks the latest vintage
+# download() picks the latest vintage
 # ---------------------------------------------------------------------------
 
 
 def test_download_picks_latest_vintage(spark, tmp_path):
-    """DL1: year='latest' selects the max naip:year (2022 here)."""
+    """year='latest' selects the max naip:year (2022 here)."""
     search_df = _make_search_df(spark, _FAKE_ITEMS)
     dl_df = _make_download_df(spark, ["naip_2022_a", "naip_2022_b"])
     mock = _MockStacClient(search_df, dl_df)
@@ -407,12 +407,12 @@ def test_download_picks_latest_vintage(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DL2 — download(year=int) selects that specific vintage
+# download(year=int) selects that specific vintage
 # ---------------------------------------------------------------------------
 
 
 def test_download_year_int_selects_vintage(spark, tmp_path):
-    """DL2: year=2020 downloads only 2020 tiles."""
+    """year=2020 downloads only 2020 tiles."""
     search_df = _make_search_df(spark, _FAKE_ITEMS)
     dl_df = _make_download_df(spark, ["naip_2020_a", "naip_2020_b"])
     mock = _MockStacClient(search_df, dl_df)
@@ -433,12 +433,12 @@ def test_download_year_int_selects_vintage(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DL3 — download() passes bbox / bbox_crs / max_mpp to StacClient.download
+# download() passes bbox / bbox_crs / max_mpp to StacClient.download
 # ---------------------------------------------------------------------------
 
 
 def test_download_passes_kwargs_to_stac_client(spark, tmp_path):
-    """DL3: bbox, bbox_crs, and max_mpp are forwarded to StacClient.download."""
+    """bbox, bbox_crs, and max_mpp are forwarded to StacClient.download."""
     search_df = _make_search_df(spark, _FAKE_ITEMS)
     dl_df = _make_download_df(spark, ["naip_2022_a", "naip_2022_b"])
     mock = _MockStacClient(search_df, dl_df)
@@ -463,12 +463,12 @@ def test_download_passes_kwargs_to_stac_client(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DL4 — download() returned DataFrame has StacClient.download schema
+# download() returned DataFrame has StacClient.download schema
 # ---------------------------------------------------------------------------
 
 
 def test_download_returns_stac_download_schema(spark, tmp_path):
-    """DL4: download() output columns match StacClient.download() output."""
+    """download() output columns match StacClient.download() output."""
     search_df = _make_search_df(spark, _FAKE_ITEMS)
     dl_df = _make_download_df(spark, ["naip_2022_a"])
     mock = _MockStacClient(search_df, dl_df)
@@ -494,12 +494,12 @@ def test_download_returns_stac_download_schema(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DL5 — download() falls back to max(date) when naip:year is absent
+# download() falls back to max(date) when naip:year is absent
 # ---------------------------------------------------------------------------
 
 
 def test_download_falls_back_to_date_when_no_naip_year(spark, tmp_path):
-    """DL5: when naip:year is absent, year is derived from date field."""
+    """When naip:year is absent, year is derived from date field."""
     search_df = _make_search_df(spark, _FAKE_ITEMS_NO_YEAR)
     dl_df = _make_download_df(spark, ["naip_noyear_2021"])
     mock = _MockStacClient(search_df, dl_df)
@@ -520,12 +520,12 @@ def test_download_falls_back_to_date_when_no_naip_year(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DL6 — empty vintage returns correct schema (no href, BooleanType is_out_file_valid)
+# empty vintage returns correct schema (no href, BooleanType is_out_file_valid)
 # ---------------------------------------------------------------------------
 
 
 def test_download_empty_vintage_returns_correct_schema(spark, tmp_path):
-    """DL6: when no items are found the result schema matches a non-empty download.
+    """When no items are found the result schema matches a non-empty download.
 
     Verifies the I1 fix: the empty-path no longer hand-builds a frame with
     ``href`` and wrong types — it flows through ``StacClient.download`` which
@@ -576,12 +576,12 @@ def test_download_empty_vintage_returns_correct_schema(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# E1 — export check
+# export check
 # ---------------------------------------------------------------------------
 
 
 def test_export_naip_downloader_from_sample_init():
-    """E1: NaipDownloader and download_naip_aoi are importable from sample."""
+    """NaipDownloader and download_naip_aoi are importable from sample."""
     from databricks.labs.gbx.sample import NaipDownloader as ND
     from databricks.labs.gbx.sample import download_naip_aoi as dna
 

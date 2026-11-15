@@ -7,8 +7,9 @@ Also covers box-as-clipPolygon cases migrated from the removed bbox option:
   - reader emits plain GTiff (not COG)
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
@@ -31,7 +32,7 @@ def _write(tmp_path, width=512, height=512):
         transform=from_origin(10.0, 50.0, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(width * height, dtype="float32").reshape(height, width), 1)
     return p
 
@@ -45,7 +46,7 @@ def _write(tmp_path, width=512, height=512):
 def _write_small(tmp_path, width=4, height=3, epsg=4326):
     p = str(tmp_path / "s.tif")
     data = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",
@@ -102,6 +103,24 @@ def test_box_clip_windows_to_aoi(spark, tmp_path):
     assert (w, h) == (2, 2)  # 1.0 deg / 0.5 px
 
 
+def test_box_clip_covers_the_far_edge_of_an_unaligned_box(spark, tmp_path):
+    """A box that ends inside a pixel gets that pixel: x 10.3..11.1 on 0.5-degree pixels is columns 0-2."""
+    p = _write_small(tmp_path)
+    spark.dataSource.register(RasterGbxDataSource)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("clipPolygons", _box_wkt(10.3, 49.0, 11.1, 50.0))
+        .option("clipCrs", "EPSG:4326")
+        .option("virtualTiles", "false")
+        .load(p)
+    )
+    bounds, (w, h) = _tile_bounds(df.collect()[0])
+    assert (w, bounds[2]) == (
+        3,
+        11.5,
+    )  # the window reaches past 11.1; the clip trims inside it
+
+
 def test_box_clip_north_overhang_clips_to_dataset(spark, tmp_path):
     """A box that extends north past the dataset is clipped to the dataset top."""
     p = _write_small(tmp_path)
@@ -136,7 +155,7 @@ def test_box_clip_emits_plain_gtiff(spark, tmp_path):
     p = str(tmp_path / "large.tif")
     width, height = 512, 512
     data = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",
@@ -261,3 +280,13 @@ def test_virtual_clip_carries_instructions_and_round_trips(spark, tmp_path):
         got = ds.read(1)
         gnod = ds.nodata
     assert np.any(got == gnod) and np.any(got != gnod)  # triangle masked
+
+
+def test_the_empty_partition_placeholder_reads_nothing():
+    """With no partition to plan (every box misses), Spark calls read once with a placeholder: None on OSS Spark, a bare
+    InputPartition on the Databricks runtime."""
+    from pyspark.sql.datasource import InputPartition
+
+    reader = RasterGbxDataSource(options={"path": "/nowhere"}).reader(None)
+    assert list(reader.read(None)) == []
+    assert list(reader.read(InputPartition(None))) == []

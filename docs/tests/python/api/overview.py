@@ -22,7 +22,7 @@ except ImportError:
 try:
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 except ImportError:
     rx = None
     bx = None
@@ -31,49 +31,44 @@ except ImportError:
 
 def register_packages_python(spark):
     """Register GeoBrix packages in Python."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
     
     # Register each package
-    rx.register(spark)
-    bx.register(spark)
-    vx.register(spark)
+    gbx.register(spark)
     return rx, bx, vx
 
 
 # SQL registration constant
-SQL_SHOW_FUNCTIONS = """-- No registration needed in SQL
+SQL_DESCRIBE_FUNCTION = """-- No registration needed in SQL
 -- Functions are available after Python/Scala registration
 
-SHOW FUNCTIONS LIKE 'gbx_*';"""
+DESCRIBE FUNCTION gbx_rst_width;"""
 
 # Example output (show-type result for docs, same style as quick-start)
 register_packages_python_output = """
 Registered RasterX, GridX, and VectorX functions.
 """
 
-SQL_SHOW_FUNCTIONS_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_bandmetadata|
-+--------------------+
+SQL_DESCRIBE_FUNCTION_output = """
+Function: gbx_rst_width
+Type: ...
 """
 
 
 def pattern_import_register(spark):
     """Pattern 1: Import and Register."""
+    from databricks.labs import gbx
     # Import functions with alias
     from databricks.labs.gbx.rasterx import functions as rx
     
     # Register with Spark
-    rx.register(spark)
+    gbx.register(spark)
     
     # Load rasters (sample data from mounted Volumes)
-    rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    rasters = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Use in DataFrame operations
     df = rasters.select(rx.rst_boundingbox("tile"))
@@ -86,12 +81,13 @@ def pattern_import_register(spark):
 
 def pattern_mixed_language(spark):
     """Pattern 2: Mixed Language Usage."""
+    from databricks.labs import gbx
     # Register in Python
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
     # Load rasters (sample data from mounted Volumes)
-    rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    rasters = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Use in Python
     python_result = rasters.select(rx.rst_boundingbox("tile"))
@@ -108,13 +104,14 @@ def pattern_mixed_language(spark):
 
 def pattern_chaining_operations(spark):
     """Pattern 3: Chaining Operations."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql.functions import expr
     
-    rx.register(spark)
+    gbx.register(spark)
     
     # Load rasters (sample data from mounted Volumes)
-    rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    rasters = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Chain multiple operations
     result = (
@@ -134,24 +131,21 @@ def pattern_chaining_operations(spark):
 
 def error_check_function_availability(spark):
     """Check Function Availability."""
-    # List registered functions
-    functions_df = spark.sql("SHOW FUNCTIONS LIKE 'gbx_*'")
-    functions_df.limit(3).show()
-    
     # Describe a specific function
     desc_df = spark.sql("DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox")
     desc_df.show(vertical=True)
-    
-    return functions_df, desc_df
+
+    return desc_df
 
 
 def error_functions_not_registered(spark):
     """Solution for Functions Not Registered error."""
+    from databricks.labs import gbx
     # Error: Function 'gbx_rst_boundingbox' not found
     
     # Solution: Register functions first
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     return rx
 
 
@@ -168,9 +162,10 @@ def error_import_errors():
 
 def performance_register_once(spark):
     """Performance Tip 1: Register Once."""
+    from databricks.labs import gbx
     # Register functions once at the start of your notebook
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
     # Then use throughout the notebook
     # Don't re-register in every cell
@@ -179,10 +174,11 @@ def performance_register_once(spark):
 
 def performance_use_dataframe_api(spark):
     """Performance Tip 2: Use DataFrame API."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Prefer DataFrame API for complex operations
     result = df.select(rx.rst_boundingbox("tile"))
@@ -195,10 +191,11 @@ def performance_use_dataframe_api(spark):
 
 def performance_batch_operations(spark):
     """Performance Tip 3: Batch Operations."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Process multiple columns at once
     result = df.select(
@@ -215,15 +212,6 @@ def performance_batch_operations(spark):
 # ============================================================================
 
 error_check_function_availability_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_bandmetadata|
-+--------------------+
-Only showing top 3 rows
-
 -DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox
 Function: gbx_rst_boundingbox
 ...

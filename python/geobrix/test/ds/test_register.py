@@ -1,10 +1,9 @@
 """register(spark) makes all light raster formats resolvable."""
 
-import numpy as np
-import rasterio
-from rasterio.transform import from_origin
+from test._volume_safe import open_raster
 
-from databricks.labs.gbx.ds import register as ds_register
+import numpy as np
+from rasterio.transform import from_origin
 
 
 def _write_sample(path):
@@ -18,13 +17,15 @@ def _write_sample(path):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
 def test_register_makes_both_formats_loadable(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
+
     f = tmp_path / "s.tif"
     _write_sample(str(f))
-    ds_register.register(spark)
+    gbx_manager.register_sources(spark)
     assert spark.read.format("raster_gbx").load(str(f)).count() == 1
     assert spark.read.format("gtiff_gbx").load(str(f)).count() == 1

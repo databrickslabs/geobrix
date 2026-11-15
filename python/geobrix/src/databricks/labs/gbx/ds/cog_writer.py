@@ -65,11 +65,12 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.file_gbx import (
     _COG_DRIVER_MAX_BYTES,
@@ -77,7 +78,10 @@ from databricks.labs.gbx.ds.file_gbx import (
     _connect_aware_lru_sizing,
     materialize_decision,
 )
+from databricks.labs.gbx.pyrx._env import open_raster
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.virtual_tile import BAND_METADATA_KEY
+from databricks.labs.gbx.zarr._tiles import is_zarr_tile  # stdlib + numpy only
 
 _logger = logging.getLogger(__name__)
 
@@ -169,25 +173,194 @@ def _source_discriminator(src_path: str) -> str:
     return f"{safe}{digest}" if safe else digest
 
 
-def _is_all_nodata(data, nodata) -> bool:
-    """Return True when every pixel in *data* matches *nodata*.
+def _tile_name_key(vt) -> str:
+    """Return a short, stable content key that tells sibling tiles apart.
 
-    Parameters
-    ----------
-    data:
-        numpy array of pixel values (any shape).
-    nodata:
-        Source nodata value (may be None, float, or NaN).
+    Retile-family tiles carry their parent's ``cellid`` (and often its source
+    path), so neither can name a tile on its own: every window of one parent
+    would resolve to the same file, and the later writes overwrite (or, with
+    ``cogSkipIfExists``, are silently skipped in favor of) the first.
 
-    Returns False when nodata is None (no declared nodata → cannot prune).
+    The key hashes the tile's bytes (a virtual tile has none, so its path
+    instead) together with the fields that say which part of the source it is:
+    window, clip polygon / CRS, target CRS and the 1-based ``band`` marker. Two
+    windows of one parent therefore differ even when their pixels are identical
+    (all-NoData windows, duplicated bands).
+
+    A Zarr tile also says which variable and which step of the other dimensions it is
+    (``zarr_array``, ``sliceDims``, ``zarr_band_index``): its path is the whole store, so
+    the steps and variables that share a window are told apart by those keys. They are
+    in the key only when the tile has them, so no other tile's name changes.
+
+    The key is a pure function of the tile, so a re-run writes the same names.
     """
+    h = hashlib.sha1()
+    if vt.raster is not None:
+        h.update(bytes(vt.raster))
+    clip = vt.clip_polygon
+    md = vt.metadata or {}
+    parts = (
+        str(vt.path) if vt.raster is None else "",
+        str(vt.window),
+        bytes(clip).hex() if clip is not None else "",
+        str(vt.clip_crs),
+        str(vt.crs),
+        str(md.get(BAND_METADATA_KEY)),
+        *(md[k] for k in ("zarr_array", "sliceDims", "zarr_band_index") if md.get(k)),
+    )
+    h.update("|".join(parts).encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def _nodata_pixels(data, nodata):
+    """Boolean array shaped like *data*: True where a value is *nodata* (NaN-aware)."""
     import numpy as np
 
-    if nodata is None:
-        return False
     if isinstance(nodata, float) and math.isnan(nodata):
-        return bool(np.all(np.isnan(data)))
-    return bool(np.all(data == nodata))
+        return np.isnan(data)
+    return data == nodata
+
+
+def _cell_gtiff_bytes(profile, dst_data, colorinterp, mask, tags, prune_empty):
+    """Intermediate GTiff bytes of a reprojected cell: the pixels, the labels of the source
+    (``match_alpha``), the mask band (when there is one) and the tags; ``None`` for ``pruneEmpty``
+    when no pixel of it is valid, by the rule of both tiers (``_nodata.valid_mask``).
+
+    The cell is checked as it will be read, from its own bytes, so a cell that is entirely NoData,
+    transparent or masked is not converted to a COG, whichever of the three says so.
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import _nodata
+    from databricks.labs.gbx.pyrx.core import compression as _comp
+
+    with _comp.internal_mask_env(mask), MemoryFile() as mf:
+        with mf.open(**profile) as dst_ds:
+            _comp.match_alpha(dst_ds, colorinterp)
+            dst_ds.write(dst_data)
+            if mask is not None:
+                dst_ds.write_mask(mask)
+            dst_ds.update_tags(**tags)
+        raw = mf.read()
+    if prune_empty:
+        with MemoryFile(raw) as mf, open_bytes(mf) as ds:
+            if not _nodata.valid_mask(ds).any():
+                return None
+    return raw
+
+
+def _cell_own_mask(
+    src, src_win, dst_crs, dst_transform, width, height, dst_data, nodata
+):
+    """The mask band to write with a reprojected cell of *src*, or ``None``.
+
+    A source with its own (per-dataset) mask band (``_nodata.has_own_mask``) has it warped
+    to the cell's grid with its pixels (``warp.warped_own_mask``, over *src_win* only).
+    GDAL reads the mask band of a raster ahead of its NoData, so where the cell declares
+    *nodata* the pixels the cell already fills with it (outside the source, or outside a
+    hexagon) are marked invalid in the mask as well.
+    """
+    from databricks.labs.gbx.pyrx.core import _nodata, warp
+
+    if not _nodata.has_own_mask(src):
+        return None
+    mask = warp.warped_own_mask(
+        src,
+        dst_crs=dst_crs,
+        transform=dst_transform,
+        width=width,
+        height=height,
+        window=src_win,
+    )
+    if nodata is not None:
+        mask[_nodata_pixels(dst_data, nodata).all(axis=0)] = 0
+    return mask
+
+
+def _mask_masked_source_pixels(src, src_win, src_data, src_nodata) -> None:
+    """Set the masked pixels of *src_data* (a window of *src*) to its declared NoData, in place.
+
+    A reprojection averages or copies the pixels it is given, so a pixel the source's own
+    mask hides must not reach it as data; a warp ignores a mask band once a NoData is set,
+    and with a NoData the masked pixels take it. Does nothing for a source without an own
+    mask or without a declared NoData.
+    """
+    from databricks.labs.gbx.pyrx.core import _nodata
+
+    if (
+        src_nodata is not None
+        and _nodata.has_own_mask(src)
+        and not _nodata.has_alpha(src)  # an alpha band marks its own transparent pixels
+    ):
+        src_data[:, src.read_masks(1, window=src_win) == 0] = src_nodata
+
+
+def _average_reproject(
+    src, src_win, src_data, src_nodata, dst_data, dst_transform, dst_crs
+):
+    """Reproject *src_data* (a window of *src*) onto *dst_data* with average resampling, in place.
+
+    A source with its own mask band and no declared NoData cannot hand the masked pixels to
+    the warp as NoData, and a plain average would mix their values into the valid pixels beside
+    them. Its output pixel is then the average of the valid source pixels only (the average
+    of ``value * valid`` over the average of ``valid``), as GDAL weights a source by an
+    alpha band. A pixel that source pixels reach but no valid one keeps the plain average, i.e.
+    the values the mask hides.
+
+    Returns ``None``, or for the masked path the ``(rows, cols)`` bool array of those pixels: the
+    cell's mask band must hide them too, since its nearest-neighbour warp can call one valid
+    where the average found no valid pixel.
+
+    Memory on the masked path, per pixel of the SOURCE window: the validity as one byte (``bool``), the
+    ones of the coverage warp as one byte, and the masked band as one more copy at the source dtype
+    (``np.where``, so a NaN under the mask is zero, not NaN * 0). The weights, sums and coverage are
+    float64 but cell-sized.
+    """
+    import numpy as np
+    from rasterio.warp import Resampling, reproject
+
+    from databricks.labs.gbx.pyrx.core import _nodata
+
+    warp = dict(
+        src_transform=src.window_transform(src_win),
+        src_crs=src.crs,
+        dst_transform=dst_transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.average,
+    )
+    reproject(
+        source=src_data,
+        destination=dst_data,
+        src_nodata=src_nodata,
+        dst_nodata=src_nodata,
+        **warp,
+    )
+    if not (
+        src_nodata is None and _nodata.has_own_mask(src) and not _nodata.has_alpha(src)
+    ):
+        return None
+    valid = src.read_masks(1, window=src_win) != 0
+    share = np.zeros(dst_data.shape[1:], dtype="float64")
+    reproject(source=valid.view("uint8"), destination=share, **warp)
+    reached = share > 0
+    covered = np.zeros(share.shape, dtype="float64")
+    reproject(source=np.ones(valid.shape, dtype="uint8"), destination=covered, **warp)
+    dtype = dst_data.dtype
+    for band in range(dst_data.shape[0]):
+        total = np.zeros(share.shape, dtype="float64")
+        reproject(
+            source=np.where(valid, src_data[band], 0).astype(
+                src_data.dtype, copy=False
+            ),
+            destination=total,
+            **warp,
+        )
+        mean = total[reached] / share[reached]
+        if np.issubdtype(dtype, np.integer):
+            info = np.iinfo(dtype)
+            mean = np.clip(np.rint(mean), info.min, info.max)
+        dst_data[band][reached] = mean.astype(dtype)
+    return (covered > 0) & ~reached
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +391,34 @@ _RASTERIO_TO_GDAL_DTYPE: Dict[str, str] = {
 }
 
 
+#: GDAL's names of the colour interpretations a VRT band carries (the rule of which band carries
+#: which label is ``_nodata.carried_labels``).
+_VRT_COLOR_INTERP = {
+    "gray": "Gray",
+    "undefined": "Undefined",
+    "red": "Red",
+    "green": "Green",
+    "blue": "Blue",
+    "alpha": "Alpha",
+}
+
+
+def _vrt_color_interp(colorinterp, index: int):
+    """GDAL name of the colour interpretation of band *index* (0-based) of a mosaic of tiles
+    labelled *colorinterp*, or ``None`` to leave the VRT band's to GDAL: the label the copy rule
+    (``_nodata.carried_labels``) gives the band."""
+    from databricks.labs.gbx.pyrx.core import _nodata
+
+    label = _nodata.carried_labels(colorinterp, all_labels=True)[index]
+    return None if label is None else _VRT_COLOR_INTERP.get(label.name)
+
+
 def _build_mosaic_vrt(
     tile_paths: List[str],
     out_dir: str,
     vrt_paths: str = "relative",
+    carry_mask: bool = True,
+    windows: Optional[List[Optional[Tuple[int, int, int, int]]]] = None,
 ) -> str:
     """Build a GDAL VRT mosaic index at ``<out_dir>/mosaic.vrt``.
 
@@ -242,6 +439,19 @@ def _build_mosaic_vrt(
        ``relativeToVRT="1"`` so the VRT is portable.
        ``vrt_paths="absolute"`` writes full paths with ``relativeToVRT="0"``.
 
+    6. Each band carries the colour interpretation of the first tile (the alpha band
+       only where the tile's alpha rule names it, ``_nodata.alpha_index``), so a mosaic
+       of RGBA tiles has its alpha band and a 4th data band stays data.
+    7. When a tile has its own (per-dataset) mask band the mosaic gets a mask band: the
+       union of the tiles' masks (``mask,1`` of each tile), a pixel no tile covers being
+       invalid. GDAL reads that mask ahead of the NoData, as it does for any raster.
+       A tile with a mask band of its own, or an alpha band, has one mask for all its bands.
+       A tile WITHOUT one has a mask per band (its NoData), and is valid at a pixel where ANY
+       band is (the rule of ``_nodata.valid_mask``), so each of its bands is a source of the
+       mosaic's mask band: a pixel is invalid only where every band of every tile that covers
+       it is NoData. Masked and unmasked tiles do mix: the writer's commit step builds one
+       index over the cells of every source it was given.
+
     Assumptions (valid for Phase A native-pixel tiling):
     - All tiles share the same CRS, pixel size, band count, and dtype.
     - The source uses a north-up affine transform (no rotation).
@@ -255,22 +465,35 @@ def _build_mosaic_vrt(
         the tiles, so relative paths are bare filenames).
     vrt_paths:
         ``"relative"`` (default) or ``"absolute"``.
+    carry_mask:
+        ``True`` (default): when a tile has its own mask band the mosaic gets the union of the tiles'
+        masks as its mask band. ``False``: tiles with a mask band are still composited by it
+        (``UseMaskBand``) but the mosaic has none.
+    windows:
+        One entry per tile: ``None`` for the whole file, else the ``(col_off, row_off, width, height)``
+        window of it the mosaic takes (the source rectangle of its ``ComplexSource``; nothing is read
+        or copied to cut it). ``None`` (default): every tile whole.
 
     Returns
     -------
     str
         Absolute path to the written ``mosaic.vrt``.
     """
+    import copy
     import xml.etree.ElementTree as ET
 
-    import rasterio
+    from rasterio import Affine
+
+    from databricks.labs.gbx.pyrx.core import _nodata
 
     vrt_out = os.path.join(out_dir, "mosaic.vrt")
 
     # ── Step 1: collect tile metadata ─────────────────────────────────────
     metas = []
     for path in tile_paths:
-        with rasterio.open(path) as ds:
+        with open_raster(
+            path
+        ) as ds:  # the folder's sidecar look-up chosen per file (pyrx._env.readdir_mode)
             metas.append(
                 {
                     "path": path,
@@ -281,6 +504,9 @@ def _build_mosaic_vrt(
                     "dtypes": ds.dtypes,  # tuple, one per band
                     "count": ds.count,
                     "nodatavals": ds.nodatavals,  # tuple, one per band (None where unset)
+                    "colorinterp": list(ds.colorinterp),
+                    "own_mask": _nodata.has_own_mask(ds),
+                    "alpha": _nodata.has_alpha(ds),
                 }
             )
 
@@ -288,9 +514,44 @@ def _build_mosaic_vrt(
         _logger.warning("_build_mosaic_vrt: no tile paths supplied; VRT not written.")
         return vrt_out
 
+    # A window of a file: the tile is that part of it (its own origin and size) and its source rectangle starts
+    # at the window; the rest of the metadata is the file's.
+    for meta, win in zip(metas, windows or [None] * len(metas)):
+        meta["src_off"] = (0, 0)
+        if win is not None:
+            col_off, row_off, win_w, win_h = (int(v) for v in win)
+            t = meta[
+                "transform"
+            ]  # the origin moves by the window's offset (spelled out: Affine's operators differ by version)
+            meta["transform"] = Affine(
+                t.a,
+                t.b,
+                t.c + col_off * t.a + row_off * t.b,
+                t.d,
+                t.e,
+                t.f + col_off * t.d + row_off * t.e,
+            )
+            meta["width"], meta["height"] = win_w, win_h
+            meta["src_off"] = (col_off, row_off)
+
     # ── Step 2: compute mosaic envelope ───────────────────────────────────
     # Use the first tile as the reference for CRS / pixel size.
     ref = metas[0]
+    # The mosaic has the first tile's bands and each tile is a source of every one of them, so a
+    # tile with fewer has no band to give: name the counts rather than fail on a band index
+    # below. A tile with more is allowed: its extra bands still feed the mask band of the mosaic
+    # (a tile without a mask band of its own is valid where any of its bands is).
+    short = [m for m in metas if m["count"] < ref["count"]]
+    if short:
+        counts = "; ".join(
+            f"{os.path.basename(m['path'])}: {m['count']}" for m in short
+        )
+        raise ValueError(
+            f"_build_mosaic_vrt: the mosaic has the {ref['count']} bands of "
+            f"{os.path.basename(ref['path'])}, the first tile, and these tiles have fewer: "
+            f"{counts}. Fix: mosaic tiles with the same number of bands (select the same "
+            "bands from each source before mosaicking)"
+        )
     pixel_x = ref["transform"].a  # positive (east)
     pixel_y = ref["transform"].e  # negative (north-up)
     crs = ref["crs"]
@@ -347,6 +608,11 @@ def _build_mosaic_vrt(
         band_nodata = nodatavals[band_idx - 1]
         if band_nodata is not None:
             ET.SubElement(band_el, "NoDataValue").text = repr(float(band_nodata))
+        # Colour interpretation: GDAL labels band 4 of a 4-band uint8 raster alpha when it
+        # creates one, and a VRT band with none loses the tile's alpha band.
+        label = _vrt_color_interp(ref["colorinterp"], band_idx - 1)
+        if label is not None:
+            ET.SubElement(band_el, "ColorInterp").text = label
 
         for meta in metas:
             t = meta["transform"]
@@ -378,8 +644,8 @@ def _build_mosaic_vrt(
                 src_el,
                 "SrcRect",
                 {
-                    "xOff": "0",
-                    "yOff": "0",
+                    "xOff": str(meta["src_off"][0]),
+                    "yOff": str(meta["src_off"][1]),
                     "xSize": str(tile_w),
                     "ySize": str(tile_h),
                 },
@@ -394,9 +660,58 @@ def _build_mosaic_vrt(
                     "ySize": str(tile_h),
                 },
             )
-            # Skip this tile's nodata pixels when compositing (transparent overlap).
-            if band_nodata is not None:
-                ET.SubElement(src_el, "NODATA").text = repr(float(band_nodata))
+            # Skip this tile's nodata pixels when compositing (transparent overlap): the tile's
+            # OWN NoData, as the in-RAM merge reads each source by its own, not that of the
+            # first tile (a tile with none would otherwise paint its fill over its neighbour,
+            # and a valid pixel equal to the first tile's NoData would be skipped).
+            tile_nodata = meta["nodatavals"][band_idx - 1]
+            if tile_nodata is not None:
+                ET.SubElement(src_el, "NODATA").text = repr(float(tile_nodata))
+            # A tile with its own mask band is composited by it: its masked pixels (the
+            # corners of an h3 cell's bounding box, for a cell of an alpha source, which
+            # declares no NoData) do not overwrite a neighbour's pixels.
+            if meta["own_mask"]:
+                ET.SubElement(src_el, "UseMaskBand").text = "true"
+
+    # ── Step 4b: the union of the tiles' own masks, when any tile has one ──
+    if carry_mask and any(m["own_mask"] for m in metas):
+        mask_el = ET.SubElement(root, "MaskBand")
+        mask_band = ET.SubElement(mask_el, "VRTRasterBand", {"dataType": "Byte"})
+        for meta in metas:
+            t = meta["transform"]
+            src_el = ET.SubElement(mask_band, "ComplexSource")
+            if vrt_paths == "relative":
+                fn_text, rel_attr = os.path.basename(meta["path"]), "1"
+            else:
+                fn_text, rel_attr = meta["path"], "0"
+            ET.SubElement(
+                src_el, "SourceFilename", {"relativeToVRT": rel_attr}
+            ).text = fn_text
+            ET.SubElement(src_el, "SourceBand").text = "mask,1"
+            rect = {
+                "xOff": str(meta["src_off"][0]),
+                "yOff": str(meta["src_off"][1]),
+                "xSize": str(meta["width"]),
+                "ySize": str(meta["height"]),
+            }
+            ET.SubElement(src_el, "SrcRect", rect)
+            ET.SubElement(
+                src_el,
+                "DstRect",
+                {
+                    **rect,
+                    "xOff": str(int(round((t.c - mosaic_left) / pixel_x))),
+                    "yOff": str(int(round((mosaic_top - t.f) / abs(pixel_y)))),
+                },
+            )
+            # an invalid pixel of one tile does not hide a valid pixel of another
+            ET.SubElement(src_el, "NODATA").text = "0"
+            # a tile with a mask band per band: each of its other bands can make a pixel valid
+            if not (meta["own_mask"] or meta["alpha"]):
+                for band in range(2, meta["count"] + 1):
+                    more = copy.deepcopy(src_el)
+                    more.find("SourceBand").text = f"mask,{band}"
+                    mask_band.append(more)
 
     # ── Step 5: write XML to disk ──────────────────────────────────────────
     tree = ET.ElementTree(root)
@@ -773,7 +1088,7 @@ class CogGbxWriter(DataSourceWriter):
         overwrite,
         cog_blocksize=512,
         cog_overview_resampling="AVERAGE",
-        # Unified compression surface (Task 5).
+        # Unified compression surface.
         # ``compress`` = "auto" | "zstd" | "deflate" | "lzw" | "none".
         # Deprecated: ``cog_compression`` is the old option; maps to ``compress``.
         # When compress == "auto", resolves to "ZSTD" (the spec ZSTD baseline).
@@ -791,7 +1106,7 @@ class CogGbxWriter(DataSourceWriter):
         cog_bigtiff="YES",
         # Mosaic mode (Phase A: native mini-COG + VRT).  ``None`` = single-COG
         # mode (default, unchanged behaviour).  Set by CogGbxDataSource.writer()
-        # after calling parse_mosaic_options(); Tasks 2–3 read self.mosaic_opts.
+        # after calling parse_mosaic_options(); the mosaic write path reads self.mosaic_opts.
         mosaic_opts: Optional[MosaicOptions] = None,
     ):
         assert_path_schema(schema)
@@ -814,7 +1129,7 @@ class CogGbxWriter(DataSourceWriter):
         self.driver_mode = driver_mode
         self.driver_mode_verbose = driver_mode_verbose
         self.cog_bigtiff = cog_bigtiff
-        # Mosaic mode: None = single-COG (unchanged); set for Tasks 2–3 to read.
+        # Mosaic mode: None = single-COG (unchanged); read by the mosaic write path.
         self.mosaic_opts = mosaic_opts
         # Driver-capture the connect-aware materialize cap. __init__ runs on the
         # DRIVER (DataSource V2 contract) where a live session is present; the
@@ -873,7 +1188,7 @@ class CogGbxWriter(DataSourceWriter):
 
         if self.tile_envelope:
             # v2 (source, tile) envelope. driverMode over v2 tiles is a follow-on
-            # (see module docstring / task-5): the path-gather-then-driver-convert
+            # (see module docstring): the path-gather-then-driver-convert
             # path only makes sense for whole-file virtual tiles, and windowed/
             # clipped/materialized tiles would need bytes on the driver. For now
             # v2-tile input runs in DEFAULT (per-partition) mode only.
@@ -1017,9 +1332,8 @@ class CogGbxWriter(DataSourceWriter):
         if self.mosaic_opts.grid_system == "bng":
             return self._write_mosaic_bng(iterator)
         import numpy as np
-        import rasterio
-        from rasterio.io import MemoryFile
 
+        from databricks.labs.gbx.pyrx.core import _nodata
         from databricks.labs.gbx.pyrx.core import compression as _comp
 
         opts = self.mosaic_opts
@@ -1039,11 +1353,10 @@ class CogGbxWriter(DataSourceWriter):
             # collide on identical tile_<row>_<col>.tif names (silent data loss).
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 src_width, src_height = src.width, src.height
                 count = src.count
                 out_dtype = src.dtypes[0]
-                src_nodata = src.nodata
 
                 for tile_row, tile_col, window in _tile_grid_windows(
                     src_width, src_height, tile_size, overlap_pct
@@ -1103,14 +1416,23 @@ class CogGbxWriter(DataSourceWriter):
                     # build GTiff bytes from already-read data (single read pass).
                     data = src.read(window=window)
 
-                    # pruneEmpty: skip tiles that are entirely nodata.
-                    if prune_empty and _is_all_nodata(data, src_nodata):
+                    # pruneEmpty: skip tiles with no valid pixel (all NoData, all
+                    # transparent, or all hidden by the mask): the rule of both tiers.
+                    if prune_empty and not _nodata.valid_mask(src, window).any():
                         continue
+
+                    # The source's own (non-alpha) mask band is not carried by the
+                    # pixels: it travels with the window as the tile's mask band.
+                    mask = (
+                        src.read_masks(1, window=window)
+                        if _nodata.has_own_mask(src)
+                        else None
+                    )
 
                     # Build GTiff bytes for this window.  Profile mirrors
                     # _window_dataset_bytes / materialize_to_bytes for fidelity:
                     # same driver, height, width, count, transform, compression.
-                    profile = src.profile.copy()
+                    profile = _comp.source_profile(src.profile)
                     # A tiled/COG source carries tiled=True + blockxsize/blockysize
                     # (e.g. 512) and possibly interleave. A partial-edge tile whose
                     # dims are smaller than those block dims conflicts when written
@@ -1126,15 +1448,9 @@ class CogGbxWriter(DataSourceWriter):
                         count=count,
                         transform=src.window_transform(window),
                     )
-                    profile.update(
-                        _comp.creation_opts(
-                            out_dtype, decoded_bytes=decoded_size, compress="auto"
-                        )
+                    window_bytes = _comp.write_gtiff(
+                        profile, data, alpha_like=src.colorinterp, mask=mask
                     )
-                    with MemoryFile() as mf:
-                        with mf.open(**profile) as dst:
-                            dst.write(data)
-                        window_bytes = mf.read()
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1169,15 +1485,8 @@ class CogGbxWriter(DataSourceWriter):
             Written paths in ``msg.paths``; ``pending_paths`` is always empty.
         """
         import numpy as np
-        import rasterio
-        from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
-        from rasterio.warp import (
-            Resampling,
-            calculate_default_transform,
-            reproject,
-            transform_bounds,
-        )
+        from rasterio.warp import calculate_default_transform, transform_bounds
         from rasterio.windows import Window
 
         from databricks.labs.gbx.ds._quadbin_grid import quadbin_cells_for_bounds
@@ -1196,7 +1505,7 @@ class CogGbxWriter(DataSourceWriter):
             src_path = _listing.to_local_path(str(row["path"]))
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 count = src.count
                 out_dtype = src.dtypes[0]
                 src_nodata = src.nodata
@@ -1275,7 +1584,9 @@ class CogGbxWriter(DataSourceWriter):
 
                     # ── Reproject source window → cell's 3857 extent ─────────
                     src_data = src.read(window=src_win)
-                    src_win_transform = src.window_transform(src_win)
+                    if src_data.shape[1] == 0 or src_data.shape[2] == 0:
+                        continue  # the window rounds to no pixel: the cell misses the source
+                    _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
 
                     fill = (
                         src_nodata
@@ -1285,21 +1596,27 @@ class CogGbxWriter(DataSourceWriter):
                         )
                     )
                     dst_data = np.full((count, cell_h, cell_w), fill, dtype=out_dtype)
-                    reproject(
-                        source=src_data,
-                        destination=dst_data,
-                        src_transform=src_win_transform,
-                        src_crs=src.crs,
-                        dst_transform=dst_transform,
-                        dst_crs=dst_crs,
-                        resampling=Resampling.average,
-                        src_nodata=src_nodata,
-                        dst_nodata=src_nodata,
+                    only_hidden = _average_reproject(
+                        src,
+                        src_win,
+                        src_data,
+                        src_nodata,
+                        dst_data,
+                        dst_transform,
+                        dst_crs,
                     )
-
-                    # ── pruneEmpty ────────────────────────────────────────────
-                    if prune_empty and _is_all_nodata(dst_data, src_nodata):
-                        continue
+                    mask = _cell_own_mask(
+                        src,
+                        src_win,
+                        dst_crs,
+                        dst_transform,
+                        cell_w,
+                        cell_h,
+                        dst_data,
+                        src_nodata,
+                    )
+                    if only_hidden is not None and mask is not None:
+                        mask[only_hidden] = 0
 
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     # GBX_CELLID and GBX_GRIDSYSTEM travel through
@@ -1322,14 +1639,20 @@ class CogGbxWriter(DataSourceWriter):
                             out_dtype, decoded_bytes=decoded_size, compress="auto"
                         )
                     )
-                    with MemoryFile() as mf:
-                        with mf.open(**profile) as dst_ds:
-                            dst_ds.write(dst_data)
-                            dst_ds.update_tags(
-                                GBX_CELLID=str(cell.cellid),
-                                GBX_GRIDSYSTEM="quadbin",
-                            )
-                        window_bytes = mf.read()
+                    # ── pruneEmpty: None when no pixel of the cell is valid ───
+                    window_bytes = _cell_gtiff_bytes(
+                        profile,
+                        dst_data,
+                        src.colorinterp,
+                        mask,
+                        {
+                            "GBX_CELLID": str(cell.cellid),
+                            "GBX_GRIDSYSTEM": "quadbin",
+                        },
+                        prune_empty,
+                    )
+                    if window_bytes is None:
+                        continue
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1359,9 +1682,7 @@ class CogGbxWriter(DataSourceWriter):
         """
         import h3
         import numpy as np
-        import rasterio
         from rasterio.features import geometry_mask
-        from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
             Resampling,
@@ -1372,6 +1693,7 @@ class CogGbxWriter(DataSourceWriter):
         from rasterio.windows import Window
 
         from databricks.labs.gbx.ds._h3_grid import h3_cells_for_bounds
+        from databricks.labs.gbx.pyrx.core import _nodata
         from databricks.labs.gbx.pyrx.core import compression as _comp
 
         opts = self.mosaic_opts
@@ -1387,21 +1709,29 @@ class CogGbxWriter(DataSourceWriter):
             src_path = _listing.to_local_path(str(row["path"]))
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 count = src.count
                 out_dtype = src.dtypes[0]
                 src_nodata = src.nodata
                 src_full_window = Window(0, 0, src.width, src.height)
 
-                # Ruling A: derive out_nodata unconditionally — h3 output MUST
+                # Derive out_nodata unconditionally — h3 output MUST
                 # always carry a nodata value so the hex-clip contract is honoured
                 # even when the source has none.
+                # A source with an alpha band that declares no NoData is the exception: a
+                # NoData declared over the alpha band would shadow it, so its pixels outside
+                # the hexagon (and outside the source) are written 0, alpha 0, and no NoData
+                # is declared. A NoData the source declares itself is kept (first branch), so
+                # the cell is valid exactly where the source is (NoData and opacity).
                 if src_nodata is not None:
                     out_nodata = src_nodata
+                elif _nodata.has_alpha(src):
+                    out_nodata = None
                 elif np.issubdtype(np.dtype(out_dtype), np.floating):
                     out_nodata = float("nan")
                 else:
                     out_nodata = int(np.iinfo(out_dtype).max)
+                fill = 0 if out_nodata is None else out_nodata
 
                 # Source bounds in EPSG:4326 for cell enumeration.
                 bounds_4326 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
@@ -1470,11 +1800,12 @@ class CogGbxWriter(DataSourceWriter):
 
                     # ── Reproject source window → cell's EPSG:4326 bbox ─────
                     src_data = src.read(window=src_win)
+                    if src_data.shape[1] == 0 or src_data.shape[2] == 0:
+                        continue  # the window rounds to no pixel: the cell misses the source
+                    _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
                     src_win_transform = src.window_transform(src_win)
 
-                    dst_data = np.full(
-                        (count, cell_h, cell_w), out_nodata, dtype=out_dtype
-                    )
+                    dst_data = np.full((count, cell_h, cell_w), fill, dtype=out_dtype)
                     reproject(
                         source=src_data,
                         destination=dst_data,
@@ -1488,7 +1819,7 @@ class CogGbxWriter(DataSourceWriter):
                     )
 
                     # ── Hex-clip: ALWAYS set pixels outside the hexagon to
-                    # out_nodata (unconditional — Ruling A).
+                    # out_nodata (unconditional).
                     # h3.cell_to_boundary returns [(lat, lon), ...]; swap to
                     # (lon, lat) for rasterio (geographic CRS: x=lon, y=lat).
                     boundary = h3.cell_to_boundary(cell.cellid)
@@ -1513,11 +1844,26 @@ class CogGbxWriter(DataSourceWriter):
                         all_touched=True,
                     )
                     for b in range(count):
-                        dst_data[b][outside_mask] = out_nodata
-
-                    # ── pruneEmpty ───────────────────────────────────────────
-                    if prune_empty and _is_all_nodata(dst_data, out_nodata):
-                        continue
+                        dst_data[b][outside_mask] = fill
+                    mask = _cell_own_mask(
+                        src,
+                        src_win,
+                        dst_crs,
+                        dst_transform,
+                        cell_w,
+                        cell_h,
+                        dst_data,
+                        out_nodata,
+                    )
+                    if mask is not None:
+                        mask[outside_mask] = 0
+                    elif out_nodata is None:
+                        # A cell of an alpha source declares no NoData (it would shadow the
+                        # alpha band), so the hexagon is its own mask band: the mosaic VRT
+                        # composites a cell by it, as it does by NoData for any other cell
+                        # (``_build_mosaic_vrt``: ``UseMaskBand``). The pixels outside are
+                        # 0, alpha 0, as well.
+                        mask = np.where(outside_mask, 0, 255).astype("uint8")
 
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     profile = {
@@ -1528,21 +1874,24 @@ class CogGbxWriter(DataSourceWriter):
                         "dtype": out_dtype,
                         "crs": dst_crs,
                         "transform": dst_transform,
-                        "nodata": out_nodata,  # always set (Ruling A)
+                        "nodata": out_nodata,  # set, except over an alpha band
                     }
                     profile.update(
                         _comp.creation_opts(
                             out_dtype, decoded_bytes=decoded_size, compress="auto"
                         )
                     )
-                    with MemoryFile() as mf:
-                        with mf.open(**profile) as dst_ds:
-                            dst_ds.write(dst_data)
-                            dst_ds.update_tags(
-                                GBX_CELLID=cell.cellid,
-                                GBX_GRIDSYSTEM="h3",
-                            )
-                        window_bytes = mf.read()
+                    # ── pruneEmpty: None when no pixel of the cell is valid ───
+                    window_bytes = _cell_gtiff_bytes(
+                        profile,
+                        dst_data,
+                        src.colorinterp,
+                        mask,
+                        {"GBX_CELLID": cell.cellid, "GBX_GRIDSYSTEM": "h3"},
+                        prune_empty,
+                    )
+                    if window_bytes is None:
+                        continue
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1580,8 +1929,6 @@ class CogGbxWriter(DataSourceWriter):
             Written paths in ``msg.paths``; ``pending_paths`` is always empty.
         """
         import numpy as np
-        import rasterio
-        from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
             Resampling,
@@ -1607,7 +1954,7 @@ class CogGbxWriter(DataSourceWriter):
             src_path = _listing.to_local_path(str(row["path"]))
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 count = src.count
                 out_dtype = src.dtypes[0]
                 src_nodata = src.nodata
@@ -1679,6 +2026,9 @@ class CogGbxWriter(DataSourceWriter):
 
                     # ── Reproject source window → cell's 27700 extent ────────
                     src_data = src.read(window=src_win)
+                    if src_data.shape[1] == 0 or src_data.shape[2] == 0:
+                        continue  # the window rounds to no pixel: the cell misses the source
+                    _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
                     src_win_transform = src.window_transform(src_win)
 
                     fill = (
@@ -1700,10 +2050,16 @@ class CogGbxWriter(DataSourceWriter):
                         src_nodata=src_nodata,
                         dst_nodata=src_nodata,
                     )
-
-                    # ── pruneEmpty ────────────────────────────────────────────
-                    if prune_empty and _is_all_nodata(dst_data, src_nodata):
-                        continue
+                    mask = _cell_own_mask(
+                        src,
+                        src_win,
+                        dst_crs,
+                        dst_transform,
+                        cell_w,
+                        cell_h,
+                        dst_data,
+                        src_nodata,
+                    )
 
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     profile = {
@@ -1722,14 +2078,17 @@ class CogGbxWriter(DataSourceWriter):
                             out_dtype, decoded_bytes=decoded_size, compress="auto"
                         )
                     )
-                    with MemoryFile() as mf:
-                        with mf.open(**profile) as dst_ds:
-                            dst_ds.write(dst_data)
-                            dst_ds.update_tags(
-                                GBX_CELLID=str(cell.cellid),
-                                GBX_GRIDSYSTEM="bng",
-                            )
-                        window_bytes = mf.read()
+                    # ── pruneEmpty: None when no pixel of the cell is valid ───
+                    window_bytes = _cell_gtiff_bytes(
+                        profile,
+                        dst_data,
+                        src.colorinterp,
+                        mask,
+                        {"GBX_CELLID": str(cell.cellid), "GBX_GRIDSYSTEM": "bng"},
+                        prune_empty,
+                    )
+                    if window_bytes is None:
+                        continue
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1737,18 +2096,83 @@ class CogGbxWriter(DataSourceWriter):
         return CogCommitMessage(paths=written)
 
     def _out_path_for(self, vt, row) -> str:
-        """Output COG path for a v2 tile row (name_col > tile.path > source > cellid)."""
+        """Output COG path for a v2 tile row.
+
+        Name precedence: nameCol > tile.path > source > ``<cellid>_<key>``.
+        A name taken from a source file is shared by every piece cut from that
+        file, so a tile that is only part of it (a sub-window or a clip) gets
+        ``_<key>`` appended; the last-resort cellid name always carries the key,
+        because retile-family tiles share their parent's cellid. A whole-file
+        tile keeps the plain source stem. See :func:`_tile_name_key`.
+        """
         base = None
+        from_source = False
         if self.name_col and row[self.name_col] is not None:
             base = os.path.basename(str(row[self.name_col]))
         elif vt.path:
             base = os.path.basename(str(vt.path))
+            from_source = True
         elif "source" in row and row["source"]:
             base = os.path.basename(str(row["source"]))
-        if not base:
-            base = str(vt.cellid)
-        stem = os.path.splitext(base)[0]
+            from_source = True
+        stem = os.path.splitext(base)[0] if base else ""
+        if not stem:
+            stem = f"{vt.cellid}_{_tile_name_key(vt)}"
+        elif from_source and self._is_sub_extent(vt):
+            stem = f"{stem}_{_tile_name_key(vt)}"
         return os.path.join(self.out_dir, f"{stem}.{self.ext}")
+
+    def _is_sub_extent(self, vt) -> bool:
+        """True when the tile is a PART of its source rather than the whole file.
+
+        A part carries one of: a clip polygon, a band marker (``rst_separatebands``),
+        or a window that is not the whole extent. The window is read like this:
+
+        - virtual tile: compared with the reader-stamped source dims;
+        - materialized tile WITH a path (a reader's tile, one per path): whole
+          only when it is ``(0, 0, own width, own height)``, the own dims read
+          from the bytes header (the readers stamp no dims metadata);
+        - materialized tile WITHOUT a path: cut from a parent by a tile function
+          (readers always stamp the path), so ANY window marks a part. Every
+          parent's first child has window ``(0, 0, tw, th)``, equal to its own
+          extent, so the own-dims test cannot be applied to it. The one output
+          that covers its whole input does not get a fresh window: the tile
+          functions give it the input's own provenance.
+
+        A pending reprojection alone still leaves one tile per source, so ``crs``
+        is not considered.
+
+        A Zarr tile is always a part: one variable and one step of a cube, never the
+        whole store, even when its window is the whole plane or it is the origin window of
+        the grid. It is a part whether it is virtual or holds its bytes
+        (``virtual_tiles=False``), so the test is the ``zarr_array`` both carry, not
+        ``is_zarr_tile``.
+        """
+        if vt.clip_polygon is not None or (vt.metadata or {}).get("zarr_array"):
+            return True
+        if (vt.metadata or {}).get(BAND_METADATA_KEY) is not None:
+            return True
+        if vt.window is None:
+            return False
+        if vt.is_virtual():
+            return not self._window_is_full_extent(vt)
+        if not vt.path:
+            return True
+        own = self._own_dims(vt)
+        col_off, row_off, width, height = vt.window
+        return own is None or (col_off, row_off, width, height) != (0, 0, *own)
+
+    @staticmethod
+    def _own_dims(vt):
+        """``(width, height)`` of a materialized tile read from its bytes header
+        (no pixel read), or None if the bytes cannot be opened."""
+        from databricks.labs.gbx.pyrx.core.open_tile import open_header
+
+        try:
+            with open_header(vt) as ds:
+                return ds.width, ds.height
+        except Exception:  # noqa: BLE001 - unreadable bytes: treat as a part
+            return None
 
     def _is_whole_file_virtual(self, vt) -> bool:
         """A virtual tile that covers the FULL source extent with no pending
@@ -1768,6 +2192,16 @@ class CogGbxWriter(DataSourceWriter):
         """
         if not vt.is_virtual() or vt.clip_polygon is not None or vt.crs is not None:
             return False
+        if is_zarr_tile(vt):
+            return False  # its path is a store of chunks, not a file to convert
+        return self._window_is_full_extent(vt)
+
+    @staticmethod
+    def _window_is_full_extent(vt) -> bool:
+        """True when ``vt.window`` is absent (implicit whole file) or equals
+        ``(0, 0, srcW, srcH)``. Source dims come from the reader-stamped
+        ``metadata["width"]/["height"]``; if they are missing a windowed tile is
+        conservatively NOT full-extent."""
         if vt.window is None:
             return True
         col_off, row_off, width, height = vt.window
@@ -1899,7 +2333,7 @@ class CogGbxWriter(DataSourceWriter):
                 bigtiff=self.cog_bigtiff,
             )
 
-        # ── Task 3: mosaic VRT index ──────────────────────────────────────
+        # ── Mosaic VRT index ──────────────────────────────────────
         # Collect all mini-COG paths written by _write_mosaic() across all
         # partitions and build a single portable VRT index file.
         # Guarded by write_vrt=True (default); mosaic_opts=None (single-COG

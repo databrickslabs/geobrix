@@ -1,9 +1,9 @@
 # gbx:app:seed-genie
 
 Seed the Genie Map app's Genie Space with its curated **instructions** and
-**example SQL queries** from the tracked source of truth
-(`apps/genie_map/docs/GENIE-SPACE.md`, Paste blocks A and B), via the Genie
-spaces update API — no manual UI pasting.
+**example SQL queries**.
+The tracked source of truth is `examples/apps/genie_map/docs/GENIE-SPACE.md` (Paste blocks A and B).
+The command writes them through the Genie spaces update API, so no manual UI pasting is needed.
 
 The DAB `genie_space` resource re-applies only the **table set**
 (`genie_space.geniespace.json`) on every `gbx:app:deploy`, which **wipes** any
@@ -27,17 +27,16 @@ bash scripts/commands/gbx-app-seed-genie.sh --profile <p> [OPTIONS]
 - `--log <path>` — tee output to `test-logs/<path>`
 - `--help`, `-h` — show help
 
-By default the Genie Space id and warehouse are read from `databricks bundle
-summary` for the given profile — the space this bundle deployed to that
-workspace — so the command follows your deploy target wherever it is (the shared
-`oauth-fe` workspace is perpetually at app capacity, so deploys go elsewhere).
+By default the Genie Space id and warehouse come from `databricks bundle
+summary` for the given profile. That is the space this bundle deployed to that
+workspace, so the command follows your deploy target.
 
 ## Examples
 
 ```bash
 # Re-seed after a deploy (resolves the space from the bundle)
-bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env
+bash scripts/commands/gbx-app-seed-genie.sh --profile <profile>
 
 # Preview what would be written (no changes)
-bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env --dry-run
+bash scripts/commands/gbx-app-seed-genie.sh --profile <profile> --dry-run
 ```

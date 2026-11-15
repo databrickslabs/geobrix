@@ -12,27 +12,47 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$SCRIPT_DIR/common.sh"
 
-# Every cross-tier parity suite, ONE PER LINE. Add new ones here so this stays the
-# single gate.
+# The cross-tier parity suites are DISCOVERED, not listed: a hand-kept list silently skipped
+# every suite added after it was written (a skipped parity suite reads as a passing gate).
+# A suite is any python/geobrix/test/**/test_parity*.py, test_*_parity.py or *_cross_tier.py (the
+# cross-tier suites that need the JAR are parity suites in intent). The few that are
+# not cross-tier gates are named in PARITY_EXCLUDE with the reason; anything new is gated by
+# default until it is excluded on purpose.
 #
 # Each file is run in its OWN pytest process, deliberately. `spark.jars` only takes effect
 # at JVM startup, so a parity module that loads after some other test already created a
 # JAR-free SparkSession cannot get the JAR and self-skips. Running the whole directory in
 # one process therefore skipped every parity test while the run still exited 0 -- exactly
 # the silently-not-running gate this command exists to prevent.
-PARITY_FILES=(
-    "python/geobrix/test/pyvx/test_crs_parity.py"
-    "python/geobrix/test/pyvx/test_parity_mvt.py"
-    "python/geobrix/test/pyvx/test_parity_tin.py"
-    "python/geobrix/test/pyvx/test_parity_legacy.py"
-    "python/geobrix/test/pyvx/test_parity_h3_tessellate.py"
-    "python/geobrix/test/pygx/test_gridx_error_parity.py"
-    "python/geobrix/test/pygx/test_parity_bng.py"
-    "python/geobrix/test/pygx/test_parity_quadbin.py"
-    "python/geobrix/test/pygx/test_parity_custom.py"
-    "python/geobrix/test/pyrx/test_parity_custom_raster.py"
-    "python/geobrix/test/pyrx/test_parity_percentile_stretch.py"
+PARITY_ROOT="python/geobrix/test"
+PARITY_EXCLUDE=(
+    "python/geobrix/test/ds/test_vector_writer_parity.py"        # light-only writer round trip, not a tier comparison
+    "python/geobrix/test/ds/test_writer_parity.py"               # light-only writer round trip, not a tier comparison
+    "python/geobrix/test/ds/test_reader_parity.py"               # light-only reader check, not a tier comparison
 )
+
+# norm_path <path>: "./a//b/" and "a/./b" are "a/b", the form PARITY_EXCLUDE and the discovery use.
+norm_path() {
+    local p="$1"
+    while [[ "$p" == ./* ]]; do p="${p#./}"; done
+    while [[ "$p" == *//* ]]; do p="${p//\/\///}"; done
+    while [[ "$p" == */./* ]]; do p="${p//\/.\///}"; done
+    p="${p%/}"
+    echo "${p:-.}"
+}
+
+# discover_parity_files [dir]: parity suites under dir (default the whole test tree), sorted.
+discover_parity_files() {
+    local root="${1:-$PARITY_ROOT}" f e skip
+    while IFS= read -r f; do
+        f="$(norm_path "$f")"   # find prints ./x for a root of "."; the exclusions are not ./x
+        skip=false
+        for e in "${PARITY_EXCLUDE[@]}"; do
+            [ "$f" = "$e" ] && skip=true
+        done
+        [ "$skip" = true ] || echo "$f"
+    done < <(cd "$PROJECT_ROOT" && find -L "$root" -type f \( -name 'test_parity*.py' -o -name 'test_*_parity.py' -o -name '*_cross_tier.py' \) | LC_ALL=C sort)
+}
 
 show_help() {
     show_banner "⚖️  GeoBrix: Cross-Tier Parity Tests"
@@ -42,15 +62,24 @@ show_help() {
     echo -e "${CYAN}What it does:${NC}"
     echo -e "  1. Rebuilds the assembly JAR (skip with ${GREEN}--skip-build${NC})"
     echo -e "  2. Stages it to ${YELLOW}python/geobrix/lib/${NC} where the light tier loads it"
-    echo -e "  3. Runs the parity suites with ${YELLOW}@pytest.mark.integration${NC} ENABLED"
+    echo -e "  3. Runs every parity suite found under ${YELLOW}python/geobrix/test/${NC} (test_parity*.py,"
+    echo -e "     test_*_parity.py and *_cross_tier.py, minus the documented exclusions) with"
+    echo -e "     ${YELLOW}@pytest.mark.integration${NC} ENABLED"
     echo -e "  4. Fails if every test skipped (a skipped gate is not a passing gate)"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--path <path>${NC}      Run ONE suite file instead of all parity suites"
+    echo -e "  ${GREEN}--path <path>${NC}      Run this suite file, or the parity suites under this directory, instead of"
+    echo -e "                       all of them; repeat it to run several (relative to the repo root)"
     echo -e "  ${GREEN}-k <expr>${NC}          Pytest keyword filter"
     echo -e "  ${GREEN}--skip-build${NC}       Reuse the staged JAR (fast; only if Scala is unchanged)"
     echo -e "  ${GREEN}--log <path>${NC}       Write output to log file (filename → test-logs/<name>)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}             Show this help"
+    echo ""
+    echo -e "${CYAN}Environment:${NC}"
+    echo -e "  ${YELLOW}GBX_NATIVE_ROOT=<payload>${NC}  Run the container's pytest on this native payload (its /root/geobrix path)"
+    echo -e "  ${YELLOW}GBX_ORACLE_TABLES=<T1,T2>${NC}  Run only these oracle tables in the family harness"
+    echo -e "                             (test_family_cross_tier.py); passed into the container unchanged"
     echo ""
     echo -e "${CYAN}Why the rebuild is the default:${NC}"
     echo -e "  A staged JAR older than the Scala sources makes every heavy call fail with"
@@ -60,21 +89,23 @@ show_help() {
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh --skip-build -k crs${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh --skip-build --path python/geobrix/test/pyvx/test_parity_mvt.py --path python/geobrix/test/pygx/test_parity_bng.py${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh --log parity.log${NC}"
     echo ""
 }
 
-TEST_PATH=""
+TEST_PATHS=()
 LOG_PATH=""
 KEYWORD=""
 SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --path)       TEST_PATH="$2"; shift 2 ;;
+        --path)       TEST_PATHS+=("$(norm_path "$2")"); shift 2 ;;
         -k)           KEYWORD="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         --log)        LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+        --no-wait)    GBX_LOCK_NO_WAIT=true; shift ;;
         --help|-h)    show_help; exit 0 ;;
         *)
             echo -e "${RED}❌ Unknown option: $1${NC}"; echo ""; show_help; exit 1 ;;
@@ -86,8 +117,14 @@ cd "$PROJECT_ROOT"
 show_banner "⚖️  GeoBrix: Cross-Tier Parity Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 STAGE_DIR="$PROJECT_ROOT/python/geobrix/lib"
+
+# A fresh container has neither geobrix installed (Spark's Python workers do not see pytest's pythonpath=,
+# so every light row would fail with ModuleNotFoundError) nor the optional light-tier test deps (the
+# Column-API legs import them): the same preparation gbx:test:python does.
+gbx_ensure_container_python_deps
 
 # --- Step 1: build the assembly JAR ---------------------------------------------------
 if [ "$SKIP_BUILD" = true ]; then
@@ -100,7 +137,7 @@ if [ "$SKIP_BUILD" = true ]; then
     warn_if_jar_stale "$PROJECT_ROOT"
 else
     echo -e "${CYAN}🔨 Building assembly JAR (skipScoverage, no tests)...${NC}"
-    docker exec geobrix-dev /bin/bash -c \
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
         "$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -o -q -P skipScoverage clean package -DskipTests"
     BUILD_EXIT=$?
     if [ $BUILD_EXIT -ne 0 ]; then
@@ -111,33 +148,72 @@ fi
 
 # --- Step 2: stage it where the light tier's Spark session looks for it ----------------
 if [ "$SKIP_BUILD" != true ]; then
-    BUILT_JAR=$(ls -t "$PROJECT_ROOT"/target/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -1)
-    if [ -z "$BUILT_JAR" ]; then
+    # Shared with gbx:test:python (common.sh); keeps ONLY the current JAR staged.
+    if ! stage_jar_from_target "$PROJECT_ROOT"; then
         echo -e "${RED}❌ Build succeeded but no assembly JAR found under target/.${NC}"
         exit 1
     fi
-    mkdir -p "$STAGE_DIR"
-    # Keep ONLY the current version staged, so a stale JAR can never be picked instead.
-    rm -f "$STAGE_DIR"/geobrix-*-jar-with-dependencies.jar
-    cp "$BUILT_JAR" "$STAGE_DIR/"
-    echo -e "${GREEN}📦 Staged $(basename "$BUILT_JAR") → python/geobrix/lib/${NC}"
+fi
+
+# --- Step 2b: the payload's bundled _jar is this JAR ----------------------------------
+# The L1 rows compare the JVM's JAR with the payload's bundled _jar (capabilities.detect: a sha gate), so a payload
+# whose _jar is an older build skips every L1 row and the run did not run. When GBX_NATIVE_ROOT names a payload that
+# has a _jar/, refresh that _jar from the JAR just staged (the same JAR the JVM loads). Without GBX_NATIVE_ROOT there
+# is no payload to compare with, and nothing changes. The copy runs under the work lock: it replaces a JAR that
+# another session's test run in this container may be loading.
+gbx_native_env_args
+if [ -n "${GBX_NATIVE_ROOT:-}" ]; then
+    echo -e "${CYAN}🔁 Refreshing the payload's bundled _jar from the staged JAR (${GBX_NATIVE_ROOT})...${NC}"
+    if ! docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c '
+        set -e
+        jar=$(ls /root/geobrix/python/geobrix/lib/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+        [ -n "$jar" ] || { echo "no staged JAR under python/geobrix/lib"; exit 1; }
+        if [ -d "$GBX_NATIVE_ROOT/_jar" ]; then
+            rm -f "$GBX_NATIVE_ROOT"/_jar/geobrix-*-jar-with-dependencies.jar
+            cp "$jar" "$GBX_NATIVE_ROOT/_jar/"
+            echo "_jar now $(basename "$jar")"
+        else
+            echo "payload has no _jar/ directory; nothing refreshed"
+        fi
+    '; then
+        echo -e "${RED}❌ Could not refresh the payload's _jar; the L1 rows would not run.${NC}"
+        exit 1
+    fi
 fi
 
 # --- Step 3: run each parity suite in its OWN process, integration ENABLED ------------
-if [ -n "$TEST_PATH" ]; then
-    RUN_FILES=("$TEST_PATH")
+RUN_FILES=()
+add_run_file() {   # once each, in the order given
+    local f="$1" seen
+    for seen in ${RUN_FILES[@]+"${RUN_FILES[@]}"}; do [ "$seen" = "$f" ] && return; done
+    RUN_FILES+=("$f")
+}
+if [ ${#TEST_PATHS[@]} -gt 0 ]; then
+    for p in "${TEST_PATHS[@]}"; do
+        if [ -d "$PROJECT_ROOT/$p" ]; then
+            while IFS= read -r f; do add_run_file "$f"; done < <(discover_parity_files "$p")
+        else
+            add_run_file "$p"   # a file; a missing one fails the run below, by name
+        fi
+    done
 else
-    RUN_FILES=("${PARITY_FILES[@]}")
+    while IFS= read -r f; do add_run_file "$f"; done < <(discover_parity_files)
+fi
+if [ ${#RUN_FILES[@]} -eq 0 ]; then
+    echo -e "${RED}❌ No parity suites found${NC}"
+    exit 1
 fi
 
 echo ""
 echo -e "${CYAN}🎯 Parity suites: ${YELLOW}${#RUN_FILES[@]}${NC}${CYAN} file(s), each in its own process${NC}"
-echo -e "${CYAN}🏷️  Markers: ${YELLOW}(none — integration ENABLED; parity is the point)${NC}"
+echo -e "${CYAN}🏷️  Markers: ${YELLOW}not connect — integration ENABLED (parity is the point); the Spark Connect tests run in gbx:test:pyrx${NC}"
 echo ""
 
 TOTAL_PASSED=0
-TOTAL_SKIPPED_FILES=()
+TOTAL_SKIPPED_FILES=()   # nothing passed: every collected test skipped, or none were collected
+PARTIAL_SKIP_FILES=()    # some passed, some skipped
 FAILED_FILES=()
+SAMPLE_DATA_MISSING=false
 
 for f in "${RUN_FILES[@]}"; do
     show_separator
@@ -151,19 +227,34 @@ for f in "${RUN_FILES[@]}"; do
 
     REPORT="/root/geobrix/target/parity-$(basename "$f" .py).txt"
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
-        python3 -m pytest /root/geobrix/$f -v --tb=short --color=yes -rs"
+        python3 -m pytest /root/geobrix/$f -v --tb=short --color=yes -rs -m 'not connect'"
     [ -n "$KEYWORD" ] && PYTEST_CMD="$PYTEST_CMD -k '$KEYWORD'"
     PYTEST_CMD="$PYTEST_CMD | tee $REPORT"
 
-    docker exec geobrix-dev /bin/bash -c "set -o pipefail; $PYTEST_CMD"
+    gbx_native_env_args
+    gbx_test_env_args
+    docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} \
+        "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
     FILE_EXIT=$?
 
-    SUMMARY=$(docker exec geobrix-dev /bin/bash -c \
-        "tail -6 $REPORT 2>/dev/null | grep -E 'passed|failed|skipped|no tests ran'" 2>/dev/null)
+    # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.
+    # pytest runs with --color=yes, so the report (the tee) holds escape codes (ESC[33mSKIPPED
+    # ESC[0m ...). They are stripped INSIDE the container command, before the greps: a '^SKIPPED'
+    # grep on the coloured report matches nothing. The ESC is a literal byte in the sed script
+    # (the same on GNU and BSD sed).
+    ANSI_SED="sed 's/$(printf '\033')\\[[0-9;]*m//g'"
+    SUMMARY=$(docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
+        "tail -6 $REPORT 2>/dev/null | $ANSI_SED | grep -E 'passed|failed|skipped|no tests ran'; $ANSI_SED $REPORT 2>/dev/null | grep -E '^SKIPPED'" 2>/dev/null)
     N_PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
     N_PASSED=${N_PASSED:-0}
     N_SKIPPED=$(echo "$SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | head -1)
     N_SKIPPED=${N_SKIPPED:-0}
+    # A test the caller's GBX_ORACLE_TABLES selection leaves out did not run by request: it is not
+    # a gate miss. Its skip reason is the harness's "GBX_ORACLE_TABLES leaves out <table>"; -rs folds
+    # equal reasons into one "SKIPPED [n] ..." line, so the counts in brackets are summed.
+    N_DESELECTED=$(echo "$SUMMARY" | grep -E '^SKIPPED' | grep -E 'GBX_ORACLE_TABLES leaves out' \
+        | awk -F'[][]' '{s += $2} END {print s + 0}')
+    N_SKIPPED=$((N_SKIPPED - N_DESELECTED))
     TOTAL_PASSED=$((TOTAL_PASSED + N_PASSED))
 
     if [ $FILE_EXIT -ne 0 ]; then
@@ -174,7 +265,21 @@ for f in "${RUN_FILES[@]}"; do
         # partial-skip loophole -- a file where most tests skip and one passes would
         # otherwise read green. Every test in every parity file transitively needs the
         # JAR-bearing session, so in a healthy run no parity test skips at all.
-        TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped)")
+        # Why: when EVERY skip reason is a missing sample (the container was started without the
+        # sample-data mounts) say so, since that skips newly discovered suites wholesale.
+        N_REASONS=$(echo "$SUMMARY" | grep -cE '^SKIPPED')
+        N_SAMPLE=$(echo "$SUMMARY" | grep -E '^SKIPPED' | grep -ciE 'sample( [a-z]+)? not mounted')
+        WHY=""
+        if [ "$N_REASONS" -gt 0 ] && [ "$N_SAMPLE" -eq "$N_REASONS" ]; then
+            WHY="; sample data missing"
+            SAMPLE_DATA_MISSING=true
+        fi
+        # "did NOT RUN" is only for a file where nothing passed; a file with passes ran, and says so.
+        if [ "$N_PASSED" -eq 0 ]; then
+            TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped$WHY)")
+        else
+            PARTIAL_SKIP_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped$WHY)")
+        fi
     fi
     echo ""
 done
@@ -188,13 +293,27 @@ if [ ${#FAILED_FILES[@]} -gt 0 ]; then
     echo -e "${CYAN}   Mass ${YELLOW}UNRESOLVED_ROUTINE${CYAN} failures mean a stale JAR — re-run without --skip-build.${NC}"
     EXIT_CODE=1
 fi
-if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
-    echo -e "${RED}❌ Cross-tier parity did NOT RUN in ${#TOTAL_SKIPPED_FILES[@]} suite(s) — 0 tests passed:${NC}"
-    for f in "${TOTAL_SKIPPED_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
-    echo -e "${CYAN}   A skipped parity suite is not a passing gate. Common causes:${NC}"
+print_skip_causes() {
+    echo -e "${CYAN}   A skipped parity test is not a passing gate. Common causes:${NC}"
+    if [ "$SAMPLE_DATA_MISSING" = true ]; then
+        echo -e "     • ${YELLOW}sample data missing${NC} (start the container with the sample-data mounts: ${GREEN}gbx:docker:start${NC})"
+    fi
     echo -e "     • no JAR staged in python/geobrix/lib/ (run without ${GREEN}--skip-build${NC})"
+    echo -e "     • the payload's bundled _jar is not this JAR (Step 2b refreshes it when GBX_NATIVE_ROOT names a payload)"
     echo -e "     • a JAR-free Spark session already live in the same process"
     echo -e "     • the suite's own dependency guard (e.g. mapbox-vector-tile) is unmet"
+    echo -e "     • a variant with no build for this platform (e.g. the Rust variant on aarch64)"
+}
+if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
+    echo -e "${RED}❌ Cross-tier parity did NOT RUN in ${#TOTAL_SKIPPED_FILES[@]} suite(s) — every test skipped or none were collected:${NC}"
+    for f in "${TOTAL_SKIPPED_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
+    print_skip_causes
+    EXIT_CODE=1
+fi
+if [ ${#PARTIAL_SKIP_FILES[@]} -gt 0 ]; then
+    echo -e "${RED}❌ Cross-tier parity ran WITH SKIPS in ${#PARTIAL_SKIP_FILES[@]} suite(s) — the skipped tests did not run:${NC}"
+    for f in "${PARTIAL_SKIP_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
+    print_skip_causes
     EXIT_CODE=1
 fi
 if [ $EXIT_CODE -eq 0 ]; then

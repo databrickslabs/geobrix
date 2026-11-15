@@ -31,6 +31,7 @@ guards (RED before it, GREEN after).
 """
 
 import os
+from test._provided_spark import wanted as _provided_session
 
 import pytest
 
@@ -84,16 +85,25 @@ def _isolate():
 
     * the driver grid registry,
     * geobrix's thread-local pyproj Transformer cache (same CRS pair would
-      otherwise return a cached grid-less transformer), and
-    * pyproj's PROJ search path (restored to its import-time value).
+      otherwise return a cached grid-less transformer),
+    * pyproj's PROJ search path (restored to its import-time value), and
+    * the GDAL_DATA / PROJ_DATA / PROJ_LIB env vars (``st_transformcrs`` calls
+      ``configure_gdal_env``, which points PROJ_DATA at the registered grids).
     """
     orig_datadir = pyproj.datadir.get_data_dir()
     pyproj.network.set_network_enabled(False)
+    env_keys = ("GDAL_DATA", "PROJ_DATA", "PROJ_LIB")
+    orig_env = {k: os.environ.get(k) for k in env_keys}
 
     def _reset():
         proj_grids.set_registered_dirs([], replace=True)
         _corecrs._thread_local.__dict__.pop("transformers", None)
         pyproj.datadir.set_data_dir(orig_datadir)
+        for k, v in orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     _reset()
     yield
@@ -159,3 +169,130 @@ def test_registration_makes_grid_consulted():
         f"expected +{SHIFT_SEC} arc-sec lat shift to {EXPECT_LAT}, got {lat}; "
         f"the registered grid was not consulted"
     )
+
+
+def test_clearing_the_registry_on_the_driver_removes_the_grid_dirs():
+    """On the driver the registry is authoritative: replaced with nothing, the next transform takes the grid dir off
+    the search path (the dirs a worker's closure set are the only ones that outlive an empty registry).
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    crs_grids.register_proj_grids(spark=None, dirs=GRID_DIR)
+    _crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS)
+    assert GRID_DIR in _env.pyproj_grid_dirs()
+
+    proj_grids.set_registered_dirs(
+        [], replace=True
+    )  # the registry cleared; the search path still holds the dir
+    _corecrs._thread_local.__dict__.pop("transformers", None)
+    try:
+        _crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS)
+    except Exception:  # noqa: BLE001 - the grid-required transform may raise without it
+        pass
+    assert GRID_DIR not in _env.pyproj_grid_dirs()
+
+
+def test_worker_grid_dirs_survive_the_transform_itself(monkeypatch):
+    """A worker holds no driver registry: its UDF closure puts the grid dirs on the search path, and the transform
+    that follows must not read the empty registry as "no grids" and take them off again. The driver registry stays
+    empty here, as on a worker, so this holds on any machine (a PROJ data dir that already holds the grid, as the
+    dev container's does, cannot hide a regression)."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import _env
+
+    monkeypatch.setattr(_gdal_policy, "_in_spark_task", lambda: True)  # a worker
+    assert proj_grids.get_registered_dirs() == []
+    _env.configure_gdal_env(extra_proj_dirs=[GRID_DIR])
+
+    lat = _lonlat(_crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS))[1]
+
+    assert lat == pytest.approx(EXPECT_LAT, abs=1e-6)
+
+
+def test_transform_sets_the_gdal_and_proj_env_with_an_empty_registry(monkeypatch):
+    """The env setup is not skipped when no grid is registered: a call with GDAL_DATA and PROJ_DATA unset sets both."""
+    monkeypatch.delenv("GDAL_DATA", raising=False)
+    monkeypatch.delenv("PROJ_DATA", raising=False)
+    monkeypatch.delenv("PROJ_LIB", raising=False)
+    assert proj_grids.get_registered_dirs() == []
+
+    # a plain transform: it needs no grid, which an empty driver registry rightly leaves off the search path
+    assert _crs.st_transformcrs(PT_WKT, "EPSG:3857", "EPSG:4326") is not None
+
+    assert os.environ.get("GDAL_DATA")
+    assert os.environ.get("PROJ_DATA")
+
+
+_SERVERLESS_ORDER_PROBE = """
+import sys
+from pyspark.sql import SparkSession
+from shapely import wkb
+from databricks.labs.gbx import _api, crs_grids, manager
+
+spark = SparkSession.builder.master("local[2]").getOrCreate()
+name = "gbx_st_transformcrs"
+manager.register_family(spark, ("gbx_st_",), only=[name], level="L3")
+assert _api.chosen(spark)[name][0] == "L3"
+crs_grids.register_proj_grids(spark, sys.argv[1])
+assert _api.chosen(spark)[name][0] == "L3"
+query = "SELECT %s('%s', '%s', '%s') AS g" % (name, sys.argv[2], sys.argv[3], sys.argv[4])
+blob = spark.sql(query).collect()[0]["g"]
+print("LAT", wkb.loads(bytes(blob)).y if blob is not None else None)
+"""
+
+
+@pytest.mark.skipif(
+    _provided_session(),
+    reason="starts a local-mode Spark session in a child process, which a Databricks node's runtime does not start "
+    "(APPLICATION_NAME_NOT_SET and the node's own configuration)",
+)
+def test_grids_registered_after_the_function_reach_the_live_binding():
+    """The documented Serverless order: register the function, then the grids. The function stays at its level and
+    its live SQL binding sees the new grid dirs (a re-registered closure), not the dirs of its first registration.
+    Runs in its own process: a Python worker that already started PROJ keeps its search path.
+    """
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _SERVERLESS_ORDER_PROBE,
+            GRID_DIR,
+            PT_WKT,
+            TGT_CRS,
+            SRC_CRS,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    lat = [ln for ln in out.stdout.splitlines() if ln.startswith("LAT ")][-1][4:]
+    assert (
+        lat != "None"
+    ), "the live binding returned NULL after the grids were registered"
+    assert float(lat) == pytest.approx(EXPECT_LAT, abs=1e-6)
+
+
+def test_grid_dirs_reregistration_prefers_the_recorded_level(monkeypatch):
+    """Each name is registered again with its recorded level as a preference, never forced; a name a JAR companion
+    holds at a level it has no row at is left alone. The session is a fresh object, so nothing an earlier test
+    registered in the shared one can change what is read."""
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx import _api, manager
+
+    session = SimpleNamespace()
+    kept, companion = "gbx_st_transformcrs", "gbx_rst_clip"
+    _api.mark_registered(session, [kept, companion, "gbx_st_setcrs"])
+    _api.chosen(session).update({kept: ("L1", "-"), companion: ("L1", "-")})
+    seen = {}
+    monkeypatch.setattr(manager, "register", lambda s, **kw: seen.update(kw))
+
+    crs_grids._reregister_active_light_tiers(session)
+
+    assert seen["only"] == [kept]
+    assert seen["_prefer"] == {kept: "L1"}
+    assert "_levels" not in seen

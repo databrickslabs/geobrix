@@ -1,0 +1,16 @@
+# Extends the default gitleaks rules. The allowlist below is for files of
+# public content that match a generic rule by name only.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "SHA-256 digests of the public UC install statements, keyed by function name"
+# AWS's published documentation example access key id (public, non-functional);
+# the snapshot secret-scan tests use it to show documented examples are not refused.
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+]
+paths = [
+  '''python/geobrix/test/manager/fixtures/uc_install_default\.json''',
+]
+

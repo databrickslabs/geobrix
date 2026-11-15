@@ -1,4 +1,4 @@
-"""Task 2 (SP2-CRS): production-path regression tests for CRS in lidar reader + LAZ encoder.
+"""Production-path regression tests for CRS in lidar reader + LAZ encoder.
 
 These tests call the ACTUAL production code paths so they would FAIL if either
 production fix were reverted:
@@ -91,7 +91,7 @@ def test_laz_encoder_tags_epsg_crs_in_header(tmp_path, crs_input, expected_auth)
     """
     import laspy
 
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz
 
     x, y, z = _tiny_xyz()
     out = write_xyz_laz(str(tmp_path / "test.las"), x, y, z, crs=crs_input)

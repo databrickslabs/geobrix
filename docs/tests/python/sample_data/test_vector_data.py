@@ -4,21 +4,23 @@ Tests for Vector Data page code examples (constants = payload only in docs).
 Documentation: docs/docs/sample-data/vector-data.mdx
 Run: pytest docs/tests/python/sample_data/test_vector_data.py -v
 """
+import re
+
 import pytest
 from . import vector_data
 
 
 _VECTOR_CONSTANTS = [
-    ("DOWNLOAD_NYC_TAXI_ZONES", "geojson_ogr"),
+    ("DOWNLOAD_NYC_TAXI_ZONES", "geojson_gbx"),
     ("USAGE_NYC_TAXI_ZONES", "nyc/taxi-zones"),
     ("DOWNLOAD_LONDON_POSTCODES", "london_postcodes"),
     ("USAGE_LONDON_POSTCODES", "london/postcodes"),
-    ("DOWNLOAD_NYC_BOROUGHS", "boro_name"),
+    ("DOWNLOAD_NYC_BOROUGHS", "boroname"),
     ("USAGE_NYC_BOROUGHS", "nyc/boroughs"),
     ("DOWNLOAD_NYC_NTA", "ntaname"),
     ("USAGE_NYC_NTA", "nyc-neighborhoods"),
     ("DOWNLOAD_LONDON_BOROUGHS", "London_Borough"),
-    ("USAGE_LONDON_BOROUGHS", "geojson_ogr"),
+    ("USAGE_LONDON_BOROUGHS", "geojson_gbx"),
     ("DOWNLOAD_NYC_PARKS", "parks"),
     ("USAGE_NYC_PARKS", "nyc/parks"),
     ("DOWNLOAD_NYC_SUBWAY", "Subway"),
@@ -26,7 +28,7 @@ _VECTOR_CONSTANTS = [
     ("CREATE_GEOPACKAGE_NYC", "GPKG"),
     ("USAGE_GEOPACKAGE_NYC", "layerName"),
     ("CREATE_FILEGDB_NYC", "CreateLayer"),
-    ("USAGE_FILEGDB_NYC", "filegdb"),
+    ("USAGE_FILEGDB_NYC", "file_gdb_gbx"),
 ]
 
 _OUTPUT_CONSTANTS = [
@@ -54,3 +56,20 @@ def test_vector_output_constant_exists_and_contains_key(const_name, key):
     val = getattr(vector_data, const_name)
     assert isinstance(val, str), f"{const_name} should be str"
     assert key in val, f"{const_name} should contain '{key}'"
+
+
+_READER = re.compile(r'\.format\("([^"]+)"\)')
+_READ_SNIPPETS = [
+    name for name, _ in _VECTOR_CONSTANTS if name.startswith(("DOWNLOAD_", "USAGE_"))
+]
+
+
+@pytest.mark.parametrize("const_name", _READ_SNIPPETS)
+def test_displayed_reader_names_are_registered(const_name):
+    """Every ``spark.read.format("...")`` on the page names a reader the manifest lists
+    (no aliases: ``filegdb`` and ``gpkg`` are not readers; ``file_gdb_gbx`` and ``gpkg_gbx`` are)."""
+    from databricks.labs.gbx.manifest import datasource_classes
+
+    registered = {src.name() for src in datasource_classes()}
+    for name in _READER.findall(getattr(vector_data, const_name)):
+        assert name in registered, f"{name} is not a registered reader"

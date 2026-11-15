@@ -86,9 +86,13 @@ mkdir -p "$WORKSPACE"
 #  - target/         (Maven build output, GBs)
 #  - python/geobrix/.venv/  (lint venv)
 #  - scripts/docker/m2/     (Maven cache)
-#  - sample-data/Volumes/   (sample-data downloads)
+#  - sample-data/Volumes/   (sample-data downloads; the TRACKED files under it are
+#                            mirrored separately below)
 #  - docs/build/, docs/node_modules/  (docusaurus build/dep dirs)
 #  - node_modules/, staging/, test-logs/, coverage-reports/
+#  - spark-warehouse/, metastore_db/, derby.log  (gitignored local Spark output:
+#    a test run in progress creates and deletes files there, and a file that
+#    vanishes mid-copy makes rsync exit 23 and abort the whole act run)
 # .git/ IS included — scripts called from workflows (e.g.
 # scripts/security/maven-pgp-verify) use `git rev-parse --show-toplevel` to
 # resolve the project root, which fails without a real .git tree.
@@ -108,7 +112,33 @@ rsync -a \
     --exclude='/staging/' \
     --exclude='/test-logs/' \
     --exclude='/coverage-reports/' \
+    --exclude='spark-warehouse/' \
+    --exclude='/metastore_db/' \
+    --exclude='/derby.log' \
     "$PROJECT_ROOT/" "$WORKSPACE/"
+
+# sample-data/Volumes/ is excluded above (untracked bulk downloads), but a few files
+# under it are TRACKED fixtures that real CI checks out, e.g. proj-grids/synthetic.gsb
+# (the pyvx grid-shift and pyrx PROJ end-to-end tests). Mirror exactly the tracked
+# files so those tests do not fail for an act-only reason. A tracked file deleted in
+# the working tree is skipped: rsync would otherwise exit 23 and abort the run.
+(
+    cd "$PROJECT_ROOT"
+    git ls-files -z --cached -- sample-data/Volumes | while IFS= read -r -d '' tracked; do
+        if [ -e "$tracked" ]; then printf '%s\0' "$tracked"; fi
+    done
+) | rsync -a \
+    --link-dest="$PROJECT_ROOT" \
+    --from0 --files-from=- \
+    "$PROJECT_ROOT/" "$WORKSPACE/"
+
+# Real CI runs every Maven call as ./mvnw, which downloads the pinned Maven through JFrog. Neither
+# is available in the local runner image, which bakes the same Maven version (Dockerfile.gha-runner)
+# plus the proxy settings. Give the mirror an ./mvnw that runs it. rsync hardlinked the real
+# mvnw into the mirror, so unlink it first: writing through the link would replace the real file.
+rm -f "$WORKSPACE/mvnw"
+printf '#!/bin/sh\nexec mvn "$@"\n' > "$WORKSPACE/mvnw"
+chmod +x "$WORKSPACE/mvnw"
 
 # Now drop .github/ in fresh, with stub overlays applied.
 cp -R "$PROJECT_ROOT/.github" "$WORKSPACE/.github"
@@ -175,8 +205,8 @@ echo "🔧 Patching mvn invocations: add -Dscoverage.scalacPluginVersion=2.3.0 i
 for af in "$WORKSPACE"/.github/actions/scala_build/action.yml; do
     [ -f "$af" ] || continue
     sed -i.bak \
-        -e 's|mvn -T 1C -C -q clean scoverage:test|mvn -T 1C -C -q -Dscoverage.scalacPluginVersion=2.3.0 clean scoverage:test|g' \
-        -e 's|mvn -C -q scoverage:report-only|mvn -C -q -Dscoverage.scalacPluginVersion=2.3.0 scoverage:report-only|g' \
+        -e 's|\./mvnw -T 1C -C -q clean scoverage:test|./mvnw -T 1C -C -q -Dscoverage.scalacPluginVersion=2.3.0 clean scoverage:test|g' \
+        -e 's|\./mvnw -C -q scoverage:report-only|./mvnw -C -q -Dscoverage.scalacPluginVersion=2.3.0 scoverage:report-only|g' \
         "$af"
     if ! diff -q "$af.bak" "$af" >/dev/null 2>&1; then
         echo "   patched: $(basename "$(dirname "$af")")/$(basename "$af")"

@@ -1,6 +1,6 @@
-"""Tests for VectorGbxWriter FILE-related behavior (Task 7).
+"""Tests for VectorGbxWriter FILE-related behavior.
 
-After Task 7 the DataSource writer (df.write.format) is FUSE-only.
+The DataSource writer (df.write.format) is FUSE-only.
 FILE-tier writes moved to pyvx.file_write.vector_file_write.
 
 Test inventory:
@@ -31,7 +31,6 @@ import pytest
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 from shapely import Point, to_wkb
 
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import VectorGbxWriter
 
 # ---------------------------------------------------------------------------
@@ -48,7 +47,7 @@ _POINT_SCHEMA = StructType(
 
 
 def _make_writer(path, driver, extra_opts=None, overwrite=True):
-    """Convenience factory for VectorGbxWriter (FUSE mode only after Task 7)."""
+    """Convenience factory for VectorGbxWriter (FUSE mode only)."""
     opts = {"driverName": driver}
     if extra_opts:
         opts.update(extra_opts)
@@ -79,7 +78,7 @@ def test_vector_writer_fuse_mode_is_default():
 
 
 # ---------------------------------------------------------------------------
-# Constructor tests — FILE modes are now REJECTED (Task 7)
+# Constructor tests — FILE modes are now REJECTED
 # Coverage for the rejected behavior lives in test/pyvx/test_file_write.py.
 # ---------------------------------------------------------------------------
 
@@ -186,7 +185,9 @@ def test_vector_writer_file_mode_managed_error_is_fuse_only():
 def test_full_write_fuse_mode_unchanged(spark, tmp_path):
     """FUSE mode (no fileMode option) writes file to disk unchanged (byte-identical
     to existing behavior; open_for_write is never called)."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "roads.gpkg")
     _wkb_df(spark).coalesce(1).write.format("gpkg_gbx").mode("overwrite").save(out)
     assert os.path.isfile(out), "FUSE write must produce a file at self.path"
@@ -196,7 +197,7 @@ def test_full_write_fuse_mode_unchanged(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 7: DataSource writer is now FUSE-only — FILE modes raise at construction
+# DataSource writer is now FUSE-only — FILE modes raise at construction
 # (behavior moved to pyvx.file_write.vector_file_write)
 # ---------------------------------------------------------------------------
 
@@ -204,7 +205,7 @@ def test_full_write_fuse_mode_unchanged(spark, tmp_path):
 def test_vector_datasource_writer_rejects_file_modes_pointing_to_function_layer():
     """file_mode=managed/external must raise ValueError pointing at vector_file_write.
 
-    The DataSource writer (df.write.format) is FUSE-only after Task 7.  FILE-tier
+    The DataSource writer (df.write.format) is FUSE-only.  FILE-tier
     writes moved to the function layer (pyvx.file_write.vector_file_write).
     """
     from pyspark.sql.types import BinaryType, StructField, StructType

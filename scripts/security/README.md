@@ -48,8 +48,32 @@ dependencies. Two pinning regimes:
 | `list-external-actions` | `yq` (Mike Farah) | Emit the set of external actions referenced by any workflow or composite action under `.github/`, one per line. |
 | `resolve-action-ref` | `gh`, `jq` | For each `action[@ref]`, resolve the most recent pre-cutoff release tag to the commit SHA it points at. Marks already-pinned entries with `✓` and drift with `⚠`. |
 | `pin-gh-actions` | `git` | Consume `resolve-action-ref` output, rewrite every `uses:` line under `.github/` to the new SHA form (skipping `databricks*`-owned actions), and stage the result with `git add`. Prints the staged diff for review — **does not commit**. |
-| `maven-pgp-bootstrap` | `mvn`, `awk` | Run `pgpverify-maven-plugin` with relaxed settings, capture every PGP fingerprint Maven Central serves for the resolved closure, and emit draft `.maven-keys.list` entries on stdout. The output is a draft — every fingerprint must be cross-checked against the project's published signing key before being committed. |
-| `maven-pgp-verify` | `mvn` | Run strict verification (`mvn -Pverify-pgp verify`). Exits non-zero if any artifact is unsigned, weakly signed, or signed by a key not in `.maven-keys.list`. |
+| `maven-pgp-bootstrap` | `./mvnw` (or `GBX_MVN=mvn` in geobrix-dev), `awk` | Run `pgpverify-maven-plugin` with relaxed settings, capture every PGP fingerprint Maven Central serves for the resolved closure, and emit draft `.maven-keys.list` entries on stdout. The output is a draft — every fingerprint must be cross-checked against the project's published signing key before being committed. |
+| `maven-pgp-verify` | `./mvnw` (or `GBX_MVN=mvn` in geobrix-dev) | Run strict verification (`./mvnw -Pverify-pgp verify`). Exits non-zero if any artifact is unsigned, weakly signed, or signed by a key not in `.maven-keys.list`. |
+
+## Maven itself (the wrapper)
+
+CI runs every Maven call through `./mvnw` (Maven Wrapper 3.3.4, `only-script` type), so CI no
+longer uses whatever Maven the runner image ships. `.mvn/wrapper/maven-wrapper.properties` pins
+Maven by version, URL and `distributionSha256Sum`; the wrapper refuses a distribution whose
+SHA-256 differs (`Failed to validate Maven distribution SHA-256`). It is the same discipline as
+the other pinning regimes here:
+
+- **No unpinned binary in the repo.** The `only-script` type checks in only the reviewable
+  `mvnw` shell script, not a `maven-wrapper.jar` (a jar would need its own `wrapperSha256Sum`).
+- **Hash-pinned download, like the Python locks and the Dockerfile's `MAVEN_SHA512`.** The
+  SHA-256 was computed from the zip and checked against the SHA-512 Apache publishes, on two
+  Apache sources (`archive.apache.org` and `dlcdn.apache.org`, byte-identical). Apache does not
+  publish a SHA-256, so the bump procedure is in the properties file's header.
+- **Through JFrog on the hardened runner.** `.github/actions/maven-wrapper` sets
+  `MVNW_REPOURL` to the `db-maven` mirror and passes the OIDC token from `jfrog-auth`, in that
+  one step only; the wrapper's pinned hash is checked on the bytes the mirror returns.
+- **The PGP gate is unchanged and runs on the pinned Maven.** Maven itself is not a project
+  dependency, so `.maven-keys.list` does not cover it; the SHA-256 pin does.
+- **Inside geobrix-dev** the wrapper cannot download (Maven Central is blocked there), so the
+  image installs the same version with a pinned SHA-512 and
+  `scripts/ci/test_maven_wrapper.py` fails if the two ever differ. Use `GBX_MVN=mvn` for the
+  scripts above in the container.
 
 ## Typical flow — GitHub Actions
 
@@ -74,13 +98,14 @@ git commit -m "Re-pin GitHub Actions to commits from releases prior to 2026-03-1
 
 Run inside the `geobrix-dev` container so Maven hits the `db-maven-proxy`
 mirror (the proxy must pass `.asc` files through unmodified — confirm
-once before relying on this).
+once before relying on this). There the scripts take `GBX_MVN=mvn` (the image's
+Maven is the version the wrapper pins).
 
 ```sh
 cd "$(git rev-parse --show-toplevel)"
 
 # 1. Generate a draft keysmap from the current resolved closure.
-./scripts/security/maven-pgp-bootstrap > /tmp/draft.list
+GBX_MVN=mvn ./scripts/security/maven-pgp-bootstrap > /tmp/draft.list
 
 # 2. Cross-check every fingerprint in /tmp/draft.list against the
 #    project's published signing key. Trust-anchor URLs for the direct
@@ -91,7 +116,7 @@ cd "$(git rev-parse --show-toplevel)"
 #    entries.
 
 # 4. Confirm strict verification passes.
-./scripts/security/maven-pgp-verify
+GBX_MVN=mvn ./scripts/security/maven-pgp-verify
 
 # 5. Commit. Once the workflow is green on main, flip the verify-pgp
 #    profile in pom.xml to <activeByDefault>true</activeByDefault> and
@@ -159,7 +184,7 @@ docker exec -it geobrix-dev bash -lc \
 > **Mirror caveat (confirmed 2026-09-11).** `uv` does not read `pip.conf`; the dev
 > container now sets `UV_INDEX_URL` alongside `PIP_INDEX_URL` so both use the corp
 > proxy (takes effect on image rebuild). BUT the dev proxy
-> (`pypi-proxy.dev.databricks.com`) is a **rolling-recent mirror that prunes old
+> is a **rolling-recent mirror that prunes old
 > releases** — it cannot reproduce runtime-matched locks. Example: the light-CI locks
 > (`requirements-light-env{5,6}-ci.txt`) pin `botocore==1.40.70` to match the Serverless
 > base image, but the dev proxy only serves `botocore>=1.42.91`, so an in-container
@@ -201,11 +226,11 @@ All non-customer-facing Python installs in the repo are hash-pinned:
 | Trust boundary | Source | Lockfile |
 |---|---|---|
 | CI (scala_build, python_build) | `python/geobrix/requirements-ci.in` | `python/geobrix/requirements-ci.txt` |
-| Dev container (geobrix-dev) | `python/geobrix/requirements-dev-container.in` | `python/geobrix/requirements-dev-container.txt` |
-| Notebook test harness (gbx:test:notebooks) | `notebooks/tests/requirements.in` | `notebooks/tests/requirements.txt` |
+| Dev container (geobrix-dev) | `python/geobrix/requirements-dev-container.in` | `python/geobrix/requirements-dev-container.txt` (x86_64) and `requirements-dev-container-aarch64.txt` (arm64): same versions, checked by `scripts/ci/check_dev_container_locks.py`. The build passes a private package index as a BuildKit secret. |
+| Notebook test harness (gbx:test:notebooks) | `examples/tests/requirements.in` | `examples/tests/requirements.txt` |
 
 Intentionally NOT hash-pinned (per maintainer policy):
-- `%pip install` cells inside `notebooks/examples/**/*.ipynb` — customer-facing content.
+- `%pip install` cells inside `examples/notebooks/**/*.ipynb` — customer-facing content.
 - Code examples in `docs/docs/**/*.mdx` — illustrative for customers.
 - The published wheel's loose `pyspark>=4.0.0` in `python/geobrix/pyproject.toml` — downstream consumers need flexibility.
 
@@ -213,11 +238,12 @@ Intentionally NOT hash-pinned (per maintainer policy):
 
 ### Policy
 
-geobrix pins runtime-sensitive core packages (`urllib3`, `pandas`, `numpy`, `idna`) to
-the preinstalled version of each DBR/Serverless base so a cluster `%pip install
-geobrix[light_dbrNN]` stays silent (no "a core Python package changed" notice) and the
-installed versions remain base-compatible.  geobrix **never** ships a version newer than
-the base.
+geobrix pins runtime-sensitive core packages (`urllib3`, `pandas`, `numpy`) to
+the preinstalled version of each DBR/Serverless base (the env wheels' `core.txt`) so a cluster
+`%pip install` of the env wheel for the runtime stays silent (no "a core Python package changed"
+notice) and the installed versions remain base-compatible.  geobrix does not ship a newer version of these
+than the base.  `idna` is the exception, and is **not** capped: see the httpx2 / httpcore2
+case below.
 
 Per-regime base versions verified 2026-09-03:
 
@@ -227,7 +253,7 @@ Per-regime base versions verified 2026-09-03:
 | DBR 19 / Serverless env 6 | 2.5.0 | `urllib3<2.6` |
 
 `pandas` and `numpy` are capped similarly (`<2.3`/`<2.2` for pb5 regimes, `<2.4`/`<2.4`
-for pb6); `idna` is capped at `<3.8` (pb5) and `<3.12` (pb6).
+for pb6).
 
 ### Consequence for Dependabot triage
 
@@ -244,35 +270,34 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   affected code path is the `[stac]` / `[earthdata]` HTTP optional extras (requests →
   urllib3) against attacker-controlled HTTP responses; the base wheel with no extras
   makes no outbound HTTP calls.  A user who must patch can override the cap at their own
-  risk (`pip install geobrix[light_env6] "urllib3>=2.6"`) accepting the changed-package
+  risk (`pip install "geobrix @ <the env wheel>" "urllib3>=2.6"`) accepting the changed-package
   cluster notice.
 
 - **pyarrow — 2 HIGH alerts** in the CI lockfiles (env5: 19.0.1, env6: 21.0.0 — both
   vulnerable; fix: 23.0.1).  `pyproject.toml` sets no upper bound on pyarrow, so geobrix
   does not prevent the fix.  The CI lockfiles are pinned to the DBR base-image version
   for test fidelity; upgrading them past the base triggers the "core package changed"
-  cluster notice on DBR.  Patching is a CI-health action, not a 0.5.x release gate.
+  cluster notice on DBR.  Patching is a CI-health action, not a 0.6.0 release gate.
 
-- **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the two `_all` umbrella locks
-  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2.x
-  (the newest admitted by the `rio-tiler>=9.0,<9.3` cap) replaced its classic
-  `httpx` client with the `httpx2` distribution.  The patched `httpx2`
-  (`>=2.11` for the MED multipart/header CVEs, `>=2.12` for HIGH
-  CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
-  for HIGH CVE-2026-84381) **requires `idna>=3.18`**, which the base-pinned idna
-  caps (`<3.8` env5 / `<3.12` env6, above) forbid — so the resolver backtracks
-  `httpx2` to 2.3.0 (its last release compatible with an unbounded idna).  rio-tiler
-  9.2.x itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
-  **inherited transitively from the same base-pinned idna constraint as the
-  urllib3/idna cases above** and clear only when the DBR/Serverless base advances
-  idna to `>=3.18` (letting the geobrix idna cap rise), not by a wheel bump.  The
-  classic-`httpx` explicit locks (`env5-ci` / `env6-ci`, pinned to rio-tiler
-  9.0.6) carry `httpx==0.28.1` with no open alert; `httpx2` appears only in the
-  `_all` resolution.  Exposure is the remote-HTTP raster-read path (rio-tiler
-  fetching COG/tiles over HTTPS); reads from trusted UC Volumes / cloud storage do
-  not traverse it.  Confirmed via `uv pip compile` on 2026-09-28: forcing
-  `httpx2>=2.11` fails with *"httpx2>=2.11.0 depends on idna>=3.18 … and
-  geobrix[light-env6-all] depends on idna<3.12"*.
+- **httpx2 / httpcore2 — resolved by lifting the idna cap (2026-10-28).**  rio-tiler 9.2 and
+  later (9.4.12 is the newest admitted by the `rio-tiler>=9.0,<10` cap) fetch remote rasters
+  through `httpx2`.  The patched `httpx2` (`>=2.11` for the MED multipart/header CVEs, `>=2.12`
+  for HIGH CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
+  for HIGH CVE-2026-84381) **requires `idna>=3.18`**.  The 0.5.x light extras used to cap idna at the
+  runtime's version (`<3.8` env5 / `<3.12` env6), so pip backtracked to `httpx2` 2.3.0 for every
+  user of a light extra, not only in the CI locks, and the cap held no one at a safe base either
+  (the base idna 3.7 / 3.11 is itself below the 3.15 fix).  The cap was cosmetic (it only
+  silenced Databricks' "a core package changed: idna" notice), so it is gone from
+  `pyproject.toml`, the env wheels' `core.txt` and the two light CI `.in` files: the four light locks
+  now carry `httpx2` / `httpcore2` 2.16.0 and idna 3.20, and installing GeoBrix upgrades the
+  runtime's idna and may show that one-time notice.  idna 3.x keeps the API `requests` (2.32.x) and `urllib3` use:
+  their IDN host encoding gives the same result on 3.7, 3.11 and 3.20, and every runtime's
+  preinstalled package set resolves with idna 3.20.  The patched `httpx2` also needs `anyio>=4.10`
+  and `httpcore2` needs `h11>=0.16`, so the install upgrades `anyio` on env5 / DBR 17.3 / DBR 18
+  (4.6.2 / 4.7.0) and `h11` on DBR 17.3 (0.14.0); the other preinstalled packages do not move
+  (checked with `uv pip compile` against each runtime's package list).  (The earlier hold was confirmed with
+  `uv pip compile` on 2026-09-28: `httpx2>=2.11` failed with *"httpx2>=2.11.0 depends on
+  idna>=3.18 … and geobrix[light-env6-all] depends on idna<3.12"*.)
 
 - **jackson-databind — 2 HIGH alerts** in `pom.xml` (scope `provided`).  The
   `jar-with-dependencies` assembly excludes provided-scope artifacts; Spark/DBR ships its
@@ -285,7 +310,7 @@ harness) are **tracked and deferred to the DBR base image**, not re-assessed per
 release.
 
 As of **2026-09-27**: 0 hard blockers for the 0.5.2 release.  274 of 353 open Dependabot
-alerts (78%) are in three pure-noise manifests (`apps/genie_map/pnpm-lock.yaml`,
+alerts (78%) are in three pure-noise manifests (`examples/apps/genie_map/pnpm-lock.yaml`,
 `requirements-dev-container.txt`, `docs/package-lock.json`) — none shipped in the wheel
 or JAR.
 
@@ -299,3 +324,26 @@ The two `_all` umbrella locks were **not** recompiled: their only outstanding al
 base-pinned `urllib3`/`idna` and the idna-blocked `httpx2`/`httpcore2` cases above (0
 clearable), so a recompile would clear nothing and only float unrelated transitives.  The
 remaining light-lock alerts are all base-pinned/idna-blocked and deferred per the cases above.
+
+**2026-10-28 dependency refresh.**  Every pin with an open alert was moved past its patched
+release unless a runtime fixes its version:
+
+- *CI and dev locks (pip).*  The four light CI locks, `requirements-ci`, `requirements-build`,
+  both dev-container locks and `examples/tests/requirements.txt` were recompiled.  Floors in the
+  `.in` files keep transitive packages at their patched releases (`pillow>=13`, `certifi`,
+  `aiohttp`, `multidict`, plus the Jupyter-stack packages in the dev container); `setuptools`,
+  `wheel` and `black` moved to patched releases.  Pillow is not a dependency of any shipped extra,
+  so the floor is CI-only and the runtime's own pillow (11.1.0 or 12.0.0) is untouched.
+- *Still held on purpose.*  `urllib3` and `pyarrow` in the light locks (cases above); `pip` and
+  `pyarrow` in the dev container (the DBR 17.3 install toolchain and
+  Arrow baseline the tests run on); `torch` in the GeoSAM model pins (`serving.MODEL_DEPS`; pinned to the Serverless GPU base,
+  CUDA 12).
+- *Docs and the Genie Map app (npm / pnpm).*  Docusaurus moved to 3.10.2, and `overrides` lift
+  `serialize-javascript`, `tinypool` and `uuid` (docs) and about twenty transitive packages
+  (Genie Map, in `pnpm.overrides`) to patched releases within their major lines.  What remains
+  has no patched release, is not yet on the package mirror, or needs a major bump of a pinned
+  consumer (kepler.gl, the AI tool stack, `@loaders.gl`).
+
+**2026-10-28 idna cap lifted.**  `idna` is no longer capped in any install, so the four light
+locks carry `httpx2` / `httpcore2` 2.16.0 and idna 3.20, and the httpx2 / httpcore2 / idna alerts
+on the light locks are cleared (see the httpx2 / httpcore2 case above).

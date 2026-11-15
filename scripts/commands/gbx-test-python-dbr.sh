@@ -20,12 +20,16 @@ set -e  # Exit on error
 # Source common utilities
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Default values
 TEST_PATH=""
 VERBOSE=false
 LOG_FILE=""
 MARKERS=""
+CLUSTER_ID=""
+PROFILE=""
+TIMEOUT_MIN=60
 
 # ============================================================================
 # Help Message
@@ -45,6 +49,10 @@ ${BOLD}OPTIONS:${NC}
     --markers MARKERS    Run tests matching pytest markers
     --verbose, -v        Show verbose output
     --log FILE           Save output to log file
+    --cluster-id ID      Run the tests on this running Databricks cluster (a DBR session) instead of the
+                         local container. The cluster needs the geobrix wheel and JAR as libraries.
+    --profile NAME       Databricks CLI profile for --cluster-id (required with it; never chosen for you)
+    --timeout-min N      Time limit of the cluster run in minutes (default: 60)
     --help, -h           Show this help message
 
 ${BOLD}EXAMPLES:${NC}
@@ -59,6 +67,9 @@ ${BOLD}EXAMPLES:${NC}
 
     ${CYAN}# Save output to log${NC}
     gbx:test:python-dbr --log dbr-tests.log
+
+    ${CYAN}# Run the docs-test SQL on a DBR cluster${NC}
+    gbx:test:python-dbr --cluster-id 0123-456789-abcdefgh --profile oauth-fe --path readers/
 
 ${BOLD}IMPORTANT:${NC}
     ${YELLOW}⚠️  These tests require Databricks Runtime environment${NC}
@@ -100,6 +111,18 @@ while [[ $# -gt 0 ]]; do
             LOG_FILE="$2"
             shift 2
             ;;
+        --cluster-id)
+            CLUSTER_ID="$2"
+            shift 2
+            ;;
+        --profile)
+            PROFILE="$2"
+            shift 2
+            ;;
+        --timeout-min)
+            TIMEOUT_MIN="$2"
+            shift 2
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -116,16 +139,80 @@ done
 # Main Execution
 # ============================================================================
 
-print_header "📚 GeoBrix: Python DBR Integration Tests"
+show_banner "GeoBrix: Python DBR Integration Tests"
+
+# ----------------------------------------------------------------------------
+# On a Databricks cluster: ship the tests in a generated notebook and run it with the notebook runner
+# ----------------------------------------------------------------------------
+if [ -n "$CLUSTER_ID" ]; then
+    if [ -z "$PROFILE" ]; then
+        echo -e "${RED}❌ --cluster-id needs --profile NAME (a profile is never chosen for you)${NC}"
+        exit 1
+    fi
+    GEN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gbx-dbr-tests.XXXXXX")"
+    NOTEBOOK="$GEN_DIR/gbx_dbr_docs_tests.ipynb"
+    python3 - "$PROJECT_ROOT/docs/tests-dbr" "$NOTEBOOK" "$TEST_PATH" "$MARKERS" "$VERBOSE" <<'PY'
+import base64, io, json, sys, zipfile
+from pathlib import Path
+
+root, out, test_path, markers, verbose = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    zf.write(root / "pytest.ini", "tests-dbr/pytest.ini")
+    for p in sorted((root / "python").rglob("*")):
+        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc":
+            zf.write(p, "tests-dbr/" + p.relative_to(root).as_posix())
+blob = base64.b64encode(buf.getvalue()).decode()
+args = ["python/" + test_path if test_path else "python/"]
+if markers:
+    args += ["-m", markers]
+if verbose == "true":
+    args.append("-vv")
+args.append("--tb=short")
+src = [
+    "import base64, io, os, sys, zipfile\n",
+    f"BLOB = {blob!r}\n",
+    "ROOT = '/tmp/gbx_dbr_tests'\n",
+    "zipfile.ZipFile(io.BytesIO(base64.b64decode(BLOB))).extractall(ROOT)\n",
+    "import subprocess\n",
+    "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'pytest'], check=True)\n",
+    "import importlib\n",
+    "importlib.invalidate_caches()\n",
+    "import pytest\n",
+    "# pytest runs in this process: the spark fixture's getOrCreate then returns the notebook's own session\n",
+    "os.environ['GBX_DBR_CLUSTER'] = '1'\n",
+    "os.chdir(ROOT + '/tests-dbr')\n",
+    f"rc = pytest.main({args!r})\n",
+    "assert rc == 0, f'pytest exited {int(rc)}'\n",
+]
+nb = {
+    "cells": [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": src}],
+    "metadata": {"language_info": {"name": "python"}},
+    "nbformat": 4,
+    "nbformat_minor": 5,
+}
+Path(out).write_text(json.dumps(nb, indent=1))
+PY
+    RUN_ARGS=(--existing-cluster-id "$CLUSTER_ID" --notebook "$NOTEBOOK" --profile "$PROFILE" --timeout-min "$TIMEOUT_MIN")
+    if [ -n "$LOG_FILE" ]; then
+        RUN_ARGS+=(--log "$LOG_FILE")
+    fi
+    echo -e "${CYAN}☁️  Running the DBR tests on cluster ${CLUSTER_ID} (profile ${PROFILE})${NC}"
+    EXIT_CODE=0
+    bash "$SCRIPT_DIR/gbx-test-notebooks-serverless.sh" "${RUN_ARGS[@]}" || EXIT_CODE=$?
+    rm -rf "$GEN_DIR"
+    exit $EXIT_CODE
+fi
 
 # Validate environment
 if ! command -v docker &> /dev/null; then
-    print_error "Docker is not installed or not in PATH"
+    echo -e "${RED}❌ Docker is not installed or not in PATH${NC}"
     exit 1
 fi
 
-if ! docker ps | grep -q geobrix-dev; then
-    print_error "geobrix-dev container is not running"
+gbx_require_local_env
+if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+    echo -e "${RED}❌ $GBX_DEV_CONTAINER container is not running${NC}"
     echo -e "${YELLOW}ℹ️  Start it with: gbx:docker:start${NC}"
     exit 1
 fi
@@ -154,7 +241,7 @@ fi
 PYTEST_CMD="${PYTEST_CMD} --tb=short"
 
 echo ""
-print_section "Running DBR Integration Tests"
+echo -e "${CYAN}Running DBR Integration Tests${NC}"
 
 # Execute tests
 if [ -n "$LOG_FILE" ]; then
@@ -162,22 +249,22 @@ if [ -n "$LOG_FILE" ]; then
     mkdir -p "$(dirname "$LOG_PATH")"
     : > "$LOG_PATH"
     echo -e "${CYAN}📝 Logging to: ${LOG_PATH}${NC}"
-    docker exec geobrix-dev bash -c "$PYTEST_CMD" 2>&1 | tee "$LOG_PATH"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "$PYTEST_CMD" 2>&1 | tee "$LOG_PATH"
     EXIT_CODE=${PIPESTATUS[0]}
 else
-    docker exec geobrix-dev bash -c "$PYTEST_CMD"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 fi
 
 # Report results
-print_divider
+show_separator
 
 if [ $EXIT_CODE -eq 0 ]; then
-    print_success "DBR integration tests passed"
+    echo -e "${GREEN}✅ DBR integration tests passed${NC}"
 else
-    print_error "DBR integration tests failed (exit code: $EXIT_CODE)"
+    echo -e "${RED}❌ DBR integration tests failed (exit code: $EXIT_CODE)${NC}"
 fi
 
-print_divider
+show_separator
 
 exit $EXIT_CODE

@@ -1,10 +1,10 @@
-"""Spark-free focal ops via scipy.ndimage, matching rasterx GDALBlock semantics:
-NoData-aware skip + edge window-shrink (filter) / replicate-edge (convolve).
+"""Spark-free focal ops via scipy.ndimage, with these window semantics:
+NoData-aware skip + edge window-shrink (filter) / zero-padded edge (convolve).
 
-GDALBlock.valuesAt (avg/min/max/median): a neighbor contributes only if it is
+Filter (avg/min/max/median): a neighbor contributes only if it is
 in-bounds AND in-mask AND not-NoData; out-of-bounds neighbors are skipped so the
 window shrinks at edges; if no neighbor is valid the output pixel is NoData.
-GDALBlock.convolveAt: ``sum += value * kernel(i)(j)`` over in-bounds valid
+Convolve: ``sum += value * kernel(i)(j)`` over in-bounds valid
 neighbors only (others contribute 0, no renormalization), kernel applied
 UN-flipped (correlation).
 """
@@ -13,14 +13,68 @@ import warnings
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from rasterio.io import MemoryFile
 from scipy import ndimage
 
-from databricks.labs.gbx.pyrx.core._nodata import read_masked
+from databricks.labs.gbx.pyrx.core._nodata import (
+    fallback_nodata,
+    has_alpha,
+    nodata_fits_dtype,
+    read_valid,
+)
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+FILTER_OPERATIONS = ("min", "max", "mean", "median")
 
 
-def _nodata_value(ds, default: float = -9999.0) -> float:
-    return ds.nodata if ds.nodata is not None else default
+def check_filter(kernel_size, operation):
+    """``(size, operation)`` of ``rst_filter`` as the filter reads them: the size a positive odd integer and
+    the operation one of :data:`FILTER_OPERATIONS` in any case; a ``ValueError`` that names a wrong one.
+    """
+    try:
+        size = int(kernel_size)
+        if float(kernel_size) != size:  # 3.9 is not 3
+            raise ValueError(kernel_size)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"rst_filter: kernel_size must be a positive odd integer; got {kernel_size!r}"
+        ) from exc
+    if size < 1 or size % 2 == 0:
+        raise ValueError(
+            f"rst_filter: kernel_size must be a positive odd integer; got {size}"
+        )
+    op = str(operation).lower()
+    if op not in FILTER_OPERATIONS:
+        raise ValueError(
+            f"rst_filter: unknown operation {operation!r}; known: {', '.join(FILTER_OPERATIONS)}"
+        )
+    return size, op
+
+
+def check_kernel(kernel) -> np.ndarray:
+    """The kernel of ``rst_convolve`` as a 2-D float array; a ``ValueError`` that names a wrong one (ragged,
+    empty, or an even side: a kernel needs a centre)."""
+    try:
+        k = np.asarray(kernel, dtype="float64")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"rst_convolve: kernel must be a rectangular array of numbers; got {kernel!r}"
+        ) from exc
+    if k.ndim != 2 or k.size == 0 or k.shape[0] % 2 == 0 or k.shape[1] % 2 == 0:
+        shape = "x".join(str(n) for n in k.shape)
+        raise ValueError(
+            f"rst_convolve: kernel must be a 2-D array with an odd number of rows and columns; got {shape}"
+        )
+    return k
+
+
+def _nodata_value(ds, default: float = -9999.0, dtype: str = None) -> float:
+    """The source's NoData, else *default* when the band type can hold it, else the type's fallback
+    (``fallback_nodata``): a ``uint8`` raster cannot carry -9999. *dtype* is the type of the output
+    (the source's when omitted)."""
+    if ds.nodata is not None:
+        return ds.nodata
+    dtype = dtype or ds.dtypes[0]
+    return default if nodata_fits_dtype(default, dtype) else fallback_nodata(dtype)
 
 
 def _out_profile(ds, dtype: str, nd: float, set_nodata: bool) -> dict:
@@ -35,18 +89,20 @@ def _out_profile(ds, dtype: str, nd: float, set_nodata: bool) -> dict:
 
 
 def filt(ds, kernel_size, operation: str) -> bytes:
-    """Apply a focal min/max/mean/median filter per band, GDALBlock semantics.
+    """Apply a focal min/max/mean/median filter per band (the module's window semantics).
 
     Output dtype: ``mean`` -> Float32; ``min``/``max``/``median`` -> input dtype.
-    All-invalid windows become NoData.
+    All-invalid windows become NoData. A neighbour is valid by ``_nodata.band_valid_mask``: the
+    band's own mask and, for a raster with an alpha band, opaque, so transparent pixels are skipped
+    like NoData at any band count.
     """
-    size = int(kernel_size)
-    op = str(operation)
+    size, op = check_filter(kernel_size, operation)
     box = np.ones((size, size), dtype="float64")
-    nd = _nodata_value(ds, default=-9999.0)
+    out_dtype = "float32" if op == "mean" else ds.dtypes[0]
+    nd = _nodata_value(ds, default=-9999.0, dtype=out_dtype)
     out_bands, any_invalid = [], False
     for i in range(1, ds.count + 1):
-        data, valid = read_masked(ds, i)
+        data, valid = read_valid(ds, i)
         if op == "mean":
             num = ndimage.correlate(data * valid, box, mode="constant", cval=0.0)
             cnt = ndimage.correlate(
@@ -89,41 +145,33 @@ def filt(ds, kernel_size, operation: str) -> bytes:
             res = np.where(invalid, nd, res)
         any_invalid = any_invalid or bool(invalid.any())
         out_bands.append(res)
-    out_dtype = "float32" if op == "mean" else ds.dtypes[0]
     out = np.stack(out_bands)
-    profile = _out_profile(ds, out_dtype, nd, any_invalid or ds.nodata is not None)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out.astype(out_dtype))
-        return mf.read()
+    # a raster with an alpha band declares none: a NoData would shadow it (the all-invalid windows
+    # are written with the value ``nd`` all the same)
+    profile = _out_profile(
+        ds, out_dtype, nd, (any_invalid or ds.nodata is not None) and not has_alpha(ds)
+    )
+    return write_gtiff(profile, out.astype(out_dtype), alpha_like=ds.colorinterp)
 
 
 def convolve(ds, kernel) -> bytes:
-    """2-D correlation (UN-flipped kernel) per band, replicate-edge boundary.
+    """2-D correlation (UN-flipped kernel) per band, zero-padded edge.
 
-    Mirrors GDALBlock.convolveAt: ``sum`` starts at 0 and accumulates
-    ``value * kernel(i)(j)`` over valid neighbors; invalid / NoData neighbors
-    contribute 0 (via ``data * valid``) with no weight renormalization, and the
-    returned sum is emitted verbatim (convolveAt never yields NoData). Output
-    dtype is Float64.
-
-    The heavyweight applies a GDAL block-halo convolution whose edge behavior
-    matches no single scipy boundary mode exactly; empirically ``mode="nearest"``
-    (replicate edge) minimizes the residual divergence vs the heavyweight, so it
-    is used here. A small edge residual remains (the accepted GDAL-halo gap).
+    ``sum`` starts at 0 and accumulates
+    ``value * kernel(i)(j)`` over in-bounds valid neighbors; invalid / NoData neighbors
+    contribute 0 (via ``data * valid``) and so do the positions off the raster
+    (``mode="constant", cval=0.0``), with no weight renormalization, and the returned
+    sum is emitted verbatim (never NoData). Output dtype is Float64.
     """
-    k = np.asarray(kernel, dtype="float64")
+    k = check_kernel(kernel)
     nd = _nodata_value(ds, default=-9999.0)
     out_bands = []
     for i in range(1, ds.count + 1):
-        data, valid = read_masked(ds, i)
+        data, valid = read_valid(ds, i)
         # data * valid zeroes out masked / NoData neighbors so they add 0,
         # exactly matching the heavyweight's skip-and-keep-sum behavior.
-        res = ndimage.correlate(data * valid, k, mode="nearest")
+        res = ndimage.correlate(data * valid, k, mode="constant", cval=0.0)
         out_bands.append(res)
     out = np.stack(out_bands)
     profile = _out_profile(ds, "float64", nd, ds.nodata is not None)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out)
-        return mf.read()
+    return write_gtiff(profile, out, alpha_like=ds.colorinterp)

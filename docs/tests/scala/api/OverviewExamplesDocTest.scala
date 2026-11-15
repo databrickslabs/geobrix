@@ -1,5 +1,6 @@
 package docs.tests.scala.api
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import com.databricks.labs.gbx.gridx.bng.{functions => bx}
 import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
@@ -50,9 +51,7 @@ class OverviewExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
 
         // Register each package
-        rx.register(spark)
-        bx.register(spark)
-        vx.register(spark)
+        TestL1.installAll(spark)
 
         // Verify registration worked for each package
         val functions = spark.catalog.listFunctions().collect()
@@ -71,9 +70,6 @@ class OverviewExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
             import com.databricks.labs.gbx.gridx.bng.{functions => bx}
             import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
             
-            val _ = rx.register _
-            val _ = bx.register _
-            val _ = vx.register _
         }
     }
 }

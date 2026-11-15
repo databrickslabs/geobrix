@@ -49,12 +49,106 @@ object GDAL {
         }
     }
 
-    /** Converts pixel (x, y) to geographic (xGeo, yGeo) using the 6-element geotransform. */
-    def toWorldCoord(gt: Array[Double], x: Int, y: Int): (Double, Double) = {
-        val offset = 0.5 // offset to center of the pixel
-        val xGeo = gt(0) + (x + offset) * gt(1) + (y + offset) * gt(2)
-        val yGeo = gt(3) + (x + offset) * gt(4) + (y + offset) * gt(5)
-        (xGeo, yGeo)
+    /** The NoData state of `ds` for a warp: the bands that declare none, and the value list gdalwarp takes
+      * (`-srcnodata` / `-dstnodata`): one value per band, a declared band's own value or `fill(band)`, written as
+      * ONE value when they all agree. The single scan of the bands' declared NoData that the warp helpers share. */
+    private final case class WarpNoData(undeclared: Seq[org.gdal.gdal.Band], list: String)
+
+    private def warpNoData(ds: org.gdal.gdal.Dataset, fill: org.gdal.gdal.Band => Double): WarpNoData = {
+        val perBand = (1 to ds.GetRasterCount()).map { i =>
+            val band = ds.GetRasterBand(i)
+            val nd = new Array[java.lang.Double](1)
+            band.GetNoDataValue(nd)
+            (Option(nd(0)).map(_.doubleValue()), band)
+        }
+        val values = perBand.map { case (declared, band) => declared.getOrElse(fill(band)) }
+        val list = values.distinct match {
+            case Seq(single) => single.toString
+            case _           => values.mkString(" ")
+        }
+        WarpNoData(perBand.collect { case (None, band) => band }, list)
+    }
+
+    /** True when `band` is masked by its own per-dataset mask band that is not an alpha band (an internal or
+      * external GTiff mask, for example). gdalwarp ignores such a mask once a source NoData is set, and under
+      * a cutline it has to rasterize; it always applies an alpha band. */
+    def hasOwnMask(band: org.gdal.gdal.Band): Boolean = {
+        val flags = band.GetMaskFlags()
+        (flags & GMF_PER_DATASET) != 0 && (flags & GMF_ALPHA) == 0
+    }
+
+    /**
+      * THE alpha rule of both tiers (the lightweight tier's `_nodata.alpha_index`): the 1-based index of the
+      * alpha band of `ds`, which is its LAST band when that band is labelled alpha, as gdalwarp reads a
+      * source. A band labelled alpha anywhere else is ordinary data.
+      */
+    def alphaBandIndex(ds: org.gdal.gdal.Dataset): Option[Int] = {
+        val n = ds.GetRasterCount()
+        if (n > 0 && ds.GetRasterBand(n).GetColorInterpretation == GCI_AlphaBand) Some(n) else None
+    }
+
+    /** True when `ds` has an alpha band ([[alphaBandIndex]]): gdalwarp carries it and applies it as the source
+      * mask. */
+    def hasAlpha(ds: org.gdal.gdal.Dataset): Boolean = alphaBandIndex(ds).isDefined
+
+    /** True when `ds` has an alpha band ([[alphaBandIndex]]) beside at least one data band, so the statistics of
+      * its data bands have to be judged by [[com.databricks.labs.gbx.rasterx.gdal.ValidMask.readBand]]: GDAL
+      * derives a mask from the alpha band for 2- and 4-band rasters only, drops it when a NoData or a mask band
+      * of the dataset is declared, and the multi-dimensional statistics (`AsMDArray().GetStatistics()`) apply
+      * no mask derived from an alpha band at all, so they count the transparent pixels of an RGBA raster too. */
+    def hasAlphaBesideData(ds: org.gdal.gdal.Dataset): Boolean =
+        ds.GetRasterCount() > 1 && alphaBandIndex(ds).isDefined
+
+    /** Throws when a GDAL call that reports failure by its return code (`ReadRaster`, `WriteRaster`,
+      * `CreateMaskBand`, `GetHistogram`) did not return `CE_None`, with GDAL's last error message: such a call
+      * does not throw, so an unchecked failure leaves a half-written result that reads as a valid one. */
+    private[rasterx] def requireOk(rc: Int, what: String): Unit =
+        if (rc != CE_None) throw new IllegalStateException(s"$what failed: ${gdal.GetLastErrorMsg()}")
+
+    /** True when the multi-dimensional statistics GDAL computes for the bands of `ds`
+      * (`AsMDArray().GetStatistics()`: `rst_avg`, `rst_pixelcount`) would count pixels that are not valid for the
+      * band, so they are computed over [[com.databricks.labs.gbx.rasterx.gdal.ValidMask.readBand]] instead: `ds`
+      * has an alpha band beside data bands ([[hasAlphaBesideData]]), or a band masked by its own mask band
+      * ([[hasOwnMask]]), which those statistics ignore. (`ComputeRasterMinMax` and `GetHistogram` honour an own
+      * mask band.) */
+    def validityJudgesStatistics(ds: org.gdal.gdal.Dataset): Boolean =
+        hasAlphaBesideData(ds) || (1 to ds.GetRasterCount()).exists(i => hasOwnMask(ds.GetRasterBand(i)))
+
+    /**
+      * gdalwarp arguments that make the source pixels equal to a band's fill value NoData, for the bands of
+      * `ds` that declare no NoData: `-srcnodata <one value per band>` (a declared band keeps its own value)
+      * and `-wo UNIFIED_SRC_NODATA=NO`, so each band is judged on its own (GDAL otherwise treats a pixel
+      * as NoData only when every band matches). Without them, gdalwarp `-dstnodata X` moves a valid source
+      * pixel equal to X to X +/- 1 and keeps it valid. `fill` gives an undeclared band's value, by default
+      * [[getNoDataConstant]] for its type. Empty when every band declares NoData, or when a band without
+      * NoData has its own mask ([[hasOwnMask]]): a source NoData makes gdalwarp drop that mask, so masked
+      * pixels would turn valid (an alpha band still masks). `maskAsAlpha` says the warp reads that mask as
+      * a source alpha band instead (the mask view of [[com.databricks.labs.gbx.rasterx.operator.WarpSource]]),
+      * which a source NoData does not drop, so the arguments are given then. The list is ONE argument: pass
+      * it as a warp extra argument, not through a space-split command string.
+      */
+    def srcNoDataArgs(
+        ds: org.gdal.gdal.Dataset,
+        fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType),
+        maskAsAlpha: Boolean = false
+    ): Seq[String] = {
+        val nd = warpNoData(ds, fill)
+        if (nd.undeclared.isEmpty || (!maskAsAlpha && nd.undeclared.exists(hasOwnMask))) Seq.empty
+        else Seq("-srcnodata", nd.list, "-wo", "UNIFIED_SRC_NODATA=NO")
+    }
+
+    /**
+      * gdalwarp `-dstnodata <one value per band>` for `ds`, when some band declares no NoData: an undeclared
+      * band gets `fill(band)` (default [[getNoDataConstant]]), a declared band keeps its own value. Empty when
+      * every band declares NoData: the warp carries it. Pair it with [[srcNoDataArgs]]; `-dstnodata` alone
+      * moves source pixels equal to the value by +/- 1 and keeps them valid. ONE argument, like there.
+      */
+    def dstNoDataArgs(
+        ds: org.gdal.gdal.Dataset,
+        fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType)
+    ): Seq[String] = {
+        val nd = warpNoData(ds, fill)
+        if (nd.undeclared.isEmpty) Seq.empty else Seq("-dstnodata", nd.list)
     }
 
     /** Converts geographic (xGeo, yGeo) to pixel (x, y) using the 6-element geotransform. */
@@ -64,7 +158,8 @@ object GDAL {
         val dy = yGeo - gt(3)
         val x = ( dx * gt(5) - dy * gt(2)) / det
         val y = (-dx * gt(4) + dy * gt(1)) / det
-        (x.toInt, y.toInt)
+        // floor, not truncation: a point just west or north of the raster is pixel -1, as the light level answers
+        (math.floor(x).toInt, math.floor(y).toInt)
     }
 
 }

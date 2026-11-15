@@ -1,4 +1,4 @@
-"""Task 6 (SDD — Phase A native mini-COG mosaic): end-to-end round-trip integration.
+"""End-to-end round-trip integration.
 
 Proves the full native mosaic pipeline composes correctly in a single Docker test:
 
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import glob
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import rasterio
@@ -42,7 +43,7 @@ from rasterio.windows import Window
 from databricks.labs.gbx.ds._mosaic import mint_vrt
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
-from databricks.labs.gbx.pyrx.functions import rst_avg
+from databricks.labs.gbx.rasterx.functions import rst_avg
 
 # ---------------------------------------------------------------------------
 # Shared raster geometry
@@ -87,7 +88,7 @@ def _write_src(
     maxval = np.iinfo(dtype).max
     data = data % maxval
     data[data == 0] = 1  # guarantee no all-zero tiles
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -735,7 +736,7 @@ def _write_gb_source_27700(tmp_path) -> str:
     )
     data = np.arange(w * h, dtype=np.uint16).reshape(1, h, w) % np.iinfo(np.uint16).max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 

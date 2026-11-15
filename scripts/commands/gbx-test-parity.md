@@ -10,11 +10,24 @@ bash scripts/commands/gbx-test-parity.sh [OPTIONS]
 
 ## Options
 
-- `--path <path>` - Suite path (default: `python/geobrix/test/pyvx/`)
+- `--path <path>` - A suite file, or a directory whose parity suites to run. Repeat it to run several (relative to the repo root; default: every parity suite, see below)
 - `-k <expr>` - Pytest keyword filter (e.g. `crs`)
 - `--skip-build` - Reuse the already-staged JAR (fast; only when Scala is unchanged)
 - `--log <path>` - Write output to a log file (filename → `test-logs/<name>`)
+- `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--help` - Display help message
+
+## The native payload
+
+Set `GBX_NATIVE_ROOT` in the calling shell to run the container's pytest on a native payload, for example `GBX_NATIVE_ROOT=build/env-wheel/env6/payload` (from `gbx:build:wheel --env 6`). The command passes it into the container as its `/root/geobrix` path (a path under this checkout, relative or absolute). Any other absolute path is taken as a container path. As a result, the run's Python serves the payload's bindings (its `osgeo` and rasterio on one GDAL). Unset, nothing is passed.
+
+## The oracle table selection
+
+Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged. Unset, nothing is passed and the harness runs every table. A test the selection leaves out skips with the reason `GBX_ORACLE_TABLES leaves out <table>`. The gate does not count those skips: they did not run by request.
+
+## Pytest options
+
+Set `PYTEST_ADDOPTS` in the calling shell (`--durations=20`) to pass it into each file's pytest process. Each file is its own process, so a `--junitxml` path is overwritten by every file after the first; keep it for a single `--path` file.
 
 ## Why this command exists
 
@@ -25,13 +38,50 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 1. **Rebuilds the JAR by default.** A staged JAR older than the Scala sources makes every heavy call fail with `UNRESOLVED_ROUTINE`: a mass failure that looks like a code bug but is only a stale artifact. Rebuilding first removes that failure mode entirely.
 2. **Stages exactly one JAR**, deleting older ones so a stale artifact cannot be picked up instead.
 3. **Runs with integration enabled** — parity is the whole point of the run.
-4. **Fails when 0 tests passed**, printing the likely cause (no staged JAR, or a JAR-free Spark session already live in the process). This is what stops a fully-skipped run from being mistaken for a pass.
+   It first prepares the container the way `gbx:test:python` does (one shared step). The first is an editable install of geobrix. Spark's Python workers do not see pytest's `pythonpath`, so without it they would fail every light row with `ModuleNotFoundError`. The second is the optional light-tier test deps, which a fresh container lacks (the Column-API legs import them). Both are idempotent and cheap when present.
+4. **Leaves the Spark Connect tests out** (`-m 'not connect'`). They run in their own process (`gbx:test:pyrx`). The container has no gRPC client, so in a parity file's process they would only ever skip.
+5. **Fails when any test skipped**, and prints the likely cause:
+   - no staged JAR;
+   - a JAR-free Spark session already live in the process;
+   - **sample data missing**: the container started without the sample-data mounts, so suites that read the sample bundle skip as `sample not mounted`. Start it with `gbx:docker:start`.
+
+   This stops a fully-skipped run from being mistaken for a pass.
+   - "did NOT RUN" means nothing passed: every test skipped, or none were collected.
+   - "ran WITH SKIPS" means some tests passed and some skipped. It prints both counts.
+
+## Which suites run
+
+The suites are **discovered**, not listed. The gate runs every `python/geobrix/test/**/test_parity*.py`, `test_*_parity.py` and `*_cross_tier.py`, sorted. A cross-tier suite that needs the JAR counts as a parity suite. A short exclusion list (`PARITY_EXCLUDE` in the script) holds the files that are not cross-tier gates:
+
+- `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py`: light-only writer round trips.
+- `ds/test_reader_parity.py`: a light-only reader check against the source file.
+
+These three are not part of any parity gate. They run only under `gbx:test:python --with-integration`, which also runs their `ds` tests that need the container's sample data. A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
+
+`--path` may be given several times, and each value may be a file or a directory. `./x` and `x/` are the same path, so the exclusions still apply. They run once each, in the order given:
+
+```bash
+bash scripts/commands/gbx-test-parity.sh --skip-build \
+  --path python/geobrix/test/pyvx/test_parity_mvt.py \
+  --path python/geobrix/test/pygx/
+```
 
 ## When to use
 
 - Before pushing a change that touches CRS handling, geometry encoding, or anything implemented in both tiers.
 - After changing any Scala expression that has a light-tier counterpart (the rebuild is what makes the heavy side current).
-- As the final gate for a both-tiers feature, alongside `gbx:test:bindings`.
+- As the final gate for a both-tiers feature, alongside `gbx:manifest:gen --check`.
+
+## One test run at a time
+
+This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the container test lock first. It is shared by every command that runs Maven or a test JVM there (`gbx:test:*`, `gbx:coverage:*`, `gbx:lint:scalastyle`, `gbx:bench:heavyweight`, `gbx:data:stage-jar`/`stage-wheel`, and `gbx:docker:exec` with an `mvn` or `pytest` command).
+
+- **What it guarantees.** gbx commands never overlap in the container, including after a killed run. There are two locks inside the container (`scripts/docker/gbx-lock.sh`). The *run* lock is held while this command or any child of it is alive, which makes whole runs take turns. The *work* lock is held by the Maven or pytest process itself for as long as it runs. The lock is not passed on to children that Python's `subprocess` or Java's `ProcessBuilder` start, such as a Surefire fork. They normally exit with their parent. If this command is killed (`kill -9`, a harness stop, a timeout), the run lock frees. The container's Maven or pytest keeps running and keeps the work lock. The next run waits for it to end and names the process still holding it.
+- **Default: wait.** A second run prints one line naming the holder (its command and PID, read from the lock's `.info` file) and waits. It gives up after `GBX_TEST_LOCK_TIMEOUT` seconds (default `3600`) with exit 75.
+- **`--no-wait`: fail fast.** Exit 75 at once, naming the holder (or the earlier work still running).
+- **What it does not cover.** Maven or pytest started in the container outside a gbx command (an interactive `docker exec geobrix-dev mvn ...`) is not seen. A work process that never ends keeps the lock until it is killed; the message names it.
+- The log starts with this run's PID and the lock acquisition (`test lock acquired: pid <pid> <command>`), so a duplicate launch shows up.
+- Do not detach a run with `&` or `nohup`: use the harness's `run_in_background`, which is tracked.
 
 ## Examples
 
@@ -41,6 +91,9 @@ bash scripts/commands/gbx-test-parity.sh
 
 # Just the CRS-family parity, reusing the staged JAR
 bash scripts/commands/gbx-test-parity.sh --skip-build -k crs
+
+# Two named suites
+bash scripts/commands/gbx-test-parity.sh --skip-build --path python/geobrix/test/pyvx/test_parity_mvt.py --path python/geobrix/test/pygx/test_parity_bng.py
 
 # With a log file
 bash scripts/commands/gbx-test-parity.sh --log parity.log

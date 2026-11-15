@@ -1,5 +1,5 @@
 """Env-v5 (Python 3.12) compatibility guard for the [stac] extra (pin sanity only;
-the live import is exercised by notebooks/tests/stac_env_v5_smoke.py on Serverless)."""
+the live import is exercised by examples/tests/stac_env_v5_smoke.py on Serverless)."""
 
 import pathlib
 import re

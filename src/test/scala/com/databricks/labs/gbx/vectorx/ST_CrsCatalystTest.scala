@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.expressions.ExpressionConfigExpr
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.expressions.{ST_TransformCrs, ST_TransformCrs3}
@@ -11,12 +12,12 @@ import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers._
 
-/** Catalyst-level SQL tests for gbx_st_crs, gbx_st_setcrs, gbx_st_transformcrs.
+/** Catalyst-level SQL tests for gbx_st_transformcrs.
   *
   * These tests run expressions through the full Spark SQL analysis path (parse → analyze
   * → optimize → execute) and catch issues that unit-level eval() tests miss, such as:
-  * - propagateNull short-circuiting in RuntimeReplaceable (C1: 2-arg transformcrs → NULL)
-  * - implicit casts not firing for integer CRS arguments (I2)
+  * - propagateNull short-circuiting in RuntimeReplaceable (2-arg transformcrs → NULL)
+  * - implicit casts not firing for integer CRS arguments
   * - expression registration gaps
   *
   * Requires GDAL native libs; run via gbx:test:scala or inside Docker.
@@ -27,7 +28,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         super.beforeAll()
         GDALManager.loadSharedObjects(Iterable.empty[String])
         GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
-        functions.register(spark)
+        TestL1.installAll(spark)
     }
 
     private val gf = new GeometryFactory()
@@ -44,30 +45,6 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     private def plainWkbHex: String = {
         val g = gf.createPoint(new Coordinate(15.0, 48.0))
         JTS.toWKB(g).map("%02x".format(_)).mkString
-    }
-
-    test("gbx_st_crs: EWKB EPSG:4326 via SQL") {
-        val result = spark.sql(s"SELECT gbx_st_crs(unhex('${ewkbHex(4326)}'))").first().getString(0)
-        result shouldBe "EPSG:4326"
-    }
-
-    test("gbx_st_setcrs: WKB + string CRS via SQL") {
-        val result = spark.sql(
-            s"SELECT gbx_st_setcrs(unhex('$plainWkbHex'), 'EPSG:32633')"
-        ).first().getAs[Array[Byte]](0)
-        assert(result != null, "gbx_st_setcrs must not return NULL")
-        val g = JTS.fromWKB(result)
-        g.getSRID shouldBe 32633
-    }
-
-    test("gbx_st_setcrs: integer CRS coerces to string via SQL") {
-        // Integer CRS should be implicitly cast to StringType via inputTypes override.
-        val result = spark.sql(
-            s"SELECT gbx_st_setcrs(unhex('$plainWkbHex'), 32633)"
-        ).first().getAs[Array[Byte]](0)
-        assert(result != null, "gbx_st_setcrs with integer CRS must not return NULL")
-        val g = JTS.fromWKB(result)
-        g.getSRID shouldBe 32633
     }
 
     test("gbx_st_transformcrs 2-arg: EWKB 4326 -> 32633 via SQL (Catalyst null propagation check)") {
@@ -116,15 +93,6 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     // Always-BINARY SQL contract: a STRING geometry argument still yields BINARY
     // ------------------------------------------------------------------
 
-    test("gbx_st_setcrs: STRING (EWKT) geometry input declares and returns BINARY") {
-        // POINT(15 48) SRID=4326 — ST_SetCrs doesn't reproject, just stamps the SRID
-        val df = spark.sql("SELECT gbx_st_setcrs('SRID=4326;POINT (15 48)', 'EPSG:32633') AS g")
-        df.schema.fields(0).dataType shouldBe org.apache.spark.sql.types.BinaryType
-        val g = JTS.fromWKB(df.first().getAs[Array[Byte]](0))
-        g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (15.0 +- 1e-12)
-    }
-
     test("gbx_st_transformcrs: STRING (EWKT) geometry input declares and returns BINARY") {
         // POINT(15 48) SRID=4326: inside EPSG:32633 domain (W=12 E=18)
         val df = spark.sql(
@@ -154,7 +122,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     // ExpressionConfigExpr child so the executor runs GDALManager.init (which
     // prepends registered custom PROJ grid dirs) BEFORE the OGR/OSR transform.
     // A session using ONLY gbx_st_transformcrs otherwise never triggers GDAL
-    // init and a grid-requiring CRS silently fails (see RST_TransformCrsGridSpec).
+    // init and a grid-requiring CRS silently fails (see RegisteredProjGridSpec).
     // Structured at the wiring level (children + builder arity) because the PROJ
     // grid cache is process-global in a shared test JVM.
     // ------------------------------------------------------------------

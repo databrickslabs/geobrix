@@ -8,7 +8,7 @@ Each test runs the hot code in a FRESH SUBPROCESS so ru_maxrss is clean
 (process-level peak, not cumulative session peak).  The subprocess script
 reports the ratio on stdout; the parent asserts the bound.
 
-COG validity (cog_validate) is asserted inline (no subprocess needed).
+COG validity (GDAL's COG validator) is asserted inline (no subprocess needed).
 """
 
 import subprocess
@@ -21,6 +21,8 @@ import rasterio
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.ds._encode import encode_tile
+
+from .conftest import cog_errors
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -149,32 +151,25 @@ def test_gtiff_encode_tile_peak_ram_baseline():
 
 
 # ---------------------------------------------------------------------------
-# COG validity: driver='COG' output must pass cog_validate (spec-compliant)
+# COG validity: driver='COG' output must pass GDAL's COG validator (spec-compliant)
 # ---------------------------------------------------------------------------
 
 
 def test_cog_convert_output_is_spec_valid():
-    """cog_convert() output must pass rio_cogeo.cog_validate (IFD order correct).
+    """cog_convert() output must pass GDAL's COG validator, strictly (IFD order correct).
 
     The old build_overviews (v4) approach passed sniff_header but FAILED
-    cog_validate because overviews were written after the main image IFD.
+    the validator because overviews were written after the main image IFD.
     driver='COG' (v5) orders IFDs correctly by construction.
     """
-    try:
-        from rio_cogeo.cogeo import cog_validate
-    except ImportError:
-        pytest.skip("rio-cogeo not installed")
-
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert
 
     src = _make_gtiff_bytes(w=512, h=512)
     with MemoryFile(src) as mf, mf.open() as ds:
         cog_bytes = cog_convert(ds, "DEFLATE", 256, "AVERAGE")
 
-    with MemoryFile(cog_bytes) as mf2:
-        is_valid, errors, warnings = cog_validate(mf2.name, strict=True)
-
-    assert is_valid, (
+    errors = cog_errors(cog_bytes)
+    assert not errors, (
         f"cog_convert output is NOT spec-valid. errors={errors}. "
         "This means the IFD ordering is wrong (likely build_overviews regression, "
         "not driver='COG' path)."
@@ -182,12 +177,7 @@ def test_cog_convert_output_is_spec_valid():
 
 
 def test_encode_tile_cog_output_is_spec_valid():
-    """encode_tile(tile_format='cog') bytes must also pass cog_validate."""
-    try:
-        from rio_cogeo.cogeo import cog_validate
-    except ImportError:
-        pytest.skip("rio-cogeo not installed")
-
+    """encode_tile(tile_format='cog') bytes must also pass GDAL's COG validator."""
     src = _make_gtiff_bytes(w=512, h=512)
     with MemoryFile(src) as cmf, cmf.open() as ds:
         _, cog_bytes, md = encode_tile(
@@ -199,10 +189,8 @@ def test_encode_tile_cog_output_is_spec_valid():
             cog_blocksize=256,
         )
 
-    with MemoryFile(cog_bytes) as mf2:
-        is_valid, errors, warnings = cog_validate(mf2.name, strict=True)
-
-    assert is_valid, f"encode_tile(cog) output is NOT spec-valid. errors={errors}"
+    errors = cog_errors(cog_bytes)
+    assert not errors, f"encode_tile(cog) output is NOT spec-valid. errors={errors}"
     # Metadata stamp also agrees
     from databricks.labs.gbx.pyrx.core.cog import GBX_FORMAT
 

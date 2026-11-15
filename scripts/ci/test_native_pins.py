@@ -1,0 +1,399 @@
+"""Tests for scripts/native/pins.py: the one pin file for the native stack and the audit that fails on drift.
+
+Pure Python, no Docker and no network. The audit reads the repository (or a scratch copy of the files it
+audits, via --root); the environment check reads the JSON that scripts/ci/venv_env_report.py collects.
+"""
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from conftest import REPO_ROOT
+
+PINS = REPO_ROOT / "scripts" / "native" / "pins.py"
+BOUND = ("rasterio", "pyogrio", "pyproj", "shapely", "netcdf4")
+
+
+def pins(*args):
+    return subprocess.run(
+        [sys.executable, str(PINS), *args], capture_output=True, text=True
+    )
+
+
+def pin(key: str) -> str:
+    res = pins("get", key)
+    assert res.returncode == 0, res.stderr
+    return res.stdout.strip()
+
+
+def audited_copy(tmp_path: Path) -> Path:
+    """The pin files, the toolchain file, the legacy list, every file the legacy list names, and the crates' locks."""
+    root = tmp_path / "tree"
+    paths = ["scripts/native/pins.conf", "scripts/native/rust-pins.conf"]
+    paths += ["scripts/native/legacy-consumers.txt", "rust-toolchain.toml"]
+    paths += [str(p.relative_to(REPO_ROOT)) for p in REPO_ROOT.glob("rust/*/Cargo.lock")]
+    java = f"gdal-{pin('GDAL_VERSION')}-gbx{pin('GBX_NATIVE_REVISION')}.jar"
+    paths += ["pom.xml", f"scripts/native/maven/{java}"]
+    for line in (
+        (REPO_ROOT / "scripts/native/legacy-consumers.txt").read_text().splitlines()
+    ):
+        if line.strip() and not line.startswith("#"):
+            paths.append(line.split("|")[0])
+    for rel in sorted(set(paths)):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / rel, root / rel)
+    return root
+
+
+def test_the_repository_passes_the_audit():
+    res = pins("audit", "--check")
+    assert res.returncode == 0, res.stdout + res.stderr
+    shell = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "scripts/commands/gbx-versions-audit.sh"),
+            "--native",
+            "--check",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert shell.returncode == 0, shell.stdout + shell.stderr
+
+
+@pytest.mark.parametrize(
+    "rel, change",
+    [
+        ("rust-toolchain.toml", (r'channel = "[^"]+"', 'channel = "0.0.1"')),
+        (
+            "scripts/docker/Dockerfile",
+            (r"(?m)^ARG GDAL_VERSION=\S+", "ARG GDAL_VERSION=9.9.9"),
+        ),
+        ("scripts/native/pins.conf", (r"(?m)^(GDAL_SHA256=).*", r"\1<")),
+        # a half-done bump: the version moved, its URL, file name and checksum did not
+        ("scripts/native/pins.conf", (r"(?m)^(GDAL_VERSION=).*", r"\g<1>9.9.9")),
+        # a crate pin in pins.conf would rebuild GDAL on every bump
+        (
+            "scripts/native/pins.conf",
+            (r"(?m)^(MATURIN_VERSION=.*)$", r"\1\nCRATE_GEOS_SYS_VERSION=2.0.10"),
+        ),
+        # a pin no Cargo.lock locks any more
+        (
+            "scripts/native/rust-pins.conf",
+            (r"(?m)^(CRATE_GEOS_VERSION=.*)$", r"\1\nCRATE_GDAL_VERSION=0.19.0"),
+        ),
+        # the committed GDAL Java classes are not the bytes the pin names (restaged, not re-pinned)
+        (
+            "scripts/native/rust-pins.conf",
+            (r"(?m)^(GDAL_JAVA_JAR_SHA256=).*", r"\g<1>" + "0" * 64),
+        ),
+        # pom.xml's gdal.java.version moved without the pin, or lost its property
+        ("pom.xml", (r"(<gdal\.java\.version>)[^<]*", r"\g<1>0.0.1-gbx0")),
+        ("pom.xml", (r"gdal\.java\.version", "gdal.jni.version")),
+    ],
+    ids=[
+        "rust-channel",
+        "legacy-gdal-arg",
+        "checksum",
+        "version-without-url",
+        "crate-pin-in-pins-conf",
+        "stale-crate-pin",
+        "java-classes-sha",
+        "pom-property-moved",
+        "pom-property-missing",
+    ],
+)
+def test_drift_is_reported(tmp_path, rel, change):
+    root = audited_copy(tmp_path)
+    assert (
+        pins("audit", "--check", "--root", str(root)).returncode == 0
+    )  # the copy matches first
+    target = root / rel
+    target.write_text(re.sub(change[0], change[1], target.read_text(), count=1))
+
+    res = pins("audit", "--check", "--root", str(root))
+
+    assert res.returncode == 1, res.stdout
+    assert rel in res.stdout + res.stderr
+
+
+def test_the_gdal_java_jar_installs_only_with_its_pin_and_names_its_build(tmp_path):
+    """java_jar.py install writes the pinned jar and a pom into a Maven repository, and refuses a jar whose sha256
+    is not the pin (nothing written); the audit holds the build the jar records to pins.conf's GDAL_VERSION."""
+    import hashlib
+    import zipfile
+
+    java_jar = REPO_ROOT / "scripts" / "native" / "java_jar.py"
+    version = f"{pin('GDAL_VERSION')}-gbx{pin('GBX_NATIVE_REVISION')}"
+    rel = f"scripts/native/maven/gdal-{version}.jar"
+
+    def install(root, repo):
+        return subprocess.run(
+            [sys.executable, str(java_jar), "install", "--root", str(root), "--repo", str(repo)],
+            capture_output=True,
+            text=True,
+        )
+
+    res = install(REPO_ROOT, tmp_path / "m2")
+    dest = tmp_path / "m2" / "org" / "gdal" / "gdal" / version
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (dest / f"gdal-{version}.jar").read_bytes() == (REPO_ROOT / rel).read_bytes()
+    assert f"<version>{version}</version>" in (dest / f"gdal-{version}.pom").read_text()
+
+    root = audited_copy(tmp_path)
+    jar = root / rel
+    jar.write_bytes(jar.read_bytes() + b"\0")
+    res = install(root, tmp_path / "m2-tampered")
+    assert res.returncode == 1 and "INSTALL REFUSED" in res.stdout, res.stdout
+    assert not (tmp_path / "m2-tampered").exists()
+
+    # a jar recording another GDAL than the pin, re-pinned: the audit still drifts, naming both
+    with zipfile.ZipFile(REPO_ROOT / rel) as z:
+        content = {i.filename: z.read(i) for i in z.infolist()}
+    content["META-INF/gbx-gdal.properties"] = b"gdal.version=9.9.9\n"
+    with zipfile.ZipFile(jar, "w") as z:
+        for name, data in content.items():
+            z.writestr(name, data)
+    pins_file = root / "scripts" / "native" / "rust-pins.conf"
+    sha = hashlib.sha256(jar.read_bytes()).hexdigest()
+    pins_file.write_text(re.sub(r"(?m)^GDAL_JAVA_JAR_SHA256=.*$", f"GDAL_JAVA_JAR_SHA256={sha}", pins_file.read_text()))
+    res = pins("audit", "--check", "--root", str(root))
+    assert res.returncode == 1 and "GDAL 9.9.9" in res.stdout, res.stdout
+
+
+CARGO_ROWS = {
+    "pyo3-as-a-table": (
+        {
+            "crate/Cargo.toml": '[package]\nname = "x"\n\n[dependencies.pyo3]\nversion = "0.29.0"\n'
+        },
+        "crate/Cargo.toml",
+    ),
+    "inherited-but-never-pinned": (
+        {
+            "Cargo.toml": '[workspace]\nmembers = ["crate"]\n',
+            "crate/Cargo.toml": "[dependencies]\npyo3.workspace = true\n",
+        },
+        "crate/Cargo.toml",
+    ),
+    "inherited-and-pinned": (
+        {
+            "Cargo.toml": '[workspace.dependencies]\npyo3 = { version = "={PYO3}", features = ["abi3"] }\n',
+            "crate/Cargo.toml": "[dependencies]\npyo3.workspace = true\n",
+        },
+        None,
+    ),
+    "maturin-backend-before-requires": (
+        {
+            "py/pyproject.toml": '[build-system]\nbuild-backend = "maturin"\nrequires = ["maturin=={MATURIN}"]\n'
+        },
+        None,
+    ),
+    # a georust crate locked at another version than its CRATE_*_VERSION pin (a `cargo update` moved it)
+    "lock-off-the-crate-pin": (
+        {
+            "crate/Cargo.lock": 'version = 4\n\n[[package]]\nname = "gdal-sys"\nversion = "0.11.0"\n'
+        },
+        "crate/Cargo.lock",
+    ),
+}
+
+
+@pytest.mark.parametrize("files, drift", CARGO_ROWS.values(), ids=CARGO_ROWS.keys())
+def test_crates_and_maturin_projects_are_audited_in_every_toml_form(
+    tmp_path, files, drift
+):
+    root = audited_copy(tmp_path)
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        text = text.replace("{PYO3}", pin("PYO3_VERSION")).replace(
+            "{MATURIN}", pin("MATURIN_VERSION")
+        )
+        (root / rel).write_text(text)
+
+    res = pins("audit", "--check", "--root", str(root))
+
+    if drift:
+        assert res.returncode == 1 and drift in res.stdout, res.stdout
+    else:
+        assert res.returncode == 0, res.stdout
+
+
+def pinned_report() -> dict:
+    """What venv_env_report.py collects, for an environment that is exactly what the pins say."""
+    return {
+        "python": pin("PYTHON_VERSION"),
+        "packages": {n: pin(f"{n.upper()}_VERSION") for n in BOUND},
+        "natives": {k: pin(f"{k.upper()}_VERSION") for k in ("gdal", "proj", "geos")},
+    }
+
+
+def drifted(report, field, name, value):
+    if field == "python":
+        report["python"] = value
+    elif value is None:
+        del report[field][name]
+    else:
+        report[field][name] = value
+    return report
+
+
+@pytest.mark.parametrize(
+    "field, name, value",
+    [
+        (None, None, None),  # matches the pins
+        ("python", None, "3.12.11"),
+        ("natives", "gdal", "3.12.1"),
+        ("natives", "geos", "3.13.1"),
+        ("packages", "pyproj", "3.7.2"),
+        ("packages", "shapely", None),  # not installed at all
+    ],
+    ids=["match", "python", "gdal", "geos", "package", "missing-package"],
+)
+def test_an_environment_is_checked_against_the_pins(tmp_path, field, name, value):
+    report = pinned_report()
+    if field:
+        drifted(report, field, name, value)
+    path = tmp_path / "env.json"
+    path.write_text(json.dumps(report))
+
+    res = pins("env-check", "--check", f"host={path}")
+
+    if field is None:
+        assert res.returncode == 0, res.stdout + res.stderr
+    else:
+        assert res.returncode == 1, res.stdout
+        assert (name or "python") in res.stdout
+
+
+TAG_INPUTS = (
+    "scripts/native/pins.conf",
+    "scripts/native/build.Dockerfile",
+    "scripts/native/build-requirements-aarch64.txt",
+    "scripts/native/cargo-offline.toml",
+    "rust-toolchain.toml",
+)
+
+
+@pytest.mark.parametrize(
+    "change, moves",
+    [
+        ((r"(?m)^(# Native stack pins:)", r"\1 (reworded)"), False),
+        ((r"(?m)^(GDAL_VERSION=.*)$", r"\n\n\1   "), False),  # blank lines, trailing space
+        ((r"(?m)^GBX_NATIVE_REVISION=\d+", "GBX_NATIVE_REVISION=99"), True),
+    ],
+    ids=["comment", "blank-lines", "value"],
+)
+def test_only_a_pin_value_moves_the_image_tag_and_the_staged_pins(tmp_path, change, moves):
+    # The image tag and the pins copied into the deps stage are the GDAL build's cache key: a comment edit must
+    # rebuild nothing, a value edit must rebuild.
+    root = tmp_path / "tag"
+    for rel in TAG_INPUTS:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / rel, root / rel)
+    key = lambda: (  # noqa: E731
+        pins("tag-hash", "aarch64", "--root", str(root)).stdout,
+        pins("canonical", "--root", str(root)).stdout,
+    )
+    before = key()
+    target = root / "scripts/native/pins.conf"
+    target.write_text(re.sub(change[0], change[1], target.read_text(), count=1))
+    after = key()
+
+    assert re.fullmatch(r"[0-9a-f]{12}\n", before[0]) and "GDAL_VERSION=" in before[1]
+    assert (after[0] != before[0], after[1] != before[1]) == (moves, moves)
+    command = (REPO_ROOT / "scripts/commands/gbx-build-native.sh").read_text()
+    assert "pins.py tag-hash" in command and "pins.py canonical" in command
+
+
+def test_the_container_build_stays_offline_on_vendored_crates():
+    # The build container compiles Rust from /vendor only. If either setting were lost, cargo would quietly
+    # reach for a registry (or fail only on a machine without network), and the offline guarantee would be gone.
+    config = REPO_ROOT / "scripts/native/cargo-offline.toml"
+    lines = [row.split("#")[0].strip() for row in config.read_text().splitlines()]
+
+    assert "[net]" in lines and "offline = true" in lines
+    assert "[source.crates-io]" in lines
+    assert 'replace-with = "vendored-sources"' in lines
+    assert 'directory = "/vendor"' in lines
+
+
+DCS_DOCKERFILE = REPO_ROOT / "scripts/docker/dcs/Dockerfile"
+ENV6 = REPO_ROOT / "python/geobrix/envs/env6"
+ARCHES = ("aarch64", "x86_64")
+
+
+def dockerfile_instructions(path: Path) -> list:
+    """The Dockerfile's instructions, comments dropped and continuation lines joined."""
+    text = path.read_text().replace("\\\n", " ")
+    return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+
+def test_the_dcs_image_builds_no_gdal():
+    # The DCS image carries the env wheel's payload: one GDAL, from the one build. It compiles none and installs none.
+    code = "\n".join(dockerfile_instructions(DCS_DOCKERFILE))
+
+    assert "download.osgeo.org" not in code
+    assert not re.search(r"\bcmake\b", code)
+    assert not re.search(r"\blib(gdal|proj|geos|poppler)[\w.+-]*", code.replace("libgdalalljni", ""))
+    assert not re.search(r"apt(-get)?\s+install", code)
+    assert "GDAL_VERSION" not in code  # the version in the image is the payload's, read from _build_info
+
+    steps = [part.strip() for ln in dockerfile_instructions(DCS_DOCKERFILE) for part in ln.split("&&")]
+    pips = [part for part in steps if "pip install" in part]
+    wheel = [ln for ln in pips if "--no-deps" in ln]
+    locked = [ln for ln in pips if "--require-hashes" in ln]
+    assert len(wheel) == 1 and "geobrix-" in wheel[0] and "--no-index" in wheel[0]
+    assert len(locked) == 1 and "-r /tmp/dcs.lock" in locked[0] and "--no-index" in locked[0]
+    assert len(pips) == 2  # nothing else is installed, and nothing reaches an index
+    assert all("--only-binary :all:" in part for part in pips)  # and nothing is built from a source distribution
+    # every RUN step runs with no network: the image build needs none, and a step that reached for one would fail
+    runs = [ln for ln in dockerfile_instructions(DCS_DOCKERFILE) if ln.startswith("RUN ")]
+    assert len(runs) == 2 and all("--network=none" in ln for ln in runs)
+
+
+@pytest.mark.parametrize("arch", ARCHES)
+def test_the_dcs_lock_installs_our_rasterio_and_holds_the_base(arch):
+    rasterio = f"{pin('RASTERIO_VERSION')}+gbx{pin('GBX_NATIVE_REVISION')}"
+    lock = (ENV6 / f"dcs-{arch}.lock").read_text()
+    base = (ENV6 / f"dcs-base-{arch}.txt").read_text()
+
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n?)+)", lock, re.M)
+    pinned = {n.lower(): v for n, v, _ in entries}
+    assert pinned["rasterio"] == rasterio  # our build, not PyPI's
+    # every requirement line carries a hash (`--require-hashes` refuses the file otherwise)
+    assert len(entries) == len(re.findall(r"^[A-Za-z0-9_.-]+==", lock, re.M))
+    # click is held at the image's version
+    assert re.search(r"^click==(\S+)", base, re.M).group(1) == pinned["click"]
+    # and it is the package list of the image at ONE image digest, one `name==version` per line after that header
+    header, *packages = base.splitlines()
+    assert re.fullmatch(r"# base-image: databricksruntime/environment@sha256:[0-9a-f]{64}", header)
+    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+==\S+", ln) for ln in packages)
+
+
+def test_the_dcs_inputs_name_the_declared_requirements_and_our_rasterio():
+    lines = [ln.split("#")[0].strip() for ln in (ENV6 / "dcs.in").read_text().splitlines()]
+    lines = [ln for ln in lines if ln]
+    rasterio = f"rasterio=={pin('RASTERIO_VERSION')}+gbx{pin('GBX_NATIVE_REVISION')}"
+    assert lines == ["-r core.txt", "-r extra-vizx.txt", rasterio]
+
+
+def test_a_version_that_is_only_a_prefix_of_the_pinned_url_is_reported():
+    # 1.7.5 is not in ...-1.7.5.1.tar.gz: the version must end at a dot-digit boundary too.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gbx_pins", PINS)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["gbx_pins"] = mod
+    spec.loader.exec_module(mod)
+    good = {
+        "ZED_VERSION": "1.7.5",
+        "ZED_SHA256": "0" * 64,
+        "ZED_URL": "https://example.invalid/zed-1.7.5.tar.gz",
+    }
+    assert mod.validate(good) == []
+    prefix = dict(good, ZED_URL="https://example.invalid/zed-1.7.5.1.tar.gz")
+    assert any("ZED_VERSION=1.7.5" in f for f in mod.validate(prefix))

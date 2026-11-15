@@ -1,6 +1,6 @@
 """Spark-free web-mercator XYZ slippy-map tiling (rio-tiler + morecantile).
 
-Mirrors the heavyweight rasterx ``RST_TileXYZ`` / ``RST_XYZPyramid`` semantics:
+Mirrors the heavyweight rasterx ``RST_TileXYZ`` semantics:
 
   * ``render_tile`` renders a single (z, x, y) web-mercator tile to PNG / JPEG /
     WEBP bytes. Out-of-extent or empty tiles return a transparent PNG (RGBA,
@@ -12,23 +12,25 @@ Mirrors the heavyweight rasterx ``RST_TileXYZ`` / ``RST_XYZPyramid`` semantics:
 
 Primary backend: rio-tiler (lazy import, checked at call time via
 ``_riotiler_available``).  Fallback backend: rasterio warp + GDAL CreateCopy
-(always available; handles the Databricks Serverless env where rio-tiler 9.3.0
-re-resolves and fails to import under py3.12).  Public API is identical for
-both backends.
+(always available; used when rio-tiler cannot be imported on the executor).
+Public API is identical for both backends.
 """
 
 import morecantile
 import numpy as np
 from rasterio.warp import transform_bounds
 
+from databricks.labs.gbx._gdal_policy import open_bytes
+
 # NOTE: rio_tiler is imported LAZILY (inside _transparent_png_riotiler /
 # _render_tile_riotiler), not at module top. rio-tiler 9.x defines
-# TypedDict(extra_items=...) (PEP 728), which fails to import under Databricks
-# Serverless %pip (its immutable constraints hold typing_extensions back).
+# TypedDict(extra_items=...) (PEP 728), which needs typing_extensions>=4.13; a
+# runtime that keeps an older typing_extensions (Serverless env 5, DBR 17.3 and 18
+# ship 4.12.2 until GeoBrix's typing_extensions floor raises it) cannot import it.
 # Keeping the import lazy means `import pyrx` — and every rst_* function that
-# does NOT use XYZ tiling — works on Serverless; only rst_tilexyz /
-# rst_xyzpyramid require a working backend at call time.  See pyproject
-# [light-base] rio-tiler pin.
+# does NOT use XYZ tiling — still works there; only rst_tilexyz /
+# rst_xyzpyramid fall back to the rasterio backend at call time.  See the
+# typing_extensions floor in pyproject's base dependencies and envs/env<N>/core.txt.
 
 # --- constants (mirror heavyweight) -----------------------------------------
 MAX_ZOOM = 20
@@ -66,8 +68,8 @@ _RIOTILER_OK = None  # module-level cache; None = not yet checked
 
 def _riotiler_available() -> bool:
     """True if rio-tiler imports cleanly (primary backend). Cached. Any import
-    failure — ImportError OR the 9.3.0 py3.12 TypedDict TypeError — selects the
-    rasterio fallback."""
+    failure — ImportError OR the TypeError from a typing_extensions older than 4.13
+    (PEP 728 ``extra_items``) — selects the rasterio fallback."""
     global _RIOTILER_OK
     if _RIOTILER_OK is None:
         try:
@@ -138,7 +140,7 @@ def _encode(arr_u8, driver):
             dtype="uint8",
         ) as src:
             src.write(arr_u8)
-        with src_m.open() as src_ds, MemoryFile(ext="." + driver.lower()) as dst_m:
+        with open_bytes(src_m) as src_ds, MemoryFile(ext="." + driver.lower()) as dst_m:
             rasterio_shutil.copy(src_ds, dst_m.name, driver=driver)
             return dst_m.read()
 
@@ -198,9 +200,23 @@ def _validate_rescale(rescale):
     if rescale is None:
         return "auto"
     if isinstance(rescale, str):
-        r = rescale.lower()
+        r = rescale.strip().lower()
         if r in ("auto", "none"):
             return r
+        parts = [q.strip() for q in rescale.split(",")]
+        if len(parts) == 2:  # the SQL form of a pair: 'min,max'
+            try:
+                rescale = (float(parts[0]), float(parts[1]))
+            except ValueError:
+                raise ValueError(
+                    f"rst_tilexyz: rescale (min,max) must be two numbers; got '{rescale}'"
+                )
+            lo, hi = rescale
+            if not (lo < hi):
+                raise ValueError(
+                    f"rst_tilexyz: rescale (min, max) must have min < max; got ({lo}, {hi})"
+                )
+            return rescale
         raise ValueError(
             f"rst_tilexyz: rescale must be 'auto', 'none', or a (min, max) pair; "
             f"got string '{rescale}'"
@@ -253,6 +269,22 @@ def _resolve_in_range(ds, rescale):
 # --- render_tile (two backends) ---------------------------------------------
 
 
+def _grey_as_rgb(img):
+    """A one-band image as three equal bands, so a web tile is display RGB(A) (PNG and WebP RGBA, JPEG RGB) whatever the
+    band count of the source; the NoData mask is kept and becomes the alpha band."""
+    if img.count != 1:
+        return img
+    from rio_tiler.models import ImageData
+
+    return ImageData(
+        np.ma.concatenate([img.array] * 3),
+        assets=img.assets,
+        crs=img.crs,
+        bounds=img.bounds,
+        metadata=img.metadata,
+    )
+
+
 def _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes:
     """Render a single XYZ tile via rio-tiler (primary backend).
 
@@ -269,7 +301,7 @@ def _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
             )
             if in_range is not None:
                 img = img.post_process(in_range=in_range)
-            out = img.render(img_format=fmt_u)
+            out = _grey_as_rgb(img).render(img_format=fmt_u)
         if not out:
             return transparent_png(s)
         return out
@@ -340,9 +372,9 @@ def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
         u8 = _to_uint8(dst, in_range)
         a = alpha[0]
         if fmt_u == "JPEG":
-            out_arr = u8[: min(nb, 3)]
+            out_arr = np.repeat(u8, 3, axis=0) if nb == 1 else u8[: min(nb, 3)]
         elif nb == 1:
-            out_arr = np.stack([u8[0], a], axis=0)  # GA
+            out_arr = np.stack([u8[0], u8[0], u8[0], a], axis=0)  # RGBA of a grey
         elif nb == 3:
             out_arr = np.concatenate([u8, a[np.newaxis]], axis=0)  # RGBA
         else:
@@ -351,6 +383,31 @@ def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
         return _encode(out_arr, driver)
     except Exception:
         return transparent_png(s)
+
+
+def render_args(format, size, resampling, rescale):
+    """The arguments of ``rst_tilexyz`` with each NULL as its default (PNG, 256, bilinear, auto), validated:
+    ``(format, size, resampling, rescale)``. ValueError, naming the value, for one that is wrong.
+    """
+    sz = int(size) if size is not None else 256
+    fmt = str(format) if format is not None else "PNG"
+    resamp = str(resampling) if resampling is not None else "bilinear"
+    rsc = rescale if rescale is not None else "auto"
+    validate_render_args(fmt, sz, resamp, rsc)
+    return fmt, sz, resamp, rsc
+
+
+def render_working_bytes(size: int, bands: int) -> int:
+    """An upper estimate of the memory :func:`render_tile` holds at its peak: the warped samples, their 8-bit copy and
+    the RGBA image, 10 bytes a sample of each band and 8 a pixel besides."""
+    return int(size) * int(size) * (10 * max(1, int(bands)) + 8)
+
+
+def validate_render_args(fmt, size, resampling, rescale) -> None:
+    """Raise ValueError, naming the value, for a bad format, size, resampling or rescale: the arguments of a render
+    are parameters, not data, so they are checked before any tile is opened."""
+    _validate(fmt, size, resampling)
+    _validate_rescale(rescale)
 
 
 def render_tile(

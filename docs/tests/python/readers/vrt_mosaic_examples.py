@@ -7,7 +7,7 @@ exercise the mosaic lifecycle end to end against real sample data:
   mosaic.vrt  ->  raster_gbx reader  ->  one virtual tile row per member
   member tiles  ->  mint_vrt  ->  windowed rasterio read
 
-Light tier (pure Python, no JAR): readers register via ds.register.register,
+Light tier (pure Python, no JAR): readers register via databricks.labs.gbx.register,
 never rasterx.register.
 """
 
@@ -22,7 +22,7 @@ SAMPLE_RASTER_SINGLE = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 # Display constants (payload rendered in docs via raw-loader)
 # ---------------------------------------------------------------------------
 
-VRT_PREPARE = r"""from databricks.labs.gbx.ds.register import register
+VRT_PREPARE = r"""from databricks.labs.gbx import register
 register(spark)
 
 # file_gbx gives one path-reference row per source file
@@ -37,8 +37,8 @@ sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw
     .save("/Volumes/catalog/schema/volume/mosaic/")
 )"""
 
-VRT_READ_EXPAND = r"""from databricks.labs.gbx.ds.register import register
-from databricks.labs.gbx.pyrx.functions import rst_avg
+VRT_READ_EXPAND = r"""from databricks.labs.gbx import register
+from databricks.labs.gbx.rasterx.functions import rst_avg
 from pyspark.sql.functions import col
 
 register(spark)
@@ -52,7 +52,7 @@ result = df.select(
     rst_avg(col("tile")).alias("avg"),
 )"""
 
-VRT_QUADBIN = r"""from databricks.labs.gbx.ds.register import register
+VRT_QUADBIN = r"""from databricks.labs.gbx import register
 from pyspark.sql.functions import col
 
 register(spark)
@@ -81,7 +81,7 @@ result = df.select(
     col("tile.metadata")["gridSystem"].alias("gridSystem"),
 )"""
 
-VRT_H3 = r"""from databricks.labs.gbx.ds.register import register
+VRT_H3 = r"""from databricks.labs.gbx import register
 from pyspark.sql.functions import col
 
 register(spark)
@@ -115,7 +115,7 @@ raster_cells = df.select(
 analytics = spark.table("catalog.schema.h3_metrics")  # h3-indexed DataFrame
 result = raster_cells.join(analytics, on="cellid", how="inner")"""
 
-VRT_BNG = r"""from databricks.labs.gbx.ds.register import register
+VRT_BNG = r"""from databricks.labs.gbx import register
 from pyspark.sql.functions import col
 
 register(spark)
@@ -151,7 +151,7 @@ raster_cells = df.select(
 analytics = spark.table("catalog.schema.bng_metrics")  # BNG-indexed DataFrame
 result = raster_cells.join(analytics, on="cellid", how="inner")"""
 
-VRT_MINT = r"""from databricks.labs.gbx.ds._mosaic import mint_vrt
+VRT_MINT = r"""from databricks.labs.gbx.rasterx.helpers import mint_vrt
 
 # Build a transient VRT over an explicit tile list
 tile_paths = [
@@ -176,9 +176,9 @@ with rasterio.open(vrt_path) as vrt_ds:
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs import gbx
 
-    register(spark)
+    gbx.register(spark)
 
 
 def _write_mosaic(spark, src, out_dir, tile_size=128, prune_empty=None):
@@ -239,7 +239,7 @@ def vrt_read_expand(spark, src_path=None):
     """raster_gbx expands mosaic.vrt into one virtual tile row per member mini-COG."""
     from pyspark.sql.functions import col
 
-    from databricks.labs.gbx.pyrx.functions import rst_avg
+    from databricks.labs.gbx.rasterx.functions import rst_avg
 
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE
@@ -532,7 +532,8 @@ def vrt_mint_windowed(spark, src_path=None):
     import rasterio
     from rasterio.windows import Window
 
-    from databricks.labs.gbx.ds._mosaic import mint_vrt, minted_vrt
+    from databricks.labs.gbx.ds._mosaic import minted_vrt
+    from databricks.labs.gbx.rasterx.helpers import mint_vrt
 
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE

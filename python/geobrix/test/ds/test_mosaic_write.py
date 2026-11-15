@@ -23,7 +23,7 @@ Coverage:
         GBX_CELLID (valid h3index at the requested resolution) and GBX_GRIDSYSTEM=h3.
     17. Pixels outside the hexagon boundary are set to nodata; interior pixels
         are non-nodata.  Nodata is always present even when the source had none
-        (derived sentinel — Ruling A).
+        (derived sentinel).
     18. Interior pixels match a reference rasterio.warp.reproject (allclose, not
         byte-equal since nearest resampling and windowed source may vary slightly).
 
@@ -43,6 +43,7 @@ import math
 import os
 import pickle
 import re
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -56,7 +57,6 @@ from databricks.labs.gbx.ds.cog_writer import (
     CogCommitMessage,
     CogGbxWriter,
     MosaicOptions,
-    _is_all_nodata,
     _source_discriminator,
     _tile_grid_windows,
     parse_mosaic_options,
@@ -123,7 +123,7 @@ def _write_src(
         data = np.stack([data[0] + b * 1000 for b in range(count)])[np.newaxis]
         data = data.squeeze(0)  # (count, h, w)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -311,7 +311,7 @@ def _write_src_with_nodata_patch(
     # Fill bottom-right tile (rows 100..120, cols 100..200) with nodata.
     data[0, 100:, 100:] = nodata
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -476,12 +476,12 @@ def test_single_cog_mode_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 8. CogCommitMessage carries mini-COG paths for Task 3
+# 8. CogCommitMessage carries mini-COG paths for the VRT index
 # ---------------------------------------------------------------------------
 
 
 def test_commit_message_paths_are_mini_cog_paths(tmp_path):
-    """CogCommitMessage.paths holds all written mini-COG paths for Task 3 VRT."""
+    """CogCommitMessage.paths holds all written mini-COG paths for the VRT index."""
     src_path = str(tmp_path / "src" / "input.tif")
     _write_src(src_path, w=200, h=120)
     opts = _default_mosaic_opts(tileSize=100)
@@ -529,34 +529,40 @@ def test_write_mosaic_non_divisible_source(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 10. _is_all_nodata helper unit tests
+# 10. pruneEmpty: a window with no valid pixel (by the rule of both tiers) is not written
 # ---------------------------------------------------------------------------
 
 
-def test_is_all_nodata_true():
-    data = np.full((1, 4, 4), -9999.0, dtype="float32")
-    assert _is_all_nodata(data, -9999.0)
-
-
-def test_is_all_nodata_false_mixed():
-    data = np.ones((1, 4, 4), dtype="float32")
-    data[0, 0, 0] = 42.0
-    assert not _is_all_nodata(data, -9999.0)
-
-
-def test_is_all_nodata_none_nodata():
-    data = np.zeros((1, 4, 4), dtype="float32")
-    assert not _is_all_nodata(data, None), "None nodata must never prune"
-
-
-def test_is_all_nodata_nan():
-    data = np.full((1, 2, 2), float("nan"), dtype="float32")
-    assert _is_all_nodata(data, float("nan"))
-
-
-def test_is_all_nodata_nan_mixed():
-    data = np.array([[[1.0, float("nan")]]], dtype="float32")
-    assert not _is_all_nodata(data, float("nan"))
+@pytest.mark.parametrize(
+    "nodata,fill,written",
+    [
+        (-9999.0, -9999.0, 1),  # the left window is all NoData: pruned
+        (float("nan"), float("nan"), 1),  # NaN is NoData too
+        (None, 0.0, 2),  # no NoData declared: nothing can be pruned
+    ],
+    ids=["nodata", "nan", "undeclared"],
+)
+def test_prune_empty_skips_a_window_that_is_all_nodata(tmp_path, nodata, fill, written):
+    src = str(tmp_path / "src.tif")
+    data = np.ones((1, 32, 64), dtype="float32")
+    data[:, :, :32] = fill  # window (0, 0)
+    profile = dict(
+        driver="GTiff",
+        width=64,
+        height=32,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32630",
+        transform=from_origin(500000.0, 5700000.0, 10.0, 10.0),
+        nodata=nodata,
+    )
+    with open_raster(src, "w", **profile) as dst:
+        dst.write(data)
+    w = _make_writer(
+        str(tmp_path / "out"), mosaic_opts=_default_mosaic_opts(tileSize=32)
+    )
+    msg = w.write(iter([{"path": src}]))
+    assert len([p for p in msg.paths if p.endswith(".tif")]) == written
 
 
 # ---------------------------------------------------------------------------
@@ -577,7 +583,7 @@ def _write_src_at(path: str, origin_x: float, w: int = 200, h: int = 120) -> Non
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -660,7 +666,7 @@ def _write_tiled_src(path: str, w: int, h: int, block: int = 512) -> None:
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -759,7 +765,7 @@ def small_source_raster(tmp_path):
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -884,7 +890,7 @@ def test_quadbin_cell_reproject_correctness(tmp_path, small_source_raster):
 def _write_src_fn():
     """Return a callable that writes a small EPSG:32632 source raster.
 
-    The default source has NO nodata value — exercises Ruling A (derived nodata).
+    The default source has NO nodata value — exercises the derived nodata.
     Signature matches _write_src(path) with default args: 200×120 uint16, nodata=None.
     """
     return _write_src
@@ -894,7 +900,7 @@ def _write_mosaic_for_test(src_path: str, out_dir: str, opts: MosaicOptions) -> 
     """Test helper: drive _write_mosaic_h3 directly, bypassing Spark.
 
     Wraps _make_writer + write() in the same pattern as the quadbin tests.
-    Lives in the test module per Ruling D — NOT in production cog_writer.py.
+    Lives in the test module — NOT in production cog_writer.py.
     """
     os.makedirs(out_dir, exist_ok=True)
     w = _make_writer(out_dir, mosaic_opts=opts)
@@ -938,14 +944,14 @@ def test_h3_write_produces_tagged_4326_minicogs(tmp_path, _write_src_fn):
 
 # ---------------------------------------------------------------------------
 # 17. h3 hex-clip: outside-hex pixels are nodata; interior pixels are not
-#     (exercises Ruling A: source has NO declared nodata → derived sentinel)
+#     (source has NO declared nodata → derived sentinel)
 # ---------------------------------------------------------------------------
 
 
 def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
     """Pixels outside the hexagon must be nodata; interior pixels non-nodata.
 
-    The source is created WITHOUT a nodata value (Ruling A test case): the writer
+    The source is created WITHOUT a nodata value (derived-nodata case): the writer
     must still hex-clip by deriving a sentinel nodata (dtype max for uint16 = 65535).
     The output file must carry nodata even though the source did not.
     """
@@ -956,7 +962,7 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
 
     src_path = str(tmp_path / "src_h3_clip" / "input.tif")
     out_dir = str(tmp_path / "mosaic_h3_clip")
-    _write_src_fn(src_path)  # nodata=None source (Ruling A case)
+    _write_src_fn(src_path)  # nodata=None source (derived-nodata case)
 
     opts = parse_mosaic_options(
         {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
@@ -973,10 +979,10 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
         data = ds.read(1)
         nodata = ds.nodata
 
-    # Ruling A: output must always carry a nodata value even for a nodata-less source.
+    # Output must always carry a nodata value even for a nodata-less source.
     assert (
         nodata is not None
-    ), "h3 output must carry a nodata value even when the source had none (Ruling A)"
+    ), "h3 output must carry a nodata value even when the source had none"
 
     # Build the hex polygon from cell_to_boundary [(lat, lon) -> (lon, lat)].
     boundary = _h3.cell_to_boundary(cellid_str)
@@ -1218,7 +1224,7 @@ def _write_gb_source_27700(tmp_path) -> str:
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 

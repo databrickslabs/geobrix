@@ -1,0 +1,7302 @@
+"""Family oracle tables: inputs -> expected, run at every implementation level and surface.
+
+One table per function family. Host tests, container parity runs and the cluster and
+Unity Catalog passes all read these rows, so a level is "correct" exactly when its rows pass.
+"""
+
+from __future__ import annotations
+
+import base64
+import contextlib
+import functools
+import json
+import math
+import os
+import re
+import tempfile
+import threading
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx.bench import product_stand_ins
+from databricks.labs.gbx.uc.ddl import UC_GEOMETRY, sql_type
+
+MERC_PROJ = (
+    "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 "
+    "+units=m +nadgrids=@null +wktext +no_defs"
+)
+# An error tile (a swallowed failure) carries its diagnostic under this one metadata key on
+# every level. The light tier defines it (`_serde.build_error_tile`); the JVM tier conforms.
+ERROR_TILE_KEY = "last_error"
+UPSTREAM_ERROR = "upstream failure"
+CUSTOM_TMERC = "+proj=tmerc +lat_0=0 +lon_0=1.5 +k=0.9996 +x_0=500000 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+
+@dataclass(frozen=True)
+class Build:
+    name: str  # a fixture built by _build(name)
+
+
+@dataclass(frozen=True)
+class Case:
+    cid: str
+    fn: str
+    args: Tuple[Any, ...]
+    # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props | geom_equals | cell_set
+    # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
+    # json_subset: the output is JSON text that holds every key and value of the `expect` dict (extra keys allowed).
+    # fill_mask: the output of a fill over a tile with its own mask band has the mask `input valid OR filled by GDAL`.
+    # json_ref: the output is JSON text equal to GDAL's own `gdal.Info(format="json", stats=True)` of the first argument
+    # (the same keys, numbers within a relative 1e-9; its path shown as `<input>`).
+    # cell_set: `expect` is the cell ids an array output must hold, each once, in any order (an array of chip
+    # structs is judged by the first field of each). approx: a number, or a struct or list of numbers, to 1e-9.
+    # geom_srid: `expect` is the WKT of the geometry the output (WKB or EWKB) must equal, Z included, and the SRID it
+    # carries: a (WKT, SRID) pair fixes the SRID (0 for none), a bare WKT means the SRID of the first argument.
+    # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
+    # per_row is one batch too (a c1 batch UDF and a per-row binding both see it): `args` is a tuple of argument rows and
+    # `expect` one kind per row, `"tile_props:<crs>"` or `"error_tile"`.
+    # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
+    # cell_rows: `expect` is the cell ids the rows' `cellid` column must hold, each once, in any order, as Python ints
+    # (a BIGINT id never passes through a float) or strings. triangles: `expect` is the triangles (three (x, y) vertices
+    # each) the `triangle` column's polygons must be, vertex order aside, to 1e-9. triangles_exact: the same, each X and Y
+    # exactly (the conforming mode's extra points included). elev_points: `expect` is the (x, y, z) of each
+    # `elevation_point` row (a dict may add "srid"), each to 1e-12 relative. mvt_tiles: `expect` is {"tiles": [(z, x, y)], "layer": name,
+    # "props": {..}}; every row's `mvt_bytes` decodes to that layer with one feature of those properties.
+    # The raster generators and vectorizers (see bench/oracle_checks.py): tile_rows (the first band of each row, in
+    # order), tessellation (the cells and the pixel sum of each), polygons (value and area per row), isobands and
+    # contours (the structs of the array a scalar returns). grid_partial: the array of (band, cellid, count, sum, m2, min,
+    # max) structs of a raster-to-grid partial, each field recomputed with numpy; grid_stats_json: the JSON text of
+    # (band, cellID, measure) rows (a recipe's one value), judged as grid_stats. grid_stats: the (band, cellID, measure) rows of a
+    # raster-to-grid reducer, each statistic recomputed with numpy over the pixels of the cells (see oracle_checks).
+    # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
+    # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
+    # wkb_bytes: `expect` is the exact bytes of a geometry output (WKB, no decoding).
+    # Aggregates use merged_equals | pixels | pixels_canvas | error_group | null | cellfill | mvt_layer | geom_equals |
+    # exact; `args[0]` is the group's rows. pixels_canvas: a canvas the function derives (its canvas arguments NULL):
+    # `expect` is {"canvas": (xmin, ymin, xmax, ymax, width, height), "pixels": [...]}, judged as pixels on that canvas.
+    # cellfill: `expect` is {cell id: value or None}, the fill payload decoded from its
+    # documented layout. mvt_layer: `expect` is {"layer": name, "features": [(WKT in tile coordinates, properties)]}.
+    kind: str
+    # exact: the value. raises: a substring (or a tuple of alternatives) the error message must contain
+    # (the offending value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
+    # error_tile: when set, the reason that must come out unchanged. error_tile_has: a substring the reason must hold.
+    # tile_meta: `expect` is a dict of what the result tile's raster must be, each key optional: crs, no_crs, srid, width,
+    # height, count (each a number, or a (least, most) pair), dtype, nodata (a value, or None for none declared), driver (the raster's format), meta_driver (the
+    # tile metadata's driver), layout (the GeoTIFF IMAGE_STRUCTURE layout), compression (its IMAGE_STRUCTURE codec), pixels_of_arg0 (the pixels of the first
+    # argument unchanged), transform_of_arg0 (its geotransform) and grid_of_arg1 (the width, height, CRS and geotransform
+    # of the second argument), and materialized (True: the raster bytes are in the tile and it has no path; False: a
+    # path and no bytes), mask_band (True: the raster has its own per-dataset mask band; False: it has none). A result that
+    # is still a virtual tile is read as its next reader reads it.
+    # warp_masked: `expect` is the CRS of a reprojection of a source that declares no NoData: the pixels outside its
+    # footprint are masked by the output's own mask band, never a valid 0.
+    expect: Any = None
+    # "python" alone: a row of the Python API leg only (a behaviour SQL does not share).
+    surfaces: Tuple[str, ...] = ("session", "uc")
+    geom_srid: int = (
+        4326  # the integer SRID UC GEOMETRY args are built with (never a CRS string)
+    )
+    # More argument rows with the same expectation (one batch on the session surface, one handler call each on UC).
+    # The UC warehouse statement is the primary `args` only. A column holds one type, so a variant that changes an
+    # argument's type (a WKT string for WKB bytes) is a row of its own.
+    variants: Tuple[Tuple[Any, ...], ...] = ()
+    # Keywords the Python API leg adds to the call, as (name, value) pairs: a Python-only keyword has no SQL argument.
+    py_kw: Tuple[Tuple[str, Any], ...] = ()
+    # The cid of the session row this UC row is a twin of (see oracle_tables._uc_tile.twin): the UC form has another
+    # name or shape, and its expected value is the session row's, adapted.
+    twin_of: Optional[str] = None
+    # A recipe row: one whole SQL statement that projects its answer as `out` (see oracle_tables._uc_tile.recipe).
+    # `{q}` marks where a function's qualifier goes (the 3-level schema prefix on UC, nothing in a session); `fn` names
+    # the manifest function it exercises, `args` is empty, and `kind`/`expect` judge the one row `out` comes from.
+    sql: Optional[str] = None
+
+
+def uc_view(
+    cases: Tuple["Case", ...],
+    srids: Optional[Dict[str, int]] = None,
+    session_only: Sequence[str] = (),
+) -> Tuple["Case", ...]:
+    """A family table as the UC surface reads it: each row of a function in `srids` builds its GEOMETRY arguments with
+    that integer SRID (a BNG function takes 27700, a lon/lat one 4326), and the rows named in `session_only` stay off
+    UC (an argument UC cannot be handed: WKB bytes for a GEOMETRY, text that is no geometry, a non-finite coordinate
+    spelled in WKB). A name in `session_only` that is no row raises, so a renamed row cannot drop out unseen.
+    """
+    srids = srids or {}
+    missing = set(session_only) - {c.cid for c in cases}
+    if missing:
+        raise ValueError(f"uc_view: no such row(s) {sorted(missing)}")
+    out = []
+    for c in cases:
+        if c.cid in session_only:
+            c = replace(c, surfaces=tuple(s for s in c.surfaces if s != "uc"))
+        elif c.fn in srids and "uc" in c.surfaces:
+            c = replace(c, geom_srid=srids[c.fn])
+        out.append(c)
+    return tuple(out)
+
+
+# Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
+# The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
+# pass must be dropped from here.
+HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    "cg_grid_null_arg": {
+        "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
+    },
+}
+
+# The aggregates of the Task 18 batch whose JVM companion differs from the contract in one hazard row. A NULL cell id
+# next to ids past 2**53 reaches the lightweight aggregate as float64, which rounds the ids to other cells, so it
+# refuses; the JVM reads exact longs and answers, rightly. The custom-grid, quadbin and H3 rasterize aggregates and the
+# custom-grid cell fill run the JVM first since the Task 25 pass; the H3 cell fill always did.
+_EXACT_IDS_L1 = "the JVM aggregate reads exact long ids, so a NULL cell id beside ids past 2**53 is no hazard there: it answers where the lightweight level refuses"
+HEAVY_PENDING.update(
+    {
+        **{
+            cid: {"L1": _EXACT_IDS_L1}
+            for cid in (
+                "h3_fill_null_beside_big_id",
+                "cg_fill_null_beside_big_id",
+                "h3r_null_beside_big_id",
+                "qbr_null_beside_big_id",
+                "cgr_null_beside_big_id",
+            )
+        },
+    }
+)
+
+HEAVY_PENDING.update(
+    {
+        "tri_multipoint_element": {
+            "L1": "the JVM triangulates the points of an array and takes a MULTIPOINT element as no point; the lightweight level flattens it"
+        },
+    }
+)
+
+# Rows every level runs through SQL with the session's read cap (`spark.databricks.labs.gbx.read_cap`) lowered to
+# this many bytes: the decoded-size gate where each level reads a tile's bytes.
+READ_CAP_ROWS: Dict[str, int] = {
+    "decoded_over_cap_error_tile": 4096,
+    "dem_decoded_over_cap": 4096,
+    "se_slope_over_cap": 4096,
+    "resample_decoded_over_cap": 4096,
+    "tile_op_decoded_over_cap": 4096,
+    "align_to_big_reference": 4096,
+    "rt_over_cap_windows": 4096,
+    # the array functions fold a group window by window: one whose row of the stack does not fit the budget is the
+    # row's error tile (the members of pair_aligned are 32 pixels wide), and a group over the budget that folds in
+    # windows gives the unconstrained result
+    "array_decoded_over_cap": 1024,
+    "merge_array_streams_under_budget": 3000,
+    "combineavg_array_streams_under_budget": 3000,
+    "combinesum_array_streams_under_budget": 3000,
+    "combinemax_array_streams_under_budget": 1000,
+    # the aggregates: the same streaming; and what it cannot cover raises (a tile in another CRS over a cap of 150 bytes)
+    "merge_agg_streams_under_budget": 3000,
+    "combineavg_agg_streams_under_budget": 3000,
+    "merge_agg_member_over_cap_refused": 150,
+    # the encoded result of a bytes aggregate is bounded by the cap too: the streamed COG of quad_tiles is about 2.4 KB
+    "merge_agg_output_over_cap_refused": 2000,
+    # derivedband stacks its members whole: a member (48 bytes decoded) over a cap of 20 raises, never a NULL
+    "db_agg_member_over_cap_refused": 20,
+}
+# The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
+# The fixtures that build a virtual tile (a path, no raster bytes) or an array with one. A UC function refuses each with a
+# Fix (the `edges` and `array_edges` rows), so `mirror` does not run their session rows on UC. A container test holds
+# the set to what the fixtures build (test_engine_uc.py).
+VIRTUAL_BUILDS = frozenset(
+    {
+        "aa_stack_virtual_member",
+        "aa_virtual_only",
+        "calc_bands_file",
+        "calc_bands_vrt",
+        "dem_cog_overviews",
+        "dem_eedai",
+        "dem_file",
+        "dem_gdalg",
+        "dem_gti",
+        "dem_inline_gdalg",
+        "dem_inline_raw",
+        "dem_missing",
+        "dem_stacta",
+        "dem_vrt",
+        "dem_vrt_gdalg",
+        "dem_vrt_gti_gdalg",
+        "dem_vrt_python",
+        "dem_vrt_raw",
+        "se_pair_paths",
+        "tile_virtual",
+        "vs_wall_file",
+        "vz_columns_virtual",
+        "vz_missing",
+    }
+)
+
+
+def _virtual_input(args) -> bool:
+    first = args[0] if args else None
+    items = first if isinstance(first, (list, tuple)) else [first]
+    return any(isinstance(a, Build) and a.name in VIRTUAL_BUILDS for a in items)
+
+
+def _geometry_args(fn: str, args) -> list:
+    """The arguments of one argument row of ``fn`` that a UC function takes as a GEOMETRY."""
+    from databricks.labs.gbx import manifest
+
+    params = manifest.load().functions[fn].params
+    return [
+        a
+        for a, p in zip(args, params)
+        if (p.uc or "").upper() == "GEOMETRY" and a is not None
+    ]
+
+
+def _uc_geometry_text(arg) -> bool:
+    """Whether a GEOMETRY argument of a session row is one a UC function can be handed: a WKT or EWKT text that is a
+    geometry. WKB bytes are a BINARY, which is no GEOMETRY on UC, and a text that is no geometry never becomes one.
+    """
+    if not isinstance(arg, str):
+        return False
+    from databricks.labs.gbx._geom import parse_geom
+
+    try:
+        parse_geom(arg)
+    except Exception:  # noqa: BLE001 - any text the parser refuses is no geometry
+        return False
+    return True
+
+
+def _ewkt_srid(text: str) -> int:
+    """The SRID of an EWKT (``SRID=<n>;...``), 0 for a plain WKT."""
+    m = re.match(r"\s*SRID=(\d+);", text, re.IGNORECASE)
+    return int(m.group(1)) if m else 0
+
+
+def engine_uc(fn: str) -> bool:
+    """Whether ``fn``'s UC form runs the GDAL spec engine (``engine.uc``): its answer is the session's by construction."""
+    from databricks.labs.gbx import manifest
+
+    f = manifest.load().functions[fn]
+    l4 = f.levels.get("L4", {})
+    ref = l4.get("handler") or ""
+    if "tvf_over" in l4:
+        ref = getattr(manifest.load().private.get(l4["tvf_over"]), "handler", "") or ""
+    return f.gdal is not None and ref.startswith("databricks.labs.gbx.engine.uc:")
+
+
+def engine_missing(fn: str) -> Optional[str]:
+    """Why the UC handler of ``fn`` cannot run in this process: it runs the GDAL spec engine (``engine_uc``) and this
+    process has no engine ``osgeo`` (the host's dev venv). None otherwise. The handler legs skip such a row; the dev
+    container and CI, which carry the engine, run it."""
+    if not engine_uc(fn):
+        return None
+    from databricks.labs.gbx.engine import run
+
+    return run.unavailable_reason()
+
+
+def mirror(rows, null=(), refused=()):
+    """``rows`` with the session rows of every GDAL spec engine function that has a UC form (``engine_uc``) also run on
+    UC, against the session's value: the UC handler runs the session's engine call, so its answer is the session's.
+    The rules a UC function adds decide the rest:
+
+    - a row whose tile, in any of its argument rows, is virtual (``VIRTUAL_BUILDS``) stays session-only: UC refuses it (the ``edges`` rows), and so
+      does a batch row (``per_row``, ``exact_rows``), a row judged under a lowered session read cap (``READ_CAP_ROWS``),
+      a row that gives a GEOMETRY parameter WKB bytes or a text that is no geometry (neither is a GEOMETRY on UC:
+      ``uc_clip_wkb_into_geometry_refused`` holds the refusal), and one whose geometries carry different SRIDs;
+    - a GEOMETRY argument carries the SRID of its EWKT on UC, else none (0), as the session reads a plain WKT;
+    - a row named in ``null`` is a data error, an error tile in the session: on UC it is NULL (row ``uc_<cid>``);
+    - a row named in ``refused`` is refused on UC with a Fix (row ``uc_<cid>``): a CRS form UC does not take, or a call
+      over the decoded size a UC function holds. A named row builds its GEOMETRY as a promoted row does, and one whose
+      GEOMETRY UC cannot be handed raises.
+
+    A named row that is no such session row raises, so the lists cannot go stale."""
+    named = {**{c: "null" for c in null}, **{c: "uc_refused" for c in refused}}
+    seen, out = set(), []
+    for c in rows:
+        if "session" not in c.surfaces or c.sql is not None or not engine_uc(c.fn):
+            out.append(c)
+            continue
+        if c.cid in named:
+            seen.add(c.cid)
+            # the UC row runs the primary args alone, and builds its GEOMETRY as a promoted row does
+            geoms = _geometry_args(c.fn, c.args)
+            srids = {_ewkt_srid(g) for g in geoms if isinstance(g, str)}
+            assert (
+                all(_uc_geometry_text(g) for g in geoms) and len(srids) <= 1
+            ), f"{c.cid}: a GEOMETRY argument UC cannot be handed (WKB, no geometry, or two SRIDs)"
+            out.append(c)
+            out.append(
+                replace(
+                    c,
+                    cid=f"uc_{c.cid}",
+                    kind=named[c.cid],
+                    expect=None,
+                    surfaces=("uc",),
+                    variants=(),
+                    geom_srid=next(iter(srids), 0),
+                )
+            )
+            continue
+        # a batch row (one call over several argument rows) is a session UDF's form; a UC function takes one row
+        batch = c.kind in ("per_row", "exact_rows")
+        # every argument row (the primary one and each variant) must be one a UC function can be handed
+        rows = (c.args, *c.variants)
+        geoms = [g for r in rows for g in _geometry_args(c.fn, r)]
+        srids = {_ewkt_srid(g) for g in geoms if isinstance(g, str)}
+        if (
+            any(_virtual_input(r) for r in rows)
+            or batch
+            or c.cid
+            in READ_CAP_ROWS  # judged under a session read cap the harness lowers; UC's cap is its own
+            or not all(_uc_geometry_text(g) for g in geoms)
+            or len(srids)
+            > 1  # a row builds its UC geometries with one SRID (Case.geom_srid)
+        ):
+            out.append(c)
+            continue
+        # a GEOMETRY carries its SRID on UC: an EWKT's own, else none (0), as the session reads a plain WKT
+        out.append(
+            replace(c, surfaces=("session", "uc"), geom_srid=next(iter(srids), 0))
+        )
+    missing = set(named) - seen
+    assert not missing, f"no such engine session rows for UC: {sorted(missing)}"
+    return tuple(out)
+
+
+_BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
+
+B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
+SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
+BOWTIE_TEXT = "POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))"
+# a shell and a hole that both run clockwise: valid by the OGC rules, not by the product's
+BOTH_CLOCKWISE = "POLYGON((0 0, 0 10, 10 10, 10 0, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2))"
+OPPOSITE = "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2))"
+
+
+def _poly_wkb(wkt):
+    import shapely
+
+    return shapely.to_wkb(shapely.from_wkt(wkt))
+
+
+MVP_S: Tuple[Case, ...] = (
+    Case("bng_1km", B, (530000.0, 180000.0, 3), "exact", "TQ3080"),
+    Case("bng_1km_str", B, (530000.0, 180000.0, "1km"), "exact", "TQ3080"),
+    Case("bng_5km_quad", B, (530000.0, 180000.0, -3), "exact", "TQ38SW"),
+    Case("bng_100km", B, (530000.0, 180000.0, 1), "exact", "TQ"),
+    Case("bng_1m", B, (530000.0, 180000.0, 6), "exact", "TQ3000080000"),
+    Case("bng_500km", B, (530000.0, 180000.0, "500km"), "exact", "T"),
+    Case("bng_500km_s", B, (130000.0, 180000.0, "500km"), "exact", "S"),
+    Case("bng_500km_n", B, (130000.0, 680000.0, "500km"), "exact", "N"),
+    Case("bng_500km_o", B, (630000.0, 780000.0, -1), "exact", "O"),
+    Case("bng_500km_h", B, (130000.0, 1180000.0, -1), "exact", "H"),
+    Case("bng_500km_j", B, (630000.0, 1180000.0, "500km"), "exact", "J"),
+    Case("bng_edinburgh", B, (325000.0, 673000.0, 3), "exact", "NT2573"),
+    Case("bng_origin", B, (0.0, 0.0, 3), "exact", "SV0000"),
+    Case("bng_null_e", B, (None, 180000.0, 3), "null"),
+    Case("bng_nan_e", B, (float("nan"), 180000.0, 3), "null"),
+    # A non-finite coordinate is NULL like NaN, on every level: there is no right cell for it.
+    Case(
+        "bng_inf_e",
+        B,
+        (float("inf"), 180000.0, 3),
+        "null",
+        variants=(
+            (float("-inf"), 180000.0, 3),
+            (530000.0, float("inf"), 3),
+            (530000.0, float("-inf"), 3),
+            (float("inf"), float("inf"), 3),
+        ),
+    ),
+    Case("bng_null_res", B, (530000.0, 180000.0, None), "null"),
+    # A NULL in an INT column makes pandas hand the whole batch over as floats (3.0): the
+    # valid rows around the NULL must still answer, row by row.
+    # (Session only: the batch is a pandas UDF artifact. A UC Python function runs row by row, and
+    # bng_null_res already pins its NULL.)
+    Case(
+        "bng_mixed_null_res",
+        B,
+        (
+            (530000.0, 180000.0, 3),
+            (530000.0, 180000.0, None),
+            (325000.0, 673000.0, 3),
+        ),
+        "exact_rows",
+        ("TQ3080", None, "NT2573"),
+        ("session",),
+    ),
+    Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
+    # A resolution BNG does not define is a parameter error on every level, never a clamped cell.
+    Case("bng_bad_res_int", B, (530000.0, 180000.0, 1001), "raises", "1001"),
+    Case("bng_bad_res_digits", B, (530000.0, 180000.0, "1001"), "raises", "1001"),
+    # A non-number easting is a parameter error too (only NaN and out-of-range values are data errors).
+    # (Session only: UC types easting DOUBLE, so the engine's cast sees 'abc' before any handler runs. The
+    # warehouse Statement API has ANSI off, where that cast is a silent NULL; with ANSI on the engine's
+    # own error names the value. Either way it is the product's behaviour, not GeoBrix's to pin.)
+    Case(
+        "bng_bad_easting",
+        B,
+        ("abc", 180000.0, 3),
+        "raises",
+        "abc",
+        ("session",),
+    ),
+    # A UC STRING parameter receives an INT literal as its digit string, so every surface
+    # accepts the digit-string form of the integer resolution.
+    Case("bng_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080"),
+    # UC trims every white-space character of a resolution text, as Python's strip() does (UC only: the JVM
+    # levels read the text as it is).
+    Case(
+        "bng_res_white_space",
+        B,
+        (530000.0, 180000.0, "\t1km\u00a0"),
+        "exact",
+        "TQ3080",
+        ("uc",),
+    ),
+    Case("bng_digit_res_quad", B, (530000.0, 180000.0, "-3"), "exact", "TQ38SW"),
+    # INT eastings, northings and resolution (columns typed INT) give the cells DOUBLE ones give, on every level.
+    Case("bng_enab_int_args", B, (530000, 180000, 3), "exact", "TQ3080"),
+    Case("tcrs_epsg", T, (Build("tile_4326"), "EPSG:3857"), "tile_props", "EPSG:3857"),
+    Case(
+        "tcrs_virtual",
+        T,
+        (Build("tile_virtual"), "EPSG:3857"),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    Case(
+        "tcrs_virtual_uc",
+        T,
+        (Build("tile_virtual"), "EPSG:3857"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    # The target CRS forms UC accepts: an int SRID, EPSG:<n> or ESRI:<n>. Anything else is refused on UC with a Fix:
+    # line (the `refused` rows of the mirror below); the session accepts every CRS spelling.
+    Case(
+        "tcrs_int_srid",
+        T,
+        (Build("tile_4326"), "3857"),
+        "tile_props",
+        ("EPSG:3857", 3857),
+    ),
+    Case(
+        "tcrs_epsg4326",
+        T,
+        (Build("tile_3857"), "EPSG:4326"),
+        "tile_props",
+        ("EPSG:4326", 4326),
+    ),
+    Case(
+        "tcrs_esri102003",
+        T,
+        (Build("tile_4326"), "ESRI:102003"),
+        "tile_props",
+        ("ESRI:102003", 102003),
+    ),
+    Case(
+        "tcrs_wkt",
+        T,
+        (Build("tile_4326"), Build("wkt_3857")),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    Case(
+        "tcrs_proj4",
+        T,
+        (Build("tile_4326"), MERC_PROJ),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    Case(
+        "tcrs_custom_src",
+        T,
+        (Build("tile_custom"), "EPSG:4326"),
+        "tile_props",
+        "EPSG:4326",
+        ("session",),
+    ),
+    Case("tcrs_null_tile", T, (None, "EPSG:3857"), "null"),
+    # A tile with neither raster nor path and no diagnostic has nothing to transform: NULL.
+    Case(
+        "tcrs_empty_tile",
+        T,
+        (Build("tile_empty"), "EPSG:3857"),
+        "null",
+        None,
+        ("session",),
+    ),
+    # An error tile IN is the same error tile OUT on every level (the upstream reason survives), and a
+    # tile with no raster never reaches GDAL.
+    Case(
+        "tcrs_error_tile_in",
+        T,
+        (Build("tile_error"), "EPSG:3857"),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case("tcrs_null_crs", T, (Build("tile_4326"), None), "null"),
+    Case(
+        "tcrs_corrupt",
+        T,
+        (Build("tile_corrupt"), "EPSG:3857"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # A target CRS that cannot be parsed is data too: an error tile, on the SQL and the Column API.
+    Case(
+        "tcrs_bad_crs",
+        T,
+        (Build("tile_4326"), "EPSG:not-a-crs"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # A materialized tile's driver decides how every level reads its bytes (the manifest's driver classes). One
+    # that is neither self-contained nor refused (netCDF here) is read as GeoTIFF bytes: the same result on every
+    # level. One that can name other files (a PDS label, a VRT) is an error tile with a Fix, and nothing it names is
+    # opened.
+    Case(
+        "bytes_class_netcdf_translated",
+        T,
+        (Build("tile_4326_netcdf"), "EPSG:3857"),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    Case(
+        "bytes_class_refused_driver",
+        T,
+        (Build("tile_pds_bytes"), "EPSG:3857"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("PDS"),
+        ("session",),
+    ),
+    Case(
+        "bytes_class_vrt_refused",
+        T,
+        (Build("tile_vrt_bytes"), "EPSG:4326"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("VRT"),
+        ("session",),
+    ),
+    # A materialized tile decoded over the read cap is an error tile with a Fix, never a failed task, on every level
+    # (run with the cap lowered: READ_CAP_ROWS).
+    Case(
+        "decoded_over_cap_error_tile",
+        T,
+        (Build("tile_4326"), "EPSG:3857"),
+        "error_tile_has",
+        "the tile is 12 KiB decoded, over this compute's read cap (4 KiB). Fix: retile it first (gbx_rst_retile)",
+        ("session",),
+    ),
+    Case(
+        "mv_bowtie",
+        M,
+        ("POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))",),
+        "geom_props",
+        {"valid": True, "area": 0.5},
+    ),
+    Case(
+        "mv_square_ogc", M, (SQUARE, "ogc"), "geom_props", {"valid": True, "area": 1.0}
+    ),
+    Case("mv_null", M, (None,), "null"),
+    Case("mv_bad_level", M, (SQUARE, "bogus"), "raises", "bogus"),
+    # Every geometry form: WKT above, then EWKT, WKB and EWKB (the fixtures are in the vector_scalar module); the
+    # SRID an EWKT or EWKB carries stays on the repaired geometry.
+    Case(
+        "mv_ewkt",
+        M,
+        ("SRID=4326;POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))",),
+        "geom_srid",
+        "MULTIPOLYGON(((0 0, 0.5 0.5, 0 1, 0 0)), ((0.5 0.5, 1 0, 1 1, 0.5 0.5)))",
+        ("session",),
+    ),
+    Case(
+        "mv_wkb",
+        M,
+        (Build("wkb_bowtie"),),
+        "geom_props",
+        {"valid": True, "area": 0.5},
+        ("session",),
+    ),
+    Case(
+        "mv_ewkb",
+        M,
+        (Build("ewkb_bowtie"),),
+        "geom_srid",
+        "MULTIPOLYGON(((0 0, 0.5 0.5, 0 1, 0 0)), ((0.5 0.5, 1 0, 1 1, 0.5 0.5)))",
+        ("session",),
+    ),
+    Case(
+        "mv_structure",
+        M,
+        ("POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))", "structure"),
+        "geom_props",
+        {"valid": True, "area": 0.5},
+    ),
+    # 'full' is not a level yet
+    Case("mv_full_refused", M, (BOWTIE_TEXT, "full"), "raises", "level"),
+    # The product's ST_IsValid also holds a polygon to opposite ring windings, so the default levels turn the exterior
+    # counter-clockwise and the holes clockwise; 'ogc' repairs the topology and leaves the windings as they came.
+    # (session only: the UC handler returns EWKB with the SRID, so its bytes are not the plain WKB)
+    Case(
+        "mv_orients",
+        M,
+        (BOTH_CLOCKWISE,),
+        "wkb_bytes",
+        lambda: _poly_wkb(OPPOSITE),
+        ("session",),
+    ),
+    Case(
+        "mv_ogc_keeps_winding",
+        M,
+        (BOTH_CLOCKWISE, "ogc"),
+        "wkb_bytes",
+        lambda: _poly_wkb(BOTH_CLOCKWISE),
+        ("session",),
+    ),
+    Case(
+        "mv_text_keeps_srid",
+        M,
+        ("SRID=4326;" + BOTH_CLOCKWISE,),
+        "geom_srid",
+        (OPPOSITE, 4326),
+        ("session",),
+    ),
+)
+# Unity Catalog: gbx_rst_transformcrs runs the session's engine call (engine.uc), so its rows run there too. A corrupt or
+# refused tile is NULL there; a CRS form other than an SRID, EPSG:<n> or ESRI:<n> is refused with a Fix.
+MVP_S = mirror(
+    MVP_S,
+    null=("tcrs_corrupt", "bytes_class_refused_driver", "bytes_class_vrt_refused"),
+    refused=("tcrs_wkt", "tcrs_proj4", "tcrs_bad_crs"),
+)
+
+
+# The towers of the DataFrame helpers' towers row, as (id, x, y) on the 200 m DSM grid of `dsm_tiles_edge`: in one tile, in
+# one tile with the ridge at the edge of its window, 20 m from a ridge that is inside its window (and so across two
+# tiles), on the corner of four tiles, in a tile of NoData, on the west edge of the DSM (inside it, within half a
+# pixel of its edge), 10 m west of the DSM (outside it, with a tile in reach), and in no tile's reach.
+TOWERS = (
+    ("t1", 100.0, 100.0),
+    ("t2", 300.0, 300.0),
+    ("ridge", 260.0, 100.0),
+    ("corner", 200.0, 200.0),
+    ("nodata", 500.0, 100.0),
+    ("edge", 0.0, 100.0),
+    ("beyond", -10.0, 100.0),
+    ("outside", 1000.0, 1000.0),
+)
+DSM_TILE_M = 200.0
+TOWERS_TOLERANCE = (
+    0.005  # of total_px: GDAL builds differ by a pixel or so along a visibility edge
+)
+
+# The DataFrame helpers in rasterx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
+# The first arg builds the input rows; the rest are the helper's arguments after the DataFrame and,
+# for the by-key helpers, the method / stat. A towers row (`rst_viewshed_towers`) takes the DSM manifest
+# `(tx, ty, path)` instead of tiles, then the towers (id, x, y[, mast]; a mast column is passed by name), the radius
+# and the mast height; its `expect` is {tower: (visible_px, total_px)}, or None for a tower on no tile (no row), or
+# for kind "raises" the text the error must contain.
+MVP_H: Tuple[Case, ...] = (
+    Case(
+        "h_retile",
+        "retile_virtual",
+        (Build("tile_virtual"), 32, 32),
+        "virtual_windows",
+        [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
+        ("session",),
+    ),
+    Case(
+        "h_retile_materialized",
+        "retile_virtual",
+        (Build("tile_4326"), 32, 32),
+        "raises",
+        "takes virtual tiles",
+        ("session",),
+    ),
+    # An error tile in is the same error tile out; a by-key helper drops it as the aggregates do,
+    # so a group of nothing else has no raster.
+    Case(
+        "h_retile_error_tile",
+        "retile_virtual",
+        (Build("tile_error"), 32, 32),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case(
+        "h_merge_error_tile",
+        "merge_by_key",
+        (Build("tile_error"), "fold"),
+        "null",
+        None,
+        ("session",),
+    ),
+    Case(
+        "h_tess",
+        "bng_tessellate_virtual",
+        (Build("tile_27700_path"), 3),
+        "virtual_cells",
+        {"TQ3080", "TQ3180", "TQ3081", "TQ3181"},
+        ("session",),
+    ),
+    # Every source pixel lands in some cell's window, also on a grid the cells do not line up with.
+    Case(
+        "h_tess_cover",
+        "bng_tessellate_virtual",
+        (Build("tile_27700_unaligned"), 3),
+        "virtual_cover",
+        None,
+        ("session",),
+    ),
+    # A tile that is already clipped is cut to the cells inside its clip, not re-opened to all of them.
+    Case(
+        "h_tess_clip",
+        "bng_tessellate_virtual",
+        (Build("tile_27700_clipped"), 3),
+        "virtual_cells",
+        {"TQ3080"},
+        ("session",),
+    ),
+    Case(
+        "h_merge_fold",
+        "merge_by_key",
+        (Build("quad_tiles"), "fold"),
+        "merged_equals",
+        Build("tile_32"),
+        ("session",),
+    ),
+    Case(
+        "h_merge_vrt",
+        "merge_by_key",
+        (Build("quad_paths"), "vrt"),
+        "merged_equals",
+        Build("tile_32"),
+        ("session",),
+    ),
+    Case(
+        "h_combine_avg",
+        "combine_by_key",
+        (Build("pair_aligned"), "avg"),
+        "pixel_ratio",
+        1.5,
+        ("session",),
+    ),
+    Case(
+        "h_combine_max",
+        "combine_by_key",
+        (Build("pair_aligned"), "max"),
+        "pixel_ratio",
+        2.0,
+        ("session",),
+    ),
+    # Tiles on different grids are refused for avg as for max, never averaged cell by cell.
+    Case(
+        "h_combine_avg_shifted",
+        "combine_by_key",
+        (Build("pair_shifted"), "avg"),
+        "raises",
+        "different geotransform",
+        ("session",),
+    ),
+    # The viewshed is the window around the tower: 161 x 161 for 80 m, whole when the DSM ends sooner (the "edge" tower
+    # has half of it), and total_px is its pixel count. The ground is flat except a ridge on the west edge of the odd
+    # columns: it hides what is behind it for "ridge" and for nobody else. A tile of NoData is flat to the viewshed.
+    # A tower on no tile has no row, wherever its window reaches.
+    Case(
+        "h_towers",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_edge"), TOWERS, 80.0, 20.0),
+        "towers",
+        {
+            "t1": (20081, 25921),
+            "t2": (20081, 25921),
+            "ridge": (18691, 25921),
+            "corner": (19286, 25921),
+            "nodata": (20081, 25921),
+            "edge": (10121, 13041),
+            "beyond": None,
+            "outside": None,
+        },
+        ("session",),
+    ),
+    # A NULL mast height is 0.0, at every level: the second tower is the first with its mast given as 0, the third is
+    # taller and sees more past the ridge.
+    Case(
+        "h_towers_null_mast",
+        "rst_viewshed_towers",
+        (
+            Build("dsm_tiles_edge"),
+            (
+                ("null", 260.0, 100.0, None),
+                ("zero", 260.0, 100.0, 0.0),
+                ("tall", 260.0, 100.0, 20.0),
+            ),
+            80.0,
+            "mast",
+        ),
+        "towers",
+        {"null": (18477, 25921), "zero": (18477, 25921), "tall": (18691, 25921)},
+        ("session",),
+    ),
+    # A tile that cannot be read fails the query at every level, naming the tile; never a plausible-looking row.
+    Case(
+        "h_towers_garbage_tile",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_garbage"), (("corner", 200.0, 200.0),), 80.0, 20.0),
+        "raises",
+        "dsm_1_1.tif",
+        ("session",),
+    ),
+    # ... also a bad block in the middle of a tile that is whole otherwise: the last row reads, and GDAL reads the
+    # rest of that strip as zeros unless something asks it whether it could.
+    Case(
+        "h_towers_garbled_tile",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_garbled"), (("corner", 200.0, 200.0),), 80.0, 20.0),
+        "raises",
+        ("dsm_1_1.tif", "Read failed"),
+        ("session",),
+    ),
+    Case(
+        "h_towers_truncated_tile",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_truncated"), (("corner", 200.0, 200.0),), 80.0, 20.0),
+        "raises",
+        (
+            "dsm_1_1.tif",
+            "Read failed",
+        ),  # the light read says "Read failed" and no tile; the others name it
+        ("session",),
+    ),
+)
+
+
+# Generators: functions that return many rows per input (and the array form of tessellate).
+# A case's rows are what `LATERAL fn(args)` (or `inline(fn(args))`) gives for it; see `run_rows`.
+RT, TE, TS = "gbx_rst_retile", "gbx_bng_tessellateexplode", "gbx_bng_tessellate"
+# 2800 x 1800 m, offset 100 m into the cells it covers: six 1 km cells, every one a border cell.
+OFFSET = "POLYGON((530100 180100, 532900 180100, 532900 181900, 530100 181900, 530100 180100))"
+# 3500 x 3500 m starting 100 m outside the cells it covers: 25 cells, and the 4 in the middle are core
+# (a core cell is one the carved-in geometry reaches; a cell fully inside can still be a border cell).
+COVER = "POLYGON((529900 179900, 533400 179900, 533400 183400, 529900 183400, 529900 179900))"
+_SIX = {
+    "TQ3080": 810000.0,
+    "TQ3180": 900000.0,
+    "TQ3280": 810000.0,
+    "TQ3081": 810000.0,
+    "TQ3181": 900000.0,
+    "TQ3281": 810000.0,
+}
+_TE: Tuple[Case, ...] = (
+    Case(
+        "te_offset",
+        TE,
+        (OFFSET, 3),
+        "cells",
+        {"cells": _SIX, "core": 0},
+        geom_srid=27700,
+    ),
+    Case(
+        "te_cover",
+        TE,
+        (COVER, 3),
+        "cells",
+        {"count": 25, "core": 4, "core_chips": "null"},
+        geom_srid=27700,
+    ),
+    Case(
+        "te_cover_keep",
+        TE,
+        (COVER, 3, True),
+        "cells",
+        {"count": 25, "core": 4, "core_chips": 1.0e6},
+        geom_srid=27700,
+    ),
+    # The resolution may be named by its cell size: "1km" is resolution 3 (a Python str is the size, not a column name).
+    Case(
+        "te_named_res",
+        TE,
+        (OFFSET, "1km"),
+        "cells",
+        {"cells": _SIX, "core": 0},
+        geom_srid=27700,
+    ),
+    Case("te_null", TE, (None, 3), "no_rows"),
+    # A NULL keep_core_geom is the default, false: an optional argument given as NULL is not a NULL result.
+    Case(
+        "te_null_keep",
+        TE,
+        (OFFSET, 3, None),
+        "cells",
+        {"cells": _SIX, "core": 0},
+        geom_srid=27700,
+    ),
+    # A resolution BNG does not define is a parameter error: it raises on every level, never zero rows.
+    Case("te_bad_res", TE, (OFFSET, "3km"), "raises", "3km", geom_srid=27700),
+    # UC takes geometry in SRID 27700 only (BNG cells are 27700): any other is refused with a Fix.
+    Case(
+        "te_wrong_srid_uc", TE, (OFFSET, 3), "uc_refused", None, ("uc",), geom_srid=4326
+    ),
+)
+MVP_G: Tuple[Case, ...] = (
+    Case(
+        "rt_32",
+        RT,
+        (Build("tile_4326"), 32, 32),
+        "windows",
+        [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
+        ("session", "uc"),
+    ),
+    # Two tiles of one size that differ in one pixel, in ONE task: each gets its own windows. A shape that keeps
+    # the last tile's dataset open for the next call must tell them apart by their bytes, and the edit sits
+    # where a sample of the bytes cannot see it.
+    Case(
+        "rt_edit_pair",
+        RT,
+        (
+            (Build("tile_edit_a"), 256, 256),
+            (Build("tile_edit_b"), 256, 256),
+        ),
+        "windows_batch",
+        None,
+        ("session",),
+    ),
+    # A tile decoded over the read cap is the very tile `gbx_rst_retile` is for: the retile family opens it without
+    # the size gate (run with the cap lowered: READ_CAP_ROWS), so the Fix the gate gives works.
+    Case(
+        "rt_over_cap_windows",
+        RT,
+        (Build("tile_4326"), 32, 32),
+        "windows",
+        [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
+        ("session",),
+    ),
+    # A window of 0 pixels never advances: a parameter error that raises on every level and says how to fix it
+    # (it used to hang the light tier and give an error tile on the JVM).
+    Case(
+        "rt_zero_window",
+        RT,
+        (Build("tile_4326"), 0, 32),
+        "raises",
+        "tile_width",
+        ("session", "uc"),
+    ),
+    # A NULL window size is data: the same one error tile on every level that judges errors, never a bare exception.
+    Case(
+        "rt_null_window",
+        RT,
+        (Build("tile_4326"), None, 32),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # A NULL tile has nothing to split: no rows, as explode(NULL) gives.
+    Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session", "uc")),
+    # An error tile in comes out as the same error tile (the upstream reason survives); a tile that
+    # cannot be read is one error tile, never a failed task.
+    Case(
+        "rt_error_in",
+        RT,
+        (Build("tile_error"), 32, 32),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session", "uc"),
+    ),
+    Case(
+        "rt_corrupt",
+        RT,
+        (Build("tile_corrupt"), 32, 32),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # Unity Catalog: a function with no error tile gives NULL (no rows) for a tile or a size it cannot use, refuses a virtual
+    # tile, an input decoded over the cap and a result the window arithmetic says cannot fit (no window is cut for it).
+    Case(
+        "uc_rt_corrupt_null",
+        RT,
+        (Build("tile_corrupt"), 32, 32),
+        "no_rows",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_null_window",
+        RT,
+        (Build("tile_4326"), None, 32),
+        "no_rows",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_virtual_refused",
+        RT,
+        (Build("tile_virtual"), 32, 32),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_input_over_cap_refused",
+        RT,
+        (Build("rg_over_windowed_cap"), 512, 512),
+        "raises",
+        "decoded, over the 256 MiB",
+        ("uc",),
+    ),
+    # A tile decoded between 64 and 256 MiB is cut in windows by the window readers (retile, maketiles, tooverlappingtiles);
+    # the pixel functions still refuse it.
+    Case(
+        "uc_rt_between_caps_cut",
+        RT,
+        (Build("rg_over_cap"), 4100, 4100),
+        "windows",
+        [
+            (0, 0, 4100, 4100),
+            (4100, 0, 4100, 4100),
+            (0, 4100, 4100, 4100),
+            (4100, 4100, 4100, 4100),
+        ],
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_result_over_cap_refused",
+        RT,
+        (Build("rg_big"), 1, 1),
+        "raises",
+        "upper estimate",
+        ("uc",),
+    ),
+    *_TE,
+    # The array form returns the same chips as one value (a session function: UC reaches it through the TVF).
+    *(
+        replace(c, cid=c.cid.replace("te_", "ts_"), fn=TS, surfaces=("session",))
+        for c in _TE
+        if c.kind != "uc_refused"
+    ),
+)
+
+
+# Aggregates (a case's `fn` is the aggregate; see `run_groups`). `args[0]` is the group's rows: tiles
+# for the merge, (cellid, value) pairs for the rasterize; the other args are its per-group constants.
+MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
+# out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad: 3 x 2 pixels of 1 km, the
+# last column with no cell in it
+CANVAS = (27700, None, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, "centroids", 0)
+# What a NULL value burns: NaN in a typed column, on every tier (an untyped NULL is the presence mask, 1.0). The marker
+# stays so a shape that burned it differently could say so (`run_groups`); every shape uses NaN now.
+NULL_BURN = "<the burn of a NULL value>"
+NAN = float("nan")
+# A member column of a group whose every value is OMITTED is an argument left out of the call: the SQL `NULL` (untyped)
+# and Python's `None`, where a NULL in the column is a typed NULL (the cell rasterizers: presence mask versus NaN).
+OMITTED = "<the argument left out>"
+MVP_A: Tuple[Case, ...] = (
+    Case(
+        "ma_quad",
+        MA,
+        (Build("quad_tiles"),),
+        "merged_equals",
+        Build("tile_32"),
+        ("session",),
+    ),
+    # An aggregate over nothing but error tiles gives the first member's error tile as it is (two members, so the
+    # one-member shortcut of the heavy aggregate does not decide), where the output is a tile; NULL where it is
+    # bytes, which have no place for a reason.
+    Case(
+        "ma_error_only",
+        MA,
+        (Build("tile_error_pair"),),
+        "error_group",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    # A repeated cell keeps its largest value, also when the larger value arrives first (3.0 before 1.0), so
+    # "the last one wins" fails. A NaN-only cell burns NaN on every tier. The last column holds no cell.
+    Case(
+        "br_dup_max",
+        BR,
+        (
+            (
+                ("TQ3080", 3.0),
+                ("TQ3080", 1.0),
+                ("TQ3180", 2.0),
+                ("TQ3081", None),
+                ("TQ3181", NAN),
+            ),
+        )
+        + CANVAS,
+        "pixels",
+        [[NULL_BURN, NAN, -9999.0], [3.0, 2.0, -9999.0]],
+        ("session",),
+    ),
+    # A NaN value beside numbers in one cell never wins (the largest number is burned), wherever it arrives; a cell
+    # of nothing but NaN burns NaN (br_dup_max).
+    Case(
+        "br_nan_beside_numbers",
+        BR,
+        (
+            (
+                ("TQ3080", NAN),
+                ("TQ3080", 4.0),
+                ("TQ3080", 1.0),
+                ("TQ3180", 2.0),
+                ("TQ3180", NAN),
+            ),
+        )
+        + CANVAS,
+        "pixels",
+        [[-9999.0, -9999.0, -9999.0], [4.0, 2.0, -9999.0]],
+        ("session",),
+    ),
+    # Rows whose cell id is NULL carry no cell: nothing to burn, so the group has no raster.
+    Case(
+        "br_empty",
+        BR,
+        (((None, 1.0), (None, 2.0)),) + CANVAS,
+        "null",
+        None,
+        ("session",),
+    ),
+)
+
+
+# The GDAL spec engine's first three functions. kind `ref` compares the output's first band, and its NoData
+# mask, with an independent reference (`expect` names it, see _REFS): the light tier's numpy Horn for slope,
+# numpy for map algebra. `error_fix` is an error tile whose reason carries a `Fix:`. gbx_rst_transformcrs keeps
+# its MVP_S rows, which every engine level runs as they are, plus the one row of a tile with no CRS.
+SL, MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
+# The virtual-tile policy's reasons (engine/run.py), as the rows read them: the file is off the allowlist or refused
+# (a driver identifies it, or none does), or a source GDAL opened on its own is one the policy stopped.
+_VT_POLICY = "which GeoBrix does not open for a virtual tile"
+_VT_TOP = f"a file no driver on the virtual-tile allowlist reads, {_VT_POLICY}"
+_VT_NESTED = f"a source GDAL has no driver for here, {_VT_POLICY}"
+SPEC_SE: Tuple[Case, ...] = (
+    # Horn's slope with no edges: the 1-pixel border and the neighbours of the NoData hole are NoData.
+    Case(
+        "se_slope_deg", SL, (Build("dem_3857"), "degrees"), "ref", "slope", ("session",)
+    ),
+    Case(
+        "se_slope_pct", SL, (Build("dem_3857"), "percent"), "ref", "slope", ("session",)
+    ),
+    Case(
+        "se_slope_scales",
+        SL,
+        (Build("dem_3857"), "degrees", 2.0, 0.5),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_slope_half_scale",
+        SL,
+        (Build("dem_3857"), "degrees", 2.0, None),
+        "raises",
+        "xscale and yscale must be supplied together",
+        ("session",),
+    ),
+    # An unknown unit is a parameter error (it was silently degrees on the heavy tier).
+    Case(
+        "se_slope_bad_unit",
+        SL,
+        (Build("dem_3857"), "radians"),
+        "raises",
+        "radians",
+        ("session",),
+    ),
+    Case(
+        "se_slope_null_unit", SL, (Build("dem_3857"), None), "null", None, ("session",)
+    ),
+    Case(
+        "se_slope_error_in",
+        SL,
+        (Build("tile_error"), "degrees"),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case("se_slope_null", SL, (None, "degrees"), "null", None, ("session",)),
+    Case(
+        "se_slope_corrupt",
+        SL,
+        (Build("tile_corrupt"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # A materialized PNG tile (no GeoTIFF magic) runs on its GeoTIFF translation: the reference slope of the PNG.
+    Case(
+        "se_slope_png",
+        SL,
+        (Build("dem_png_bytes"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    # One row per driver class of the bytes rule (the manifest's driver classes), on the DEM surface read as slope:
+    # a driver outside GeoTIFF that the light tier keeps is read as the GeoTIFF it translates to (netCDF, HFA,
+    # JP2OpenJPEG, GPKG), and a driver that names other files (a VRT's XML as the tile's bytes) is an error tile with
+    # a Fix, its sources never opened.
+    Case(
+        "se_bytes_netcdf",
+        SL,
+        (Build("dem_netcdf"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_hfa",
+        SL,
+        (Build("dem_hfa"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_jp2",
+        SL,
+        (Build("dem_jp2"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_gpkg",
+        SL,
+        (Build("dem_gpkg"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_refused_light",
+        SL,
+        (Build("tile_vrt_bytes"), "degrees"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("VRT"),
+        ("session",),
+    ),
+    # The decoded-size gate on a materialized tile (READ_CAP_ROWS lowers the cap): the same error tile and Fix at
+    # every level, the tile small on disk.
+    Case(
+        "se_slope_over_cap",
+        SL,
+        (Build("tile_4326"), "degrees"),
+        "error_tile_has",
+        "the tile is 12 KiB decoded, over this compute's read cap (4 KiB). Fix: retile it first (gbx_rst_retile)",
+        ("session",),
+    ),
+    # Reprojecting a tile with no CRS is an error tile that says how to set one (heavy assumed EPSG:4326).
+    Case(
+        "se_tcrs_no_crs",
+        T,
+        (Build("tile_nocrs"), "EPSG:3857"),
+        "error_fix",
+        None,
+        ("session",),
+    ),
+    # An integer SRID that is an ESRI code, not an EPSG one: the engine reads it as ESRI:<n>, as resolve_crs does.
+    Case(
+        "se_tcrs_int_esri",
+        T,
+        (Build("tile_4326"), "102003"),
+        "tile_props",
+        ("ESRI:102003", 102003),
+        ("session",),
+    ),
+    # A target CRS that names a grid by path is refused before GDAL or PROJ sees it: an error tile (the value is
+    # data) with a Fix, the same on every level.
+    Case(
+        "se_tcrs_grid_path",
+        T,
+        (
+            Build("tile_4326"),
+            "+proj=longlat +datum=WGS84 +nadgrids=/etc/hostname +type=crs",
+        ),
+        "error_fix",
+        None,
+        ("session",),
+    ),
+    # A bare grid name PROJ cannot find: every level gives the same outcome.
+    Case(
+        "se_tcrs_missing_grid",
+        T,
+        (
+            Build("tile_4326"),
+            "+proj=longlat +datum=WGS84 +nadgrids=gbx_no_such_grid.gsb +type=crs",
+        ),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # A PROJJSON target CRS (its "$schema" is a URL, which is never fetched) reprojects like its EPSG code.
+    Case(
+        "se_tcrs_projjson",
+        T,
+        (Build("tile_3857"), Build("projjson_4326")),
+        "tile_props",
+        ("EPSG:4326", 4326),
+        ("session",),
+    ),
+    # A target CRS that IS a URL is refused before GDAL sees it: an error tile with a Fix, the same on every level.
+    Case(
+        "se_tcrs_url",
+        T,
+        (Build("tile_4326"), "https://example.com/crs.wkt"),
+        "error_fix",
+        None,
+        ("session",),
+    ),
+    # A materialized tile kept in another driver is translated to GeoTIFF first, under the light bytes rule on every
+    # level: a PNG carries no CRS, so reprojecting it is the no-CRS error tile; HFA (as netCDF, JP2OpenJPEG and GPKG,
+    # the slope rows `se_bytes_*` below) is read as the GeoTIFF it translates to, as the light tier reads it; a driver
+    # that can name other files (a VRT names its sources, a local file or a URL) is an error tile with a Fix, and
+    # nothing it names is opened. There is no HDF5 row: GDAL cannot write HDF5 and the container has no h5py.
+    Case(
+        "se_tcrs_png",
+        T,
+        (Build("dem_png_bytes"), "EPSG:4326"),
+        "error_tile_has",
+        "Fix: set its CRS",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_transformcrs_hfa",
+        T,
+        (Build("tile_4326_hfa"), "EPSG:3857"),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    # transformcrs is the same reprojection as transform (SPEC_WARP, whose rows run for the warp functions): a source with
+    # no NoData declared has the pixels outside the reprojected footprint masked, not a valid 0
+    Case(
+        "se_tcrs_undeclared_masked",
+        T,
+        (Build("warp_ramp_geo"), "EPSG:3035"),
+        "warp_masked",
+        "EPSG:3035",
+        ("session",),
+    ),
+    Case(
+        "se_tcrs_vrt_bytes",
+        T,
+        (Build("tile_vrt_bytes"), "EPSG:4326"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("VRT"),
+        ("session",),
+    ),
+    Case(
+        "se_tcrs_vrt_bytes_vsicurl",
+        T,
+        (Build("tile_vrt_bytes_vsicurl"), "EPSG:4326"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("VRT"),
+        ("session",),
+    ),
+    # Virtual tiles: a VRT is read (the policy allows it); a stored GDAL pipeline, a VRT over one, a VRT with a
+    # Python pixel function and a VRT raw band (a file's bytes read with no driver) are error tiles, never run and
+    # never a failed query. A missing file is not data: it is retried, then raises naming the path (a Volume that has
+    # not caught up fails the task so that Spark retries).
+    Case(
+        "se_slope_virtual_vrt",
+        SL,
+        (Build("dem_vrt"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    # The policy's refusals (design section 4): each row's reason is the policy's own text (error_tile_has), so a row
+    # cannot pass on a different error. A file of no allowed driver is refused by its identity; a source GDAL opens
+    # on its own is refused by the registry (no driver there), or by the engine's settings (a raw band, a Python
+    # pixel function).
+    Case(
+        "se_slope_virtual_gdalg",
+        SL,
+        (Build("dem_gdalg"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_vrt_gdalg",
+        SL,
+        (Build("dem_vrt_gdalg"), "degrees"),
+        "error_tile_has",
+        _VT_NESTED,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_inline_gdalg",
+        SL,
+        (Build("dem_inline_gdalg"), "degrees"),
+        "error_tile_has",
+        _VT_NESTED,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_gti_gdalg",
+        SL,
+        (Build("dem_vrt_gti_gdalg"), "degrees"),
+        "error_tile_has",
+        _VT_NESTED,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_gti",
+        SL,
+        (Build("dem_gti"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_stacta",
+        SL,
+        (Build("dem_stacta"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_network_api",
+        SL,
+        (Build("dem_eedai"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_vrt_python",
+        SL,
+        (Build("dem_vrt_python"), "degrees"),
+        "error_tile_has",
+        f"a VRT Python pixel function, {_VT_POLICY}",
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_vrt_raw",
+        SL,
+        (Build("dem_vrt_raw"), "degrees"),
+        "error_tile_has",
+        f"a VRT raw band, {_VT_POLICY}",
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_inline_raw",
+        SL,
+        (Build("dem_inline_raw"), "degrees"),
+        "error_tile_has",
+        f"a VRT raw band, {_VT_POLICY}",
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_missing",
+        SL,
+        (Build("dem_missing"), "degrees"),
+        "raises",
+        "se_no_such_dem",
+        ("session",),
+    ),
+    # One grammar: GDAL's muparser evaluates every expression (the pinned build carries it, the native self-check
+    # holds it), and the envelope takes no dialect.
+    Case(
+        "se_ma_dialect",
+        MALG,
+        (Build("se_pair"), '{"calc": "norm_diff", "dialect": "builtin"}'),
+        "raises",
+        "dialect",
+        ("session",),
+    ),
+    # the same pair as references (a path each, no bytes): the level that serves the function by default reads them
+    Case(
+        "se_ma_virtual",
+        MALG,
+        (Build("se_pair_paths"), "(A - B) / (A + B)"),
+        "ref",
+        "norm_diff",
+        ("session",),
+    ),
+    Case(
+        "se_ma_times2",
+        MALG,
+        (Build("se_one"), "A * 2"),
+        "ref",
+        "times2",
+        ("session", "uc"),
+    ),
+    Case(
+        "se_ma_nd_two_tiles",
+        MALG,
+        (Build("se_pair"), "(A - B) / (A + B)"),
+        "ref",
+        "norm_diff",
+        ("session", "uc"),
+    ),
+    Case(
+        "se_ma_multiband",
+        MALG,
+        (
+            Build("se_four_band"),
+            '{"calc": "(A-B)/(A+B)", "A_index": 0, "B_index": 0, "A_band": 4, "B_band": 3}',
+        ),
+        "ref",
+        "nd_bands_4_3",
+        ("session", "uc"),
+    ),
+    # A literal expression GDAL cannot evaluate is a parameter error, found by the engine's dry run (muparser's
+    # message names the fault).
+    Case(
+        "se_ma_bad_syntax",
+        MALG,
+        (Build("se_one"), "A +* 2"),
+        "raises",
+        "Unexpected",
+        ("session",),
+    ),
+    Case(
+        "se_ma_extra_options",
+        MALG,
+        (Build("se_one"), '{"calc": "A*2", "extra_options": "--hideNoData"}'),
+        "raises",
+        "extra_options",
+        ("session", "uc"),
+    ),
+    Case(
+        "se_ma_unbound",
+        MALG,
+        (Build("se_one"), "A + C"),
+        "raises",
+        "C",
+        ("session", "uc"),
+    ),
+    Case(
+        "se_ma_error_in",
+        MALG,
+        (Build("se_error_pair"), "(A - B) / (A + B)"),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session", "uc"),
+    ),
+    # Two tiles whose CRS differ: a fault of the data, so that row's error tile (not a parameter error that fails the
+    # query); the same expression over a matching pair afterwards still runs (the check caches no data fault).
+    Case(
+        "se_ma_crs_mismatch",
+        MALG,
+        (Build("se_mismatch_pair"), "(A - B) / (A + B) + 0"),
+        "error_tile_has",
+        "Input spatial reference systems are inconsistent",
+        ("session",),
+    ),
+    Case(
+        "se_ma_after_mismatch",
+        MALG,
+        (Build("se_pair"), "(A - B) / (A + B) + 0"),
+        "ref",
+        "norm_diff",
+        ("session", "uc"),
+    ),
+    Case(
+        "se_ma_null", MALG, (None, "(A - B) / (A + B)"), "null", None, ("session", "uc")
+    ),
+    # Unity Catalog runs the session's engine call: an array of members over the UC cap, or with a virtual member, is
+    # refused with a Fix
+    Case("uc_ma_null_expression", MALG, (Build("se_one"), None), "null", None, ("uc",)),
+    Case(
+        "uc_ma_virtual_refused",
+        MALG,
+        (Build("aa_virtual_only"), "A * 2"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_ma_virtual_member_refused",
+        MALG,
+        (Build("aa_stack_virtual_member"), "A + B"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_ma_over_cap_sum_refused",
+        MALG,
+        (Build("aa_over_cap_sum"), "A + B"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_ma_corrupt_null",
+        MALG,
+        (Build("aa_corrupt_only"), "A * 2"),
+        "null",
+        None,
+        ("uc",),
+    ),
+)
+SPEC_SE += (
+    # One batch whose rows bind different CRS values, one of them bad: only that row is an error tile, and the others
+    # keep their result (a batch UDF and a per-row binding both see this batch).
+    Case(
+        "warp_rows_mixed_crs",
+        T,
+        (
+            (Build("tile_4326"), "EPSG:3857"),
+            (Build("tile_4326"), "not a crs"),
+            (Build("tile_4326"), "EPSG:4326"),
+        ),
+        "per_row",
+        ("tile_props:EPSG:3857", "error_tile", "tile_props:EPSG:4326"),
+        ("session",),
+    ),
+)
+# Unity Catalog: slope, transformcrs and map algebra run the session's engine call (engine.uc), so their rows run there
+# too. A data error is NULL there (no error tile), and a CRS form UC does not take is refused with a Fix.
+SPEC_SE = mirror(
+    SPEC_SE,
+    null=(
+        "se_slope_corrupt", "se_bytes_refused_light", "se_tcrs_no_crs", "se_tcrs_png", "se_tcrs_vrt_bytes",
+        "se_tcrs_vrt_bytes_vsicurl", "se_ma_crs_mismatch",
+    ),
+    refused=("se_tcrs_grid_path", "se_tcrs_missing_grid", "se_tcrs_projjson", "se_tcrs_url"),
+)  # fmt: skip
+
+
+# The read-path table: the ways to read a file into tiles (and the decode that follows a bytes-free read), held to
+# one answer. `io_cover` runs per read path (`run_reader`): the tiles must reproduce the file exactly, each pixel once.
+MVP_IO: Tuple[Case, ...] = (
+    Case(
+        "io_cover",
+        "read",
+        (Build("tile_virtual"),),
+        "covers_file",
+        None,
+        ("session",),
+    ),
+)
+
+
+# Fixture builders a family oracle module registers for its own `Build(name)` fixtures.
+BUILDERS: Dict[str, Callable[[str], Any]] = {}
+
+
+def builder(name: str):
+    """Register a fixture builder for ``Build(name)``; the family oracle modules use it."""
+
+    def deco(f):
+        BUILDERS[name] = f
+        return f
+
+    return deco
+
+
+def _tables() -> Dict[str, Tuple[Case, ...]]:
+    import importlib
+    import pkgutil
+
+    from databricks.labs.gbx.bench import oracle_tables
+
+    def is_table(v) -> bool:
+        return isinstance(v, tuple) and bool(v) and isinstance(v[0], Case)
+
+    found = {k: v for k, v in globals().items() if k.isupper() and is_table(v)}
+    for m in pkgutil.iter_modules(oracle_tables.__path__):
+        mod = importlib.import_module(f"{oracle_tables.__name__}.{m.name}")
+        found.update(
+            {k: v for k, v in vars(mod).items() if k.isupper() and is_table(v)}
+        )
+    return found
+
+
+class _Tables(dict):
+    """Every oracle table by name, discovered on first use (so family modules need no registry edit): any read
+    (lookup, ``in``, iteration, ``len``, ``keys``, ``items``, ``values``, ``get``) finds them first.
+    """
+
+    _found = False
+    _lock = threading.RLock()
+
+    def _find(self) -> None:
+        if self._found:
+            return
+        with (
+            self._lock
+        ):  # one thread imports the family modules; the others wait for a whole dict
+            if not self._found:
+                dict.update(self, _tables())
+                self._found = True
+
+    def __getitem__(self, key):
+        self._find()
+        return dict.__getitem__(self, key)
+
+    def __contains__(self, key):
+        self._find()
+        return dict.__contains__(self, key)
+
+    def __iter__(self):
+        self._find()
+        return dict.__iter__(self)
+
+    def __len__(self):
+        self._find()
+        return dict.__len__(self)
+
+    def get(self, key, default=None):
+        self._find()
+        return dict.get(self, key, default)
+
+    def keys(self):
+        self._find()
+        return dict.keys(self)
+
+    def items(self):
+        self._find()
+        return dict.items(self)
+
+    def values(self):
+        self._find()
+        return dict.values(self)
+
+
+TABLES = _Tables()
+
+
+def _tile_bytes(
+    crs_value: str, w: int = 64, h: int = 48, origin=None, px=None
+) -> bytes:
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    data = (np.arange(w * h, dtype="float32").reshape(1, h, w) % 97).astype("float32")
+    data[0, :4, :4] = -9999.0
+    geographic = crs_value.upper().startswith("EPSG:4326")
+    transform = (
+        from_origin(origin[0], origin[1], px, px)
+        if origin
+        else (
+            from_origin(-1.0, 52.0, 0.01, 0.01)
+            if geographic
+            else from_origin(400000.0, 5760000.0, 100.0, 100.0)
+        )
+    )
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="float32",
+        nodata=-9999.0,
+        crs=resolve_crs(crs_value),
+        transform=transform,
+        **creation_opts("float32", compress="zstd"),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(data)
+        return mf.read()
+
+
+def _tile(raster=None, path=None, window=None) -> dict:
+    return {
+        "cellid": 0,
+        "raster": raster,
+        "path": path,
+        "path_mode": None,
+        "window": window,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+
+
+# The sampling of a content key for a raster: the first and the last
+# 64 KB and 64 blocks of 4 KB between them, nothing at all of a raster up to 512 KB. An edit that sits
+# between two blocks of a raster above that is invisible to a key made of the sample.
+_SAMPLE_HEAD, _SAMPLE_BLOCK, _SAMPLE_BLOCKS, _SAMPLE_WHOLE = 65536, 4096, 64, 524288
+
+
+@functools.lru_cache(maxsize=1)
+def _edit_pair() -> Tuple[bytes, bytes]:
+    """Two 512 x 512 int32 GTiffs (1 MiB each, uncompressed) that differ in ONE pixel, chosen so that the
+    bytes that differ lie between two sampled blocks (see _SAMPLE_*)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    n = 512
+    data = np.random.default_rng(7).integers(0, 1000, size=(1, n, n), dtype="int32")
+    profile = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="int32",
+        crs=resolve_crs("EPSG:4326"),
+        transform=from_origin(-1.0, 52.0, 0.01, 0.01),
+        **creation_opts("int32", compress="none"),
+    )
+
+    def encode(arr) -> bytes:
+        with MemoryFile() as mf:
+            with mf.open(**profile) as ds:
+                ds.write(arr)
+            return mf.read()
+
+    a = encode(data)
+    start = a.find(data[0, 0, :8].tobytes())  # where the pixels begin
+    span = len(a) - 2 * _SAMPLE_HEAD - _SAMPLE_BLOCK
+    block = 20  # the midpoint of the gap between two sampled blocks
+    gap_lo = _SAMPLE_HEAD + span * block // (_SAMPLE_BLOCKS - 1) + _SAMPLE_BLOCK
+    gap_hi = _SAMPLE_HEAD + span * (block + 1) // (_SAMPLE_BLOCKS - 1)
+    idx = (
+        (gap_lo + gap_hi) // 2 - start
+    ) // 4  # the pixel whose 4 bytes lie in the gap
+    edited = data.copy()
+    edited[0, idx // n, idx % n] += 100000
+    b = encode(edited)
+    assert (
+        len(a) == len(b) and len(a) > _SAMPLE_WHOLE
+    ), "the pair must be one size, above the sampled limit"
+    diff = [i for i in range(len(a)) if a[i] != b[i]]
+    assert (
+        diff and gap_lo <= diff[0] and diff[-1] < gap_hi
+    ), "the edit must lie between two sampled blocks"
+    return a, b
+
+
+def _encode(bands, driver: str, **profile) -> bytes:
+    """`bands` (a (count, h, w) array) as raster bytes in `driver`, with the profile's georeferencing if any."""
+    from rasterio.io import MemoryFile
+
+    count, h, w = bands.shape
+    with MemoryFile() as mf:
+        with mf.open(
+            driver=driver, width=w, height=h, count=count, dtype=bands.dtype, **profile
+        ) as ds:
+            ds.write(bands)
+        return mf.read()
+
+
+def _gtiff(
+    bands,
+    crs_value: Optional[str],
+    nodata=-9999.0,
+    origin=(400000.0, 5760000.0),
+    px=10.0,
+    dtype="float32",
+) -> bytes:
+    """A GeoTIFF of `bands` (a (count, h, w) array) as `dtype` (float32) on a `px` pixel grid (10 m) from the
+    top-left corner `origin`, in `crs_value` (None: no CRS)."""
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    count, h, w = bands.shape
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=count,
+        dtype=dtype,
+        nodata=nodata,
+        transform=from_origin(origin[0], origin[1], px, px),
+        **creation_opts(dtype, compress="zstd"),
+    )
+    if crs_value:
+        profile["crs"] = resolve_crs(crs_value)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(bands.astype(dtype))
+        return mf.read()
+
+
+def _vrt_body(source_xml: str) -> str:
+    """A one-band 64 x 64 VRT on the DEM's grid (EPSG:3857) whose SimpleSource is `source_xml` (a SourceFilename)."""
+    return (
+        '<VRTDataset rasterXSize="64" rasterYSize="64"><SRS>EPSG:3857</SRS>'
+        "<GeoTransform>400000, 10, 0, 5760000, 0, -10</GeoTransform>"
+        '<VRTRasterBand dataType="Float32" band="1"><NoDataValue>-9999</NoDataValue><SimpleSource>'
+        f"{source_xml}<SourceBand>1</SourceBand></SimpleSource></VRTRasterBand></VRTDataset>"
+    )
+
+
+def _vrt_nested(inner: str) -> str:
+    """The same grid's VRT whose only source is `inner`, a VRTDataset inline in the SimpleSource (GDAL opens the
+    inline source itself; a walk of the file's SourceFilename members never sees it)."""
+    return _vrt_body(inner)
+
+
+def _gti_index(path: str, location: str) -> str:
+    """A GeoPackage tile index (GTI's `location` field) with one tile over the DEM's extent, located at `location`."""
+    from osgeo import ogr, osr
+
+    from databricks.labs.gbx.bench import uc_perf
+
+    def build(local: str) -> None:
+        os.remove(local)  # the temp file exists (empty); OGR creates its own
+        ds = ogr.GetDriverByName("GPKG").CreateDataSource(local)
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(3857)
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        lyr = ds.CreateLayer("tiles", srs, ogr.wkbPolygon)
+        lyr.CreateField(ogr.FieldDefn("location", ogr.OFTString))
+        feat = ogr.Feature(lyr.GetLayerDefn())
+        feat.SetField("location", location)
+        feat.SetGeometry(
+            ogr.CreateGeometryFromWkt(
+                "POLYGON((400000 5759360,400640 5759360,400640 5760000,400000 5760000,400000 5759360))"
+            )
+        )
+        lyr.CreateFeature(feat)
+        feat = None
+        ds = None  # closing flushes the GeoPackage before the copy
+
+    if os.path.exists(path):
+        os.remove(path)
+    # SQLite cannot be written in place on a Volume
+    uc_perf.write_via_local(path, build)
+    return path
+
+
+def _se_virtual(name: str, tmpdir: str):
+    """The virtual-tile fixtures of SPEC_SE: files under `tmpdir`, the tile pointing at them."""
+    dem = os.path.join(tmpdir, "se_dem.tif")
+    if not os.path.exists(dem):
+        with open(dem, "wb") as fh:
+            fh.write(_se_build("dem_3857")["raster"])
+    gdalg = os.path.join(tmpdir, "se_dem.gdalg.json")
+    gdalg_text = (
+        json.dumps(  # the pipeline, every nested fixture names it, so it always exists
+            {
+                "type": "gdal_streamed_alg",
+                "command_line": f"gdal raster pipeline read {dem} ! slope",
+            }
+        )
+    )
+    with open(gdalg, "w") as fh:
+        fh.write(gdalg_text)
+    files = {
+        "dem_gdalg": (gdalg, gdalg_text),
+        "dem_vrt": (os.path.join(tmpdir, "se_dem.vrt"), _vrt(dem)),
+        "dem_vrt_gdalg": (os.path.join(tmpdir, "se_dem_gdalg.vrt"), _vrt(gdalg)),
+        "dem_vrt_python": (
+            os.path.join(tmpdir, "se_dem_python.vrt"),
+            _vrt(dem, python=True),
+        ),
+    }
+    if name == "dem_missing":
+        return _tile(None, os.path.join(tmpdir, "se_no_such_dem.tif"), None)
+    # The policy's refusals (design section 4). Each file is a benign fixture: a pipeline, an index over it, a PNG, a
+    # raw band over a file of known bytes, a connection string that names no collection.
+    if (
+        name == "dem_inline_gdalg"
+    ):  # a VRT whose only source is an inline VRT over the pipeline
+        path = os.path.join(tmpdir, "se_dem_inline_gdalg.vrt")
+        with open(path, "w") as fh:
+            fh.write(
+                _vrt_nested(
+                    _vrt_body(
+                        f'<SourceFilename relativeToVRT="0">{gdalg}</SourceFilename>'
+                    )
+                )
+            )
+        return _tile(None, path, None)
+    if name in (
+        "dem_gti",
+        "dem_vrt_gti_gdalg",
+    ):  # a tile index whose one tile is the pipeline
+        idx = _gti_index(os.path.join(tmpdir, "se_index.gpkg"), gdalg)
+        if name == "dem_gti":  # named by its GTI: prefix, as the tile's own file
+            return _tile(None, "GTI:" + idx, None)
+        path = os.path.join(tmpdir, "se_dem_gti.vrt")  # a VRT whose source is the index
+        with open(path, "w") as fh:
+            fh.write(_vrt("GTI:" + idx))
+        return _tile(None, path, None)
+    if (
+        name == "dem_stacta"
+    ):  # a STAC tiled-asset catalog as the tile's file (refused as the file, never opened)
+        return _tile(None, "STACTA:" + os.path.join(tmpdir, "se_catalog.json"), None)
+    if (
+        name == "dem_eedai"
+    ):  # a network API's connection string, naming no collection that exists
+        return _tile(None, "EEDAI:se-no-such-collection", None)
+    if (
+        name == "dem_png"
+    ):  # a driver GeoBrix does not emit virtual tiles for (not on the allowlist)
+        import numpy as np
+
+        from databricks.labs.gbx.bench import uc_perf
+
+        path = os.path.join(tmpdir, "se_dem.png")
+
+        def build_png(local: str) -> None:
+            with open_data(
+                local, "w", driver="PNG", width=64, height=64, count=1, dtype="uint8"
+            ) as dst:
+                dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64))
+
+        uc_perf.write_via_local(path, build_png)
+        return _tile(None, path, None)
+    if (
+        name == "dem_inline_raw"
+    ):  # an inline raw band over a sibling file of known bytes (GDAL's default: sibling)
+        import struct
+
+        with open(os.path.join(tmpdir, "se_dem_inline_raw.bin"), "wb") as fh:
+            fh.write(struct.pack("<f", 3.0) * (64 * 64))
+        raw = (
+            '<VRTDataset rasterXSize="64" rasterYSize="64"><SRS>EPSG:3857</SRS>'
+            "<GeoTransform>400000, 10, 0, 5760000, 0, -10</GeoTransform>"
+            '<VRTRasterBand dataType="Float32" band="1" subClass="VRTRawRasterBand">'
+            '<SourceFilename relativeToVRT="1">se_dem_inline_raw.bin</SourceFilename>'
+            "<ImageOffset>0</ImageOffset><PixelOffset>4</PixelOffset><LineOffset>256</LineOffset>"
+            "<ByteOrder>LSB</ByteOrder></VRTRasterBand></VRTDataset>"
+        )
+        path = os.path.join(tmpdir, "se_dem_inline_raw.vrt")
+        with open(path, "w") as fh:
+            fh.write(_vrt_nested(raw))
+        return _tile(None, path, None)
+    if name == "dem_vrt_raw":  # a raw band over a sibling file of float32 bytes
+        with open(os.path.join(tmpdir, "se_dem_raw.bin"), "wb") as fh:
+            fh.write(bytes(64 * 64 * 4))
+        files[name] = (
+            os.path.join(tmpdir, "se_dem_raw.vrt"),
+            _vrt("se_dem_raw.bin")
+            .replace(
+                '<VRTRasterBand dataType="Float32" band="1">',
+                '<VRTRasterBand dataType="Float32" band="1" subClass="VRTRawRasterBand">'
+                '<SourceFilename relativeToVRT="1">se_dem_raw.bin</SourceFilename><ImageOffset>0</ImageOffset>'
+                "<PixelOffset>4</PixelOffset><LineOffset>256</LineOffset><ByteOrder>LSB</ByteOrder>",
+            )
+            .split("<NoDataValue>")[0]
+            + "</VRTRasterBand></VRTDataset>",
+        )
+    if (
+        name == "dem_vrt_gdalg"
+    ):  # the pipeline the VRT points at must exist, or nothing is tested
+        _se_virtual("dem_gdalg", tmpdir)
+    path, text = files[name]
+    with open(path, "w") as fh:
+        fh.write(text)
+    return _tile(None, path, None)
+
+
+def _vrt(source: str, python: bool = False) -> str:
+    """A one-band 64 x 64 VRT over `source` (EPSG:3857, the DEM's grid); with `python`, a derived band whose pixel
+    function is inline Python."""
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    band = (
+        '<VRTRasterBand dataType="Float32" band="1" subClass="VRTDerivedRasterBand">'
+        "<PixelFunctionType>f</PixelFunctionType><PixelFunctionLanguage>Python</PixelFunctionLanguage>"
+        "<PixelFunctionCode><![CDATA[\ndef f(in_ar, out_ar, *args, **kwargs):\n    out_ar[:] = in_ar[0]\n]]>"
+        "</PixelFunctionCode>"
+        if python
+        else '<VRTRasterBand dataType="Float32" band="1">'
+    )
+    return (
+        f'<VRTDataset rasterXSize="64" rasterYSize="64"><SRS>{resolve_crs("EPSG:3857").to_wkt()}</SRS>'
+        "<GeoTransform>400000, 10, 0, 5760000, 0, -10</GeoTransform>"
+        f"{band}<NoDataValue>-9999</NoDataValue><SimpleSource>"
+        f'<SourceFilename relativeToVRT="0">{source}</SourceFilename><SourceBand>1</SourceBand>'
+        "</SimpleSource></VRTRasterBand></VRTDataset>"
+    )
+
+
+def _dem_surface():
+    """The DEM oracle surface (64 x 64): smooth, with a 3 x 3 NoData hole (-9999) at rows 20-22, columns 30-32."""
+    import numpy as np
+
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+    z[20:23, 30:33] = -9999.0
+    return z
+
+
+def _se_build(name: str, tmpdir: Optional[str] = None):
+    """The spec engine rows' fixtures (SPEC_SE)."""
+    import numpy as np
+
+    y, x = np.mgrid[0:48, 0:64].astype("float64")
+    a = 10.0 + (x * 7 + y * 3) % 13
+    b = 5.0 + (x * 5 + y * 11) % 7
+    a[5:8, 5:8] = -9999.0
+    b[30:32, 40:44] = -9999.0
+    if name == "dem_3857":  # a smooth surface with a 3 x 3 NoData hole
+        return _tile(_gtiff(_dem_surface()[np.newaxis], "EPSG:3857"))
+    if name == "tile_nocrs":  # a geotransform, but no CRS
+        return _tile(_gtiff(a[np.newaxis], None))
+    if name == "se_pair":
+        return [
+            _tile(_gtiff(a[np.newaxis], "EPSG:3857")),
+            _tile(_gtiff(b[np.newaxis], "EPSG:3857")),
+        ]
+    if (
+        name == "se_pair_paths" and tmpdir is not None
+    ):  # the se_pair rasters as files, the tiles their paths
+        paths = []
+        for i, t in enumerate(_se_build("se_pair")):
+            path = os.path.join(tmpdir, f"se_pair_{i}.tif")
+            with open(path, "wb") as fh:
+                fh.write(t["raster"])
+            paths.append(_tile(None, path, None))
+        return paths
+    if name == "se_mismatch_pair":  # the se_pair rasters, the second one in another CRS
+        return [
+            _tile(_gtiff(a[np.newaxis], "EPSG:3857")),
+            _tile(_gtiff(b[np.newaxis], "EPSG:4326")),
+        ]
+    if name == "se_one":
+        return [_tile(_gtiff(a[np.newaxis], "EPSG:3857"))]
+    if (
+        name == "dem_png_bytes"
+    ):  # a materialized PNG of a smooth Byte surface (a PNG holds no georeferencing)
+        yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+        z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+        return _tile(_encode(z[np.newaxis].round().astype("uint8"), "PNG"))
+    if name in _DEM_DRIVERS:
+        return _dem_driver_tile(name)
+    if name == "se_four_band":
+        return [_tile(_gtiff(np.stack([a, b, a + 1.0, b + 20.0]), "EPSG:3857"))]
+    if name == "se_error_pair":
+        return [
+            {**_tile(), "metadata": {ERROR_TILE_KEY: UPSTREAM_ERROR}},
+            _se_build("se_one")[0],
+        ]
+    if name.startswith("dem_") and name != "dem_3857" and tmpdir is not None:
+        return _se_virtual(name, tmpdir)
+    return None
+
+
+def to_netcdf(tif: str, nc: str) -> None:
+    """Write the raster file `tif` as the NetCDF file `nc` (GDAL writes NetCDF by copy, to a file only; each band
+    becomes a variable)."""
+    import rasterio.shutil
+
+    from databricks.labs.gbx.bench import uc_perf
+
+    with open_data(tif) as src:  # the copy reads this dataset, not the name
+        # netCDF is written by seeks and a re-open (CPLE_OpenFailedError on a Volume): build locally, then copy
+        uc_perf.write_via_local(
+            nc, lambda local: rasterio.shutil.copy(src, local, driver="netCDF")
+        )
+
+
+# The DEM surface as a materialized tile in each driver of the bytes rule's kept class: the slope rows `se_bytes_*`
+# (a smooth Int16 surface with no hole, as JP2OpenJPEG and GPKG hold integers and no NoData).
+_DEM_DRIVERS = {
+    "dem_netcdf": "netCDF",
+    "dem_hfa": "HFA",
+    "dem_jp2": "JP2OpenJPEG",
+    "dem_gpkg": "GPKG",
+}
+
+
+def _dem_driver_tile(name: str):
+    """The `dem_*` fixture of `_DEM_DRIVERS`: GDAL copies a GeoTIFF of the surface into the driver's file, whose
+    bytes are the tile's."""
+    import tempfile
+
+    import numpy as np
+    import rasterio.shutil
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+    tif_bytes = _encode(
+        z[np.newaxis].round().astype("int16"),
+        "GTiff",
+        crs=resolve_crs("EPSG:3857"),
+        transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        tif, out = (os.path.join(tmp, f"dem.{e}") for e in ("tif", "bin"))
+        with open(tif, "wb") as fh:
+            fh.write(tif_bytes)
+        with open_data(
+            tif
+        ) as src:  # a copy into a new local file (GDAL writes these drivers by copy)
+            rasterio.shutil.copy(src, out, driver=_DEM_DRIVERS[name])
+        with open(out, "rb") as fh:
+            return _tile(fh.read())
+
+
+def _bytes_class_build(name: str, tmpdir: str):
+    """The bytes-class rows' fixtures: a materialized tile in a driver outside the self-contained class."""
+    if (
+        name == "tile_4326_netcdf"
+    ):  # the tile_4326 raster, materialized as netCDF (GDAL writes netCDF by copy, to a file only)
+        tif, nc = (os.path.join(tmpdir, f"oracle_4326.{e}") for e in ("tif", "nc"))
+        with open(tif, "wb") as fh:
+            fh.write(_tile_bytes("EPSG:4326"))
+        to_netcdf(tif, nc)
+        with open(nc, "rb") as fh:
+            return _tile(fh.read())
+    if (
+        name == "tile_pds_bytes"
+    ):  # a PDS label (it names its image file) as a materialized tile's bytes
+        return _tile(
+            b"PDS_VERSION_ID = PDS3\r\nRECORD_TYPE = FIXED_LENGTH\r\nRECORD_BYTES = 64\r\n"
+            b'^IMAGE = ("oracle_image.img", 1)\r\nOBJECT = IMAGE\r\nLINES = 48\r\nLINE_SAMPLES = 64\r\n'
+            b"SAMPLE_TYPE = UNSIGNED_INTEGER\r\nSAMPLE_BITS = 8\r\nEND_OBJECT = IMAGE\r\nEND\r\n"
+        )
+    return None
+
+
+def _build(name: str, tmpdir: str):
+    TABLES._find()  # the family modules register their fixture builders when they are imported
+    if name in BUILDERS:
+        return BUILDERS[name](tmpdir)
+    se = _se_build(name, tmpdir)
+    if se is not None:
+        return se
+    if name in ("tile_4326_netcdf", "tile_pds_bytes"):
+        return _bytes_class_build(name, tmpdir)
+    if name == "tile_edit_a":
+        return _tile(_edit_pair()[0])
+    if name == "tile_edit_b":
+        return _tile(_edit_pair()[1])
+    if name == "tile_4326":
+        return _tile(_tile_bytes("EPSG:4326"))
+    if name == "tile_3857":
+        return _tile(_tile_bytes("EPSG:3857"))
+    if (
+        name == "tile_4326_hfa"
+    ):  # the tile_4326 raster, materialized as ERDAS Imagine (CRS and geotransform in-band)
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        with open_bytes(_tile_bytes("EPSG:4326")) as src:
+            return _tile(
+                _encode(
+                    src.read(),
+                    "HFA",
+                    crs=resolve_crs("EPSG:4326"),
+                    transform=src.transform,
+                    nodata=src.nodata,
+                )
+            )
+    if name in ("tile_vrt_bytes", "tile_vrt_bytes_vsicurl"):
+        # a VRT's XML as a materialized tile's bytes: its source is the DEM on local disk, or a URL
+        if name == "tile_vrt_bytes":
+            _se_virtual("dem_vrt", tmpdir)  # writes se_dem.tif
+            src = os.path.join(tmpdir, "se_dem.tif")
+        else:
+            src = "/vsicurl/https://example.invalid/se_dem.tif"
+        return _tile(_vrt(src).encode())
+    if (
+        name == "projjson_4326"
+    ):  # a CRS-as-PROJJSON INPUT value (it carries a "$schema" URL)
+        from databricks.labs.gbx.core.crs import resolve_crs as core_resolve
+        from databricks.labs.gbx.core.crs import to_pyproj_crs
+
+        return to_pyproj_crs(core_resolve("EPSG:4326")).to_json()
+    if name == "wkt_3857":
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        return resolve_crs(
+            "EPSG:3857"
+        ).to_wkt()  # a CRS-as-WKT INPUT value (not a stored canonical string)
+    if name == "tile_custom":
+        return _tile(_tile_bytes(CUSTOM_TMERC))
+    if name == "tile_corrupt":
+        return _tile(b"II*\x00not-a-real-tiff")
+    if name == "tile_empty":
+        return _tile()
+    if name == "tile_error_pair":  # two error tiles with the same reason
+        return [_build("tile_error", tmpdir), _build("tile_error", tmpdir)]
+    if (
+        name == "tile_error"
+    ):  # what a failed upstream function returns: no raster, no path, the reason
+        return {**_tile(), "metadata": {ERROR_TILE_KEY: UPSTREAM_ERROR}}
+    if name == "tile_virtual":
+        path = os.path.join(tmpdir, "oracle_4326.tif")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(_tile_bytes("EPSG:4326"))
+        return _tile(
+            None, path, {"col_off": 0, "row_off": 0, "width": 64, "height": 48}
+        )
+    return _build_helper_input(name, tmpdir)
+
+
+def _dsm_tile_is_whole(path: str, size: int) -> bool:
+    """True when `path` opens as a `size` x `size` raster whose last row reads: a copy that an interrupted run left
+    half-written does not."""
+    from rasterio.windows import Window
+
+    try:
+        with open_data(path) as ds:
+            last = ds.read(1, window=Window(0, size - 1, size, 1))
+            return (ds.width, ds.height) == (size, size) and last.shape == (1, size)
+    except Exception:  # noqa: BLE001 - absent, not a raster, cut short: write it again
+        return False
+
+
+def dsm_tile_rows(
+    tmpdir: str, grid: int = 2, size: int = 200, nodata_at: Sequence = ()
+) -> List[Tuple[int, int, str]]:
+    """The `(tx, ty, path)` manifest of a DSM written under `tmpdir`: a `grid` x `grid` block of tiles of `size`
+    pixels at 1 m in EPSG:3857, tile (tx, ty) covering x in [tx*size, (tx+1)*size) and y likewise, plus the
+    tiles in `nodata_at`, which hold NoData only. The ground is flat at 10 m, and every odd-`tx` tile has a
+    30 m ridge on its 5 westernmost columns. A tile that is already there and whole is kept, so a re-run writes
+    nothing. `tmpdir` may be a UC Volume, which does not reliably rename: each tile is written to a local file,
+    copied (content only) to its path, and the local file removed.
+    """
+    import shutil
+
+    import numpy as np
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    os.makedirs(tmpdir, exist_ok=True)
+    cells = {(tx, ty) for tx in range(grid) for ty in range(grid)} | set(nodata_at)
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="gbx-dsm-") as scratch:
+        for tx, ty in sorted(cells):
+            p = os.path.join(tmpdir, f"dsm_{tx}_{ty}.tif")
+            if not _dsm_tile_is_whole(p, size):
+                z = np.full((1, size, size), 10.0, dtype="float32")
+                if tx % 2 == 1:
+                    z[0, :, :5] = 40.0  # a 30 m ridge along x = tx*size .. tx*size + 5
+                if (tx, ty) in nodata_at:
+                    z[:] = -9999.0
+                prof = dict(
+                    driver="GTiff",
+                    width=size,
+                    height=size,
+                    count=1,
+                    dtype="float32",
+                    nodata=-9999.0,
+                    crs=resolve_crs("EPSG:3857"),
+                    transform=from_origin(tx * size, (ty + 1) * size, 1.0, 1.0),
+                    **creation_opts("float32", compress="zstd"),
+                )
+                local = os.path.join(scratch, os.path.basename(p))
+                with open_data(local, "w", **prof) as ds:
+                    ds.write(z)
+                shutil.copyfile(local, p)  # content only: a Volume takes no copystat
+                os.remove(local)
+            rows.append((tx, ty, p))
+    return rows
+
+
+def _build_helper_input(name: str, tmpdir: str):
+    """The fixtures of the helper cases (tiles for the DataFrame helpers)."""
+    if name == "dsm_tiles":  # four tiles, 400 x 400 m
+        return dsm_tile_rows(tmpdir)
+    if (
+        name == "dsm_tiles_edge"
+    ):  # the same four, and a tile of NoData east of them at (2, 0)
+        return dsm_tile_rows(tmpdir, nodata_at=((2, 0),))
+    if name in ("dsm_tiles_garbage", "dsm_tiles_truncated", "dsm_tiles_garbled"):
+        # The four, tile (1, 1) not a raster / cut short / with one block gone bad in the middle of an otherwise whole
+        # file (rows 150-159: inside the window of a tower on the corner at (200, 200) with 80 m, and not the last row).
+        rows = dsm_tile_rows(os.path.join(tmpdir, name))
+        path = next(p for tx, ty, p in rows if (tx, ty) == (1, 1))
+        data = bytearray(open(path, "rb").read())
+        if name.endswith("garbled"):
+
+            with open_data(path) as ds:
+                at = int(ds.get_tag_item("BLOCK_OFFSET_0_15", "TIFF", bidx=1))
+                n = int(ds.get_tag_item("BLOCK_SIZE_0_15", "TIFF", bidx=1))
+            data[at : at + n] = b"\xff" * n
+        if name.endswith("garbage"):
+            data = bytearray(b"not a raster")
+        if name.endswith("truncated"):
+            data = data[: len(data) // 2]
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return rows
+    if name == "tile_32":
+        return _tile(_tile_bytes("EPSG:4326", 32, 32))
+    if name == "quad_tiles":
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core import tiling
+
+        with MemoryFile(_tile_bytes("EPSG:4326", 32, 32)) as mf, mf.open() as ds:
+            return [
+                _tile(
+                    raster,
+                    window=dict(zip(("col_off", "row_off", "width", "height"), win)),
+                )
+                for win, raster in tiling.iter_retile_located(ds, 16, 16)
+            ]
+    if name == "tile_27700_path":
+        path = os.path.join(tmpdir, "oracle_27700.tif")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(
+                    _tile_bytes(
+                        "EPSG:27700", 20, 20, origin=(530000.0, 182000.0), px=100.0
+                    )
+                )
+        return _tile(None, path, None)
+    if name == "tile_27700_unaligned":  # 33 m pixels from an origin off the 1 km grid
+        path = os.path.join(tmpdir, "oracle_27700_unaligned.tif")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(
+                    _tile_bytes(
+                        "EPSG:27700", 60, 60, origin=(530010.0, 182010.0), px=33.0
+                    )
+                )
+        return _tile(None, path, None)
+    if name == "tile_27700_clipped":  # inside cell TQ3080 only
+        from shapely.geometry import box
+
+        t = _build("tile_27700_path", tmpdir)
+        t["clip_polygon"] = box(530100.0, 180100.0, 530900.0, 180900.0).wkb
+        t["clip_crs"] = "EPSG:27700"
+        return t
+    if name == "quad_paths":
+        out = []
+        for i, t in enumerate(_build("quad_tiles", tmpdir)):
+            p = os.path.join(tmpdir, f"quad_{i}.tif")
+            with open(p, "wb") as fh:
+                fh.write(t["raster"])
+            out.append(_tile(None, p, None))
+        return out
+    if name == "pair_aligned":
+        import numpy as np
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+        a = _tile_bytes("EPSG:4326", 32, 32)
+        with MemoryFile(a) as mf, mf.open() as ds:
+            prof, arr = ds.profile.copy(), ds.read()
+        return [
+            _tile(a),
+            _tile(
+                write_gtiff(
+                    prof, np.where(arr == -9999.0, arr, arr * 2).astype("float32")
+                )
+            ),
+        ]
+    if name == "pair_shifted":  # the same grid, moved six pixels east
+        from affine import Affine
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+        a = _tile_bytes("EPSG:4326", 32, 32)
+        with MemoryFile(a) as mf, mf.open() as ds:
+            prof, arr = ds.profile.copy(), ds.read()
+        prof["transform"] = prof["transform"] * Affine.translation(6, 0)
+        return [_tile(a), _tile(write_gtiff(prof, arr))]
+    raise KeyError(name)
+
+
+def resolve_arg(arg: Any, tmpdir: str) -> Any:
+    return _build(arg.name, tmpdir) if isinstance(arg, Build) else arg
+
+
+def _field(row, name):
+    if row is None:
+        return None
+    try:
+        return row[name]
+    except (KeyError, TypeError, IndexError, ValueError):
+        return getattr(row, name, None)
+
+
+def _raster_of(tile) -> Optional[bytes]:
+    if isinstance(tile, (bytes, bytearray)):  # a constructor's content argument
+        return bytes(tile)
+    if isinstance(tile, str):  # a constructor's path argument
+        return Path(tile).read_bytes()
+    if _field(tile, "raster") is not None:
+        return bytes(_field(tile, "raster"))
+    p = _field(tile, "path")
+    return Path(p).read_bytes() if p else None
+
+
+def _reference_warp(src, target_crs: str):
+    """Independent nearest-neighbour reference: rasterio.warp and numpy only.
+
+    It must not call the gbx warp code, or an implementation level would be checked against
+    itself. Returns (width, height, masked first band).
+    """
+    import numpy as np
+    from rasterio.crs import CRS
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    dst_crs = CRS.from_user_input(target_crs)
+    transform, width, height = calculate_default_transform(
+        src.crs, dst_crs, src.width, src.height, *src.bounds
+    )
+    nodata = src.nodata
+    dst = np.full((height, width), 0 if nodata is None else nodata, dtype=src.dtypes[0])
+    reproject(
+        source=src.read(1),
+        destination=dst,
+        src_transform=src.transform,
+        src_crs=src.crs,
+        src_nodata=nodata,
+        dst_transform=transform,
+        dst_crs=dst_crs,
+        dst_nodata=nodata,
+        resampling=Resampling.nearest,
+    )
+    band = (
+        np.ma.masked_equal(dst, nodata)
+        if nodata is not None
+        else np.ma.masked_array(dst)
+    )
+    return width, height, band
+
+
+def _check_tile(case: Case, out, args) -> Optional[str]:
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    want_crs, want_srid = (
+        case.expect if isinstance(case.expect, tuple) else (case.expect, None)
+    )
+    with MemoryFile(_raster_of(args[0])) as src_mf, src_mf.open() as src:
+        want_w, want_h, w = _reference_warp(src, want_crs)
+    with MemoryFile(bytes(raster)) as a, a.open() as got:
+        if not crs_equal(got.crs, want_crs):
+            return f"{case.cid}: CRS {got.crs} is not {want_crs}"
+        from databricks.labs.gbx.core.crs import authority_srid_of
+
+        if want_srid is not None and authority_srid_of(got.crs) != want_srid:
+            return f"{case.cid}: SRID {authority_srid_of(got.crs)} is not {want_srid}"
+        if abs(got.width - want_w) > 1 or abs(got.height - want_h) > 1:
+            return (
+                f"{case.cid}: {got.width}x{got.height} vs reference {want_w}x{want_h}"
+            )
+        g = got.read(1, masked=True)
+        # Nearest-neighbour pixels must agree, not just their mean. A grid one pixel larger or
+        # smaller than the reference is compared over the rows and columns both have (same
+        # origin), so a size difference never turns the pixel check off.
+        rows, cols = min(g.shape[0], w.shape[0]), min(g.shape[1], w.shape[1])
+        same = (g[:rows, :cols].filled(-1) == w[:rows, :cols].filled(-1)).mean()
+        if same < 0.99:
+            return f"{case.cid}: only {same:.1%} of pixels match the reference warp"
+        if g.count() == 0 or abs(float(g.mean()) - float(w.mean())) > 0.01 * max(
+            1.0, abs(float(w.mean()))
+        ):
+            return f"{case.cid}: valid mean {g.mean()} vs reference {w.mean()}"
+    return None
+
+
+def _warp_coverage_agreement(src, got, want_crs: str) -> float:
+    """The share of the pixels both grids hold on which the output's validity equals the reference footprint: the
+    source's pixels warped nearest by rasterio.warp onto its default grid (a 0 outside, 1 where a source pixel lands).
+    """
+    import numpy as np
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    dst_crs = resolve_crs(want_crs)
+    transform, width, height = calculate_default_transform(
+        src.crs, dst_crs, src.width, src.height, *src.bounds
+    )
+    cover = np.zeros((height, width), "u1")
+    reproject(
+        np.ones((src.height, src.width), "u1"),
+        cover,
+        src_transform=src.transform,
+        src_crs=src.crs,
+        dst_transform=transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.nearest,
+    )
+    rows, cols = min(got.height, height), min(got.width, width)
+    valid = got.read_masks(1)[:rows, :cols] != 0
+    return float((valid == (cover[:rows, :cols] != 0)).mean())
+
+
+def _check_warp_masked(case: Case, out, args) -> Optional[str]:
+    """A reprojection of a source that declares no NoData into `case.expect` (a CRS): the pixels no source pixel reaches
+    are masked by the output's own mask band, never a valid 0. The bands and the count stay (no NoData, no alpha band),
+    the valid pixels hold source values (the source's smallest is above 0), and the footprint is the reference's (rasterio
+    warp, to the pixels on its edge)."""
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    with open_bytes(_raster_of(args[0])) as src, open_bytes(bytes(raster)) as got:
+        if not crs_equal(got.crs, case.expect):
+            return f"{case.cid}: CRS {got.crs} is not {case.expect}"
+        if got.count != src.count or got.nodata is not None:
+            return f"{case.cid}: {got.count} band(s), NoData {got.nodata}; want {src.count} band(s), none declared"
+        why = _tile_meta_flaws(case, out, got, {"mask_band": True})
+        if why:
+            return f"{case.cid}: {why}"
+        masks = got.read_masks(1)
+        if not (masks == 0).any():
+            return (
+                f"{case.cid}: no pixel is masked, the footprint leaves pixels outside"
+            )
+        valid = got.read(1)[masks != 0]
+        if valid.size == 0 or float(valid.min()) < float(src.read(1).min()):
+            return f"{case.cid}: a valid pixel is below the source's smallest ({valid.min() if valid.size else 'none'})"
+        same = _warp_coverage_agreement(src, got, case.expect)
+        if same < 0.98:
+            return f"{case.cid}: only {same:.1%} of the footprint matches the reference warp"
+    return None
+
+
+@contextlib.contextmanager
+def _open_out(out):
+    """The raster of a result tile, open for reading: its bytes, or, for a virtual result (which records
+    instructions for its next reader), the file as that reader opens it."""
+    raster = _field(out, "raster")
+    if raster is not None:
+        with open_bytes(bytes(raster)) as ds:
+            yield ds
+        return
+    from databricks.labs.gbx.pyrx.core import open_tile
+
+    with open_tile._open(out) as ds:
+        yield ds
+
+
+def _extent_flaw(got, want) -> Optional[str]:
+    """The width, height or band count of the open raster `got` against `want`, each a number or a (least, most) pair."""
+    for key in ("width", "height", "count"):
+        if key in want:
+            lo, hi = want[key] if isinstance(want[key], tuple) else (want[key],) * 2
+            if not lo <= getattr(got, key) <= hi:
+                return f"{key} {getattr(got, key)} is not {want[key]}"
+    return None
+
+
+def _mask_band_flaw(got, want) -> Optional[str]:
+    """The `mask_band` key of a `tile_meta` expectation against the open raster `got`: True wants the dataset's own
+    mask band, False wants none."""
+    if "mask_band" not in want:
+        return None
+    has = any(f.name == "per_dataset" for f in got.mask_flag_enums[0])
+    if has == want["mask_band"]:
+        return None
+    return f"{'a' if has else 'no'} mask band, want {'one' if want['mask_band'] else 'none'}"
+
+
+def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
+    """What is wrong with the open raster `got` of a result tile `out` against the dict `want` (see `Case`), else None."""
+    from databricks.labs.gbx.core.crs import authority_srid_of, crs_equal
+
+    if "crs" in want and (got.crs is None or not crs_equal(got.crs, want["crs"])):
+        return f"CRS {got.crs} is not {want['crs']}"
+    if want.get("no_crs") and got.crs is not None:
+        return f"CRS {got.crs}, want none"
+    if "srid" in want and authority_srid_of(got.crs) != want["srid"]:
+        return f"SRID {authority_srid_of(got.crs)} is not {want['srid']}"
+    why = _extent_flaw(got, want) or _mask_band_flaw(got, want)
+    if why:
+        return why
+    if "dtype" in want and got.dtypes[0] != want["dtype"]:
+        return f"data type {got.dtypes[0]} is not {want['dtype']}"
+    if "nodata" in want:
+        n, w = got.nodata, want["nodata"]
+        # NaN is a NoData value that equals itself here
+        same = (
+            n is None
+            if w is None
+            else n is not None
+            and ((math.isnan(n) and math.isnan(w)) or abs(n - w) <= 1e-6)
+        )
+        if not same:
+            return f"NoData {n} is not {w}"
+    if "driver" in want and got.driver != want["driver"]:
+        return f"format {got.driver} is not {want['driver']}"
+    if "meta_driver" in want:
+        md = (_field(out, "metadata") or {}).get("driver")
+        if md != want["meta_driver"]:
+            return f"metadata driver {md!r} is not {want['meta_driver']!r}"
+    if "materialized" in want:
+        has_bytes = _field(out, "raster") is not None
+        has_path = _field(out, "path") is not None
+        if want["materialized"] != (has_bytes and not has_path):
+            return (
+                f"the tile {'has' if has_bytes else 'has no'} raster bytes and {'a' if has_path else 'no'} path, "
+                f"want {'bytes and no path' if want['materialized'] else 'a path and no bytes'}"
+            )
+    if "layout" in want:
+        layout = got.tags(ns="IMAGE_STRUCTURE").get("LAYOUT")
+        if layout != want["layout"]:
+            return f"layout {layout!r} is not {want['layout']!r}"
+    if "compression" in want:
+        codec = got.tags(ns="IMAGE_STRUCTURE").get("COMPRESSION")
+        if codec != want["compression"]:
+            return f"compression {codec!r} is not {want['compression']!r}"
+    if "overviews" in want and list(got.overviews(1)) != list(want["overviews"]):
+        return f"overviews {list(got.overviews(1))} are not {list(want['overviews'])}"
+    if "blocksize" in want and tuple(got.block_shapes[0]) != tuple(want["blocksize"]):
+        return f"blocks {tuple(got.block_shapes[0])} are not {tuple(want['blocksize'])}"
+    return None
+
+
+def _tile_meta_against_args(got, want, args) -> Optional[str]:
+    """The keys of a `tile_meta` expectation that compare the result `got` with the case's arguments, else None."""
+    import numpy as np
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    if want.get("pixels_of_arg0") or want.get("transform_of_arg0"):
+        with _ref_dataset(args) as src:
+            if want.get("pixels_of_arg0") and not np.array_equal(
+                got.read(), src.read(), equal_nan=True
+            ):
+                return "the pixels differ from the input's"
+            if want.get("transform_of_arg0") and got.transform != src.transform:
+                return f"geotransform {got.transform} is not the input's"
+    if "grid_of_arg1" in want:
+        with open_bytes(_raster_of(args[1])) as ref:
+            # the transform to float rounding: gdalwarp derives the pixel size from the extent it is given
+            if (got.width, got.height) != (
+                ref.width,
+                ref.height,
+            ) or not (
+                got.transform.almost_equals(ref.transform, precision=1e-9)
+                and crs_equal(got.crs, ref.crs)
+            ):
+                return (
+                    f"grid {got.width}x{got.height} {got.transform} {got.crs} is not the reference's "
+                    f"{ref.width}x{ref.height} {ref.transform} {ref.crs}"
+                )
+    return None
+
+
+def _check_tile_meta(case: Case, out, args) -> Optional[str]:
+    """`out` is a tile whose raster meets each key of `case.expect` (see `Case`); the bytes an aggregate returns count as
+    a materialized tile."""
+    if isinstance(out, (bytes, bytearray, memoryview)):
+        out = {"raster": bytes(out), "path": None, "metadata": {}}
+    if out is None or (_field(out, "raster") is None and _field(out, "path") is None):
+        meta = _field(out, "metadata") if out is not None else None
+        return f"{case.cid}: no raster in the result (got {out!r}, metadata={meta!r})"
+    want = dict(case.expect)
+    with _open_out(out) as got:
+        why = _tile_meta_flaws(case, out, got, want) or _tile_meta_against_args(
+            got, want, args
+        )
+    return None if why is None else f"{case.cid}: {why}"
+
+
+def _masked_band(raster: bytes, band: int = 1):
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+        return ds.read(band, masked=True)
+
+
+@contextlib.contextmanager
+def _ref_dataset(args):
+    """The tile `args[0]` opened for a reference to read."""
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as ds:
+        yield ds
+
+
+def _ref_slope(args):
+    """Horn's slope (oracle_refs.slope), independent of GDAL: (values, NoData mask). A NULL xscale and yscale take GDAL's
+    default scale for the DEM's CRS (``_gdaldem_scale``)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    unit = args[1] if len(args) > 1 else "degrees"
+    xs, ys = (args[2], args[3]) if len(args) > 3 else (None, None)
+    if (xs is None) != (ys is None):
+        raise ValueError("the slope reference takes both scales or neither")
+    z, nodata, xres, yres = _dem_band(args)
+    if xs is None:
+        with _ref_dataset(args) as ds:
+            xs, ys = _gdaldem_scale(ds)
+    return oracle_refs.slope(z, nodata, xres, yres, unit, xs, ys)
+
+
+def _gdaldem_scale(ds) -> tuple:
+    """GDAL's default (xscale, yscale) of a DEM with none given, as ``gdaldem`` derives it from the CRS: about 111 km a
+    degree for a geographic CRS (the x scale shrunk by the cosine of the mean latitude), the metres in a linear unit for a
+    projected one, and 1 for none or one PROJ cannot read; each divided by the heights' unit in metres (a band in feet).
+    """
+    import math
+
+    from databricks.labs.gbx.core.crs import to_pyproj_crs
+
+    if ds.crs is None:
+        return 1.0, 1.0
+    try:
+        pcrs = to_pyproj_crs(ds.crs)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a CRS PROJ cannot read: GDAL's default for no CRS
+        return 1.0, 1.0
+    zunit = (
+        1.0  # the heights' unit in metres: GDAL takes metres when the band names none
+    )
+    unit = (getattr(ds, "units", None) or [None])[0]
+    if unit and unit.lower() in ("ft", "foot", "feet", "foot (international)"):
+        zunit = 0.3048
+    elif unit and unit.lower() in ("us-ft", "foot_us", "us survey foot"):
+        zunit = 1200.0 / 3937.0
+    if pcrs.is_geographic:
+        ang = math.pi / 180.0
+        yscale = ang * pcrs.ellipsoid.semi_major_metre / zunit
+        mean_lat = (ds.transform.f + ds.height * ds.transform.e / 2.0) * ang
+        return yscale * math.cos(mean_lat), yscale
+    if pcrs.is_projected:
+        lin = pcrs.axis_info[0].unit_conversion_factor / zunit
+        return lin, lin
+    return 1.0, 1.0
+
+
+def _ref_contours(args):
+    """GDAL's older `gdal.ContourGenerateEx` on band 1 of the tile `args[0]` (written under a `/vsimem` name), an entry
+    point apart from the `raster contour` algorithm the engine runs: ``({level: [LineString]}, pixel width)``. The levels
+    are `args[1]` (sorted, without repeats and NULLs), or `args[2]` apart from `args[3]` when there are none. NoData is the
+    band's declared value, else -9999.
+    """
+    import uuid
+
+    import shapely
+
+    from databricks.labs.gbx import _osgeo
+
+    b = _osgeo.bindings("the contour reference")
+    gdal, ogr = b.gdal, b.ogr
+    levels = sorted({float(v) for v in (args[1] or ()) if v is not None})
+    interval = float(args[2]) if len(args) > 2 and args[2] is not None else 0.0
+    base = float(args[3]) if len(args) > 3 and args[3] is not None else 0.0
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        ds = gdal.Open(name)
+        band = ds.GetRasterBand(1)
+        nodata = band.GetNoDataValue()
+        mem = ogr.GetDriverByName("Memory").CreateDataSource("ref")
+        lyr = mem.CreateLayer("c", srs=ds.GetSpatialRef())
+        lyr.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+        lyr.CreateField(ogr.FieldDefn("value", ogr.OFTReal))
+        opts = [
+            "ID_FIELD=0",
+            "ELEV_FIELD=1",
+            f"NODATA={-9999.0 if nodata is None else nodata}",
+        ]
+        opts += (
+            ["FIXED_LEVELS=" + ",".join(repr(v) for v in levels)]
+            if levels
+            else [f"LEVEL_INTERVAL={interval!r}", f"LEVEL_BASE={base!r}"]
+        )
+        if gdal.ContourGenerateEx(band, lyr, options=opts) != 0:
+            raise RuntimeError(f"ContourGenerateEx failed: {gdal.GetLastErrorMsg()}")
+        out = {}
+        for f in lyr:
+            out.setdefault(f.GetField("value"), []).append(
+                shapely.from_wkb(bytes(f.GetGeometryRef().ExportToIsoWkb()))
+            )
+        return out, abs(ds.GetGeoTransform()[1])
+    finally:
+        band = lyr = mem = ds = None
+        gdal.Unlink(name)
+
+
+def _ref_polygons(args):
+    """GDAL's older `gdal.Polygonize` (an integer band) or `gdal.FPolygonize` (a floating point band) on band `args[1]` of
+    the tile `args[0]` (written under a `/vsimem` name), with the band's own mask and 8-connectedness when `args[2]` is 8:
+    an entry point apart from the `raster polygonize` algorithm the engine runs. ``[(value, area, ring points, holes)]``
+    per polygon, sorted.
+    """
+    import uuid
+
+    import shapely
+
+    from databricks.labs.gbx import _osgeo
+
+    b = _osgeo.bindings("the polygonize reference")
+    gdal, ogr = b.gdal, b.ogr
+    band_no = 1 if len(args) < 2 or args[1] is None else int(args[1])
+    eight = len(args) > 2 and args[2] is not None and int(args[2]) == 8
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        ds = gdal.Open(name)
+        band = ds.GetRasterBand(band_no)
+        mem = ogr.GetDriverByName("Memory").CreateDataSource("ref")
+        lyr = mem.CreateLayer("p", srs=ds.GetSpatialRef())
+        lyr.CreateField(ogr.FieldDefn("DN", ogr.OFTReal))
+        floating = gdal.GetDataTypeName(band.DataType) in (
+            "Float32",
+            "Float64",
+        )
+        run = gdal.FPolygonize if floating else gdal.Polygonize
+        opts = ["8CONNECTED=8"] if eight else []
+        if run(band, band.GetMaskBand(), lyr, 0, opts) != 0:
+            raise RuntimeError(f"Polygonize failed: {gdal.GetLastErrorMsg()}")
+        out = []
+        for f in lyr:
+            g = shapely.from_wkb(bytes(f.GetGeometryRef().ExportToIsoWkb()))
+            out.append(
+                (
+                    f.GetField("DN"),
+                    round(g.area, 6),
+                    len(g.exterior.coords),
+                    len(g.interiors),
+                )
+            )
+        return sorted(out)
+    finally:
+        band = lyr = mem = ds = None
+        gdal.Unlink(name)
+
+
+def _ref_gdaldem_slope(args, slope_format="degree", compute_edges=False):
+    """GDAL's own `gdal.DEMProcessing` slope (Horn, no edges), the `gdaldem` command line's scale handling, through
+    `osgeo`: independent of the engine's `raster slope` and of the numpy kernel. The source is the tile written under
+    a `/vsimem` name; the scale is GDAL's own (for a geographic CRS, its metres per degree).
+    """
+    import uuid
+
+    from databricks.labs.gbx import _osgeo
+
+    gdal = _osgeo.bindings("the gdaldem slope reference").gdal
+    stem = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}"
+    src, dst = f"{stem}_in.tif", f"{stem}_out.tif"
+    gdal.FileFromMemBuffer(src, _raster_of(args[0]))
+    try:
+        gdal.DEMProcessing(
+            dst,
+            src,
+            "slope",
+            alg="Horn",
+            computeEdges=compute_edges,
+            slopeFormat=slope_format,
+        )
+        f = gdal.VSIFOpenL(dst, "rb")
+        gdal.VSIFSeekL(f, 0, 2)
+        size = gdal.VSIFTellL(f)
+        gdal.VSIFSeekL(f, 0, 0)
+        out = gdal.VSIFReadL(1, size, f)
+        gdal.VSIFCloseL(f)
+    finally:
+        gdal.Unlink(src)
+        gdal.Unlink(dst)
+    g = _masked_band(out)
+    return g.data.astype("float64"), g.mask
+
+
+def _ref_bands(args, pairs):
+    """[(tile index, band)] of the map-algebra inputs as float64 arrays and their union NoData mask."""
+    import numpy as np
+
+    bands = [_masked_band(_raster_of(args[0][i]), b) for i, b in pairs]
+    mask = np.zeros(bands[0].shape, dtype=bool)
+    for m in bands:
+        mask |= np.ma.getmaskarray(m)
+    return [m.data.astype("float64") for m in bands], mask
+
+
+def _ref_norm_diff(args, pairs=((0, 1), (1, 1))):
+    (a, b), mask = _ref_bands(args, pairs)
+    return (a - b) / (a + b), mask
+
+
+def _ref_times2(args):
+    (a,), mask = _ref_bands(args, ((0, 1),))
+    return a * 2, mask
+
+
+def _dem_band(args):
+    """Band 1 of the DEM tile `args[0]` as float64, its NoData value and its pixel size."""
+    with _ref_dataset(args) as ds:
+        return (
+            ds.read(1).astype("float64"),
+            ds.nodata,
+            abs(ds.transform.a),
+            abs(ds.transform.e),
+        )
+
+
+def _ref_terrain(name):
+    """The independent reference (oracle_refs) of a DEM function, called with the case's arguments."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        if name == "hillshade":
+            _require_projected_for_default_scale(args)
+        z, nodata, xres, yres = _dem_band(args)
+        rest = [1.0 if a is None else a for a in args[1:]]
+        return getattr(oracle_refs, name)(z, nodata, xres, yres, *rest)
+
+    return ref
+
+
+def _require_projected_for_default_scale(args):
+    """The hillshade reference takes a NULL xscale / yscale as 1.0 (pixel size in the unit of the heights), which
+    is what the function derives only for a projected CRS; for a geographic one it derives about 111 km per degree.
+    A row on a geographic DEM must give the scales, or the reference would judge against the wrong surface.
+    """
+    scales = args[4:6]
+    if len(scales) == 2 and all(v is not None for v in scales):
+        return
+    with _ref_dataset(args) as ds:
+        if ds.crs is not None and ds.crs.is_geographic:
+            raise ValueError(
+                "the hillshade reference assumes a scale of 1.0 when xscale and yscale are NULL, which holds only "
+                "for a projected DEM; this DEM is geographic: give xscale and yscale"
+            )
+
+
+def _ref_window(name):
+    """The independent reference of a 3 x 3 window function (TRI, TPI, roughness)."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        z, nodata, _, _ = _dem_band(args)
+        return getattr(oracle_refs, name)(z, nodata)
+
+    return ref
+
+
+def _ref_calc(formula, bands=2):
+    """Band math on the tile `args[0]`: `formula` over its bands `args[1:1 + bands]` (1-based) and the remaining
+    arguments, NoData where an input band is NoData or the result is not finite."""
+
+    def ref(args):
+        import numpy as np
+
+        arrays, mask = _calc_inputs(args[0], args[1 : 1 + bands])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = formula(*arrays, *args[1 + bands :])
+        return out, mask | ~np.isfinite(out)
+
+    return ref
+
+
+def _calc_inputs(tile, indexes):
+    import numpy as np
+
+    bands = [_masked_band(_raster_of(tile), int(i)) for i in indexes]
+    mask = np.zeros(bands[0].shape, dtype=bool)
+    for m in bands:
+        mask |= np.ma.getmaskarray(m)
+    return [m.data.astype("float64") for m in bands], mask
+
+
+def _ref_index(formula, names=("red", "nir")):
+    """rst_index: `formula` over the bands the map names (`names`, in the order the formula takes them)."""
+
+    def ref(args):
+        import numpy as np
+
+        band_map = {k.lower(): v for k, v in dict(args[2]).items()}
+        arrays, mask = _calc_inputs(args[0], [band_map[n] for n in names])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = formula(*arrays)
+        return out, mask | ~np.isfinite(out)
+
+    return ref
+
+
+def _ref_threshold(args):
+    """rst_threshold: in every band, the pixels that satisfy the comparison keep their value, the rest are NoData
+    (a NoData input pixel stays NoData)."""
+    import operator
+
+    import numpy as np
+
+    ops = {
+        ">": operator.gt,
+        "<": operator.lt,
+        ">=": operator.ge,
+        "<=": operator.le,
+        "==": operator.eq,
+        "!=": operator.ne,
+    }
+    with _ref_dataset(args) as ds:
+        count = ds.count
+    values, masks = [], []
+    for i in range(1, count + 1):
+        (band,), mask = _calc_inputs(args[0], [i])
+        with np.errstate(invalid="ignore"):
+            keep = ops[args[1]](band, float(args[2]))
+        values.append(band)
+        masks.append(mask | ~keep)
+    return np.stack(values), np.stack(masks)
+
+
+def _ref_chm(args):
+    """rst_chm on tiles that share a grid: the surface minus the terrain, no lower than 0."""
+    import numpy as np
+
+    (dsm,), m_dsm = _calc_inputs(args[0], [1])
+    (dem,), m_dem = _calc_inputs(args[1], [1])
+    return np.maximum(dsm - dem, 0.0), m_dsm | m_dem
+
+
+def _ref_resample_average(args):
+    """rst_resample by a factor 1/k with `average`: every k x k block of the source is one output pixel, its mean."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        z = ds.read(1).astype("float64")
+    k = int(round(1.0 / float(args[1])))
+    out = oracle_refs.block_mean(z, k)
+    return out, np.zeros(out.shape, dtype=bool)
+
+
+def _ref_resample_average_nodata(args):
+    """rst_resample by a factor 1/k with `average` of a tile with NoData: a k x k block holding only NoData is NoData, any
+    other block's value is the mean of its data pixels."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        z = ds.read(1, masked=True)
+    k = int(round(1.0 / float(args[1])))
+    h, w = z.shape[0] // k * k, z.shape[1] // k * k
+    blocks = (
+        z[:h, :w]
+        .reshape(h // k, k, w // k, k)
+        .swapaxes(1, 2)
+        .reshape(h // k, w // k, k * k)
+    )
+    out = blocks.astype("float64").mean(axis=2)
+    return out.filled(0.0), np.ma.getmaskarray(out)
+
+
+def _ref_proximity(units: str):
+    """rst_proximity: the distance to the nearest source pixel (oracle_refs), in ground units or in pixels."""
+
+    def ref(args):
+        import numpy as np
+
+        from databricks.labs.gbx.bench import oracle_refs
+
+        targets = args[1] if len(args) > 1 else None
+        cap = args[3] if len(args) > 3 else None
+        if cap is not None and cap != cap:  # NaN is no cap
+            cap = None
+        with _ref_dataset(args) as ds:
+            band = ds.read(1)
+            px, py = abs(ds.transform.a), abs(ds.transform.e)
+        # GDAL matches targets in the integer domain: a pixel is rounded half away from zero first
+        rounded = (np.sign(band) * np.floor(np.abs(band) + 0.5)).astype("int64")
+        if targets is not None and str(targets).strip():
+            wanted = [
+                int(round(float(v))) for v in str(targets).split(",") if v.strip()
+            ]
+            source = np.isin(rounded, wanted)
+        else:
+            source = rounded != 0
+        return oracle_refs.proximity(source, px, py, cap, units == "PIXEL")
+
+    return ref
+
+
+def _ref_fillnodata(args):
+    """rst_fillnodata: rasterio's own GDAL `FillNodata` call on every band, the same search distance and smoothing. One
+    band gives a 2-D reference, several a 3-D one. A tile that declares no NoData has no pixel to fill.
+    """
+    import numpy as np
+    from rasterio.fill import fillnodata
+
+    max_dist = args[1] if len(args) > 1 and args[1] is not None else 100.0
+    smoothing = args[2] if len(args) > 2 and args[2] is not None else 0
+    with _ref_dataset(args) as ds:
+        nodata = ds.nodata
+        outs = [
+            fillnodata(
+                ds.read(b),
+                mask=ds.read_masks(b),
+                max_search_distance=float(max_dist),
+                smoothing_iterations=int(smoothing),
+            )
+            for b in range(1, ds.count + 1)
+        ]
+    masks = [np.zeros(o.shape, bool) if nodata is None else o == nodata for o in outs]
+    if len(outs) == 1:
+        return outs[0].astype("float64"), masks[0]
+    return np.stack(outs).astype("float64"), np.stack(masks)
+
+
+def _ref_clip_columns(first: int, count: int):
+    """rst_clip with a cutline that covers `count` whole columns from column `first` and every row: those columns."""
+
+    def ref(args):
+        import numpy as np
+
+        with _ref_dataset(args) as ds:
+            band = ds.read(1, masked=True)[:, first : first + count]
+        return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+    return ref
+
+
+def _ref_clip_pixel(col: int, row: int):
+    """rst_clip of a cutline smaller than a pixel: the one pixel (col, row) it stands in, with its value."""
+
+    def ref(args):
+        import numpy as np
+
+        with _ref_dataset(args) as ds:
+            band = ds.read(1, masked=True)[row : row + 1, col : col + 1]
+        return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+    return ref
+
+
+def _ref_clip_triangle(args):
+    """rst_clip of the `clip_ramp_*` tile by the right triangle with corners (400020, 5759980), (400140, 5759980) and
+    (400140, 5759880): the columns 2 to 13 and rows 2 to 11 of the tile, where a pixel whose centre the triangle holds
+    keeps its value and every other pixel is NoData (the tile's own NoData, else 65535, the fallback of its UInt16).
+    The centres are judged by shapely, not by the rasterizer the clip uses.
+    """
+    import numpy as np
+    import shapely
+
+    tri = shapely.Polygon([(400020, 5759980), (400140, 5759980), (400140, 5759880)])
+    with _ref_dataset(args) as ds:
+        band = ds.read(1)[2:12, 2:14].astype("float64")
+        fill = ds.nodata if ds.nodata is not None else 65535.0
+    cols, rows = np.meshgrid(np.arange(2, 14), np.arange(2, 12))
+    x, y = 400000.0 + 10.0 * (cols + 0.5), 5760000.0 - 10.0 * (rows + 0.5)
+    inside = shapely.contains_xy(tri, x, y)
+    return np.where(inside, band, fill), ~inside
+
+
+def _ref_transform_gcp(args):
+    """rst_transform to EPSG:3857 of a tile georeferenced by ground control points: rasterio.warp's own nearest-neighbour
+    warp from the points and their projection, on the default output grid."""
+    import numpy as np
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    with _ref_dataset(args) as ds:
+        points, gcp_crs = ds.gcps
+        transform, width, height = calculate_default_transform(
+            gcp_crs, "EPSG:3857", ds.width, ds.height, gcps=points
+        )
+        nodata = ds.nodata
+        out = np.full((height, width), nodata, dtype=ds.dtypes[0])
+        reproject(
+            source=ds.read(1),
+            destination=out,
+            gcps=points,
+            src_crs=gcp_crs,
+            src_nodata=nodata,
+            dst_transform=transform,
+            dst_crs="EPSG:3857",
+            dst_nodata=nodata,
+            resampling=Resampling.nearest,
+        )
+    return out.astype("float64"), out == nodata
+
+
+def _ref_band_arg(args):
+    """rst_band: the band the second argument names (1-based) of the first, as it is."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(int(args[1]), masked=True)
+    return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+
+def _ref_filter(args):
+    """rst_filter: the focal minimum, maximum, mean or median written out pixel by pixel (oracle_refs.focal)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    import numpy as np
+
+    return oracle_refs.focal(
+        band.data.astype("float64"),
+        ~np.ma.getmaskarray(band),
+        int(args[1]),
+        str(args[2]).lower(),
+    )
+
+
+def _ref_filter_blank(fill):
+    """rst_filter of a tile whose NoData is an alpha band: the output declares no NoData, so a window with nothing valid
+    in it shows `fill` (-9999 for a Float32 mean) as a pixel value, and no pixel is masked.
+    """
+
+    def ref(args):
+        import numpy as np
+
+        values, mask = _ref_filter(args)
+        return np.where(mask, fill, values), np.zeros(mask.shape, dtype=bool)
+
+    return ref
+
+
+def _ref_convolve(args):
+    """rst_convolve: the unflipped kernel laid over each pixel, zero-padded, a NoData neighbour adding 0
+    (oracle_refs.correlate); the result is never NoData."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    out = oracle_refs.correlate(
+        band.data.astype("float64"), ~np.ma.getmaskarray(band), args[1]
+    )
+    return out, np.zeros(out.shape, dtype=bool)
+
+
+def _ref_percentile_stretch(args):
+    """rst_percentile_stretch: the band scaled between two percentiles of its valid pixels (oracle_refs). The
+    output's NoData is 0, so a pixel that scales to below 1 is NoData too."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    valid = ~np.ma.getmaskarray(band)
+    out = oracle_refs.percentile_scale(
+        band.data.astype("float64"), valid, float(args[1]), float(args[2])
+    )
+    return out, ~valid | (np.floor(out) == 0)
+
+
+def _ref_percentile_stretch_bands(args):
+    """rst_percentile_stretch of every band, each on its own percentiles (oracle_refs): a band with no valid pixel or
+    with equal percentiles is all 0, which is also its NoData."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    outs, masks = [], []
+    with _ref_dataset(args) as ds:
+        for b in range(1, ds.count + 1):
+            band = ds.read(b, masked=True)
+            valid = ~np.ma.getmaskarray(band)
+            z = band.data.astype("float64")
+            lo, hi = (
+                np.percentile(z[valid], (float(args[1]), float(args[2])))
+                if valid.any()
+                else (0.0, 0.0)
+            )
+            if hi <= lo:
+                out = np.zeros(z.shape)
+            else:
+                out = oracle_refs.percentile_scale(
+                    z, valid, float(args[1]), float(args[2])
+                )
+            outs.append(out)
+            masks.append(~valid | (np.floor(out) == 0))
+    return np.stack(outs), np.stack(masks)
+
+
+def _ref_init_nodata_u16(args):
+    """rst_initnodata of a UInt16 tile: it keeps the source's NoData (65535 when it declares none) and its own mask,
+    and a pixel equal to that value is NoData too; the data is untouched."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+        sentinel = 65535.0 if ds.nodata is None else ds.nodata
+    z = band.data.astype("float64")
+    return z, np.ma.getmaskarray(band) | (z == sentinel)
+
+
+def _ref_derived_plus_one(args):
+    """rst_derivedband with `out_ar[:] = in_ar[0] * 2 + 1`: band 1 doubled and one added, as 64-bit floats."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        z = ds.read(1).astype("float64")
+    return z * 2.0 + 1.0, np.zeros(z.shape, dtype=bool)
+
+
+def _ref_cast(args):
+    """rst_updatetype to an integer type: each value rounded to the nearest integer and clamped to the type's range,
+    as `gdal_translate -ot` does, a NaN as 0; the NoData mask is the input's."""
+    import numpy as np
+
+    info = np.iinfo(
+        {"byte": "uint8", "int32": "int32", "int16": "int16"}[str(args[1]).lower()]
+    )
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    values = np.nan_to_num(band.data.astype("float64"), nan=0.0)
+    out = np.clip(np.floor(values + 0.5), info.min, info.max)
+    return out, np.ma.getmaskarray(band)
+
+
+def _ref_align_to(args):
+    """rst_align_to: rasterio.warp's nearest-neighbour reprojection of the first tile onto the grid of the second,
+    the tile's NoData (0 for a tile without) where it does not cover the grid; the NoData mask is the pixels no valid
+    source pixel lands on, from a warped validity array."""
+    import numpy as np
+    from rasterio.warp import Resampling, reproject
+
+    with _ref_dataset(args) as src, open_bytes(_raster_of(args[1])) as ref:
+        nodata = src.nodata
+        fill = (
+            0 if nodata is None else nodata
+        )  # a source without NoData fills what it does not cover with 0
+        data = src.read(1)
+        grid = dict(
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=ref.transform,
+            dst_crs=ref.crs,
+            resampling=Resampling.nearest,
+        )
+        out = np.full((ref.height, ref.width), fill, dtype=src.dtypes[0])
+        reproject(
+            source=data,
+            destination=out,
+            src_nodata=nodata,
+            dst_nodata=fill,
+            **grid,
+        )
+        # the pixels that carry a source value: a source pixel is valid (1) unless it is the NoData value, and the
+        # warp fills what the source does not cover with 0, so the mask is where this comes out 0
+        valid = np.zeros(out.shape, dtype="uint8")
+        reproject(
+            source=(
+                np.ones(data.shape, "uint8")
+                if nodata is None
+                else (data != nodata).astype("uint8")
+            ),
+            destination=valid,
+            src_nodata=0,
+            dst_nodata=0,
+            **grid,
+        )
+    mask = np.zeros(out.shape, dtype=bool) if nodata is None else valid == 0
+    return out.astype("float64"), mask
+
+
+def _ref_land_cover_spectral(args):
+    """rst_land_cover with `spectral`: the documented thresholds on the red, green and blue bands. Excess green
+    (2G - R - B) above 6 is vegetation (0); of the rest, a brightness (R + G + B) / 3 of 150 or more is bare (1),
+    below 55 is dark (3), and between is impervious (2); a pixel whose three bands sum below 12 is NoData (-1).
+    """
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        r, g, b = (ds.read(i).astype("float64") for i in (1, 2, 3))
+    bright = (r + g + b) / 3.0
+    out = np.full(r.shape, 2.0)
+    out[bright >= 150] = 1.0
+    out[bright < 55] = 3.0
+    out[2 * g - r - b > 6] = 0.0
+    nodata = (r + g + b) < 12
+    out[nodata] = -1.0
+    return out, nodata
+
+
+def _ref_subdataset(args):
+    """rst_getsubdataset: the subdataset the second argument names of the NetCDF file the first tile points to,
+    opened straight through rasterio's NetCDF driver."""
+    import os
+    import tempfile
+
+    import numpy as np
+
+    path, raster = _field(args[0], "path"), _field(args[0], "raster")
+    with tempfile.TemporaryDirectory(prefix="gbx-oracle-nc-") as d:
+        if path is None:  # a materialized tile: its bytes are the file
+            path = os.path.join(d, "tile.nc")
+            with open(path, "wb") as fh:
+                fh.write(bytes(raster))
+        with open_data(f'NETCDF:"{path}":{args[1]}') as sub:
+            band = sub.read(1, masked=True)
+    return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+
+def _shapely_of(raw):
+    """A geometry argument (WKB, EWKB, WKT or EWKT) as a shapely geometry and its SRID (0 for none), read with
+    shapely directly."""
+    import re
+
+    import shapely
+
+    if isinstance(raw, (bytes, bytearray)):
+        g = shapely.from_wkb(bytes(raw))
+        return g, int(shapely.get_srid(g))
+    m = re.match(r"\s*SRID=(\d+);(.*)", raw, re.S)
+    return (
+        (shapely.from_wkt(m.group(2)), int(m.group(1)))
+        if m
+        else (shapely.from_wkt(raw), 0)
+    )
+
+
+def _web_mercator(g):
+    """The geometry's longitude/latitude vertices in Web Mercator by the closed-form sphere projection (radius
+    6378137 m), edges straight between them: no CRS library."""
+    import math
+
+    import shapely
+
+    r = 6378137.0
+    import numpy as np
+
+    return shapely.transform(
+        g,
+        lambda c: np.array(
+            [
+                [
+                    r * math.radians(x),
+                    r * math.log(math.tan(math.pi / 4 + math.radians(y) / 2)),
+                ]
+                for x, y in c
+            ]
+        ),
+    )
+
+
+def _ref_rasterize(args):
+    """rst_rasterize: the geometry (reprojected from longitude/latitude to Web Mercator when it says SRID=4326 and the
+    output is 3857) burned where the pixel centre is inside it (oracle_refs.burn)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    g, srid = _shapely_of(args[0])
+    if srid == 4326 and len(args) > 8 and args[8] == 3857:
+        g = _web_mercator(g)
+    return oracle_refs.burn(g, args[1], (*args[2:6], args[6], args[7]))
+
+
+def _ref_gridfrompoints(args):
+    """rst_gridfrompoints: inverse-distance weighting written out (oracle_refs.idw)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    pts = [_shapely_of(p)[0] for p in args[0]]
+    xy = [(p.x, p.y) for p in pts]
+    power = args[9] if len(args) > 9 and args[9] is not None else 2.0
+    max_pts = args[10] if len(args) > 10 and args[10] is not None else 12
+    return oracle_refs.idw(xy, args[1], (*args[2:6], args[6], args[7]), power, max_pts)
+
+
+def _ref_binpoints(args):
+    """rst_binpoints: the points binned into the grid by the statistic (oracle_refs.bin_statistic)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    stat = args[10] if len(args) > 10 else "max"
+    return oracle_refs.bin_statistic(
+        args[0], args[1], args[2], (*args[3:7], args[7], args[8]), stat
+    )
+
+
+def _ref_binpoints_cells(args):
+    """rst_binpoints_finalize: the tile of per-pixel values written out. args = [cells (col, row, value), xmin, ymin, xmax,
+    ymax, width_px, height_px, srid]; a NULL or NaN value, and a pixel in no cell, is NoData; a pixel given twice keeps its
+    largest value."""
+    import numpy as np
+
+    cells, w, h = args[0], args[5], args[6]
+    out = np.full((h, w), -9999.0)
+    mask = np.ones((h, w), bool)
+    for c in cells:
+        if c is None or c[0] is None or c[1] is None or c[2] is None or c[2] != c[2]:
+            continue
+        col, row, value = c
+        if mask[row, col] or value > out[row, col]:
+            out[row, col] = value
+            mask[row, col] = False
+    return out, mask
+
+
+def _ref_plane(coeffs, hull):
+    """rst_dtmfromgeoms of points on the plane z = a x + b y that fill the rectangle `hull`: every triangle of any
+    triangulation of them holds the plane, so the height is the plane's (oracle_refs.plane).
+    """
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        nodata = args[11] if len(args) > 11 and args[11] is not None else -9999.0
+        return oracle_refs.plane(coeffs, hull, (*args[4:8], args[8], args[9]), nodata)
+
+    return ref
+
+
+def _ref_viewshed_wall(args):
+    """rst_viewshed of the `vs_wall` DEM from pixel (6, 10): visible (255) up to the wall in column 14, 0 behind it."""
+    import numpy as np
+
+    out = np.zeros((21, 21))
+    out[:, :15] = 255.0
+    return out, np.zeros(out.shape, bool)
+
+
+def _ref_viewshed_gdal(args):
+    """GDAL's older `gdal.ViewshedGenerate` (GVM_Edge, curvature 0.85714, visible 255, invisible and out-of-range 0) on band 1
+    of the tile `args[0]` (written under a `/vsimem` name), an entry point apart from the `raster viewshed` algorithm the
+    engine runs. The observer is `args[1]` (a POINT; its embedded SRID, else `args[5]`, else the tile's own CRS, moved into
+    the tile's CRS by pyproj), its height `args[2]` (NULL is 0), the target height `args[3]` (1.6 when absent) and the
+    distance limit `args[4]` (none when absent): the window GDAL writes, as 255 / 0 values.
+    """
+    import uuid
+
+    import numpy as np
+    import shapely
+
+    from databricks.labs.gbx import _osgeo
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.core.crs import get_transformer, resolve_source_crs
+
+    n = len(args)
+    height = float(args[2]) if n > 2 and args[2] is not None else 0.0
+    target = float(args[3]) if n > 3 and args[3] is not None else 1.6
+    limit = float(args[4]) if n > 4 and args[4] is not None else 0.0
+    geom = parse_geom(args[1])
+    x, y = geom.x, geom.y
+    with _ref_dataset(args) as rio:
+        tile_crs = rio.crs
+    src = resolve_source_crs(shapely.get_srid(geom), crs=args[5] if n > 5 else None)
+    if src is not None and tile_crs is not None and src != tile_crs:
+        x, y = get_transformer(src, tile_crs).transform(x, y)
+    b = _osgeo.bindings("the viewshed reference")
+    gdal = b.gdal
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    out = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        ds = gdal.Open(name)
+        res = gdal.ViewshedGenerate(
+            ds.GetRasterBand(1),
+            "GTiff",
+            out,
+            [],
+            float(x),
+            float(y),
+            height,
+            target,
+            255.0,
+            0.0,
+            0.0,
+            0.0,
+            0.85714,
+            gdal.GVM_Edge,
+            limit,
+        )
+        if res is None:
+            raise RuntimeError(f"ViewshedGenerate failed: {gdal.GetLastErrorMsg()}")
+        got = res.ReadAsArray().astype("float64")
+        return got, np.zeros(got.shape, bool)
+    finally:
+        res = ds = None
+        gdal.Unlink(name)
+        gdal.Unlink(out)
+
+
+def _ref_color_relief(args):
+    """rst_color_relief of the DEM args[0] through the table text args[1] (oracle_refs.color_relief)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    z, nodata, _, _ = _dem_band(args)
+    return oracle_refs.color_relief(z, nodata, args[1])
+
+
+def _members_of(group):
+    """The first band of each readable tile of an array argument, masked by its NoData: an error tile (no bytes) or
+    bytes that are no raster are not members, as the array functions skip them."""
+    out = []
+    for t in group:
+        raw = _raster_of(t)
+        if raw is None:
+            continue
+        try:
+            out.append(_masked_band(raw))
+        except Exception:  # noqa: BLE001 - a member that cannot be read is skipped
+            continue
+    return out
+
+
+def _ref_combine(stat):
+    """rst_combine<stat>: the statistic of the valid values at each pixel across the readable tiles of args[0]
+    (oracle_refs.combine); a pixel that is NoData in every tile is NoData."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        return oracle_refs.combine(stat, _members_of(args[0]))
+
+    return ref
+
+
+def _ref_frombands(args):
+    """rst_frombands: the first band of each readable tile of args[0], in array order, as one band each."""
+    import numpy as np
+
+    members = _members_of(args[0])
+    return (
+        np.stack([m.data.astype("float64") for m in members]),
+        np.stack([np.ma.getmaskarray(m) for m in members]),
+    )
+
+
+def _ref_agg_gridfrompoints(args):
+    """gbx_rst_gridfrompoints_agg: the scalar's reference over the group's points (a row with a NULL point or value is
+    dropped). args = [group of (point, value), xmin, ymin, xmax, ymax, width_px, height_px, out_srid, power, max_pts].
+    """
+    rows = [(p, v) for p, v in args[0] if p is not None and v is not None]
+    return _ref_gridfrompoints([[p for p, _ in rows], [v for _, v in rows], *args[1:]])
+
+
+def _ref_agg_binpoints(args):
+    """gbx_rst_binpoints_agg: the scalar's reference over the group's (x, y, z) rows."""
+    cols = list(zip(*args[0])) or [(), (), ()]
+    return _ref_binpoints([*(list(c) for c in cols), *args[1:]])
+
+
+def _ref_agg_dtm_plane(coeffs, hull):
+    """gbx_rst_dtmfromgeoms_agg of points on a plane: the scalar's reference with the group as its point array."""
+    plane = _ref_plane(coeffs, hull)
+    return lambda args: plane([list(args[0]), *args[1:]])
+
+
+def _ref_agg_rasterize(args):
+    """gbx_rst_rasterize_agg: each feature burned where a pixel centre is inside it, in the canonical order the tiers
+    share (WKB bytes, then value), the last write winning. args = [group of (wkb, value), xmin, ymin, xmax, ymax,
+    width_px, height_px, out_srid]."""
+    import numpy as np
+    import shapely
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    rows = sorted(
+        (bytes(g), float(v))
+        for g, v in args[0]
+        if g is not None and v is not None and v == v  # a NULL or NaN value is skipped
+    )
+    xmin, ymin, xmax, ymax, w, h = args[1:7]
+    out, mask = np.full((h, w), -9999.0), np.ones((h, w), bool)
+    for g, v in rows:
+        vals, inside_not = oracle_refs.burn(
+            shapely.from_wkb(g), v, (xmin, ymin, xmax, ymax, w, h)
+        )
+        out = np.where(~inside_not, vals, out)
+        mask &= inside_not
+    return out, mask
+
+
+def _ref_agg_derived_sum(args):
+    """gbx_rst_derivedband_agg with a pixel function that adds the bands: the sum of the first bands of the tiles."""
+    import numpy as np
+
+    members = _members_of(args[0])
+    out = sum(m.data.astype("float64") for m in members)
+    return out, np.zeros(out.shape, dtype=bool)
+
+
+def _ref_agg_frombands(args):
+    """gbx_rst_frombands_agg: the first band of each readable tile, in ascending band_index order."""
+    rows = sorted(((i, t) for t, i in args[0] if i is not None), key=lambda r: r[0])
+    return _ref_frombands([[t for _, t in rows]])
+
+
+_REFS = {
+    "agg_gridfrompoints": _ref_agg_gridfrompoints,
+    "agg_binpoints": _ref_agg_binpoints,
+    "binpoints_cells": _ref_binpoints_cells,
+    "agg_dtm_plane": _ref_agg_dtm_plane((1.0, 2.0), (0.0, 0.0, 10.0, 10.0)),
+    "agg_rasterize": _ref_agg_rasterize,
+    "agg_derived_sum": _ref_agg_derived_sum,
+    "agg_frombands": _ref_agg_frombands,
+    "viewshed_wall": _ref_viewshed_wall,
+    "viewshed_gdal": _ref_viewshed_gdal,
+    "color_relief": _ref_color_relief,
+    "combine_avg": _ref_combine("avg"),
+    "combine_count": _ref_combine("count"),
+    "combine_max": _ref_combine("max"),
+    "combine_median": _ref_combine("median"),
+    "combine_min": _ref_combine("min"),
+    "combine_stddev": _ref_combine("stddev"),
+    "combine_sum": _ref_combine("sum"),
+    "frombands": _ref_frombands,
+    "rasterize": _ref_rasterize,
+    "gridfrompoints": _ref_gridfrompoints,
+    "binpoints": _ref_binpoints,
+    "dtm_plane": _ref_plane((1.0, 2.0), (0.0, 0.0, 10.0, 10.0)),
+    "band": _ref_band_arg,
+    "filter": _ref_filter,
+    "filter_blank_9999": _ref_filter_blank(-9999.0),
+    "convolve": _ref_convolve,
+    "percentile_stretch": _ref_percentile_stretch,
+    "percentile_stretch_bands": _ref_percentile_stretch_bands,
+    "init_nodata_u16": _ref_init_nodata_u16,
+    "derived_plus_one": _ref_derived_plus_one,
+    "cast": _ref_cast,
+    "align_to": _ref_align_to,
+    "land_cover_spectral": _ref_land_cover_spectral,
+    "subdataset": _ref_subdataset,
+    "transform_gcp": _ref_transform_gcp,
+    "resample_average_half": _ref_resample_average,
+    "resample_average_nodata": _ref_resample_average_nodata,
+    "proximity_geo": _ref_proximity("GEO"),
+    "proximity_pixel": _ref_proximity("PIXEL"),
+    "fillnodata": _ref_fillnodata,
+    "clip_left_half": _ref_clip_columns(0, 32),
+    "clip_pixel_10_10": _ref_clip_pixel(10, 10),
+    "clip_triangle": _ref_clip_triangle,
+    "slope": _ref_slope,
+    "gdaldem_slope": _ref_gdaldem_slope,
+    # gbx_rst_gdal: the command's `slope --unit=percent` against GDAL's own DEMProcessing; the step computes the edges
+    # unless the command says --no-edges, which the engine's own slope row always does
+    "gdaldem_slope_percent": lambda args: _ref_gdaldem_slope(args, "percent", True),
+    "chm": _ref_chm,
+    "norm_diff": _ref_norm_diff,
+    "times2": _ref_times2,
+    "nd_bands_4_3": lambda args: _ref_norm_diff(args, ((0, 4), (0, 3))),
+    "aspect": _ref_terrain("aspect"),
+    "hillshade": _ref_terrain("hillshade"),
+    "tri": _ref_window("riley_tri"),
+    "tpi": _ref_window("tpi"),
+    "roughness": _ref_window("roughness"),
+    "ndvi": _ref_calc(lambda r, n: (n - r) / (n + r)),
+    "ndwi": _ref_calc(lambda g, n: (g - n) / (g + n)),
+    "nbr": _ref_calc(lambda n, s: (n - s) / (n + s)),
+    "savi": _ref_calc(lambda r, n, l_=0.5: (n - r) / (n + r + l_) * (1 + l_), bands=2),
+    "evi": _ref_calc(
+        lambda r, n, b, l_=1.0, c1=6.0, c2=7.5, g=2.5: g
+        * (n - r)
+        / (n + c1 * r - c2 * b + l_),
+        bands=3,
+    ),
+    "index_ndvi": _ref_index(lambda r, n: (n - r) / (n + r)),
+    "index_msavi": _ref_index(
+        lambda r, n: (2 * n + 1 - ((2 * n + 1) ** 2 - 8 * (n - r)) ** 0.5) / 2
+    ),
+    "index_gndvi": _ref_index(lambda g, n: (n - g) / (n + g), ("green", "nir")),
+    "index_ndvi_re": _ref_index(lambda e, n: (n - e) / (n + e), ("red_edge", "nir")),
+    "index_ndmi": _ref_index(lambda n, s: (n - s) / (n + s), ("nir", "swir")),
+    "index_ndsi": _ref_index(lambda g, s: (g - s) / (g + s), ("green", "swir")),
+    "threshold": _ref_threshold,
+}
+# Byte output (hillshade) is rounded by GDAL, not by the reference: one grey level either way.
+# GDAL's proximity is a fast two-pass distance, not the exact Euclidean one: it agrees to within a pixel's diagonal.
+_REF_ATOL = {
+    "percentile_stretch": 1.0,  # the cast to 8 bits truncates; a reference that rounded would differ by one level
+    "percentile_stretch_bands": 1.0,
+    "hillshade": 1.0,
+    "aspect": 0.01,
+    "color_relief": 1.0,  # GDAL rounds the interpolated channel to a Byte
+    "proximity_geo": 15.0,
+    "proximity_pixel": 1.5,
+}  # GDAL computes aspect in float32
+
+
+def _check_ref(case: Case, out, args) -> Optional[str]:
+    """The output's first band equals the reference (to float32 rounding) on the same NoData mask. A reference of
+    several bands (3-D arrays) is held to every band of the output, in order, and to the band count.
+    """
+    raster = _raster_bytes(out)  # a tile struct, or the bytes of an aggregate
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    want, want_mask = _REFS[case.expect](args)
+    if want.ndim == 3:
+        with _ref_dataset([raster]) as ds:
+            if ds.count != want.shape[0]:
+                return (
+                    f"{case.cid}: {ds.count} bands, the reference has {want.shape[0]}"
+                )
+        pairs = [
+            (_masked_band(raster, b + 1), want[b], want_mask[b])
+            for b in range(want.shape[0])
+        ]
+    else:
+        pairs = [(_masked_band(raster), want, want_mask)]
+    for got, w, w_mask in pairs:
+        why = _ref_flaw(case, got, w, w_mask)
+        if why:
+            return why
+    return None
+
+
+def _ref_flaw(case: Case, got, want, want_mask) -> Optional[str]:
+    import numpy as np
+
+    if got.shape != want.shape:
+        return f"{case.cid}: shape {got.shape} vs reference {want.shape}"
+    off = int((np.ma.getmaskarray(got) != want_mask).sum())
+    if off:
+        return (
+            f"{case.cid}: the NoData mask differs from the reference at {off} pixel(s)"
+        )
+    ok = ~want_mask
+    gotv = got.data[ok].astype("float64")
+    atol = _REF_ATOL.get(case.expect, 1e-3)
+    if case.expect == "aspect":
+        # a direction in degrees wraps at 360: a cell facing almost due north is 0.001 on one side and 359.999 on the
+        # other, and the two agree
+        diff = (gotv - want[ok] + 180.0) % 360.0 - 180.0
+        close = np.abs(diff) <= atol + 1e-4 * np.abs(want[ok])
+        worst_d = np.abs(diff)
+    else:
+        close = np.isclose(gotv, want[ok], rtol=1e-4, atol=atol)
+        worst_d = np.abs(gotv - want[ok])
+    if not close.all():
+        worst = float(np.max(worst_d))
+        return f"{case.cid}: {int((~close).sum())} pixel(s) differ from the reference (max |d| {worst:.3g})"
+    return None
+
+
+def _check_geom(case: Case, out) -> Optional[str]:
+    from databricks.labs.gbx._geom import parse_geom
+
+    g = parse_geom(out if not isinstance(out, (bytearray, memoryview)) else bytes(out))
+    if g is None:
+        return f"{case.cid}: no geometry"
+    if (
+        bool(g.is_valid) != case.expect["valid"]
+        or abs(g.area - case.expect["area"]) > 1e-9
+    ):
+        return f"{case.cid}: valid={g.is_valid} area={g.area}, want {case.expect}"
+    return None
+
+
+def _check_geom_equals(case: Case, out) -> Optional[str]:
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
+
+    if out is None:
+        return f"{case.cid}: got NULL, want {case.expect}"
+    got = parse_geom(bytes(out) if isinstance(out, (bytearray, memoryview)) else out)
+    want = shapely.from_wkt(case.expect)
+    # the same vertices, or (areas) the same region: a union keeps a vertex a hand-written ring does not
+    same = got is not None and got.geom_type == want.geom_type
+    if same and not shapely.normalize(got).equals_exact(shapely.normalize(want), 1e-6):
+        same = want.area > 0 and got.symmetric_difference(want).area <= 1e-9 * want.area
+    if not same:
+        return f"{case.cid}: got {got.wkt if got is not None else out!r}, want {case.expect}"
+    return None
+
+
+def _check_wkb_bytes(case: Case, out) -> Optional[str]:
+    """The exact bytes, for a geometry output: the same call returns the same bytes at every level (the byte order, the
+    flags, the ring start and direction), which a decoded-geometry comparison cannot see.
+    """
+    if out is None:
+        return f"{case.cid}: got NULL, want {case.expect.hex()}"
+    got = bytes(out)
+    if got != bytes(case.expect):
+        return f"{case.cid}: got {got.hex()}, want {bytes(case.expect).hex()}"
+    return None
+
+
+def _check_geom_srid(case: Case, out, args) -> Optional[str]:
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
+
+    wkt, srid = case.expect if isinstance(case.expect, tuple) else (case.expect, None)
+    bad = _check_geom_equals(replace(case, expect=wkt), out)
+    if bad:
+        return bad
+    got = parse_geom(bytes(out) if isinstance(out, (bytearray, memoryview)) else out)
+    want = shapely.from_wkt(wkt)
+    if bool(got.has_z) != bool(want.has_z):
+        return f"{case.cid}: Z is {bool(got.has_z)}, want {bool(want.has_z)}"
+    if want.has_z:
+        a, b = (
+            sorted(map(tuple, shapely.get_coordinates(g, include_z=True)))
+            for g in (got, want)
+        )
+        # an absent Z is NaN on both sides: a NaN that became a number is a Z that was made up
+        if len(a) != len(b) or any(
+            (x != x) != (y != y) or abs(x - y) > 1e-6
+            for p, q in zip(a, b)
+            for x, y in zip(p, q)
+        ):
+            return f"{case.cid}: coordinates {a}, want {b}"
+    if srid is None:
+        try:
+            first = parse_geom(args[0])
+        except Exception:  # noqa: BLE001 - not a geometry at all (a struct, a number)
+            first = None
+        if first is None:
+            return (
+                f"{case.cid}: the first argument is not a geometry, so a bare WKT has no SRID to compare with; "
+                "give the expectation as a (WKT, SRID) pair"
+            )
+        srid = shapely.get_srid(first)
+    if shapely.get_srid(got) != srid:
+        return f"{case.cid}: SRID {shapely.get_srid(got)}, want {srid}"
+    return None
+
+
+def _check_approx(case: Case, out) -> Optional[str]:
+    """`out` (a number, or a struct or list of numbers) equals `case.expect` to a relative 1e-9."""
+    import math
+
+    def flat(v):
+        if isinstance(
+            v, dict
+        ):  # a UC function returns a struct as a dict, the session as a Row
+            v = list(v.values())
+        return [v] if isinstance(v, (int, float)) else list(v)
+
+    if out is None:
+        return f"{case.cid}: got NULL, want {case.expect}"
+    got, want = flat(out), flat(case.expect)
+    if len(got) != len(want) or not all(
+        math.isclose(g, w, rel_tol=1e-9, abs_tol=1e-12) for g, w in zip(got, want)
+    ):
+        return f"{case.cid}: got {got}, want {want}"
+    return None
+
+
+def _check_cell_set(case: Case, out) -> Optional[str]:
+    if out is None:
+        return f"{case.cid}: got NULL, want the cells {sorted(case.expect)}"
+    # a chip array (struct elements) is judged by its cells: the struct's first field
+    cells = sorted(
+        (
+            e[0]
+            if isinstance(e, tuple)
+            else next(iter(e.values())) if isinstance(e, dict) else e
+        )
+        for e in out
+    )
+    return (
+        None
+        if cells == sorted(case.expect)
+        else f"{case.cid}: cells {cells}, want {sorted(case.expect)}"
+    )
+
+
+def _json_subset(got, want) -> bool:
+    """`want` (parsed JSON) is inside `got`: an object may hold more keys, a list has the same length, numbers
+    agree to a relative 1e-9, anything else is equal."""
+    import math
+
+    if isinstance(want, dict):
+        return isinstance(got, dict) and all(
+            k in got and _json_subset(got[k], v) for k, v in want.items()
+        )
+    if isinstance(want, list):
+        return (
+            isinstance(got, list)
+            and len(got) == len(want)
+            and all(_json_subset(g, w) for g, w in zip(got, want))
+        )
+    if isinstance(want, (int, float)) and not isinstance(want, bool):
+        return (
+            isinstance(got, (int, float))
+            and not isinstance(got, bool)
+            and math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12)
+        )
+    return got == want
+
+
+def _check_json_subset(case: Case, out) -> Optional[str]:
+    """`out` is JSON text that holds every key and value of `case.expect` (a dict): the fields a contract fixes,
+    where a tier may add others."""
+    if out is None:
+        return f"{case.cid}: got NULL, want JSON holding {case.expect}"
+    try:
+        got = json.loads(out)
+    except (TypeError, ValueError):
+        return f"{case.cid}: not JSON: {str(out)[:200]!r}"
+    if not _json_subset(got, case.expect):
+        return f"{case.cid}: got {str(out)[:300]}, want it to hold {case.expect}"
+    return None
+
+
+def _ref_info(args) -> dict:
+    """GDAL's own `gdal.Info(..., format="json", stats=True)` on the tile `args[0]`, written under a unique `/vsimem`
+    name, through osgeo: an entry point apart from the `raster info` algorithm the engine runs. Its path is shown as
+    `<input>`, as the engine shows its own."""
+    import uuid
+
+    from databricks.labs.gbx import _osgeo
+
+    gdal = _osgeo.bindings("the summary reference").gdal
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        with gdal.ExceptionMgr(useExceptions=False):
+            info = gdal.Info(name, format="json", stats=True)
+        text = info if isinstance(info, str) else json.dumps(info)
+        return json.loads(text.replace(name, "<input>"))
+    finally:
+        for left in (name, name + ".aux.xml"):
+            if gdal.VSIStatL(left) is not None:
+                gdal.Unlink(left)
+
+
+_CRS_PATHS = (".wkt", ".proj:wkt2", ".proj:projjson")
+
+
+def _crs_flaw(got, want, path) -> Optional[str]:
+    """A CRS in GDAL's JSON (WKT or PROJJSON) is judged by CRS equivalence, not by its text: the PROJ database of the
+    worker that wrote it and of the process that judges it can spell one CRS differently (a datum or an ensemble).
+    """
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    def text(v):
+        return v if isinstance(v, str) else json.dumps(v)
+
+    try:
+        same = crs_equal(text(got), text(want))
+    except Exception:  # noqa: BLE001 - a CRS that does not parse is a difference
+        same = False
+    return None if same else f"{path}: not the same CRS as the reference"
+
+
+def _json_flaw(got, want, path="$") -> Optional[str]:
+    """Where JSON `got` departs from `want`: the same keys, lists of the same length, numbers to a relative 1e-9, a CRS
+    by its equivalence."""
+    import math
+
+    if path.endswith(_CRS_PATHS):
+        return _crs_flaw(got, want, path)
+    if isinstance(want, dict):
+        if not isinstance(got, dict) or set(got) != set(want):
+            return f"{path}: keys {sorted(got) if isinstance(got, dict) else got!r}, want {sorted(want)}"
+        return next(
+            (
+                w
+                for w in (_json_flaw(got[k], v, f"{path}.{k}") for k, v in want.items())
+                if w
+            ),
+            None,
+        )
+    if isinstance(want, list):
+        if not isinstance(got, list) or len(got) != len(want):
+            return f"{path}: {got!r}, want {want!r}"
+        return next(
+            (
+                w
+                for w in (
+                    _json_flaw(g, v, f"{path}[{i}]")
+                    for i, (g, v) in enumerate(zip(got, want))
+                )
+                if w
+            ),
+            None,
+        )
+    if isinstance(want, (int, float)) and not isinstance(want, bool):
+        ok = (
+            isinstance(got, (int, float))
+            and not isinstance(got, bool)
+            and math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12)
+        )
+        return None if ok else f"{path}: {got!r}, want {want!r}"
+    return None if got == want else f"{path}: {got!r}, want {want!r}"
+
+
+def _check_json_ref(case: Case, out, args) -> Optional[str]:
+    """`out` is JSON text equal to GDAL's own info JSON of the tile (`_ref_info`): the same keys everywhere, numbers within
+    a relative 1e-9."""
+    if out is None:
+        return f"{case.cid}: got NULL, want GDAL's info JSON"
+    try:
+        got = json.loads(out)
+    except (TypeError, ValueError):
+        return f"{case.cid}: not JSON: {str(out)[:200]!r}"
+    why = _json_flaw(got, _ref_info(args))
+    return None if why is None else f"{case.cid}: {why}"
+
+
+def _check_fill_mask(case: Case, out, args) -> Optional[str]:
+    """The result of a fill over a tile whose validity is its own mask band: its mask is ``input valid OR filled by GDAL``.
+    What GDAL fills is found with rasterio's own `FillNodata` call (an entry point apart from the engine's) over a raster of
+    1 where the input is valid and 0 elsewhere: a pixel it reaches comes back 1. The reference must fill some masked pixel and,
+    for `expect` "partial", leave some masked, so the row cannot pass by a fill that did nothing or reached everything.
+    """
+    from rasterio.fill import fillnodata
+
+    raster = _raster_bytes(out)
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    max_dist = args[1] if len(args) > 1 and args[1] is not None else 100.0
+    with _ref_dataset(args) as ds:
+        valid = ds.read_masks(1) != 0
+    ones = valid.astype("uint8")
+    cover = fillnodata(ones, mask=ones, max_search_distance=float(max_dist)) != 0
+    want = valid | cover
+    with _ref_dataset([raster]) as ds:
+        got = ds.read_masks(1) != 0
+    if got.shape != want.shape:
+        return f"{case.cid}: shape {got.shape} vs reference {want.shape}"
+    off = int((got != want).sum())
+    if off:
+        return (
+            f"{case.cid}: the mask differs from input-valid OR filled at {off} pixel(s)"
+        )
+    if case.expect == "partial" and want.all():
+        return f"{case.cid}: the reference leaves no pixel masked, so the row proves nothing"
+    if not (want & ~valid).any():
+        return f"{case.cid}: the reference fills no masked pixel, so the row proves nothing"
+    return None
+
+
+def _check_tile_size(case: Case, out) -> Optional[str]:
+    """`out` is a tile whose raster is `case.expect` = (width, height) pixels."""
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    height, width = _masked_band(raster).shape
+    got = (width, height)
+    return (
+        None
+        if got == tuple(case.expect)
+        else f"{case.cid}: the raster is {got[0]}x{got[1]}, want {case.expect[0]}x{case.expect[1]}"
+    )
+
+
+@contextlib.contextmanager
+def _quiet_no_georeference():
+    """An image (a web tile) has no georeferencing and rasterio says so; the docs tests turn warnings into errors."""
+    import warnings
+
+    from rasterio.errors import NotGeoreferencedWarning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NotGeoreferencedWarning)
+        yield
+
+
+def _check_image_meta(case: Case, out) -> Optional[str]:
+    """`out` is the bytes of an image (a web tile) with the format, size and band count of `case.expect`, and the alpha
+    band it names: ``transparent`` (every pixel 0), ``opaque`` (every pixel 255) or ``mixed``; ``gray`` is the
+    ``(least, most)`` that every pixel of band 1 lies between.
+    """
+    if out is None:
+        return f"{case.cid}: got NULL, want an image"
+    want = dict(case.expect)
+    with _quiet_no_georeference(), open_bytes(bytes(out)) as ds:
+        for key, got in (
+            ("driver", ds.driver),
+            ("width", ds.width),
+            ("height", ds.height),
+            ("count", ds.count),
+        ):
+            if key in want and got != want[key]:
+                return f"{case.cid}: {key} {got!r} is not {want[key]!r}"
+        if "alpha" in want:
+            if ds.count != 4:
+                return f"{case.cid}: {ds.count} bands, no alpha band to judge"
+            a = ds.read(4)
+            state = (
+                "transparent"
+                if not a.any()
+                else "opaque" if (a == 255).all() else "mixed"
+            )
+            if state != want["alpha"]:
+                return f"{case.cid}: the alpha band is {state}, want {want['alpha']}"
+        if "gray" in want:
+            lo, hi = want["gray"]
+            first = ds.read(1)
+            if first.min() < lo or first.max() > hi:
+                return f"{case.cid}: band 1 runs {first.min()}..{first.max()}, want {lo}..{hi}"
+    return None
+
+
+def _check_pmtiles_archive(case: Case, out) -> Optional[str]:
+    """`out` is a PMTiles v3 archive holding exactly the tiles of `case.expect["tiles"]` ({(z, x, y): payload}), the
+    metadata JSON `expect["metadata"]`, and the header's tile type `expect["tile_type"]` (png, jpeg, webp or mvt),
+    read with the pmtiles library's header decoder and the spec's directory layout."""
+    from pmtiles.tile import TileType, deserialize_header
+
+    from databricks.labs.gbx.pmtiles import _directory
+
+    if out is None:
+        return f"{case.cid}: got NULL, want an archive"
+    raw = bytes(out)
+    want = case.expect
+    header = deserialize_header(raw[:127])
+    kinds = {
+        TileType.PNG: "png",
+        TileType.JPEG: "jpeg",
+        TileType.WEBP: "webp",
+        TileType.MVT: "mvt",
+    }
+    if kinds.get(header["tile_type"]) != want["tile_type"]:
+        return f"{case.cid}: tile type {header['tile_type']}, want {want['tile_type']}"
+    from pmtiles.tile import Compression
+
+    meta_raw = raw[
+        header["metadata_offset"] : header["metadata_offset"]
+        + header["metadata_length"]
+    ]
+    if header["internal_compression"] == Compression.GZIP:
+        import gzip
+
+        meta_raw = gzip.decompress(meta_raw)
+    meta = json.loads(meta_raw)
+    if meta != want["metadata"]:
+        return f"{case.cid}: metadata {meta!r}, want {want['metadata']!r}"
+    got = {zxy: payload for zxy, payload in _directory.iter_tiles(raw)}
+    if got != dict(want["tiles"]):
+        return f"{case.cid}: tiles {sorted(got)}, want {sorted(want['tiles'])}"
+    return None
+
+
+def _oracle_check(name: str):
+    """A check of `oracle_checks`, imported when a row of its kind runs."""
+
+    def run(*a):
+        from databricks.labs.gbx.bench import oracle_checks
+
+        return getattr(oracle_checks, name)(*a)
+
+    return run
+
+
+_VALUE_CHECKS = {
+    "image_meta": _check_image_meta,
+    "pmtiles_archive": _check_pmtiles_archive,
+    "tile_size": _check_tile_size,
+    "geom_equals": _check_geom_equals,
+    "wkb_bytes": _check_wkb_bytes,
+    "json_subset": _check_json_subset,
+    "approx": _check_approx,
+    "cell_set": _check_cell_set,
+}
+
+
+# the kinds whose check reads the case's arguments too
+_ARG_CHECKS = {
+    "tile_props": _check_tile,
+    "warp_masked": _check_warp_masked,
+    "tile_meta": _check_tile_meta,
+    "ref": _check_ref,
+    "json_ref": _check_json_ref,
+    "fill_mask": _check_fill_mask,
+    "geom_srid": _check_geom_srid,
+    "isobands": _oracle_check("check_isobands"),
+    "contours": _oracle_check("check_contours"),
+    "features_ref": _oracle_check("check_features_ref"),
+    "cellfill": _oracle_check("check_cellfill"),
+    "mvt_layer": _oracle_check("check_mvt_layer"),
+    "grid_partial": _oracle_check("check_grid_partial"),
+    "grid_stats_json": _oracle_check("check_grid_stats_json"),
+    "stats_partial": _oracle_check("check_stats_partial"),
+    "stats_merge_json": _oracle_check("check_stats_merge_json"),
+}
+
+
+def check(case: Case, out, args) -> Optional[str]:
+    """None when `out` meets the case; else a one-line reason.
+
+    An `expect` that is a function is called here, when the row runs, so a table can state a value that needs rasterio
+    (a fixture's byte length) without importing it when the table is imported.
+    """
+    if callable(case.expect):
+        case = replace(case, expect=case.expect())
+    if case.kind == "exact":
+        if isinstance(out, dict) and isinstance(case.expect, (tuple, list)):
+            out = tuple(
+                out.values()
+            )  # a UC struct is a dict, the session's a Row (a tuple)
+        return (
+            None
+            if out == case.expect
+            else f"{case.cid}: got {out!r}, want {case.expect!r}"
+        )
+    if case.kind == "exact_rows":
+        return (
+            None
+            if list(out) == list(case.expect)
+            else f"{case.cid}: got {list(out)!r}, want {list(case.expect)!r}"
+        )
+    if case.kind == "null":
+        return None if out is None else f"{case.cid}: got {out!r}, want NULL"
+    if case.kind in ("raises", "uc_refused"):
+        return f"{case.cid}: returned {out!r}, want an error"
+    if case.kind == "error_tile":
+        meta = _field(out, "metadata") or {}
+        ok = (
+            out is not None
+            and _field(out, "raster") is None
+            and _field(out, "path") is None
+            and bool(meta.get(ERROR_TILE_KEY))
+        )
+        if ok and case.expect is not None and meta.get(ERROR_TILE_KEY) != case.expect:
+            return f"{case.cid}: the reason is {meta.get(ERROR_TILE_KEY)!r}, want {case.expect!r} unchanged"
+        return (
+            None
+            if ok
+            else f"{case.cid}: got {out!r}, want an error tile (no raster, no path, metadata[{ERROR_TILE_KEY!r}] set)"
+        )
+    if case.kind == "error_tile_has":
+        # an error tile whose reason says `case.expect` (a substring: a policy reason names the file, the GDAL text)
+        meta = _field(out, "metadata") or {}
+        reason = str(meta.get(ERROR_TILE_KEY) or "")
+        if (
+            out is None
+            or _field(out, "raster") is not None
+            or _field(out, "path") is not None
+            or not reason
+        ):
+            return f"{case.cid}: got {out!r}, want an error tile with a reason"
+        return (
+            None
+            if str(case.expect) in reason
+            else f"{case.cid}: the reason is {reason!r}, want it to say {str(case.expect)!r}"
+        )
+    if case.kind in _ARG_CHECKS:
+        return _ARG_CHECKS[case.kind](case, out, args)
+    if case.kind == "error_fix":
+        reason = (_field(out, "metadata") or {}).get(ERROR_TILE_KEY) or ""
+        if out is None or _field(out, "raster") is not None or "Fix:" not in reason:
+            return (
+                f"{case.cid}: got {out!r}, want an error tile whose reason has a Fix:"
+            )
+        return None
+    if case.kind == "geom_props":
+        return _check_geom(case, out)
+    if case.kind in _VALUE_CHECKS:
+        return _VALUE_CHECKS[case.kind](case, out)
+    if case.kind == "merged_equals":
+        return _check_merged(case, out)
+    if case.kind == "pixels":
+        return _check_pixels(case, out)
+    if case.kind == "pixels_canvas":
+        return _check_pixels(
+            replace(case, expect=case.expect["pixels"]),
+            out,
+            canvas=case.expect["canvas"],
+        )
+    raise ValueError(case.kind)
+
+
+def _attempts(text: str) -> str:
+    """How many times Spark ran the failed task, from its message ("Task 0 in stage 3.0 failed 4 times"): "" without one."""
+    m = re.search(r"failed (\d+) times", text)
+    return f"; the task ran {m.group(1)} time(s)" if m else ""
+
+
+def check_error(case: Case, exc: BaseException) -> Optional[str]:
+    text = str(exc)
+    _trace(
+        f"{case.cid} raised {type(exc).__name__}{_attempts(text)}: {' '.join(text.split())[:200]}"
+    )
+    if case.kind == "raises":
+        # a tuple is alternatives: levels that say it differently (a light read failure names no tile)
+        wanted = case.expect if isinstance(case.expect, tuple) else (case.expect,)
+        if any(str(w) in str(exc) for w in wanted):
+            return None
+        return f"{case.cid}: error does not mention {case.expect!r}: {type(exc).__name__}: {str(exc)[:300]}"
+    if case.kind == "uc_refused":
+        return (
+            None
+            if "Fix:" in str(exc)
+            else f"{case.cid}: refused without a 'Fix:' line: {exc}"
+        )
+    return f"{case.cid}: raised {type(exc).__name__}: {str(exc)[:300]}"
+
+
+def _raster_bytes(out) -> Optional[bytes]:
+    """The raster bytes of a result that is bytes, a tile struct, or NULL."""
+    if out is None:
+        return None
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    raster = _field(out, "raster")
+    return None if raster is None else bytes(raster)
+
+
+def _check_merged(case: Case, out) -> Optional[str]:
+    """A merged raster has the expected grid and the expected pixels (`case.expect` names the fixture)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    got_b = _raster_bytes(out)
+    want_b = _build(case.expect.name, tempfile.gettempdir())["raster"]
+    if got_b is None:
+        return f"{case.cid}: no merged raster"
+    with (
+        MemoryFile(got_b) as a,
+        a.open() as got,
+        MemoryFile(want_b) as b,
+        b.open() as want,
+    ):
+        if (got.shape, got.transform) != (want.shape, want.transform) or not crs_equal(
+            got.crs, want.crs
+        ):
+            return f"{case.cid}: {got.shape}@{got.transform} in {got.crs} vs {want.shape}@{want.transform} in {want.crs}"
+        return (
+            None
+            if np.array_equal(got.read(), want.read())
+            else f"{case.cid}: pixels differ"
+        )
+
+
+def _check_pixels(case: Case, out, canvas=None) -> Optional[str]:
+    """The first band of the raster (bytes or a tile) is `case.expect`, pixel by pixel (NaN equals NaN), and it sits
+    where the canvas of the case puts it: its transform, its CRS and its NoData value. A canvas aggregate's
+    arguments are the group, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, ...; `canvas`
+    (xmin, ymin, xmax, ymax, width, height) stands for them when the row leaves them NULL for the function to derive.
+    """
+    import numpy as np
+    from affine import Affine
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    b = _raster_bytes(out)
+    if b is None:
+        return f"{case.cid}: no raster"
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    names = [p.name for p in fn.params]
+    n0 = (
+        group_width(fn) if fn.kind == "aggregate" else 1
+    )  # args[0] holds the member columns
+
+    def const(
+        *alts,
+    ):  # a canvas constant by its parameter name, wherever the signature puts it
+        name = next((a for a in alts if a in names), None)
+        if name is None:
+            return None
+        i = 1 + names.index(name) - n0
+        return case.args[i] if i < len(case.args) else None
+
+    srid, out_crs = const("out_srid", "srid"), const("out_crs")
+    if "_bng_" in fn.sql_name:
+        srid = 27700  # the BNG rasterizers always write EPSG:27700 (a table function has no out_srid)
+    if (
+        srid is None
+    ):  # a NULL out_srid: the custom grid's CRS, else the lon/lat default of the cell rasterizers
+        grid = const("grid")
+        srid = grid["srid"] if isinstance(grid, dict) else 4326
+    if canvas is not None:
+        xmin, ymin, xmax, ymax, width, height = canvas
+    else:
+        xmin, ymin, xmax, ymax = (const(n) for n in ("xmin", "ymin", "xmax", "ymax"))
+        width, height = const("width", "width_px"), const("height", "height_px")
+    want_transform = Affine(
+        (xmax - xmin) / width, 0.0, xmin, 0.0, -(ymax - ymin) / height, ymax
+    )
+    want_crs = out_crs if out_crs else f"EPSG:{srid}"  # out_crs wins over out_srid
+    with MemoryFile(b) as m, m.open() as ds:
+        got = ds.read(1).astype("float64")
+        where = (ds.transform, ds.crs, ds.nodata)
+    if not (
+        where[0].almost_equals(want_transform, 1e-9) and crs_equal(where[1], want_crs)
+    ):
+        return f"{case.cid}: placed at {where[0]} in {where[1]}, want {want_transform} in {want_crs}"
+    if where[2] != -9999.0:
+        return f"{case.cid}: NoData is {where[2]}, want -9999.0"
+    ok = got.shape == np.shape(case.expect) and np.allclose(
+        got,
+        np.asarray(case.expect, dtype="float64"),
+        rtol=1e-6,
+        atol=1e-9,
+        equal_nan=True,
+    )
+    return None if ok else f"{case.cid}: pixels {got.tolist()}, want {case.expect}"
+
+
+def _check_error_group(case: Case, out, tile_out: bool) -> Optional[str]:
+    """A group of nothing but error tiles: the error tile (reason `case.expect`) when the result is a tile,
+    NULL when it is bytes (they have no place for a reason)."""
+    if tile_out:
+        return check(replace(case, kind="error_tile"), out, None)
+    return None if out is None else f"{case.cid}: got bytes, want NULL"
+
+
+def _check_helper(case: Case, rows, tiles) -> Optional[str]:
+    """Judge the collected rows of one helper call (`tiles` are the input tiles)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    if case.kind == "raises":
+        return f"{case.cid}: returned {len(rows)} rows, want an error"
+    ts = [r["tile"] for r in rows] if rows and "tile" in rows[0].asDict() else []
+    if case.kind == "error_tile":
+        return (
+            check(case, ts[0], None)
+            if len(ts) == 1
+            else f"{case.cid}: {len(ts)} rows, want the one error tile"
+        )
+    if case.kind == "null":
+        return (
+            None
+            if rows and all(r["raster"] is None for r in rows)
+            else f"{case.cid}: want a NULL raster, got {len(rows)} rows"
+        )
+    if case.kind == "virtual_windows":
+        if any(t["raster"] is not None for t in ts):
+            return f"{case.cid}: a sub-tile carries bytes"
+        wins = sorted(
+            (
+                t["window"]["col_off"],
+                t["window"]["row_off"],
+                t["window"]["width"],
+                t["window"]["height"],
+            )
+            for t in ts
+        )
+        return None if wins == sorted(case.expect) else f"{case.cid}: windows {wins}"
+    if case.kind == "virtual_cover":
+
+        with open_data(tiles[0]["path"]) as src:
+            seen = np.zeros((src.height, src.width), dtype=bool)
+        for t in ts:
+            w = t["window"]
+            seen[
+                w["row_off"] : w["row_off"] + w["height"],
+                w["col_off"] : w["col_off"] + w["width"],
+            ] = True
+        return (
+            None
+            if seen.all()
+            else f"{case.cid}: {int((~seen).sum())} of {seen.size} source pixels are in no cell window"
+        )
+    if case.kind == "virtual_cells":
+        from databricks.labs.gbx.pygx import _bng
+
+        cells = {_bng.format(t["cellid"]) for t in ts}
+        ok = cells == case.expect and all(
+            t["raster"] is None and t["clip_crs"] == "EPSG:27700" for t in ts
+        )
+        return None if ok else f"{case.cid}: cells {cells}"
+    if case.kind == "merged_equals":
+        return _check_merged(case, rows[0]["raster"] if rows else None)
+    if case.kind == "pixel_ratio":
+        with (
+            MemoryFile(bytes(rows[0]["raster"])) as a,
+            a.open() as got,
+            MemoryFile(tiles[0]["raster"]) as b,
+            b.open() as base,
+        ):
+            x = base.read(1, masked=True)
+            with np.errstate(
+                divide="ignore", invalid="ignore"
+            ):  # a valid 0 divides to NaN
+                ratio = got.read(1)[~x.mask] / x.compressed()
+        ratio = ratio[np.isfinite(ratio)]
+        return (
+            None
+            if np.allclose(ratio, case.expect, rtol=1e-6)
+            else f"{case.cid}: ratio {np.unique(ratio)[:5]}"
+        )
+    raise ValueError(case.kind)
+
+
+def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> List[str]:
+    """Read the oracle file through one path; the tiles must reproduce it exactly, once.
+
+    The forms: ``b`` the light reader, materialized; ``d-py`` its virtual tiles decoded in one Python call per Arrow
+    batch (pyrx). Each output tile is located by its own geotransform, so this holds whatever window fields a path
+    keeps.
+    """
+    import functools
+
+    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+    from databricks.labs.gbx.pyrx import tile_batches
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    path = resolve_arg(case.args[0], tmpdir)["path"]
+    gbx_manager.register_sources(spark)  # the light raster reader
+    virt = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .option("tileSize", "32")
+        .load(path)
+        .select("tile")
+    )
+    if form == "b":
+        df = (
+            spark.read.format("raster_gbx")
+            .option("virtualTiles", "false")
+            .option("tileSize", "32")
+            .load(path)
+        )
+    elif form == "d-py":
+        df = virt.mapInArrow(
+            functools.partial(
+                tile_batches.materialize_batches,
+                cap_bytes=report_detected_cap(
+                    spark
+                ),  # the driver's cap: a worker cannot measure it
+            ),
+            virt.schema,
+        )
+    else:
+        raise ValueError(form)
+    with open_data(path) as src:
+        return reader_failures(
+            case.cid, form, src, [r["tile"] for r in df.select("tile").collect()]
+        )
+
+
+def reader_failures(cid: str, form: str, src, tiles) -> List[str]:
+    """What is wrong with `tiles` (rows of a read of the open raster `src`): each must be a decoded tile with the CRS,
+    data type and NoData of the file and exactly its pixels where its geotransform puts it, and together they must
+    cover every pixel once (a boolean mask: an overlap and a gap are both failures, whatever their areas).
+    """
+    import numpy as np
+    from rasterio.windows import from_bounds
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    failures, seen = [], np.zeros((src.height, src.width), dtype=bool)
+    for tile in tiles:
+        if tile["raster"] is None:
+            err = (tile["metadata"] or {}).get("last_error")
+            failures.append(f"{cid}/{form}: an error tile ({err})")
+            continue
+        with open_bytes(bytes(tile["raster"])) as got:
+            win = (
+                from_bounds(*got.bounds, transform=src.transform)
+                .round_offsets()
+                .round_lengths()
+            )
+            r0, c0, h, w = (
+                int(win.row_off),
+                int(win.col_off),
+                int(win.height),
+                int(win.width),
+            )
+            if r0 < 0 or c0 < 0 or r0 + h > src.height or c0 + w > src.width:
+                failures.append(f"{cid}/{form}: a tile outside the raster at {win}")
+                continue
+            if got.count != src.count:
+                failures.append(f"{cid}/{form}: {got.count} bands, not {src.count}")
+            else:
+                want = src.read(window=win)
+                have = got.read()
+                nan_ok = want.dtype.kind in "fc"  # a NaN pixel is the same pixel
+                if have.shape != want.shape or not np.array_equal(
+                    have, want, equal_nan=nan_ok
+                ):
+                    failures.append(f"{cid}/{form}: pixels differ at {win}")
+            if not crs_equal(got.crs, src.crs):
+                failures.append(f"{cid}/{form}: crs {got.crs} is not {src.crs}")
+            if got.dtypes != src.dtypes:
+                failures.append(f"{cid}/{form}: dtype {got.dtypes} is not {src.dtypes}")
+            gn, sn = got.nodata, src.nodata
+            both_nan = (
+                gn is not None and sn is not None and gn != gn and sn != sn
+            )  # NaN NoData: nan != nan
+            if gn != sn and not both_nan:
+                failures.append(f"{cid}/{form}: nodata {gn} is not {sn}")
+            if seen[r0 : r0 + h, c0 : c0 + w].any():
+                failures.append(f"{cid}/{form}: a tile overlaps another at {win}")
+            seen[r0 : r0 + h, c0 : c0 + w] = True
+    if not seen.all():
+        failures.append(
+            f"{cid}/{form}: {int((~seen).sum())} of {seen.size} px are in no tile"
+        )
+    return failures
+
+
+def run_towers(spark, case: Case, tmpdir: str):
+    """`rst_viewshed_towers` over the case's DSM and towers.
+    Returns {tower: (visible_px, total_px)}; a tower with no row is not in it."""
+    from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
+
+    manifest_rows, towers, radius, height = case.args
+    tiles = spark.createDataFrame(
+        resolve_arg(manifest_rows, tmpdir), "tx int, ty int, path string"
+    )
+    masts = len(towers[0]) == 4  # a per-tower mast column, named by `height`
+    sites = spark.createDataFrame(
+        list(towers),
+        "tower_cellid string, x double, y double"
+        + (f", {height} double" if masts else ""),
+    )
+    got = rst_viewshed_towers(
+        sites, tiles, radius, height, x0=0.0, y0=0.0, tile_m=DSM_TILE_M
+    )
+    return {r["tower_cellid"]: (r["visible_px"], r["total_px"]) for r in got.collect()}
+
+
+def towers_differ(want: Dict, got: Dict) -> Optional[str]:
+    """None when every tower of `want` ({tower: (visible_px, total_px) or None for no row}) is in `got` within
+    TOWERS_TOLERANCE of its total_px, and `got` holds no other; else the towers that differ, with both counts.
+    """
+    bad = []
+    for k in sorted(set(want) | set(got)):
+        w, g = want.get(k), got.get(k)
+        if (w is None) != (g is None) or (
+            w is not None
+            and any(abs(g[i] - w[i]) > TOWERS_TOLERANCE * w[1] for i in (0, 1))
+        ):
+            bad.append(f"{k}: want {w}, got {g}")
+    return "; ".join(bad) or None
+
+
+def run_helpers(spark, cases, tmpdir: Optional[str] = None):
+    """Build a (key, tile) DataFrame from the case, call the helper by name, check the rows."""
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.rasterx import helpers
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    out = []
+    for case in cases:
+        if "session" not in case.surfaces:
+            continue
+        with _traced(f"{case.cid} alone"):
+            out.append((case, _helper_verdict(spark, case, tmpdir, helpers, TILE_SQL)))
+    return out
+
+
+def _helper_verdict(spark, case, tmpdir: str, helpers, tile_sql: str) -> Optional[str]:
+    """One helper case of ``run_helpers``: None when it holds, else what differs."""
+    if case.fn == "rst_viewshed_towers":
+        try:
+            got = run_towers(spark, case, tmpdir)
+            if case.kind == "raises":
+                return f"{case.cid}: returned {len(got)} rows, want an error"
+            msg = towers_differ(case.expect, got)
+            return msg and f"{case.cid}: {msg}"
+        except Exception as exc:  # noqa: BLE001
+            return check_error(case, exc)
+    first = resolve_arg(case.args[0], tmpdir)
+    tiles = first if isinstance(first, list) else [first]
+    df = spark.createDataFrame(
+        [("a", t) for t in tiles], f"key string, tile {tile_sql}"
+    )
+    fn, extra = getattr(helpers, case.fn), list(case.args[1:])
+    try:
+        if case.fn == "merge_by_key":
+            res = fn(df, ["key"], method=extra[0]).collect()
+        elif case.fn == "combine_by_key":
+            res = fn(df, ["key"], stat=extra[0]).collect()
+        else:
+            res = fn(df, "tile", *extra).collect()
+        return _check_helper(case, res, tiles)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+        return check_error(case, exc)
+
+
+_SQL = {
+    "DOUBLE": "double",
+    "INT": "int",
+    "BIGINT": "bigint",
+    "STRING": "string",
+    "BINARY": "binary",
+    "BOOLEAN": "boolean",
+    "ARRAY<INT>": "array<int>",
+    "ARRAY<BIGINT>": "array<bigint>",
+    "ARRAY<DOUBLE>": "array<double>",
+    "ARRAY<BINARY>": "array<binary>",
+    "ARRAY<STRING>": "array<string>",
+    "ARRAY<ARRAY<DOUBLE>>": "array<array<double>>",
+    "STRUCT": "struct<>",  # a NULL struct argument (a feature's attributes); a dict value is typed field by field
+}
+
+
+class Big(int):
+    """An integer argument that a session row types as BIGINT, whatever its size (a PySpark int column)."""
+
+
+def _ddl_type(value, param) -> str:
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    if param.session[0] == "ARRAY<TILE>":
+        return f"array<{TILE_SQL}>"
+    if param.session[0].startswith(
+        "struct<"
+    ):  # a struct parameter other than a tile (a BNG chip)
+        return param.session[0]
+    if isinstance(value, dict) and param.session[0].upper().startswith("MAP<"):
+        return param.session[0].lower()  # a map parameter (a band map)
+    if param.session[0] == "STRUCT" and isinstance(value, dict):
+        # a struct of any fields (a feature's attributes): the type of each value
+        return (
+            "struct<"
+            + ",".join(f"{k}:{_ddl_type(v, _Scalar())}" for k, v in value.items())
+            + ">"
+        )
+    if isinstance(value, dict) or "TILE" in param.session:
+        return TILE_SQL
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, list):  # an array parameter (quadbin cells)
+        return _array_ddl_type(param, value)
+    if isinstance(value, int):
+        wide = (
+            param.session[0] == "BIGINT"
+            or isinstance(value, Big)
+            or not -(2**31) <= value < 2**31
+        )
+        return "bigint" if wide else "int"
+    if isinstance(value, float):
+        return "double"
+    if isinstance(value, (bytes, bytearray)):
+        return "binary"
+    if isinstance(value, str):
+        return "string"
+    return _param_sql(param)
+
+
+def _param_sql(param) -> str:
+    """The DDL type a parameter is written with: the table above, or a composite type as the manifest spells it."""
+    t = param.session[0]
+    if t in _SQL:
+        return _SQL[t]
+    if t.lower().startswith(("array<", "map<", "struct<")):
+        return t.lower()
+    return _unmapped(param)
+
+
+class _Scalar:
+    """A stand-in parameter for the type of one field of a struct argument."""
+
+    session = ("",)
+    name = "a struct field"
+
+
+def _unmapped(param):
+    raise ValueError(
+        f"parameter {param.name!r}: no DDL type for {param.session[0]!r}; add it to oracles._SQL"
+    )
+
+
+def _array_ddl_type(param, value=None) -> str:
+    """The DDL type of an array argument: ARRAY<...> parameter types map as they are written."""
+    t = param.session[0]
+    if (
+        value and isinstance(value[0], str) and "ARRAY<STRING>" in param.session
+    ):  # geometries as text (WKT or EWKT) in an array that also takes WKB
+        return "array<string>"
+    if t.upper().startswith("ARRAY<") and t.endswith(">"):
+        return t.lower()
+    raise ValueError(
+        f"parameter {param.name!r}: a list was given but its type is {t!r}, not ARRAY<...>"
+    )
+
+
+def _argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
+    raw = (
+        case.args
+        if case.kind in ("exact_rows", "per_row")
+        else (case.args, *case.variants)
+    )
+    return [[resolve_arg(a, tmpdir) for a in row] for row in raw]
+
+
+def _verdict(case: Case, outs, rows) -> Optional[str]:
+    """`check` for the whole batch: exact_rows judges the list, any other kind each row (variants included)."""
+    if case.kind == "exact_rows":
+        return check(case, outs, rows[0])
+    if case.kind == "per_row":
+        if len(outs) != len(case.expect):
+            return f"{case.cid}: {len(outs)} output rows for {len(case.expect)} expectations"
+        for i, (out, row, kind) in enumerate(zip(outs, rows, case.expect)):
+            name, _, want = kind.partition(":")
+            one = replace(case, cid=f"{case.cid}[{i}]", kind=name, expect=want or None)
+            why = check(one, out, row)
+            if why:
+                return why
+        return None
+    return next(filter(None, (check(case, o, r) for o, r in zip(outs, rows))), None)
+
+
+def argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
+    """The argument rows of `case` as one SQL view holds them. An aggregate's view has one row per group
+    member (its member columns only: the per-group constants are literals of the call).
+    """
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    if has_groups(fn):
+        group = resolve_arg(case.args[0], tmpdir)
+        group = [group] if isinstance(group, dict) else group
+        return (
+            [[t] for t in group] if group_width(fn) == 1 else [list(m) for m in group]
+        )
+    if case.kind == "windows_batch":
+        return [[resolve_arg(a, tmpdir) for a in row] for row in case.args]
+    return _argument_rows(case, tmpdir)
+
+
+def argument_schema(case: Case, rows, surface: str = "session") -> str:
+    """The DDL schema of the view `argument_rows` fills: a column is typed from its first non-NULL value,
+    an all-NULL column from the manifest."""
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    if has_groups(fn):
+        n = group_width(fn)
+        group = [r[0] if n == 1 else tuple(r) for r in rows]
+        return ", ".join(f"c{i} {t}" for i, t in enumerate(_member_types(fn, group, n)))
+    params = fn.params
+    return ", ".join(
+        f"c{i} "
+        + _ddl_type(next((r[i] for r in rows if r[i] is not None), None), params[i])
+        for i in range(len(rows[0]))
+    )
+
+
+def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[str]:
+    """None when the outputs of one case meet it: a scalar's values (one per argument row), a generator's
+    rows, or an aggregate's one value. A scalar that returns an array of cells is judged on its elements,
+    as the rows its array explodes to. An aggregate's check reads the resolved arguments, so it takes the
+    ``tmpdir`` its fixtures were built in."""
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    if fn.kind == "generator" and fn.table_input is None:
+        return _check_rows(
+            case, outs, rows if case.kind == "windows_batch" else rows[0]
+        )
+    if fn.kind == "scalar" and case.kind == "cells":
+        # an array of chips is its elements; one chip (a struct) is one cell
+        cells = [
+            e
+            for o in outs
+            if o is not None
+            for e in (o if isinstance(o, list) else [o])
+        ]
+        return _check_rows(case, cells, rows[0])
+    if has_groups(
+        fn
+    ):  # an aggregate's one value; a table function's one row per partition (none: NULL)
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        return check(case, outs[0] if outs else None, args)
+    return _verdict(case, outs, rows)
+
+
+def _projection(case: Case, params, rows, surface: str) -> str:
+    """The select list over the argument columns. On UC a GEOMETRY parameter reads its column through an integer-SRID
+    ``st_geomfromwkt`` (``st_geomfromewkt`` for EWKT, which carries its SRID), except a column of WKB bytes, which goes
+    in as BINARY (the engine refuses it). A column holds
+    one type, so the choice is made over EVERY row of the batch: a column that is bytes in some rows and text in others
+    is a harness error (give the variant a row of its own), never a wrapping decided from the first row.
+    """
+    cols = []
+    for i in range(len(rows[0])):
+        as_binary = ewkt = False
+        if surface == "uc" and params[i].uc == "GEOMETRY":
+            kinds = {
+                isinstance(r[i], (bytes, bytearray)) for r in rows if r[i] is not None
+            }
+            if len(kinds) > 1:
+                raise ValueError(
+                    f"{case.cid}: argument {i} is WKB bytes in some rows and text in others, and a column holds one "
+                    "type; give the variant a row of its own"
+                )
+            as_binary = kinds == {True}
+            # EWKT carries its own SRID: st_geomfromwkt does not parse it, st_geomfromewkt does (as `_sql_literal`)
+            forms = {
+                r[i].lstrip()[:5].upper() == "SRID="
+                for r in rows
+                if isinstance(r[i], str)
+            }
+            if len(forms) > 1:
+                raise ValueError(
+                    f"{case.cid}: argument {i} is EWKT in some rows and WKT in others, and a column is read one "
+                    "way; give the variant a row of its own"
+                )
+            ewkt = forms == {True}
+        if surface != "uc" or params[i].uc != "GEOMETRY" or as_binary:
+            cols.append(f"c{i}")
+        elif ewkt:
+            cols.append(f"CAST(st_geomfromewkt(c{i}) AS {UC_GEOMETRY})")
+        else:
+            cols.append(
+                f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
+            )
+    return ", ".join(cols)
+
+
+def render_recipe(sql: str, prefix: str = "", tmpdir: Optional[str] = None) -> str:
+    """A recipe row's statement with every ``{q}`` replaced by ``prefix`` (the 3-level schema prefix on UC, "" in a
+    session) and every ``{tile:<builder>}`` by the tile struct that fixture builder makes, as a SQL literal (built when
+    the row runs, in ``tmpdir``, so a table needs no raster library to be imported)."""
+    out = sql.replace("{q}", prefix)
+    if "{tile:" not in out:
+        return out
+    from databricks.labs.gbx import manifest
+
+    param = manifest.load().functions["gbx_rst_width"].params[0]  # a TILE parameter
+    with contextlib.ExitStack() as stack:
+        d = tmpdir or stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="gbx-oracle-")
+        )
+
+        def literal(m):
+            tile = _build(m.group(1), d)
+            text = _sql_literal(tile, param, Case("", "", (), ""))
+            md = tile.get("metadata") or {}
+            if not md:
+                return text
+            # a session reads the driver from the tile's metadata: the literal carries it, as the fixture does
+            pairs = ", ".join(
+                f"'{k}', '{str(v).replace(chr(39), chr(39) * 2)}'"
+                for k, v in md.items()
+            )
+            return text.replace("CAST(map() AS map<string,string>)", f"map({pairs})")
+
+        return re.sub(r"\{tile:(\w+)\}", literal, out)
+
+
+def run_recipe(
+    spark, case: Case, prefix: str = "", tmpdir: Optional[str] = None
+) -> Optional[str]:
+    """Run a recipe row's statement and check the one row it answers (its ``out`` column); None when it meets the case."""
+    try:
+        with contextlib.ExitStack() as stack:
+            d = tmpdir or stack.enter_context(
+                tempfile.TemporaryDirectory(prefix="gbx-oracle-")
+            )
+            got = spark.sql(render_recipe(case.sql, prefix, d)).collect()
+            if len(got) != 1:
+                return f"{case.cid}: the recipe gave {len(got)} rows, want one"
+            return check(case, got[0]["out"], [resolve_arg(a, d) for a in case.args])
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+        return check_error(case, exc)
+
+
+# --- Batching: the cases of one function at one level and surface in one Spark query --------------------------------
+# A query costs seconds of overhead on Serverless and a DBR 19 pool, whatever it computes, so the family harness puts
+# the cases of one call that can share a query into ONE: each group of cases with one input schema (and one call) is a
+# view of their argument rows, with the case and row index, and the groups are one UNION ALL whose column `o<g>` is
+# group g's answer (NULL in the other groups' rows, so no column takes a type widened from another group's). Each case
+# is then judged on its own rows with the same judges. A case that must raise runs alone (it would end the batch), as
+# do recipes and the shapes listed at each runner. A batch that fails as a whole, and a case that fails its judge in a
+# batch, are run alone again: the alone run's verdict is the one recorded, so a red row is named and judged exactly as
+# it is unbatched. `GBX_ORACLE_BATCH=0` runs every case alone (to compare the two).
+BATCH_ENV = "GBX_ORACLE_BATCH"
+_ALONE_KINDS = ("raises", "uc_refused")
+
+
+def batching() -> bool:
+    """True unless ``GBX_ORACLE_BATCH=0``: whether the family harness batches the cases of a call."""
+    return os.environ.get(BATCH_ENV, "1").strip() != "0"
+
+
+# `GBX_ORACLE_TRACE=1` prints a line per query of the family harness: the batch (and why it failed) and each case run alone,
+# with its seconds. A row that is slow on one compute (a Serverless query costs seconds) is then named in the test's output.
+TRACE_ENV = "GBX_ORACLE_TRACE"
+
+
+def _trace(line: str) -> None:
+    if os.environ.get(TRACE_ENV, "").strip() == "1":
+        print(f"oracle trace: {line}", flush=True)
+
+
+@contextlib.contextmanager
+def _traced(what: str):
+    """Trace ``what`` (``_trace``): its start, and its seconds when it ends, also when it raises."""
+    import time
+
+    t0 = time.time()
+    _trace(f"{what}: start")
+    try:
+        yield
+    finally:
+        _trace(f"{what}: {time.time() - t0:.1f} s")
+
+
+def _run_batched(cases, prepare, run_batch, judge, run_alone):
+    """Run ``cases`` in batches; one ``(case, verdict)`` per case run, in the order of ``cases``.
+
+    ``prepare(case)`` gives ``(key, payload)``, or None for a case that runs alone; cases with one key share a group.
+    ``run_batch(groups)`` (each group a list of ``(index, payload)``) runs every group in one query and gives
+    ``{index: outputs}``. ``judge(case, payload, outputs)`` is the verdict. ``run_alone(case)`` gives the unbatched
+    ``[(case, verdict)]`` (empty for a case the runner skips).
+    """
+    groups: Dict[Any, list] = {}
+    alone = []
+    for k, case in enumerate(cases):
+        try:
+            got = prepare(case)
+        except (
+            Exception
+        ):  # noqa: BLE001 - the alone run raises it, or judges it, as unbatched
+            got = None
+        if got is None:
+            alone.append(k)
+        else:
+            groups.setdefault(got[0], []).append((k, got[1]))
+    done: Dict[int, list] = {}
+    if groups:
+        n = sum(len(g) for g in groups.values())
+        try:
+            with _traced(f"batch of {n} case(s) in {len(groups)} group(s)"):
+                outs = run_batch(list(groups.values()))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - re-run case by case, so a failure names its case
+            why = " ".join(str(exc).split())[:300]
+            _trace(f"batch failed, its cases run alone: {type(exc).__name__}: {why}")
+            outs = None
+        for members in groups.values():
+            for k, payload in members:
+                why = "batch failed"
+                if outs is not None:
+                    try:
+                        why = judge(cases[k], payload, outs.get(k, []))
+                    except Exception:  # noqa: BLE001 - judged again alone
+                        why = "judge raised"
+                if why is None:
+                    done[k] = [(cases[k], None)]
+                else:
+                    alone.append(k)
+    for k in alone:
+        done[k] = run_alone(cases[k])
+    return [r for k in range(len(cases)) for r in done.get(k, [])]
+
+
+def _batch_rows(members) -> list:
+    """The rows of one group's view: ``(case index, row index, *arguments)`` for each argument row of each case."""
+    return [
+        (k, i, *row) for k, payload in members for i, row in enumerate(payload["rows"])
+    ]
+
+
+def _batch_schema(schema: str) -> str:
+    return ", ".join(s for s in ("_gbx_case int, _gbx_i int", schema) if s)
+
+
+def _gather(got, group_of: Dict[int, int]) -> Dict[int, list]:
+    """``{case index: [its group's column, row by row, in argument-row order]}`` from the rows of a batch query."""
+    rows: Dict[int, list] = {}
+    for r in got:
+        rows.setdefault(r["_gbx_case"], []).append(r)
+    return {
+        k: [r[f"o{group_of[k]}"] for r in sorted(rs, key=lambda r: r["_gbx_i"])]
+        for k, rs in rows.items()
+    }
+
+
+def _batch_sql(spark, groups, select_of) -> Dict[int, list]:
+    """One UNION ALL over a view per group (``_gbx_oracle_b<g>``): ``select_of(g, payload, view, n)`` is group g's
+    branch (of n), its answer as ``o<g>`` and a NULL for each other group's (`_answer_columns`).
+    """
+    branches, group_of = [], {}
+    for g, members in enumerate(groups):
+        payload = members[0][1]
+        view = f"_gbx_oracle_b{g}"
+        spark.createDataFrame(
+            _batch_rows(members), _batch_schema(payload["schema"])
+        ).createOrReplaceTempView(view)
+        branches.append(select_of(g, payload, view, len(groups)))
+        group_of.update({k: g for k, _ in members})
+    return _gather(spark.sql(" UNION ALL ".join(branches)).collect(), group_of)
+
+
+def _answer_columns(g: int, n: int, answer: str) -> str:
+    return ", ".join(answer if j == g else f"NULL AS o{j}" for j in range(n))
+
+
+def _batch_python(spark, groups, call_of) -> Dict[int, list]:
+    """The Python API form of `_batch_sql`: one DataFrame per group, ``call_of(payload)`` its answer Column, the groups
+    one ``union``."""
+    from pyspark.sql import functions as F
+
+    frames, group_of = [], {}
+    for g, members in enumerate(groups):
+        payload = members[0][1]
+        df = spark.createDataFrame(
+            _batch_rows(members), _batch_schema(payload["schema"])
+        )
+        call = call_of(payload)
+        frames.append(
+            df.select(
+                "_gbx_case",
+                "_gbx_i",
+                *[
+                    (call if j == g else F.lit(None)).alias(f"o{j}")
+                    for j in range(len(groups))
+                ],
+            )
+        )
+        group_of.update({k: g for k, _ in members})
+    return _gather(
+        functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
+    )
+
+
+def _session_py_call(case: Case, rows, params, column_of):
+    """The Python API call of a session case over the frame ``c0..``: a str_only parameter takes the Python value
+    itself (the API refuses a Column for it), so it is one value for every row of the case.
+    """
+    from pyspark.sql import functions as F
+
+    args = rows[0]
+    for i in range(min(len(args), len(params))):
+        if params[i].str_only and any(r[i] != args[i] for r in rows):
+            raise TypeError(
+                f"{case.cid}: {params[i].name} of {case.fn} differs between the rows, but the Python API "
+                "takes it as one Python str. Fix: give the variant rows one value for it."
+            )
+    fcols = [
+        (args[i] if i < len(params) and params[i].str_only else F.col(f"c{i}"))
+        for i in range(len(args))
+    ]
+    return column_of(case.fn)(*fcols, **dict(case.py_kw))
+
+
+def run_session(
+    spark,
+    cases: Sequence[Case],
+    name_of: Callable[[str], str] = lambda f: f,
+    tmpdir: Optional[str] = None,
+    surface: str = "session",
+    column_of: Optional[Callable[[str], Callable]] = None,
+    batch: bool = False,
+) -> List[Tuple[Case, Optional[str]]]:
+    """Run each case through SQL (`name_of(fn)(cols...)`) and check it. One result per case.
+
+    With `column_of` (SQL name -> Column function) the case runs through the Python Column
+    API instead of SQL, so both APIs are held to the same rows.
+
+    With `batch` the cases that can share a query run in one (see `_run_batched`); a case that must raise, and a
+    recipe, run alone.
+    """
+    from databricks.labs.gbx import manifest
+
+    if tmpdir is None:  # virtual-tile fixtures live here; removed when the run ends
+        with tempfile.TemporaryDirectory(prefix="gbx-oracle-") as d:
+            return run_session(spark, cases, name_of, d, surface, column_of, batch)
+    man = manifest.load()
+    cases = [
+        c
+        for c in cases
+        if surface in c.surfaces or (column_of is not None and "python" in c.surfaces)
+    ]
+    if batch:
+        return _run_session_batched(
+            spark, man, cases, name_of, tmpdir, surface, column_of
+        )
+    results = []
+    for case in cases:
+        if (
+            case.sql is not None
+        ):  # a recipe: one statement, `{q}` the qualifier name_of gives a bare name
+            results.append((case, run_recipe(spark, case, name_of(""), tmpdir)))
+            continue
+        rows, schema, call = _session_parts(man, case, name_of, tmpdir, surface)
+        try:
+            with _traced(f"{case.cid} alone"):
+                df = spark.createDataFrame([tuple(r) for r in rows], schema)
+                if column_of is None:
+                    df.createOrReplaceTempView("_gbx_oracle")
+                    got = spark.sql(f"SELECT {call} AS out FROM _gbx_oracle").collect()
+                else:
+                    call_py = _session_py_call(
+                        case, rows, man.functions[case.fn].params, column_of
+                    )
+                    got = df.select(call_py.alias("out")).collect()
+            outs = [r["out"] for r in got]
+            results.append((case, verdict(case, outs, rows, tmpdir)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            results.append((case, check_error(case, exc)))
+    return results
+
+
+def _session_parts(man, case: Case, name_of, tmpdir: str, surface: str):
+    """The argument rows, view schema and SQL call of a session case."""
+    rows = _argument_rows(case, tmpdir)
+    fn = man.functions[case.fn]
+    schema = argument_schema(case, rows, surface)
+    # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
+    cols = _projection(case, fn.params, rows, surface)
+    call = f"{name_of(case.fn)}({cols})"
+    if surface == "uc" and fn.returns_uc == "GEOMETRY":
+        call = f"st_asewkb({call})"
+    return rows, schema, call
+
+
+def _run_session_batched(spark, man, cases, name_of, tmpdir, surface, column_of):
+    def prepare(case):
+        if case.sql is not None or case.kind in _ALONE_KINDS:
+            return None
+        rows, schema, call = _session_parts(man, case, name_of, tmpdir, surface)
+        payload = {"case": case, "rows": rows, "schema": schema, "call": call}
+        if column_of is None:
+            return (case.fn, schema, call), payload
+        params = man.functions[case.fn].params
+        _session_py_call(
+            case, rows, params, column_of
+        )  # refuses here what it refuses alone
+        str_only = tuple(
+            repr(rows[0][i])
+            for i in range(min(len(rows[0]), len(params)))
+            if params[i].str_only
+        )
+        return (case.fn, schema, str_only, repr(case.py_kw)), payload
+
+    def run_batch(groups):
+        if column_of is None:
+            return _batch_sql(
+                spark,
+                groups,
+                lambda g, p, view, n: (
+                    "SELECT _gbx_case, _gbx_i, "
+                    + _answer_columns(g, n, f"{p['call']} AS o{g}")
+                    + f" FROM {view}"
+                ),
+            )
+        return _batch_python(
+            spark,
+            groups,
+            lambda p: _session_py_call(
+                p["case"], p["rows"], man.functions[p["case"].fn].params, column_of
+            ),
+        )
+
+    return _run_batched(
+        cases,
+        prepare,
+        run_batch,
+        lambda case, p, outs: verdict(case, outs, p["rows"], tmpdir),
+        lambda case: run_session(spark, [case], name_of, tmpdir, surface, column_of),
+    )
+
+
+_WINDOW_KEYS = ("col_off", "row_off", "width", "height")
+
+
+def _window_of(tile, src) -> Tuple[int, int, int, int]:
+    """Where `tile` was cut from `src`, read from the pixels: its origin in the source grid and its size.
+
+    The JVM tier does not fill the tile's `window` field, so the window is the geotransform's, which
+    every level shares. A level that fills `window` has it held to the same numbers.
+    """
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(_field(tile, "raster"))) as mf, mf.open() as got:
+        col = round((got.transform.c - src.transform.c) / src.transform.a)
+        row = round((got.transform.f - src.transform.f) / src.transform.e)
+        return col, row, got.width, got.height
+
+
+def _check_window_batch(case: Case, tiles: list, arg_rows) -> Optional[str]:
+    """Several tiles through one task: every output piece is a window of ONE of them, and together the pieces
+    are exactly the windows of all of them (a piece's pixel sum must be the sum of that window of its tile).
+
+    The pieces carry no link to the tile they came from, so the expectation is the multiset over all the
+    tiles: a dataset kept from the first tile and cut again for the second gives the first tile's window twice
+    and the second's edited one never.
+    """
+    from collections import Counter
+
+    from rasterio.io import MemoryFile
+    from rasterio.windows import Window
+
+    if any(_field(t, "raster") is None for t in tiles):
+        return f"{case.cid}: a piece has no raster"
+    want: Counter = Counter()
+    for tile, tw, th in (r[:3] for r in arg_rows):
+        with MemoryFile(_raster_of(tile)) as mf, mf.open() as src:
+            for row in range(0, src.height, th):
+                for col in range(0, src.width, tw):
+                    win = (
+                        col,
+                        row,
+                        min(tw, src.width - col),
+                        min(th, src.height - row),
+                    )
+                    want[
+                        (
+                            win,
+                            float(src.read(1, window=Window(*win), masked=True).sum()),
+                        )
+                    ] += 1
+    got: Counter = Counter()
+    with MemoryFile(_raster_of(arg_rows[0][0])) as mf, mf.open() as src:
+        for t in tiles:
+            with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as piece:
+                got[(_window_of(t, src), float(piece.read(1, masked=True).sum()))] += 1
+    if got == want:
+        return None
+    return f"{case.cid}: {sum((want - got).values())} expected pieces missing {sorted((want - got))[:2]}, unexpected {sorted((got - want))[:2]}"
+
+
+def _check_cell_rows(case: Case, rows: list) -> Optional[str]:
+    """The rows' `cellid` values are exactly `case.expect`, each once, as the type the expectation has."""
+    got = [_field(r, "cellid") for r in rows]
+    want = sorted(case.expect)
+    if want and any(type(c) is not type(want[0]) for c in got):
+        return f"{case.cid}: cell ids are {sorted({type(c).__name__ for c in got})}, want {type(want[0]).__name__}"
+    return (
+        None
+        if sorted(got) == want
+        else f"{case.cid}: {len(got)} rows {sorted(got)}, want {want}"
+    )
+
+
+def _check_windows(case: Case, tiles: list, args) -> Optional[str]:
+    """The sub-tiles are exactly the windows of `case.expect`, each with the pixels of its window."""
+    from rasterio.io import MemoryFile
+    from rasterio.windows import Window
+
+    if any(_field(t, "raster") is None for t in tiles):
+        return f"{case.cid}: a sub-tile has no raster"
+    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
+        seen = []
+        for t in tiles:
+            win = _window_of(t, src)
+            declared = _field(t, "window")
+            if declared is not None and tuple(declared[k] for k in _WINDOW_KEYS) != win:
+                return f"{case.cid}: window field {tuple(declared[k] for k in _WINDOW_KEYS)}, pixels say {win}"
+            want = float(src.read(1, window=Window(*win), masked=True).sum())
+            with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as got:
+                if abs(float(got.read(1, masked=True).sum()) - want) > 1e-6 * max(
+                    1.0, abs(want)
+                ):
+                    return f"{case.cid}: pixel sum differs in window {win}"
+            seen.append(win)
+    return (
+        None
+        if sorted(seen) == sorted(case.expect)
+        else f"{case.cid}: windows {sorted(seen)}, want {sorted(case.expect)}"
+    )
+
+
+def _check_rows(case: Case, rows: list, args) -> Optional[str]:
+    """Judge the rows a generator produced for one case."""
+    from databricks.labs.gbx._geom import parse_geom
+
+    tiles = [
+        _field(r, "tile") or r for r in rows
+    ]  # one `tile` column (JVM), or the tile fields (light)
+    if case.kind == "no_rows":
+        return None if not rows else f"{case.cid}: {len(rows)} rows, want none"
+    if case.kind == "xyz_tiles":
+        return _check_xyz_tiles(case, tiles)
+    if case.kind == "error_tile":
+        if len(rows) != 1:
+            return f"{case.cid}: {len(rows)} rows, want the one error tile"
+        return check(case, tiles[0], args)
+    if case.kind == "raises":
+        return f"{case.cid}: returned {len(rows)} rows, want an error"
+    if case.kind == "windows_batch":
+        return _check_window_batch(case, tiles, args)
+    if case.kind == "windows":
+        return _check_windows(case, tiles, args)
+    if case.kind in _ROW_CHECKS:
+        return _ROW_CHECKS[case.kind](case, tiles, args)
+    if case.kind == "cells":
+        e = case.expect
+        got = {
+            (_field(r, "cellid"), bool(_field(r, "core"))): _field(r, "chip")
+            for r in rows
+        }
+        if len(got) != len(rows):
+            return f"{case.cid}: a cell is returned twice"
+        if "cells" in e:
+            areas = {
+                cid: parse_geom(bytes(ch)).area
+                for (cid, _), ch in got.items()
+                if ch is not None
+            }
+            if set(areas) != set(e["cells"]) or any(
+                abs(areas[k] - v) > 1e-6 * v for k, v in e["cells"].items()
+            ):
+                return f"{case.cid}: cells/areas {areas}, want {e['cells']}"
+        if "count" in e and len(got) != e["count"]:
+            return f"{case.cid}: {len(got)} cells, want {e['count']}"
+        cores = [ch for (_, core), ch in got.items() if core]
+        if len(cores) != e["core"]:
+            return f"{case.cid}: {len(cores)} core cells, want {e['core']}"
+        if e.get("core_chips") == "null" and any(ch is not None for ch in cores):
+            return f"{case.cid}: core chips carry geometry with keep_core_geom off"
+        if isinstance(e.get("core_chips"), float) and any(
+            abs(parse_geom(bytes(ch)).area - e["core_chips"]) > 1e-3 for ch in cores
+        ):
+            return f"{case.cid}: core chips are not whole cells"
+        return None
+    raise ValueError(case.kind)
+
+
+def _orientation(a, b, c) -> int:
+    """The exact sign of the area of the triangle a, b, c: +1 counter-clockwise."""
+    from fractions import Fraction
+
+    (ax, ay), (bx, by), (cx, cy) = a, b, c
+    d = (Fraction(bx) - Fraction(ax)) * (Fraction(cy) - Fraction(ay)) - (
+        Fraction(by) - Fraction(ay)
+    ) * (Fraction(cx) - Fraction(ax))
+    return (d > 0) - (d < 0)
+
+
+def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
+    """Judge the rows of a vector fan-out (see `Case`): triangles, elevation points or MVT tiles."""
+    from databricks.labs.gbx._geom import parse_geom
+
+    if case.kind in ("triangles", "triangles_exact"):
+
+        def xy(x, y):
+            return (
+                (float(x), float(y))
+                if case.kind == "triangles_exact"
+                else (round(x, 9), round(y, 9))
+            )
+
+        got = []
+        for r in rows:
+            poly = parse_geom(bytes(_field(r, "triangle")))
+            exact = [(float(x), float(y)) for x, y in list(poly.exterior.coords)[:-1]]
+            ring = [xy(x, y) for x, y in exact]
+            if len(ring) != 3:
+                return f"{case.cid}: a triangle with {len(ring)} vertices"
+            # every level writes a triangle one way: counter-clockwise from its lowest (x, y) vertex. A zero-area ring
+            # has no orientation (the levels keep its input order), so only its first vertex is judged.
+            if exact[0] != min(exact) or _orientation(*exact) < 0:
+                return f"{case.cid}: the ring {exact} does not run counter-clockwise from its lowest vertex"
+            got.append(frozenset(ring))
+        want = [frozenset(xy(x, y) for x, y in t) for t in case.expect]
+        return (
+            None
+            if len(got) == len(want)
+            and set(got) == set(want)
+            and len(set(got)) == len(got)
+            else f"{case.cid}: {len(got)} triangles {sorted(map(sorted, got))}, want {sorted(map(sorted, want))}"
+        )
+    if case.kind == "elev_points":
+        want = case.expect
+        got = []
+        for r in rows:
+            pt = parse_geom(bytes(_field(r, "elevation_point")))
+            if not pt.has_z:
+                return f"{case.cid}: a point without Z"
+            got.append((pt.x, pt.y, pt.z))
+        got.sort()
+        want = sorted(want)
+        ok = len(got) == len(want) and all(
+            all(abs(a - b) <= 1e-12 * max(1.0, abs(b)) for a, b in zip(g, w))
+            for g, w in zip(got, want)
+        )
+        return None if ok else f"{case.cid}: {len(got)} points {got}, want {want}"
+    import mapbox_vector_tile as mvt
+
+    want = case.expect
+    got = sorted(
+        (int(_field(r, "z")), int(_field(r, "x")), int(_field(r, "y"))) for r in rows
+    )
+    if got != sorted(want["tiles"]):
+        return f"{case.cid}: tiles {got}, want {sorted(want['tiles'])}"
+    for r in rows:
+        layer = mvt.decode(bytes(_field(r, "mvt_bytes"))).get(want["layer"])
+        feats = layer["features"] if layer else []
+        if len(feats) != 1:
+            return f"{case.cid}: layer {want['layer']!r} holds {len(feats)} features in tile {_field(r, 'z')}/{_field(r, 'x')}/{_field(r, 'y')}"
+        if any(feats[0]["properties"].get(k) != v for k, v in want["props"].items()):
+            return (
+                f"{case.cid}: properties {feats[0]['properties']}, want {want['props']}"
+            )
+    return None
+
+
+# generator kinds: (case, the rows with a `tile` column unwrapped, the case's arguments)
+_ROW_CHECKS = {
+    "cell_rows": lambda case, rows, args: _check_cell_rows(case, rows),
+    "triangles": lambda case, rows, args: _check_vector_rows(case, rows),
+    "triangles_exact": lambda case, rows, args: _check_vector_rows(case, rows),
+    "elev_points": lambda case, rows, args: _check_vector_rows(case, rows),
+    "mvt_tiles": lambda case, rows, args: _check_vector_rows(case, rows),
+    "tile_rows": _oracle_check("check_tile_rows"),
+    "tessellation": _oracle_check("check_tessellation"),
+    "polygons": _oracle_check("check_polygons"),
+    "polygons_ref": _oracle_check("check_polygons_ref"),
+    "grid_stats": _oracle_check("check_grid_stats"),
+    "drivers": _oracle_check("check_drivers"),
+}
+
+
+def _check_xyz_tiles(case: Case, rows: list) -> Optional[str]:
+    """The rows of a pyramid are exactly the (z, x, y) tiles of `case.expect["tiles"]`, each once, and every `bytes` is
+    a PNG of `expect["size"]` pixels square with an alpha band."""
+    got = [
+        (int(_field(r, "z")), int(_field(r, "x")), int(_field(r, "y"))) for r in rows
+    ]
+    want = sorted(case.expect["tiles"])
+    if sorted(got) != want:
+        return f"{case.cid}: tiles {sorted(set(got))[:6]}.., {len(got)} rows, want {len(want)} tiles {want[:6]}.."
+    size = case.expect["size"]
+    image = Case(
+        case.cid,
+        case.fn,
+        (),
+        "image_meta",
+        {"driver": "PNG", "width": size, "height": size, "count": 4},
+    )
+    for r in rows:
+        why = _check_image_meta(image, _field(r, "bytes"))
+        if why:
+            return why
+    return None
+
+
+def python_leg_unexpressible(case: Case, fn) -> Optional[str]:
+    """Why a generator row's inputs cannot be given to the DataFrame-first entry (`_api.table`), else None. The row
+    then runs through SQL only. A NULL for an optional argument is the one such case: the Python API reads None as
+    "unset" and sends the argument's default, where SQL sends the NULL.
+    """
+    for i, v in enumerate(case.args):
+        if v is None and i >= fn.min_args:
+            return f"a NULL for the optional argument {fn.params[i].name!r}: the Python API sends its default"
+    return None
+
+
+def _python_leg_args(args, fn) -> list:
+    """The arguments of the DataFrame-first call over the frame `c0..`: a literal argument is its value, a NULL
+    required argument is None (the API's own typed `CAST(NULL AS <type>)`, so that cast is exercised), any other
+    argument is its column name."""
+    return [
+        (
+            None
+            if v is None
+            else (
+                (int(v) if isinstance(v, Big) else v)
+                if fn.params[i].py == "lit"
+                else f"c{i}"
+            )
+        )
+        for i, v in enumerate(args)
+    ]
+
+
+_ROWS_SHAPE = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t"
+
+
+def run_rows(
+    spark,
+    cases,
+    shape_sql: str = _ROWS_SHAPE,
+    name_of: Callable[[str], str] = lambda f: f,
+    tmpdir: Optional[str] = None,
+    surface: str = "session",
+    pad: bool = False,
+    table_of: Optional[Callable[[str], Callable]] = None,
+    batch: bool = False,
+):
+    """Generators: `shape_sql` (with {fn} and {args}) yields the rows a case checks; one shape per form.
+
+    `pad` fills the optional arguments a case leaves out with their defaults, for a function of fixed arity.
+
+    With `table_of` (SQL name -> the generated DataFrame-first function) the case runs through the Python API
+    instead of SQL, over the same frame: `table_of(fn)(df, <the column name of each argument, its value for a
+    literal one>)`, so both APIs are held to the same rows. A row whose inputs that cannot express is skipped
+    (`python_leg_unexpressible`).
+
+    With `batch` the cases of the default shape that can share a query run in one (see `_run_batched`), each case's
+    rows told apart by the input row they come from; on the Python API a table function with no input row (a source)
+    is one call per case, the calls one union. Alone: a case that must raise, a windows batch (its rows are one task
+    of their own), and any other shape.
+    """
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    cases = [c for c in cases if surface in c.surfaces]
+    if batch:
+        return _run_rows_batched(
+            spark, man, cases, shape_sql, name_of, tmpdir, surface, pad, table_of
+        )
+    out = []
+    for case in cases:
+        window_batch = case.kind == "windows_batch"
+        arg_rows, schema, cols = _rows_parts(man, case, tmpdir, surface, pad)
+        args = arg_rows[0]
+        if table_of is not None and python_leg_unexpressible(
+            case, man.functions[case.fn]
+        ):
+            continue
+        with _traced(f"{case.cid} alone"):
+            try:
+                df = spark.createDataFrame(
+                    [
+                        tuple(int(v) if isinstance(v, Big) else v for v in r)
+                        for r in arg_rows
+                    ],
+                    schema,
+                )
+                # one partition: the rows of a batch case go through ONE task, one after the other
+                df = df.coalesce(1) if window_batch else df
+                if table_of is None:
+                    df.createOrReplaceTempView("_gbx_oracle")
+                    rows = spark.sql(
+                        shape_sql.format(fn=name_of(case.fn), args=cols)
+                    ).collect()
+                elif man.functions[case.fn].source:
+                    # a table function with no input row: the Python entry takes the arguments alone
+                    rows = table_of(case.fn)(*args).collect()
+                else:
+                    py_args = _python_leg_args(args, man.functions[case.fn])
+                    rows = table_of(case.fn)(df, *py_args).collect()
+                out.append(
+                    (case, _check_rows(case, rows, arg_rows if window_batch else args))
+                )
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+                out.append((case, check_error(case, exc)))
+    return out
+
+
+def _rows_parts(man, case: Case, tmpdir: str, surface: str, pad: bool):
+    """The argument rows, view schema and argument list of a generator case."""
+    arg_rows = [
+        [resolve_arg(a, tmpdir) for a in row]
+        for row in (case.args if case.kind == "windows_batch" else (case.args,))
+    ]
+    params = man.functions[case.fn].params
+    schema = ", ".join(
+        f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(arg_rows[0])
+    )
+    cols = _projection(case, params, arg_rows, surface)
+    if pad:
+        cols = ", ".join([cols] + [p.default for p in params[len(arg_rows[0]) :]])
+    return arg_rows, schema, cols
+
+
+def _run_rows_batched(
+    spark, man, cases, shape_sql, name_of, tmpdir, surface, pad, table_of
+):
+    from pyspark.sql import functions as F
+
+    def prepare(case):
+        fn = man.functions[case.fn]
+        if (
+            case.kind in _ALONE_KINDS
+            or case.kind == "windows_batch"
+            or shape_sql != _ROWS_SHAPE
+            or (table_of is not None and python_leg_unexpressible(case, fn))
+        ):
+            return None
+        arg_rows, schema, cols = _rows_parts(man, case, tmpdir, surface, pad)
+        rows = [tuple(int(v) if isinstance(v, Big) else v for v in r) for r in arg_rows]
+        payload = {
+            "case": case,
+            "rows": rows,
+            "args": arg_rows[0],
+            "schema": schema,
+            "cols": cols,
+        }
+        if table_of is None:
+            return (case.fn, schema, cols), payload
+        if fn.source:  # no input row: one call per case, the calls one union
+            return (case.fn, "source"), payload
+        py_args = _python_leg_args(arg_rows[0], fn)
+        payload["py_args"] = py_args
+        # a literal argument is the Python value of the call: one call per set of them
+        return (case.fn, schema, repr(py_args)), payload
+
+    def run_batch(groups):
+        if table_of is None:
+            return _batch_sql(
+                spark,
+                groups,
+                lambda g, p, view, n: (
+                    "SELECT v._gbx_case, v._gbx_i, "
+                    + _answer_columns(g, n, f"struct(t.*) AS o{g}")
+                    + f" FROM {view} v, LATERAL {name_of(p['case'].fn)}({p['cols']}) t"
+                ),
+            )
+        frames, group_of = [], {}
+
+        def answer(g, got, case_col, i_col):
+            # the rows as the DataFrame-first entry gives them alone: the input's columns, then the generated ones
+            fields = [c for c in got.columns if c not in ("_gbx_case", "_gbx_i")]
+            frames.append(
+                got.select(
+                    case_col.alias("_gbx_case"),
+                    i_col.alias("_gbx_i"),
+                    *[
+                        (F.struct(*fields) if j == g else F.lit(None)).alias(f"o{j}")
+                        for j in range(len(groups))
+                    ],
+                )
+            )
+
+        for g, members in enumerate(groups):
+            p = members[0][1]
+            group_of.update({k: g for k, _ in members})
+            if man.functions[p["case"].fn].source:
+                # a table function with no input row: the Python entry takes each case's arguments alone
+                for k, q in members:
+                    answer(g, table_of(q["case"].fn)(*q["args"]), F.lit(k), F.lit(0))
+                continue
+            df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
+            got = table_of(p["case"].fn)(df, *p["py_args"])
+            answer(g, got, F.col("_gbx_case"), F.col("_gbx_i"))
+        return _gather(
+            functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
+        )
+
+    return _run_batched(
+        cases,
+        prepare,
+        run_batch,
+        lambda case, p, rows: _check_rows(case, rows, p["args"]),
+        lambda case: run_rows(
+            spark, [case], shape_sql, name_of, tmpdir, surface, pad, table_of
+        ),
+    )
+
+
+def is_flat_struct(ddl: str) -> bool:
+    """A struct type whose fields are all scalars (a custom grid), the only struct a constant literal can be."""
+    return ddl.startswith("struct<") and "<" not in ddl[len("struct<") :]
+
+
+def struct_literal(value: dict, ddl: str) -> str:
+    """A dict as the SQL literal of the struct type `ddl` (`struct<a:bigint,b:int>`): named_struct with each field cast to
+    its type. The fields are flat (a custom grid)."""
+    fields = [f.split(":", 1) for f in ddl[len("struct<") : -1].split(",")]
+    return (
+        "named_struct("
+        + ", ".join(f"'{n}', CAST({repr(value[n])} AS {t})" for n, t in fields)
+        + ")"
+    )
+
+
+def _typed_literal(value, param, case: Case) -> str:
+    """`value` as a SQL literal of the parameter's type (a bare `1000.0` is a DECIMAL); NULL stays untyped."""
+    if isinstance(value, dict) and is_flat_struct(param.session[0]):
+        return struct_literal(value, param.session[0])
+    lit = _sql_literal(value, param, case)
+    return lit if value is None else f"CAST({lit} AS {_param_sql(param)})"
+
+
+# How many leading parameters one row of an aggregate's group fills (its member columns); the others are the group's
+# constants. The default is a tile (1), a (cellid, value) pair (2) or a PMTiles member (bytes, z, x, y: 4).
+GROUP_WIDTH: Dict[str, int] = {
+    "gbx_quadbin_cellunion_agg": 1,
+    "gbx_bng_cellunion_agg": 1,
+    "gbx_bng_cellintersection_agg": 1,
+    "gbx_st_coverageisvalid": 1,
+    "gbx_st_coverageinvalidedges": 1,
+    "gbx_rst_dtmfromgeoms_agg": 1,
+    "gbx_rst_frombands_agg": 2,  # (tile, band_index)
+    "gbx_rst_binpoints_agg": 3,  # (x, y, z)
+}
+
+
+def has_groups(fn) -> bool:
+    """True for a function whose case is a group of member rows (`args[0]`) and constants: an aggregate, or a table
+    function over `TABLE(...) PARTITION BY`."""
+    return fn.kind == "aggregate" or fn.table_input is not None
+
+
+def group_width(fn) -> int:
+    """The number of member columns of aggregate `fn` (a manifest Function)."""
+    if fn.table_input is not None:
+        return len(fn.table_input.members)
+    if fn.sql_name in GROUP_WIDTH:
+        return GROUP_WIDTH[fn.sql_name]
+    if fn.params[0].name == "bytes":
+        return 4
+    return 1 if fn.params[0].session == ("TILE",) else 2
+
+
+def _member_types(fn, group, n0: int) -> List[str]:
+    """The SQL type of each member column: the manifest's, except where the parameter takes several types or a
+    struct of any fields, which the first non-NULL value in the group decides."""
+    from databricks.labs.gbx import manifest
+
+    out = []
+    if fn.table_input is not None:  # the table's own columns, not parameters
+        return [manifest.sql_type(t) for _, t in fn.table_input.members]
+    for i, p in enumerate(fn.params[:n0]):
+        if len(p.session) > 1 or p.session[0] == "STRUCT":
+            v = next(
+                (
+                    m[i] if n0 > 1 else m
+                    for m in group
+                    if (m[i] if n0 > 1 else m) is not None
+                ),
+                None,
+            )
+            out.append(
+                _ddl_type(v, p) if v is not None else manifest.sql_type(p.session[0])
+            )
+        else:
+            out.append(manifest.sql_type(p.session[0]))
+    return out
+
+
+def _burn_nulls(expect, null_burn: float):
+    """`expect` (rows of pixels) with the marker of a NULL value's burn replaced by what this tier burns."""
+    return [[null_burn if v == NULL_BURN else v for v in row] for row in expect]
+
+
+def table_call_sql(fn, omitted=frozenset()) -> str:
+    """The SQL of one group through a table function: `SELECT * FROM gbx_x(TABLE(<members>) PARTITION BY (<keys>), <constants>)`.
+
+    The one place the harness calls a function that reads a table argument (a manifest row with `table_input`). The
+    members are the view's `key` and `c0..`, named as the function's table argument names its columns; `{args}` is the
+    constants as typed literals (the Spark parser needs the parentheses to tell the key from a constant). A member
+    whose index is in `omitted` is left out of the table argument. Every partition key is the view's `key`; the result
+    is `(key, out)` with `out` the function's last column.
+    """
+    ti = fn.table_input
+    members = iter(range(len(ti.members)))
+    cols = []
+    for n, _ in ti.columns:
+        if n in ti.partition_by:
+            cols.append("key" if n == "key" else f"key AS {n}")
+            continue
+        i = next(members)
+        if i not in omitted:
+            cols.append(f"c{i} AS {n}")
+    keys = ", ".join(ti.partition_by)
+    first_key = ti.partition_by[0]
+    return (
+        f"SELECT {'key' if first_key == 'key' else first_key + ' AS key'}, {fn.columns[-1][0]} AS out "
+        f"FROM {fn.sql_name}(TABLE(SELECT {', '.join(cols)} FROM {{src}}) PARTITION BY ({keys}){{args}})"
+    )
+
+
+def _table_frame(fn, src, omitted=frozenset()):
+    """The Python API form of `table_call_sql`'s table argument: the frame ``src``'s `key` (every partition key) and
+    members ``c0..`` under the names of the function's table argument, an omitted member left out.
+    """
+    from pyspark.sql import functions as F
+
+    ti = fn.table_input
+    names = {k: "key" for k in ti.partition_by}
+    names.update({n: f"c{i}" for i, (n, _) in enumerate(ti.members)})
+    member_index = {n: i for i, (n, _) in enumerate(ti.members)}
+    return src.select(
+        *[
+            F.col(names[n]).alias(n)
+            for n, _ in ti.columns
+            if member_index.get(n) not in omitted
+        ]
+    )
+
+
+def _python_table_constants(case: Case, consts) -> bool:
+    """Whether the Python API can pass a table function's constants: it renders them into the SQL text, so a fixture
+    or a structured value is no literal."""
+    return not any(
+        isinstance(a, Build) or isinstance(v, (dict, list, tuple))
+        for a, v in zip(case.args[1:], consts)
+    )
+
+
+def run_groups(
+    spark,
+    cases,
+    shape_sql: Optional[str] = None,
+    tmpdir: Optional[str] = None,
+    null_burn: float = NAN,
+    column_of: Optional[Callable[[str], Callable]] = None,
+    batch: bool = False,
+):
+    """Aggregates: `args[0]` is the group's rows, the rest are its constants. The table `_gbx_oracle` has one
+    row per member: a key, the member's columns c0.., then the constants as columns. `shape_sql` takes `{fn}`,
+    `{src}` (that table) and `{args}` (the member columns, then the constants as literals: a Catalyst aggregate
+    reads them when it finishes, with no row to look in) and returns `(key, out)`. `null_burn` is what a NULL
+    value burns on the tier the shape runs.
+
+    With `column_of` (SQL name -> Column function) the group runs through the Python Column API instead of
+    `shape_sql`: `groupBy(key).agg(column_of(fn)(members..., constants as literals))`.
+
+    A function that reads a table argument (`table_input` on its row) is called with `table_call_sql` when `shape_sql`
+    is not given: the group is the partition of key `a`, a partition with no answer gives no row (NULL here).
+
+    A recipe row (`sql`) runs its own statement, which holds its groups: an argument a table holds as a column, or
+    several groups with their own arguments. The Python API leg runs it as SQL too.
+
+    With `batch` the cases with one member schema and one set of constants run in one query (see `_run_batched`):
+    an aggregate grouped by the case, a table function with the case as its partition key (the view's `key`, one
+    partition per case, as the alone run's one partition `a`). Alone: a case that must raise, an `error_group` row
+    (its check reads the output type), a recipe, a Python leg row whose constants the API cannot pass, and any other
+    shape.
+    """
+    from pyspark.sql.types import StructType
+
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    cases = [c for c in cases if "session" in c.surfaces]
+    if batch:
+        return _run_groups_batched(
+            spark, man, cases, shape_sql, tmpdir, null_burn, column_of
+        )
+    out = []
+    for case in cases:
+        if (
+            case.sql is not None
+        ):  # a recipe: the statement holds its groups (a grid in a column, several keys)
+            out.append((case, run_recipe(spark, case, "", tmpdir)))
+            continue
+        fn = man.functions[case.fn]
+        params = fn.params
+        p = _group_parts(man, case, tmpdir, null_burn)
+        rows, schema, members, literals = (
+            p["rows"],
+            p["schema"],
+            p["members"],
+            p["literals"],
+        )
+        want, omitted, n0, first_const = (
+            p["want"],
+            p["omitted"],
+            p["n0"],
+            p["first_const"],
+        )
+        consts, group_arg = p["consts"], p["group_arg"]
+        if column_of is not None and fn.table_input is not None:
+            # the Python API renders a table function's constants into the SQL text: a fixture or a structured value
+            # is no literal. That is this row's limit, not the function's: say so rather than score it a failure.
+            if not _python_table_constants(case, consts):
+                raise TypeError(
+                    f"{case.cid}: a constant of {case.fn} is a fixture or a structured value, which the "
+                    "Python leg cannot pass as a SQL literal. Fix: give the row plain constants, or leave "
+                    "the Python surface out of its `surfaces`."
+                )
+        with _traced(f"{case.cid} alone"):
+            try:
+                src = spark.createDataFrame(rows, schema)
+                src.createOrReplaceTempView("_gbx_oracle")
+                if column_of is None and fn.table_input is not None:
+                    df = spark.sql(
+                        (shape_sql or table_call_sql(fn, omitted)).format(
+                            fn=case.fn,
+                            src="_gbx_oracle",
+                            args="".join(f", {lit}" for lit in literals),
+                        )
+                    )
+                elif fn.table_input is not None:  # column_of given
+                    # the Python API: the DataFrame-first entry, the view's `key` and members as the table's columns
+                    from pyspark.sql import functions as F
+
+                    got_df = column_of(case.fn)(_table_frame(fn, src, omitted), *consts)
+                    df = got_df.select(
+                        *fn.table_input.partition_by,
+                        F.col(fn.columns[-1][0]).alias("out"),
+                    )
+                elif column_of is None:
+                    df = spark.sql(
+                        (
+                            shape_sql
+                            or "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key"
+                        ).format(
+                            fn=case.fn,
+                            src="_gbx_oracle",
+                            args=", ".join([members] + literals),
+                        )
+                    )
+                else:
+                    from pyspark.sql import functions as F
+
+                    call = column_of(case.fn)(
+                        *[None if i in omitted else F.col(f"c{i}") for i in range(n0)],
+                        *[
+                            v if params[i + first_const].str_only else F.expr(lit)
+                            for i, (v, lit) in enumerate(zip(consts, literals))
+                        ],
+                    )
+                    df = src.groupBy("key").agg(call.alias("out"))
+                got = df.collect()
+                value = got[0]["out"] if got else None
+                if case.kind == "error_group":
+                    tile_out = isinstance(df.schema["out"].dataType, StructType)
+                    out.append((case, _check_error_group(want, value, tile_out)))
+                else:
+                    out.append((case, check(want, value, [group_arg, *consts])))
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+                out.append((case, check_error(case, exc)))
+    return out
+
+
+def _group_parts(man, case: Case, tmpdir: str, null_burn: float) -> dict:
+    """The member view of an aggregate case (its rows and schema, a key ``a``, the members then the constants), the
+    member columns and constants of the call, and the case its output is judged against.
+    """
+    fn = man.functions[case.fn]
+    params = fn.params
+    group = group_arg = resolve_arg(case.args[0], tmpdir)
+    group = [group] if isinstance(group, dict) else group  # one tile is a group of one
+    consts = [resolve_arg(a, tmpdir) for a in case.args[1:]]
+    n_cols = group_width(fn)
+    # the constants' parameters follow the member parameters of an aggregate, or the one TABLE parameter
+    first_const = 1 if fn.table_input is not None else n_cols
+    if n_cols == 1:
+        rows = [("a", t, *consts) for t in group]
+        first = [f"c0 {_member_types(man.functions[case.fn], group, 1)[0]}"]
+    else:
+        rows = [
+            ("a", *(None if v is OMITTED else v for v in m), *consts) for m in group
+        ]
+        first = [
+            f"c{i} {t}"
+            for i, t in enumerate(_member_types(man.functions[case.fn], group, n_cols))
+        ]
+    n0 = len(first)
+    omitted = {  # a member column left out of the call
+        i
+        for i in range(n0)
+        if n_cols > 1 and group and all(m[i] is OMITTED for m in group)
+    }
+    schema = ", ".join(
+        ["key string"]
+        + first
+        + [
+            f"c{i + n0} {_ddl_type(v, params[i + first_const])}"
+            for i, v in enumerate(consts)
+        ]
+    )
+    members = ", ".join("NULL" if i in omitted else f"c{i}" for i in range(n0))
+    literals = [
+        _typed_literal(v, params[i + first_const], case) for i, v in enumerate(consts)
+    ]
+    want = (
+        replace(case, expect=_burn_nulls(case.expect, null_burn))
+        if case.kind == "pixels" and not callable(case.expect)
+        else case
+    )
+    return {
+        "rows": rows,
+        "schema": schema,
+        "members": members,
+        "literals": literals,
+        "want": want,
+        "omitted": omitted,
+        "n0": n0,
+        "first_const": first_const,
+        "consts": consts,
+        "group_arg": group_arg,
+    }
+
+
+def _run_groups_batched(spark, man, cases, shape_sql, tmpdir, null_burn, column_of):
+    from pyspark.sql import functions as F
+
+    def prepare(case):
+        fn = man.functions[case.fn]
+        table = fn.table_input is not None
+        if (
+            case.sql is not None
+            or case.kind in _ALONE_KINDS
+            or case.kind == "error_group"
+            or shape_sql is not None
+        ):
+            return None
+        p = _group_parts(man, case, tmpdir, null_burn)
+        p["case"] = case
+        if (
+            table
+            and column_of is not None
+            and not _python_table_constants(case, p["consts"])
+        ):
+            return None  # the alone run refuses it, as unbatched
+        str_only = tuple(
+            repr(v)
+            for i, v in enumerate(p["consts"])
+            if fn.params[i + p["first_const"]].str_only
+        )
+        # the Python API passes a table function's constants as Python values: one call per set of them
+        py_consts = repr(p["consts"]) if table and column_of is not None else None
+        key = (
+            case.fn,
+            p["schema"],
+            p["members"],
+            tuple(p["literals"]),
+            str_only,
+            py_consts,
+        )
+        return key, p
+
+    def call_py(p):
+        params = man.functions[p["case"].fn].params
+        return column_of(p["case"].fn)(
+            *[None if i in p["omitted"] else F.col(f"c{i}") for i in range(p["n0"])],
+            *[
+                v if params[i + p["first_const"]].str_only else F.expr(lit)
+                for i, (v, lit) in enumerate(zip(p["consts"], p["literals"]))
+            ],
+        )
+
+    def select_sql(g, p, view, n):
+        fn = man.functions[p["case"].fn]
+        if fn.table_input is None:
+            return (
+                "SELECT _gbx_case, 0 AS _gbx_i, "
+                + _answer_columns(
+                    g,
+                    n,
+                    f"{fn.sql_name}({', '.join([p['members']] + p['literals'])}) AS o{g}",
+                )
+                + f" FROM {view} GROUP BY _gbx_case"
+            )
+        # a table function: the case is the partition key, so each case is one partition of one call
+        members = ", ".join(f"c{i}" for i in range(p["n0"]))
+        src = f"(SELECT CAST(_gbx_case AS STRING) AS key, {members} FROM {view}) AS _gbx_src"
+        call = table_call_sql(fn, p["omitted"]).format(
+            fn=fn.sql_name, src=src, args="".join(f", {lit}" for lit in p["literals"])
+        )
+        return (
+            "SELECT CAST(key AS INT) AS _gbx_case, 0 AS _gbx_i, "
+            + _answer_columns(g, n, f"out AS o{g}")
+            + f" FROM ({call}) AS _gbx_t"
+        )
+
+    def answer_py(p, df):
+        """The frame ``(_gbx_case, _gbx_out)`` of one group through the Python API: a case is a group of the
+        aggregate, or the partition of the table function."""
+        fn = man.functions[p["case"].fn]
+        if fn.table_input is None:
+            return df.groupBy("_gbx_case").agg(call_py(p).alias("_gbx_out"))
+        src = df.withColumn("key", F.col("_gbx_case").cast("string"))
+        got = column_of(fn.sql_name)(_table_frame(fn, src, p["omitted"]), *p["consts"])
+        return got.select(
+            F.col(fn.table_input.partition_by[0]).cast("int").alias("_gbx_case"),
+            F.col(fn.columns[-1][0]).alias("_gbx_out"),
+        )
+
+    def run_batch(groups):
+        if column_of is None:
+            return _batch_sql(spark, groups, select_sql)
+        frames, group_of = [], {}
+        for g, members in enumerate(groups):
+            p = members[0][1]
+            df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
+            agg = answer_py(p, df)
+            frames.append(
+                agg.select(
+                    "_gbx_case",
+                    F.lit(0).alias("_gbx_i"),
+                    *[
+                        (F.col("_gbx_out") if j == g else F.lit(None)).alias(f"o{j}")
+                        for j in range(len(groups))
+                    ],
+                )
+            )
+            group_of.update({k: g for k, _ in members})
+        return _gather(
+            functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
+        )
+
+    return _run_batched(
+        cases,
+        prepare,
+        run_batch,
+        lambda case, p, outs: check(
+            p["want"], outs[0] if outs else None, [p["group_arg"], *p["consts"]]
+        ),
+        lambda case: run_groups(spark, [case], shape_sql, tmpdir, null_burn, column_of),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _l3_opt_ins():
+    """The scalars whose session rows also run on the plain Python function, as their table modules declare it:
+    ``L3_CALLABLE = True`` opts in every scalar whose oracle table the module defines, and
+    ``L3_CALLABLE_FNS = ("gbx_...",)`` adds scalars whose rows sit in a shared table (``MVP_S``). Returns
+    (table names, function names)."""
+    import importlib
+    import pkgutil
+
+    from databricks.labs.gbx.bench import oracle_tables
+
+    tables, fns = set(), set()
+    for m in pkgutil.iter_modules(oracle_tables.__path__):
+        mod = importlib.import_module(f"{oracle_tables.__name__}.{m.name}")
+        if getattr(mod, "L3_CALLABLE", False):
+            tables |= {
+                k
+                for k, v in vars(mod).items()
+                if k.isupper() and isinstance(v, tuple) and v and isinstance(v[0], Case)
+            }
+        fns |= set(getattr(mod, "L3_CALLABLE_FNS", ()))
+    return tables, fns
+
+
+def l3_opted_in(fn) -> bool:
+    """True when the function's table module opts its session rows into the plain-Python-function leg."""
+    tables, fns = _l3_opt_ins()
+    return fn.oracle in tables or fn.sql_name in fns
+
+
+_ROW_UDF, _PANDAS_SCALAR_UDF = (
+    100,
+    200,
+)  # pyspark's PythonEvalType values for udf and scalar pandas_udf
+
+
+def _scalar_call_of_series_udf(func):
+    """A one-value call of the function behind a pandas UDF (it takes and returns a Series): each argument becomes a
+    one-row Series typed as pandas types it, and the one result value comes back as a Python value.
+    """
+
+    def call(*args):
+        import pandas as pd
+
+        out = func(*[pd.Series([a]) for a in args])
+        v = out.iloc[0]
+        if v is None or v is pd.NA or (isinstance(v, float) and v != v):
+            return None
+        return v.item() if hasattr(v, "item") and not isinstance(v, (bytes, str)) else v
+
+    return call
+
+
+def _sql_default(text):
+    """A parameter's SQL default (`'degrees'`, `0.5`, `true`, `NULL`) as a Python value; None when it has none."""
+    import ast
+
+    if text is None or str(text).strip().upper() == "NULL":
+        return None
+    t = str(text).strip()
+    if t.lower() in ("true", "false"):
+        return t.lower() == "true"
+    try:
+        return ast.literal_eval(t)
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _with_sql_defaults(fn, func, call):
+    """`call` with the trailing optional arguments filled from the manifest's SQL defaults, as the CREATE FUNCTION
+    wrapper does for a session: a row that leaves them out calls the plain function with the defaults a query gets.
+    """
+    import inspect
+
+    try:
+        positional = [
+            p
+            for p in inspect.signature(func).parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        return call
+    n = min(len(positional), fn.max_args)
+    defaults = [_sql_default(p.default) for p in fn.params]
+
+    def padded(*args):
+        return call(*args, *defaults[len(args) : n])
+
+    return padded
+
+
+def _plain_call_of_udf(fn, udf):
+    """The plain Python call of a registered UDF object (a pandas UDF one value at a time), or None."""
+    func = getattr(udf, "func", None)
+    if func is not None and getattr(udf, "evalType", None) == _PANDAS_SCALAR_UDF:
+        return _with_sql_defaults(fn, func, _scalar_call_of_series_udf(func))
+    if func is not None and getattr(udf, "evalType", None) == _ROW_UDF:
+        return _with_sql_defaults(
+            fn, func, func
+        )  # a row-at-a-time UDF is its plain function
+    return None
+
+
+def l3_callable(fn):
+    """The plain Python function behind a scalar's session form, or None when it has none (a UDTF, a grouped
+    aggregate). A ``callable`` form is the function itself; a ``udf`` form built by a factory has a plain
+    ``_udf_<name>`` beside the factory, or else is the function the factory builds; a pandas UDF (the ``c0``
+    variant) is called through its ``func``, one value at a time. Optional arguments a row leaves out take the
+    manifest's SQL defaults."""
+    from databricks.labs.gbx import manifest
+
+    l3 = fn.levels.get("L3", {})
+    if "callable" in l3:
+        return manifest.resolve_ref(l3["callable"])
+    if "factory" in l3 and fn.kind == "scalar":
+        module = l3["factory"].split(":")[0]
+        try:
+            return manifest.resolve_ref(f"{module}:_udf_{fn.sql_name[len('gbx_'):]}")
+        except AttributeError:
+            from databricks.labs.gbx.manager.l3 import _factory_args
+
+            kind = l3.get("factory_args")
+            built = manifest.resolve_ref(l3["factory"])(
+                *(_factory_args(kind) if kind else ())
+            )
+            return _plain_call_of_udf(fn, built)
+    c0 = (l3.get("variants") or {}).get("c0")
+    if c0 and fn.kind == "scalar":
+        return _plain_call_of_udf(fn, manifest.resolve_ref(c0))
+    return None
+
+
+def run_l3_callables(cases, tmpdir: Optional[str] = None):
+    """The session rows of a scalar, without Spark: the function a session registers is called with Python values,
+    and each result is judged as the SQL result is (so a mutation of the kernel is seen with no JVM and no worker).
+    """
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        fn = man.functions[case.fn]
+        call = l3_callable(fn)
+        if "session" not in case.surfaces or case.sql is not None or call is None:
+            continue
+        if case.cid in READ_CAP_ROWS:
+            continue  # the decoded-size gate needs the session's read cap, which a plain call does not carry
+        try:
+            rows = _argument_rows(case, tmpdir)
+            outs = [call(*r) for r in rows]
+            out.append((case, _verdict(case, outs, rows)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+# --- Unity Catalog surface -----------------------------------------------------------------------
+
+
+class UcGeometry:
+    """Stand-in for ``pyspark.sql.types.Geometry``: what a UC Python function receives for a GEOMETRY(ANY) argument
+    and returns for a GEOMETRY(ANY) result (measured on Serverless env 6): plain WKB plus the SRID.
+    """
+
+    def __init__(self, wkb: bytes, srid: int):
+        self.wkb, self.srid = bytes(wkb), int(srid)
+
+    @classmethod
+    def fromWKB(cls, wkb, srid):  # noqa: N802 - the pyspark name
+        return cls(wkb, srid)
+
+    def getBytes(self):  # noqa: N802
+        return self.wkb
+
+    def getSrid(self):  # noqa: N802
+        return self.srid
+
+
+def _from_uc_geometry(out):
+    """A handler's GEOMETRY result as the EWKB the product's st_asewkb gives for it."""
+    if not isinstance(out, UcGeometry):
+        return out
+    from shapely import from_wkb, set_srid, to_wkb
+
+    return to_wkb(set_srid(from_wkb(out.wkb), out.srid), include_srid=True)
+
+
+def _struct_rows(value, param):
+    """An array of flat structs given as tuples (the session builds the struct from the declared fields) as dicts
+    keyed by the field names of the parameter's UC type."""
+    uc = (param.uc or "").lower()
+    if not (isinstance(value, list) and uc.startswith("array<struct<")):
+        return value
+    names = [f.split(":", 1)[0] for f in uc[len("array<struct<") : -2].split(",")]
+    return [dict(zip(names, v)) if isinstance(v, tuple) else v for v in value]
+
+
+def _uc_value(arg, param, case: Case):
+    """A session-shaped oracle argument as the UC function receives it."""
+    arg = _struct_rows(arg, param)
+    if arg is not None and tuple(param.session) == ("STRUCT",) and param.uc == "STRING":
+        return json.dumps(arg)  # a struct of any fields reaches UC as its JSON text
+    if arg is None or isinstance(arg, dict):
+        return arg
+    if param.uc == "GEOMETRY" and isinstance(arg, str):
+        from shapely import to_wkb
+
+        from databricks.labs.gbx._geom import parse_geom
+
+        return UcGeometry(to_wkb(parse_geom(arg)), case.geom_srid)
+    if param.uc == "ARRAY<GEOMETRY>" and isinstance(arg, list):
+        from shapely import to_wkb
+
+        from databricks.labs.gbx._geom import parse_geom
+
+        # each element is a Geometry (WKB beside its SRID, the Z kept); a NULL element stays NULL
+        return [
+            None if g is None else UcGeometry(to_wkb(parse_geom(g)), case.geom_srid)
+            for g in arg
+        ]
+    if param.uc == "STRING" and not isinstance(arg, str):
+        return str(arg)  # UC has one STRING type: an INT literal arrives as its digits
+    return arg
+
+
+@contextlib.contextmanager
+def _uc_geometry_type():
+    """The handlers build their GEOMETRY results with :class:`UcGeometry` while the oracle calls them (no pyspark)."""
+    from databricks.labs.gbx.uc import handlers
+
+    saved, handlers._geometry_type = handlers._geometry_type, lambda: UcGeometry
+    try:
+        yield
+    finally:
+        handlers._geometry_type = saved
+
+
+def _uc_default(param):
+    """A parameter's DEFAULT as the SQL wrapper hands it to the handler: typed by the UC type, NULL as None."""
+    raw = param.default
+    if raw is None or raw.strip().upper() == "NULL":
+        return None
+    raw = raw.strip()
+    if param.uc == "BOOLEAN":
+        return raw.lower() == "true"
+    if param.uc in ("INT", "BIGINT"):
+        return int(raw)
+    if param.uc == "DOUBLE":
+        return float(raw)
+    return raw.strip("'")
+
+
+def run_handlers(cases, tmpdir: Optional[str] = None):
+    """L4 without Spark: call the UC handlers with Python values. GEOMETRY params get :class:`UcGeometry` values."""
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        fn = man.functions[case.fn]
+        if (
+            "uc" not in case.surfaces
+            or case.sql is not None
+            or "handler" not in fn.levels.get("L4", {})
+            or engine_missing(case.fn)
+        ):
+            # not on UC, a recipe, a table function (run_handlers_rows runs the function behind it), or an engine
+            # function where this process has no engine
+            continue
+        handler = manifest.resolve_ref(fn.levels["L4"]["handler"])
+        try:
+            msgs = []
+            for row in (case.args, *case.variants):
+                args = [resolve_arg(a, tmpdir) for a in row]
+                args += [  # the SQL wrapper supplies the DEFAULTs
+                    _uc_default(p) for p in fn.params[len(args) :]
+                ]
+                uc_args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
+                with _uc_geometry_type():
+                    got = _from_uc_geometry(handler(*uc_args))
+                if (
+                    case.kind == "cells"
+                ):  # one chip (a struct) is one cell, as `verdict` reads it
+                    msgs.append(_check_rows(case, [] if got is None else [got], args))
+                    continue
+                msgs.append(
+                    check(case, got, args)
+                )  # a bare-WKT expectation reads the session-shaped argument
+            out.append((case, next(filter(None, msgs), None)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+def run_sql_kernels(
+    spark,
+    cases: Sequence[Case],
+    sources: Optional[Dict[str, Tuple[str, Sequence[Mapping]]]] = None,
+    tmpdir: Optional[str] = None,
+) -> List[Tuple[Case, Optional[str]]]:
+    """The UC rows of every function that is a SQL kernel, run on a local Spark session (no Unity Catalog).
+
+    Each kernel (the row's L4 ``sql``, or ``sources[name]`` = ``(body, helpers)`` in its place, which is how a candidate
+    body is judged before it is a manifest key) is installed as a temporary function under its manifest name with the UC
+    signature, the UC rows (recipes included) run through :func:`run_session` on the UC surface, and the functions are
+    dropped again. A row of a function with no kernel is not run. A body that calls a built-in the local engine lacks
+    fails its rows; the host has no ``h3_*`` or ``st_*`` (see the SQL kernel notes), so such a body is judged on the
+    workspace.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.uc import ddl, sqlbody
+
+    man = manifest.load()
+    sources = dict(sources or {})
+
+    def source(name):
+        got = sources.get(name) or sqlbody.l4_source(man.functions[name])
+        return None if got is None else product_stand_ins.rewrite_source(got)
+
+    names = sorted(
+        {c.fn for c in cases if "uc" in c.surfaces and source(c.fn) is not None}
+    )
+    mine = [c for c in cases if c.fn in names]
+    # a body that calls a product built-in the local engine lacks runs against its stand-in (bench.product_stand_ins)
+    mine = [
+        replace(c, sql=product_stand_ins.rewrite(c.sql)) if c.sql else c for c in mine
+    ]
+    texts = [c.sql for c in mine if c.sql] + [
+        part for n in names for part in _source_texts(source(n))
+    ]
+    stood = []
+    try:
+        stood = product_stand_ins.register(spark, texts)
+        for name in names:
+            # a UDF of this name from an earlier test in the session cannot be replaced by a SQL function
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
+            spark.sql(ddl.local_function_ddl(man.functions[name], source(name)))
+        return run_session(spark, mine, tmpdir=tmpdir, surface="uc")
+    finally:
+        for name in names:
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
+        product_stand_ins.drop(spark, stood)
+
+
+def _source_texts(source) -> List[str]:
+    """The SQL texts of a kernel source ``(body, helpers)``: the body and each helper's body."""
+    body, helpers = source
+    return [body, *(h["sql"] for h in helpers)]
+
+
+def run_handlers_rows(cases, tmpdir: Optional[str] = None):
+    """UC table functions without Spark: call the handler behind the TVF and check its elements as rows."""
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        fn = man.functions[case.fn]
+        if (
+            "uc" not in case.surfaces
+            or "tvf_over" not in fn.levels.get("L4", {})
+            or engine_missing(case.fn)
+        ):
+            continue
+        over = fn.levels["L4"]["tvf_over"]
+        if (
+            over in man.private
+        ):  # a private array function takes the table function's own parameters
+            inner, params = None, fn.params
+            handler = manifest.resolve_ref(man.private[over].handler)
+        else:
+            inner = man.functions[over]
+            params = inner.params
+            handler = manifest.resolve_ref(inner.levels["L4"]["handler"])
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        args += [
+            None if p.default is None else p.default.strip("'")
+            for p in params[len(args) :]
+        ]
+        if inner is None:  # the DEFAULT of the table function, typed by the parameter
+            args = [
+                _uc_default(p) if i >= len(case.args) else a
+                for i, (a, p) in enumerate(zip(args, params))
+            ]
+        uc_args = [_uc_value(a, p, case) for a, p in zip(args, params)]
+        uc_args = [
+            a == "true" if p.uc == "BOOLEAN" and isinstance(a, str) else a
+            for a, p in zip(uc_args, params)
+        ]
+        try:
+            elems = list(handler(*uc_args) or [])
+            if "tvf_select" in fn.levels["L4"]:
+                elems = _projected_rows(fn, elems)
+            elif (
+                len(fn.columns) == 1
+            ):  # an array of single values: the TVF's one column holds each
+                elems = [{fn.columns[0][0]: e} for e in elems]
+            out.append((case, _check_rows(case, elems, args)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+def _projected_rows(fn, elems: list) -> list:
+    """The rows of a table function that PROJECTS the rows of the function it is over (L4 ``tvf_select``): the
+    statistic is read from each partial row by ``gridagg.measure_of``, the Python twin of the SQL projection (a host test holds
+    the two equal on every state a cell can have, and the workspace runs the SQL)."""
+    from databricks.labs.gbx.pyrx.core import gridagg
+
+    stat = fn.sql_name.rsplit("rastertogrid", 1)[1]
+    return [
+        {
+            "band": e["band"],
+            "cellID": e["cellid"],
+            "measure": gridagg.measure_of(
+                stat, tuple(e[k] for k in gridagg.PARTIAL_FIELDS)
+            ),
+        }
+        for e in elems
+    ]
+
+
+def _legacy_literal(value: dict, param) -> str:
+    """The legacy Mosaic geometry struct as a SQL literal cast to the parameter's declared type."""
+
+    def nest(v) -> str:
+        if isinstance(v, (list, tuple)):
+            return "array(" + ", ".join(nest(x) for x in v) + ")"
+        x = float(v)
+        if math.isnan(x):
+            return "CAST('NaN' AS DOUBLE)"
+        if math.isinf(x):
+            return (
+                "CAST('Infinity' AS DOUBLE)" if x > 0 else "CAST('-Infinity' AS DOUBLE)"
+            )
+        return repr(x) + "D"
+
+    return (
+        f"CAST(named_struct('typeId', {int(value['typeId'])}, 'srid', {int(value['srid'])}, "
+        f"'boundaries', {nest(value['boundaries'])}, 'holes', {nest(value['holes'])}) AS {sql_type(param.uc)})"
+    )
+
+
+def _array_element_type(param) -> str:
+    """X of a manifest UC type ``ARRAY<X>``; ValueError for a parameter that is no array."""
+    uc = param.uc or ""
+    if not (uc.upper().startswith("ARRAY<") and uc.endswith(">")):
+        raise ValueError(
+            f"{param.name}: a list needs an ARRAY<...> parameter; got {uc!r}"
+        )
+    return uc[len("ARRAY<") : -1]
+
+
+def _geometry_element_literal(wkb, case: Case) -> str:
+    """One element of an ``ARRAY<GEOMETRY(ANY)>`` built from WKB bytes: ``st_geomfromwkb`` of ISO WKB (the warehouse parses type
+    1001 for a point with Z and rejects the EWKB Z flag), the integer SRID of the case, cast to GEOMETRY(ANY).
+    """
+    from shapely import from_wkb, to_wkb
+
+    iso = to_wkb(from_wkb(bytes(wkb)), flavor="iso")
+    return f"CAST(st_geomfromwkb(X'{iso.hex()}', {case.geom_srid}) AS {UC_GEOMETRY})"
+
+
+def _sql_literal(value, param, case: Case) -> str:
+    if value is None:
+        return "NULL"
+    value = _struct_rows(value, param)
+    if isinstance(
+        value, list
+    ):  # an ARRAY<X>: the element type is the parameter's own (a NULL element is a NULL X)
+        elem_uc = _array_element_type(param)
+        elem = replace(param, uc=elem_uc)
+        items = ", ".join(
+            (
+                "CAST(NULL AS " + sql_type(elem_uc) + ")"
+                if v is None
+                else (
+                    _geometry_element_literal(v, case)
+                    if elem_uc.upper() == "GEOMETRY"
+                    and isinstance(v, (bytes, bytearray))
+                    else _sql_literal(v, elem, case)
+                )
+            )
+            for v in value
+        )
+        return f"array({items})" if value else f"CAST(array() AS {sql_type(param.uc)})"
+    if tuple(param.session) == ("STRUCT",) and param.uc == "STRING":
+        return (
+            "'" + json.dumps(value).replace("'", "''") + "'"
+        )  # the JSON text of a struct of any fields
+    if isinstance(value, dict) and "typeId" in value:
+        return _legacy_literal(value, param)
+    if isinstance(value, dict) and (param.uc or "").lower().startswith("struct<"):
+        # a flat struct of a declared type (an element of an array of cells): each field cast to its type
+        decl = [f.split(":", 1) for f in param.uc[len("struct<") : -1].split(",")]
+        parts = ", ".join(
+            f"'{n}', "
+            + (
+                f"CAST(NULL AS {t})"
+                if value.get(n) is None
+                else f"CAST({_sql_literal(value[n], replace(param, uc=t.upper()), case)} AS {t})"
+            )
+            for n, t in decl
+        )
+        return f"named_struct({parts})"
+    if isinstance(value, dict) and (param.uc or "").upper().startswith("MAP<"):
+        # a MAP<K,V> parameter: map(k1, v1, ...), the key and value types the parameter's own
+        key_uc, val_uc = (t.strip() for t in param.uc[len("MAP<") : -1].split(",", 1))
+        kp, vp = replace(param, uc=key_uc.upper()), replace(param, uc=val_uc.upper())
+        items = ", ".join(
+            f"{_sql_literal(k, kp, case)}, {'CAST(NULL AS ' + sql_type(val_uc) + ')' if v is None else _sql_literal(v, vp, case)}"
+            for k, v in value.items()
+        )
+        return f"map({items})" if value else f"CAST(map() AS {sql_type(param.uc)})"
+    if isinstance(value, dict):
+        # NULL fields are typed: a CTE column of struct<path: void> does not match the UC tile parameter
+        raster = (
+            "CAST(NULL AS BINARY)"
+            if value["raster"] is None
+            else "X'" + value["raster"].hex() + "'"
+        )
+        path = (
+            "CAST(NULL AS STRING)"
+            if value["path"] is None
+            else "'" + value["path"].replace("'", "''") + "'"
+        )
+        # The tile's own metadata: an error tile is known by its reason (`last_error`), so a literal without it is an
+        # empty tile, which a UC function answers with NULL.
+        meta = value.get("metadata") or {}
+        metadata = (
+            "map("
+            + ", ".join(
+                "'" + str(t).replace("'", "''") + "'" for kv in meta.items() for t in kv
+            )
+            + ")"
+            if meta
+            else "CAST(map() AS map<string,string>)"
+        )
+        return (
+            f"named_struct('cellid', 0L, 'raster', {raster}, 'path', {path}, "
+            "'path_mode', CAST(NULL AS STRING), "
+            "'window', CAST(NULL AS struct<col_off:int,row_off:int,width:int,height:int>), "
+            "'clip_polygon', CAST(NULL AS BINARY), 'clip_crs', CAST(NULL AS STRING), "
+            f"'crs', CAST(NULL AS STRING), 'metadata', {metadata})"
+        )
+    if param.uc == "GEOMETRY":
+        if isinstance(value, (bytes, bytearray)):
+            # a BINARY literal for a GEOMETRY parameter: the engine refuses it (the uc_wkb_into_geometry_refused row)
+            return "X'" + bytes(value).hex() + "'"
+        if isinstance(value, str) and value.lstrip()[:5].upper() == "SRID=":
+            # EWKT carries its own SRID: st_geomfromwkt does not parse it, st_geomfromewkt does
+            escaped = value.replace("'", "''")
+            return f"CAST(st_geomfromewkt('{escaped}') AS {UC_GEOMETRY})"
+        # integer SRID only (product CRS facts); a UC GEOMETRY(ANY) parameter takes it through a CAST
+        return f"CAST(st_geomfromwkt('{value}', {case.geom_srid}) AS {UC_GEOMETRY})"
+    if isinstance(
+        value, (bytes, bytearray)
+    ):  # a BINARY element or value: a hex literal
+        return "X'" + bytes(value).hex() + "'"
+
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    if isinstance(value, float) and math.isnan(value):
+        return "CAST('NaN' AS DOUBLE)"
+    if isinstance(value, float) and math.isinf(value):
+        return (
+            "CAST('Infinity' AS DOUBLE)" if value > 0 else "CAST('-Infinity' AS DOUBLE)"
+        )
+    return repr(value)
+
+
+def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str]]:
+    """(cid, statement) per UC case: one SELECT each, so a refusal can't hide another case."""
+    from databricks.labs.gbx import manifest
+
+    man = manifest.load()
+    stmts = []
+    for case in cases:
+        if "uc" not in case.surfaces:
+            continue
+        if case.sql is not None:
+            stmts.append(
+                (case.cid, render_recipe(case.sql, f"`{catalog}`.`{schema}`.", tmpdir))
+            )
+            continue
+        fn = man.functions[case.fn]
+        lits = [
+            _sql_literal(resolve_arg(a, tmpdir), p, case)
+            for a, p in zip(case.args, fn.params)
+        ]
+        call = f"`{catalog}`.`{schema}`.{case.fn}({', '.join(lits)})"
+        if fn.kind == "generator":
+            # A UC table function: its rows as ONE JSON array cell (BINARY columns base64), so the statement
+            # still answers one value; check_uc_results reads the rows back.
+            fields = ", ".join(
+                f"'{n}', " + (f"base64(t.{n})" if t.upper() == "BINARY" else f"t.{n}")
+                for n, t in fn.columns
+            )
+            stmts.append(
+                (
+                    case.cid,
+                    f"SELECT to_json(collect_list(named_struct({fields}))) AS out FROM {call} AS t",
+                )
+            )
+            continue
+        if fn.returns_uc == "GEOMETRY":
+            call = f"st_asewkb({call})"
+        stmts.append((case.cid, f"SELECT {call} AS out"))
+    return stmts
+
+
+def _uc_rows(fn, value) -> list:
+    """The rows of a UC table function from the JSON array `uc_sql` made of them (BINARY columns decoded)."""
+    binary = [n for n, t in fn.columns if t.upper() == "BINARY"]
+    rows = json.loads(value) if isinstance(value, str) else (value or [])
+    for r in rows:
+        for n in binary:
+            if r.get(n) is not None:
+                r[n] = base64.b64decode(r[n])
+    return rows
+
+
+_CID_MARK = "-- cid: "
+
+
+_BATCH_MARK = "-- batch"
+_EXPECTS_ERROR = ("raises", "uc_refused")
+# The two statement shapes `uc_sql` renders for a function call (a recipe is neither).
+_UC_SCALAR_STMT = re.compile(r"\ASELECT (?P<expr>.+) AS out\Z", re.S)
+_UC_TABLE_STMT = re.compile(
+    r"\ASELECT to_json\(collect_list\(.*\)\) AS out FROM .+ AS t\Z", re.S
+)
+
+
+def uc_batchable(cases) -> set:
+    """The cids whose statement may share a warehouse statement with others (`uc_batch_statement`).
+
+    A case that must be refused stays out: one error aborts the whole statement, and the refusal is the
+    answer. A recipe stays out too: it is a statement of its own, not a call.
+    """
+    return {
+        c.cid
+        for c in cases
+        if "uc" in c.surfaces and c.sql is None and c.kind not in _EXPECTS_ERROR
+    }
+
+
+def uc_batch_item(stmt: str) -> Optional[str]:
+    """The one-value expression of a `uc_sql` statement, or None when it has no such form.
+
+    A scalar call `SELECT <call> AS out` is its call; a table function's `SELECT to_json(...) AS out FROM <call> AS t`
+    is that whole query as a scalar subquery.
+    """
+    m = _UC_SCALAR_STMT.match(stmt)
+    if m:
+        return m.group("expr")
+    return f"({stmt})" if _UC_TABLE_STMT.match(stmt) else None
+
+
+def uc_batch_statement(items: Sequence[str]) -> str:
+    """One row, one column `c<i>` per item: the sandbox cost of the statement is paid once for all of them."""
+    return "SELECT " + ", ".join(f"{item} AS c{i}" for i, item in enumerate(items))
+
+
+def uc_sql_text(
+    pairs: Sequence[Tuple[str, str]], batchable: Optional[set] = None
+) -> str:
+    """The statement file gbx:uc:sql reads: a `-- cid: <id>` line, then the statement.
+
+    A cid in `batchable` gets a `-- batch` line after its cid line: the runner may put it in a batch.
+    """
+    mark = f"{_BATCH_MARK}\n"
+    return (
+        "\n\n".join(
+            f"{_CID_MARK}{cid}\n{mark if batchable and cid in batchable else ''}{stmt};"
+            for cid, stmt in pairs
+        )
+        + "\n"
+    )
+
+
+def parse_uc_batchable(text: str) -> set:
+    """The cids that carry a `-- batch` line (see `uc_sql_text`)."""
+    out, cid = set(), None
+    for line in text.splitlines():
+        if line.startswith(_CID_MARK):
+            cid = line[len(_CID_MARK) :].strip()
+        elif line.strip() == _BATCH_MARK and cid is not None:
+            out.add(cid)
+    return out
+
+
+def parse_uc_sql(text: str) -> List[Tuple[str, str]]:
+    pairs: List[Tuple[str, str]] = []
+    for line in text.splitlines():
+        if line.startswith(_CID_MARK):
+            pairs.append((line[len(_CID_MARK) :].strip(), ""))
+        elif pairs and line.strip() and not line.startswith("--"):
+            cid, stmt = pairs[-1]
+            pairs[-1] = (cid, f"{stmt}\n{line}" if stmt else line)
+    return [(cid, stmt.strip().rstrip(";").strip()) for cid, stmt in pairs]
+
+
+_INTS = {"BYTE", "TINYINT", "SHORT", "SMALLINT", "INT", "LONG", "BIGINT"}
+_FLOATS = {"FLOAT", "DOUBLE", "DECIMAL"}
+_BINARY_FIELDS = ("raster", "clip_polygon")  # the BINARY fields of a tile struct
+
+
+def decode_uc_cell(raw, type_name: str, *, decode_binary: bool = True):
+    """One cell of a Statement API JSON_ARRAY result -> a Python value.
+
+    The API returns every cell as a string: BINARY as base64, DOUBLE as text (NaN included), and
+    STRUCT / MAP / ARRAY as JSON text.
+    """
+    if raw is None:
+        return None
+    t = type_name.upper()
+    if t == "BINARY":
+        return base64.b64decode(raw) if decode_binary else raw
+    if t in _INTS:
+        return int(raw)
+    if t in _FLOATS:
+        return float(raw)
+    if t == "BOOLEAN":
+        return str(raw).lower() == "true"
+    if t in ("STRUCT", "MAP", "ARRAY"):
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        if decode_binary and isinstance(value, dict):
+            for k in _BINARY_FIELDS:
+                if isinstance(value.get(k), str):
+                    value[k] = base64.b64decode(value[k])
+        return value
+    return raw
+
+
+_BYTES_KEY = "$bytes"
+
+
+def _jsonable(obj):
+    if isinstance(obj, (bytes, bytearray)):
+        return {_BYTES_KEY: base64.b64encode(bytes(obj)).decode("ascii")}
+    if isinstance(obj, dict):
+        return {k: _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    return obj
+
+
+def _from_json(obj):
+    if isinstance(obj, dict):
+        if set(obj) == {_BYTES_KEY}:
+            return base64.b64decode(obj[_BYTES_KEY])
+        return {k: _from_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_from_json(v) for v in obj]
+    return obj
+
+
+def dump_uc_results(results: dict, path: str) -> None:
+    """`{cid: {"value": ..., "wall_s": [...]} | {"error": message}}` as JSON; bytes are written as base64."""
+    with open(path, "w") as fh:
+        json.dump(_jsonable(results), fh, indent=1)
+
+
+def load_uc_results(path: str) -> dict:
+    with open(path) as fh:
+        return _from_json(json.load(fh))
+
+
+def _split_type_args(text: str) -> List[str]:
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return parts + ([cur] if cur else [])
+
+
+def coerce_uc_value(value, type_text: str):
+    """A container cell of a Statement API result with every nested leaf in its declared type.
+
+    The API gives a nested BINARY as base64 text, a nested BOOLEAN / BIGINT / DOUBLE as text. ``type_text`` is the
+    function's declared return type (``struct<a:bigint,b:array<binary>>``, ``array<double>``, ``TILE``).
+    """
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    t = type_text.strip()
+    if t.upper() == "TILE":
+        t = TILE_SQL
+    low = t.lower()
+    if value is None:
+        return None
+    if low.startswith("struct<") and isinstance(value, dict):
+        fields = {}
+        for part in _split_type_args(t[len("struct<") : -1]):
+            name, _, ft = part.partition(":")
+            fields[name.strip()] = ft.strip()
+        # the API lists a struct's fields in no particular order: put them back in the declared one
+        names = [n for n in fields if n in value] + [
+            n for n in value if n not in fields
+        ]
+        return {k: coerce_uc_value(value[k], fields.get(k, "string")) for k in names}
+    if low.startswith("array<") and isinstance(value, list):
+        return [coerce_uc_value(v, t[len("array<") : -1]) for v in value]
+    if low.startswith("map<") and isinstance(value, dict):
+        args = _split_type_args(t[len("map<") : -1])
+        vt = args[1] if len(args) > 1 else "string"
+        return {k: coerce_uc_value(v, vt) for k, v in value.items()}
+    if not isinstance(value, str):
+        return value
+    if low == "binary":
+        return base64.b64decode(value)
+    if low in ("tinyint", "smallint", "int", "integer", "bigint", "long"):
+        return int(value)
+    if low in ("float", "double") or low.startswith("decimal"):
+        return float(value)
+    if low == "boolean":
+        return value.lower() == "true"
+    return value
+
+
+def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
+    """results: {cid: {"value": <decoded>} | {"error": "<message>"}} written by gbx-uc-sql --out.
+
+    A UC case with no result is a failure too: a statement that never ran must not pass.
+    """
+    from databricks.labs.gbx import manifest
+
+    man = manifest.load()
+    failures = []
+    by_id = {c.cid: c for c in cases}
+    for cid, r in results.items():
+        case = by_id[cid]
+        fn = man.functions[case.fn]
+        if isinstance(r.get("value"), (dict, list)) and fn.returns_uc:
+            r = {**r, "value": coerce_uc_value(r["value"], fn.returns_uc)}
+        try:
+            # inside the try: an argument this host cannot build (no osgeo) fails its own case, not the judgement
+            args = [resolve_arg(a, tmpdir) for a in case.args]
+            if "error" in r:
+                msg = check_error(case, RuntimeError(r["error"]))
+            elif fn.kind == "generator" and case.sql is None:
+                msg = _check_rows(case, _uc_rows(fn, r["value"]), args)
+            elif fn.kind == "scalar" and case.kind == "cells":
+                # an array of chips is its elements; one chip (a struct) is one cell, as the session runner reads it
+                v = r["value"]
+                msg = _check_rows(
+                    case,
+                    [e for e in (v if isinstance(v, list) else [v]) if e is not None],
+                    args,
+                )
+            else:
+                msg = check(case, r["value"], args)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - one row the judge cannot read must not hide the others
+            msg = f"{case.cid}: the judge could not read the result ({type(exc).__name__}: {str(exc)[:200]})"
+        if msg:
+            failures.append(msg)
+    failures += [
+        f"{c.cid}: no result"
+        for c in cases
+        if "uc" in c.surfaces and c.cid not in results
+    ]
+    return failures

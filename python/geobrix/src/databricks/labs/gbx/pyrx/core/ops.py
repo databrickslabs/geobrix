@@ -6,15 +6,26 @@ Faithful ports of the heavyweight ``gbx_rst_tryopen`` / ``gbx_rst_asformat`` /
 rasterio's bundled GDAL (no JAR)."""
 
 import os
+import shutil
 
 import rasterio
 import shapely.wkb
+from rasterio._base import driver_supports_mode
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx._gdal_policy import (
+    activate,
+    bytes_refused_light_names,
+    open_bytes,
+    open_data,
+)
 from databricks.labs.gbx.pyrx.core import compression as _comp
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    new_local_temp_dir,
+    new_local_temp_file,
+)
 
 # Heavyweight gdaladdo resampling name -> rasterio.enums.Resampling name.
 # Mirrors the AllowedResampling set in RST_BuildOverviews.scala; "near" is the
@@ -42,7 +53,8 @@ def try_open(raster_bytes: bytes) -> bool:
     if raster_bytes is None:
         return False
     try:
-        with _serde.open_tile(bytes(raster_bytes)) as ds:
+        # an open, not a read: a tile too large to decode still opens
+        with MemoryFile(bytes(raster_bytes)) as mf, open_bytes(mf) as ds:
             # Touch a property so a lazily-opened-but-invalid dataset still trips.
             _ = ds.count
         return True
@@ -50,29 +62,171 @@ def try_open(raster_bytes: bytes) -> bool:
         return False
 
 
-def as_format(ds, new_format: str) -> bytes:
-    """Re-encode the raster to another GDAL driver (e.g. PNG, GTiff).
+# Raster drivers that write a file but that rasterio's extension map does not list: COG shares
+# ``tif`` with GTiff (only GTiff survives), and the Surfer grids have no extension of
+# their own. (The other drivers the map hides cannot be encoded to one buffer: ENVI and ISCE
+# write a header file beside the data, ROI_PAC and Leveller need a file type or a creation option
+# of their own.) A driver of the refused tile-bytes class (VRT, VICAR, ISIS3 ...) is no writer here: a tile's
+# bytes in that format would not open again (``_gdal_policy.open_bytes``).
+_EXTENSIONLESS_WRITERS = ("COG", "GS7BG", "GSAG", "GSBG")
 
-    Mirrors the heavyweight ``gbx_rst_asformat``. Validates the requested
-    driver is available in rasterio's bundled GDAL build; raises ValueError
-    otherwise. Returns the raster bytes encoded in ``new_format``.
+
+def _writable_drivers() -> set:
+    """Raster driver short names this GDAL build can encode to.
+
+    ``raster_driver_extensions`` maps each file extension to ONE driver, so a driver that
+    shares its extension with another, or has none, is hidden from it:
+    :data:`_EXTENSIONLESS_WRITERS` are added back from the registered-driver list. The drivers GeoBrix
+    refuses to open from tile bytes are left out: the tile would not open again (with the driver policy off
+    nothing is refused, and nothing is left out).
     """
-    new_format = str(new_format)
-    # raster_driver_extensions maps extension -> driver short name; the value
-    # set is the writable raster drivers available in this GDAL build.
-    available = set(rasterio.drivers.raster_driver_extensions().values())
-    if new_format not in available:
+    drivers = set(rasterio.drivers.raster_driver_extensions().values())
+    with rasterio.Env() as env:
+        registered = env.drivers()
+        drivers.update(d for d in _EXTENSIONLESS_WRITERS if d in registered)
+    if activate()["mode"] == "off":
+        return drivers
+    return drivers - set(bytes_refused_light_names())
+
+
+def driver_name(new_format: str) -> str:
+    """The GDAL short name that ``new_format`` names, in any case (GDAL looks a driver up
+    case-insensitively); ValueError when this GDAL build cannot encode to it."""
+    available = _writable_drivers()
+    by_lower = {d.lower(): d for d in available}
+    name = by_lower.get(str(new_format).lower())
+    if name is None:
         raise ValueError(
             f"rst_asformat: driver '{new_format}' is not available in this "
-            f"GDAL build; available: {', '.join(sorted(available))}"
+            "GDAL build, or is a format whose bytes GeoBrix does not open as a tile "
+            f"(it can name other files); available: {', '.join(sorted(available))}"
         )
+    return name
+
+
+def known_driver(name, fn: str) -> str:
+    """GDAL's spelling of the driver short name ``name`` (any case) for a constructor's driver hint; ValueError
+    naming the value when this GDAL build has no such driver, or the driver is vector-only (no ``DCAP_RASTER``,
+    such as 'GeoJSON' or 'ESRI Shapefile')."""
+    with rasterio.Env() as env:
+        registered = env.drivers()
+    by_lower = {d.lower(): d for d in registered}
+    hit = by_lower.get(str(name).lower())
+    if hit is None or not driver_supports_mode(hit, "DCAP_RASTER"):
+        raise ValueError(
+            f"{fn}: driver '{name}' is not a GDAL raster driver in this build. "
+            "Fix: use a GDAL raster driver short name such as 'GTiff', 'PNG' or 'netCDF'."
+        )
+    return hit
+
+
+def content_refusal(exc) -> str:
+    """The reason and Fix of ``rst_fromcontent`` for bytes that cannot be opened as a raster (what GDAL or the driver
+    policy says, then how to pass a raster file's bytes)."""
+    return (
+        f"rst_fromcontent: the content cannot be opened as a raster: {exc}. "
+        "Fix: pass the bytes of a whole raster file in a format GDAL reads, such as the content column of "
+        "spark.read.format('binaryFile')."
+    )
+
+
+def written_driver(new_format: str) -> str:
+    """The driver the bytes of ``as_format(ds, new_format)`` open as, for the tile metadata:
+    the driver itself, except COG, which is a layout of a GeoTIFF and opens as ``GTiff`` (the
+    stamp of ``rst_cog_convert`` too, so a writer passes the bytes through, keeping the layout
+    and the codec that were asked for, instead of re-encoding them with its own defaults).
+    """
+    name = driver_name(new_format)
+    return "GTiff" if name == "COG" else name
+
+
+def as_format(ds, new_format: str) -> bytes:
+    """Re-encode the raster to another GDAL driver (e.g. PNG, GTiff, COG).
+
+    Mirrors the heavyweight ``gbx_rst_asformat``. Validates the requested
+    driver (in any case) is available in rasterio's bundled GDAL build; raises
+    ValueError otherwise. Returns the raster bytes encoded in ``new_format``.
+
+    ``COG`` yields a Cloud Optimized GeoTIFF (``LAYOUT=COG``): the COG driver
+    only copies an existing dataset and its layout needs the canonical
+    block-size / overview / codec options, so it goes through ``cog_convert``
+    with the ``rst_cog_convert`` defaults (512 blocks, AVERAGE overviews) and
+    the size-adaptive codec. Other copy-only drivers (PNG, JPEG, ...) are
+    written by rasterio through a buffered copy.
+    """
+    new_format = driver_name(new_format)
+    if new_format == "COG":
+        return cog_convert(ds, "AUTO", 512, "AVERAGE")
     data = ds.read()
-    profile = ds.profile.copy()
+    profile = _comp.source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver=new_format)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
+    try:
+        if new_format in _FILE_WRITERS:
+            return _encode_via_file(profile, data, _FILE_WRITERS[new_format])
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                if new_format == "GTiff":
+                    _comp.match_alpha(dst, ds.colorinterp)
+                dst.write(data)
+            return mf.read()
+    except (SystemError, TypeError) as exc:
+        # the binding's own failure of a driver that cannot encode a tile through a buffer: a clear refusal, not a
+        # raw SystemError or TypeError from rasterio's writer
+        raise ValueError(
+            f"rst_asformat: driver '{new_format}' cannot encode a tile here (rasterio: {exc}). "
+            "Fix: encode to GTiff, COG or PNG instead, or write this format with plain GDAL."
+        ) from exc
+
+
+# Drivers whose georeferencing a buffered (in-memory) write loses: the JPEG 2000 encoder drops the CRS of the file it
+# creates in memory. They write to a file with their own extension, and the bytes are read back.
+_FILE_WRITERS = {"JP2OpenJPEG": ".jp2"}
+
+
+def _encode_via_file(profile: dict, data, extension: str) -> bytes:
+    """The bytes of *data* written with *profile* to a file named with *extension* in a local folder of its own."""
+    folder = new_local_temp_dir("gbx_asformat_")
+    try:
+        path = os.path.join(folder, "tile" + extension)
+        # the source's strip or tile layout is a GeoTIFF's, not the format's: the encoder chooses its own
+        profile = {
+            k: v
+            for k, v in profile.items()
+            if k not in ("blockxsize", "blockysize", "tiled")
+        }
+        with open_data(path, "w", **profile) as dst:
             dst.write(data)
-        return mf.read()
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def check_overview_args(levels, resampling):
+    """The validated ``(levels as ints, lower-case resampling key)`` of a build_overviews call; ValueError, naming the
+    value, for no levels, a level below 2 or a resampling word that names none."""
+    if levels is None or len(levels) == 0:
+        raise ValueError(
+            "rst_buildoverviews: levels must be a non-empty integer array "
+            "(e.g. [2, 4, 8])"
+        )
+    levels = [int(level) for level in levels]
+    for level in levels:
+        if level < 2:
+            raise ValueError(
+                f"rst_buildoverviews: each level must be >= 2; got {level} in levels {levels}"
+            )
+    resampling = (
+        "average" if resampling is None or resampling == "" else str(resampling)
+    )
+    key = resampling.lower()
+    if key not in _OVERVIEW_RESAMPLING_MAP:
+        allowed = ", ".join(sorted(_OVERVIEW_RESAMPLING_MAP))
+        raise ValueError(
+            f"rst_buildoverviews: unsupported resampling '{resampling}'; "
+            f"allowed: {allowed}"
+        )
+    return levels, key
 
 
 def build_overviews(ds, levels, resampling: str = "average") -> bytes:
@@ -85,32 +239,12 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
 
     Overviews are embedded internally in the GTiff (no .ovr sidecar).
     """
-    if levels is None or len(levels) == 0:
-        raise ValueError(
-            "rst_buildoverviews: levels must be a non-empty integer array "
-            "(e.g. [2, 4, 8])"
-        )
-    levels = [int(level) for level in levels]
-    for level in levels:
-        if level < 2:
-            raise ValueError(
-                f"rst_buildoverviews: each level must be >= 2; got {level}"
-            )
-    resampling = (
-        "average" if resampling is None or resampling == "" else str(resampling)
-    )
-    key = resampling.lower()
-    if key not in _OVERVIEW_RESAMPLING_MAP:
-        allowed = ", ".join(sorted(_OVERVIEW_RESAMPLING_MAP))
-        raise ValueError(
-            f"rst_buildoverviews: unsupported resampling '{resampling}'; "
-            f"allowed: {allowed}"
-        )
+    levels, key = check_overview_args(levels, resampling)
     resampling_enum = Resampling[_OVERVIEW_RESAMPLING_MAP[key]]
 
     data = ds.read()
     out_dtype = ds.dtypes[0]
-    profile = ds.profile.copy()
+    profile = _comp.source_profile(ds.profile)
     profile.update(driver="GTiff")
     profile.update(
         _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
@@ -121,9 +255,10 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     # embed internally; then read the bytes (with their .ovr) back.
     tmp = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(tmp, "w", **profile) as dst:
+        with open_data(tmp, "w", **profile) as dst:
+            _comp.match_alpha(dst, ds.colorinterp)
             dst.write(data)
-        with rasterio.open(tmp, "r+") as dst:
+        with open_data(tmp, "r+") as dst:
             dst.build_overviews(levels, resampling_enum)
             dst.update_tags(ns="rio_overview", resampling=key)
         with open(tmp, "rb") as fh:

@@ -66,14 +66,66 @@ object Quadbin extends GridSystem {
         val n: Long = if (z == 0) 1L else 1L << z
         val latRad = latClamped * math.Pi / 180.0
         var xTile = math.floor((lonClamped + 180.0) / 360.0 * n.toDouble).toLong
-        var yTile = math.floor(
-          (1.0 - math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.Pi) / 2.0 * n.toDouble
-        ).toLong
+        val yFast = (1.0 - math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.Pi) / 2.0 * n.toDouble
+        // A latitude within EdgeBand of a row edge is decided exactly, not by the libm functions of the fast
+        // formula (tan, cos and log differ by an ulp or two between platforms and from the lightweight tier's).
+        val m = math.rint(yFast).toLong
+        var yTile =
+            if (m > 0L && m < n && math.abs(yFast - m.toDouble) <= EdgeBand) (if (tileYAtLeast(latClamped, n, m)) m else m - 1L)
+            else math.floor(yFast).toLong
         if (xTile < 0L) xTile = 0L
         if (xTile > n - 1L) xTile = n - 1L
         if (yTile < 0L) yTile = 0L
         if (yTile > n - 1L) yTile = n - 1L
         (xTile, yTile)
+    }
+
+    /** How near a whole tile row the fast formula must land for the row to be decided exactly. */
+    private val EdgeBand: Double = 1e-6
+
+    private val Pi60 = new java.math.BigDecimal("3.14159265358979323846264338327950288419716939937510582097494459")
+    private val Mc60 = new java.math.MathContext(60)
+
+    /**
+      * True when the web-mercator tile row of the double `lat` at `n` rows is at least `m`. Exact, in 60-digit
+      * decimal arithmetic on the binary value of `lat`: `y >= m` is `tan(r) + sec(r) <= exp(pi * (1 - 2m / n))`
+      * for `r` = `lat` in radians. The lightweight tier's `_quadbin._tile_y_at_least` is the same computation, so
+      * a pixel centre on a tile edge lands in the same row in both tiers whatever the platform's libm says.
+      */
+    private[grid] def tileYAtLeast(lat: Double, n: Long, m: Long): Boolean = {
+        val r  = new java.math.BigDecimal(lat).multiply(Pi60, Mc60).divide(new java.math.BigDecimal(180), Mc60)
+        val r2 = r.multiply(r, Mc60)
+        var cos, termC = java.math.BigDecimal.ONE
+        var sin, termS = r
+        var k = 1
+        while (k < 70) {
+            termC = termC.multiply(r2, Mc60).divide(new java.math.BigDecimal((2 * k - 1) * (2 * k)), Mc60).negate()
+            termS = termS.multiply(r2, Mc60).divide(new java.math.BigDecimal((2 * k) * (2 * k + 1)), Mc60).negate()
+            cos = cos.add(termC, Mc60)
+            sin = sin.add(termS, Mc60)
+            k += 1
+        }
+        val lhs = java.math.BigDecimal.ONE.add(sin, Mc60).divide(cos, Mc60)
+        val arg = Pi60.multiply(
+          java.math.BigDecimal.ONE.subtract(new java.math.BigDecimal(2L * m).divide(new java.math.BigDecimal(n), Mc60), Mc60),
+          Mc60
+        )
+        lhs.compareTo(expBd(arg)) <= 0
+    }
+
+    /** `e^x` for |x| <= pi in 60 digits: Taylor series of the argument halved 4 times, then squared back. */
+    private def expBd(x: java.math.BigDecimal): java.math.BigDecimal = {
+        val h = x.divide(new java.math.BigDecimal(16), Mc60)
+        var term, sum = java.math.BigDecimal.ONE
+        var k = 1
+        while (k < 60) {
+            term = term.multiply(h, Mc60).divide(new java.math.BigDecimal(k), Mc60)
+            sum = sum.add(term, Mc60)
+            k += 1
+        }
+        var i = 0
+        while (i < 4) { sum = sum.multiply(sum, Mc60); i += 1 }
+        sum
     }
 
     /** Pack (z, x, y) into the 64-bit quadbin Long (canonical CARTO v0 encoding). */

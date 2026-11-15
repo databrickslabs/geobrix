@@ -20,7 +20,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re as _re
-import shutil
+import threading
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -29,14 +29,26 @@ from typing import Any, Callable, Literal, Optional
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-# Re-export listing helpers for backward compatibility
-from databricks.labs.gbx.ds._listing import (
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx.ds._listing import (  # re-exported for backward compatibility
     _retry_transient,
     list_files,
     to_local_path,
     to_spark_uri,
 )
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.budget import (  # noqa: F401  (re-exported)
+    READ_CAP_KEY,
+    WindowOverReadCap,
+    read_cap_refusal,
+    session_read_cap,
+    size_text,
+    tile_read_cap,
+)
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    copy_source_with_sidecars,
+    new_staged_local_file,
+    remove_staged,
+)
 
 __all__ = [
     "to_local_path",
@@ -57,6 +69,7 @@ __all__ = [
     "_COG_DRIVER_MAX_BYTES",
     "_FILE_SUPPORT_CACHE",
     "_connect_aware_lru_sizing",
+    "session_free_stream_cap",
     "_open_via_file_ref",
     "_OpenerContext",
     "OpenResourceLRU",
@@ -72,7 +85,8 @@ __all__ = [
     "_resolve_session_for_cap",
     "materialize_decision",
     "report_detected_cap",
-    # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
+    "lazy_read_cap",
+    # FILE-column table helpers (moved from rasterx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
     # Generic session-ful FILE-column table read
@@ -592,7 +606,7 @@ def _accept_basename(
 
 
 # ---------------------------------------------------------------------------
-# Positive path filter helpers (Task 8b)
+# Positive path filter helpers
 # ---------------------------------------------------------------------------
 
 
@@ -715,8 +729,13 @@ def _enumerate_fuse(
     include_hidden: bool,
     glob_patterns: Optional[list[str]] = None,
     need_size: bool = True,
+    names_out: Optional[dict] = None,
 ) -> list[dict[str, Any]]:
     """Enumerate via os.scandir (FUSE-only fallback).
+
+    *names_out*, when given, receives ``{folder: [every entry name the scan found there]}``
+    for each folder scanned (the names the accepted files were picked from, sidecars
+    included), at no extra syscall.
 
     Returns a list of dicts with keys {path, size, file} where file is None.
 
@@ -773,6 +792,8 @@ def _enumerate_fuse(
                 scan_entries = _retry_transient(lambda p=dir_path: list(os.scandir(p)))
             except FileNotFoundError as exc:
                 raise FileNotFoundError(f"Path does not exist: {path!r}") from exc
+            if names_out is not None:
+                names_out[dir_path] = [e.name for e in scan_entries]
             for entry in scan_entries:
                 name = entry.name
                 if entry.is_dir(follow_symlinks=False):
@@ -811,8 +832,12 @@ def list_local_files(
     include_hidden: bool = False,
     extensions: Optional[tuple[str, ...]] = None,
     path_glob_filter: Optional[str] = None,
+    names_out: Optional[dict] = None,
 ) -> list[str]:
     """Session-free: return sorted local (FUSE) file paths under *path*.
+
+    *names_out*: see :func:`_enumerate_fuse` (the folders' entry names, for a caller that
+    reads the sidecars beside the files it lists).
 
     The single enumeration routine every DataSource reader consumes — no
     SparkSession, no FILE-tier SQL, safe inside a session-less DataSource on
@@ -829,6 +854,7 @@ def list_local_files(
         include_hidden=include_hidden,
         glob_patterns=glob_patterns,
         need_size=False,  # caller discards size; skip all per-file stat syscalls
+        names_out=names_out,
     )
     return [r["path"] for r in rows]
 
@@ -868,6 +894,9 @@ _COG_DRIVER_MAX_BYTES = int(
 # =============================================================================
 
 _FILE_SUPPORT_CACHE: dict = {}
+_FILE_SUPPORT_LOCK = (
+    threading.Lock()
+)  # installs that overlap in `register` must not probe at the same moment
 
 
 def file_supported(spark: Optional["SparkSession"] = None) -> bool:
@@ -916,9 +945,12 @@ def file_supported(spark: Optional["SparkSession"] = None) -> bool:
     if session_id in _FILE_SUPPORT_CACHE:
         return _FILE_SUPPORT_CACHE[session_id]
 
-    result = _check_file_support(spark)
-    _FILE_SUPPORT_CACHE[session_id] = result
-    return result
+    with _FILE_SUPPORT_LOCK:
+        if session_id in _FILE_SUPPORT_CACHE:
+            return _FILE_SUPPORT_CACHE[session_id]
+        result = _check_file_support(spark)
+        _FILE_SUPPORT_CACHE[session_id] = result
+        return result
 
 
 def _check_file_support(spark: "SparkSession") -> bool:
@@ -1029,6 +1061,43 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
     return F.lit(None)
 
 
+def lazy_read_cap() -> int:
+    """The read cap of a reader no registration carried one into, resolved where it runs. With a session (the driver)
+    it is :func:`report_detected_cap`. With none (a Spark task on a worker) the process cannot tell Serverless from
+    classic, so it takes the smaller Serverless cap, never the classic 256 MiB that would decode an over-cap file on a
+    Serverless task. ``GBX_STREAM_MAX_BYTES`` still wins."""
+    sess = _resolve_session_for_cap()
+    return report_detected_cap(sess) if sess is not None else _lru_sizing(True)[0]
+
+
+def file_ref_sql(tile_sql: str, spark: Optional["SparkSession"] = None) -> str:
+    """The SQL form of :func:`file_ref_arg`, for a SQL function wrapper: the FILE mint for ``tile_sql``'s path,
+    with the same size-gated FUSE-direct rule and cap; ``NULL`` when FILE is not supported here.
+
+    ``tile_sql`` is the SQL text of the tile (a parameter name or a column). Serverless-safe, as
+    :func:`file_ref_arg`: no .rdd / _jvm / _jsc / sparkContext / conf.set.
+    """
+    if not file_supported(spark):
+        return "NULL"
+    sess = spark if spark is not None else _resolve_session_for_cap()
+    if sess is not None:
+        from databricks.labs.gbx.manager import capabilities
+
+        # FILE works in a query here, but a SQL function that carries it can break the listing of the session's
+        # functions (DBR 17.3): there the wrapper passes NULL and the UDF reads the path
+        if not capabilities.has(sess, "sql_file_type"):
+            return "NULL"
+    path = f"{tile_sql}.path"
+    mint = f"try_to_file({path})"
+    if _fuse_direct_disabled():
+        return mint
+    cap = int(_connect_aware_lru_sizing(sess)[0])
+    return (
+        f"CASE WHEN {tile_sql}.window IS NULL AND (startswith({path}, '/Volumes') OR startswith({path}, '/dbfs')) "
+        f"AND CAST({tile_sql}.metadata['path_file_size'] AS BIGINT) > {cap} THEN NULL ELSE {mint} END"
+    )
+
+
 class FileRefReadError(Exception):
     """Raised when a FILE/FILEREF windowed read fails (allows degradation)."""
 
@@ -1085,7 +1154,6 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # The broad except converts any failure here to FileRefReadError so the
     # caller can degrade to the local-file path.  The yield is OUTSIDE this
     # handler so that caller-body exceptions propagate unchanged (not wrapped).
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.windows import Window
 
@@ -1094,7 +1162,7 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
         if not stream.seekable():
             raise FileRefReadError("FileRef stream is not seekable")
 
-        with rasterio.open(stream) as src:
+        with open_data(stream) as src:
             # Reprojection check: if tile_crs requests a different CRS than
             # the source (after any pending_srid relabel), the FILE path cannot
             # warp — raise FileRefReadError to degrade to the local-file path.
@@ -1128,7 +1196,8 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
             from databricks.labs.gbx.pyrx.core.open_tile import _window_dataset_bytes
 
             tile_bytes = _window_dataset_bytes(src, rio_window, pending=pending)
-    except FileRefReadError:
+    except (FileRefReadError, WindowOverReadCap):
+        # a window over the read cap is refused here, not degraded to a local copy of the whole file
         raise
     except Exception as exc:
         raise FileRefReadError(f"FileRef windowed read failed: {exc}") from exc
@@ -1136,7 +1205,7 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # Yield phase: outside the broad handler so that caller-body exceptions
     # propagate unchanged (not converted to FileRefReadError → RuntimeError).
     with MemoryFile(tile_bytes) as mf:
-        with mf.open() as ds:
+        with open_bytes(mf) as ds:
             yield ds
 
 
@@ -1161,19 +1230,37 @@ def _fuse_direct_disabled() -> bool:
     return os.environ.get("GBX_DISABLE_FUSE_DIRECT") == "1"
 
 
+def _remote_configured() -> bool:
+    """True when this process is set up for Spark Connect (SPARK_REMOTE and the like)."""
+    try:
+        from pyspark.sql.utils import is_remote
+    except ImportError:  # cannot tell: let the builder decide, as before
+        return True
+    return bool(is_remote())
+
+
 def _resolve_session_for_cap() -> Optional["SparkSession"]:
     """Resolve the active SparkSession for baking the connect-aware stream cap.
 
     Mirrors the session-resolution in file_supported(): tries getActiveSession()
-    first, falls back to getOrCreate(), returns None if both fail.  None is an
+    first; with Spark Connect configured it falls back to getOrCreate() (a Connect
+    client session is cheap, and it is what tells Serverless's 64 MiB cap from the
+    classic 256 MiB). Returns None otherwise, and when getOrCreate() fails.  None is an
     acceptable result — _connect_aware_lru_sizing(None) returns the 256 MiB classic
-    cap as a safe fallback (same as the non-Connect branch).
+    cap, the very value a classic session would give.
+
+    Without Connect it never creates a session: a classic session would only say "classic",
+    while building one starts a JVM and leaves a process-wide ``local[*]`` session behind,
+    which the next ``SparkSession.builder.master(...).getOrCreate()`` of the same process
+    then silently reuses (its master and settings ignored).
 
     Worker-safe: no .rdd / _jvm / conf.set.
     """
     sess = SparkSession.getActiveSession()
     if sess is not None:
         return sess
+    if not _remote_configured():
+        return None
     try:
         return SparkSession.builder.getOrCreate()
     except Exception:
@@ -1253,8 +1340,9 @@ def report_detected_cap(spark: Optional["SparkSession"] = None) -> int:
 
     Returns:
         The stream cap in bytes:
-        - 64 MiB (67,108,864) on Spark Connect / Serverless.
-        - 256 MiB (268,435,456) on classic Spark (no Connect session).
+        - 64 MiB (67,108,864) on Serverless (a Spark Connect session there).
+        - 256 MiB (268,435,456) on classic compute: a classic session, or a Spark Connect
+          session of standard access mode.
         - ``GBX_STREAM_MAX_BYTES`` override if set (wins in both modes).
 
     Args:
@@ -1290,16 +1378,24 @@ def _probe_direct_open(path: str) -> None:
     consistency misses (``FileNotFoundError`` / ``OSError``) do not
     immediately trigger a full-file copy.
 
+    The open runs with ``GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR`` for this thread
+    (``pyrx._env.readdir_option``): a one-pixel read needs no sidecar file, and GDAL then
+    neither lists the folder (0.3 s to 10 s on a Serverless worker for a folder of 745
+    files) nor checks each sidecar by name. The real open that follows takes its own value
+    (``pyrx._env.open_raster``).
+
     Raises on failure after retries; returns ``None`` on success.
     """
-    import rasterio
     from rasterio.windows import Window
 
-    def _do() -> None:
-        with rasterio.open(path) as ds:
-            ds.read(1, window=Window(0, 0, 1, 1))
+    from databricks.labs.gbx.pyrx._env import readdir_option
 
-    _retry_transient(_do)
+    def _do() -> None:
+        with readdir_option("EMPTY_DIR"):
+            with open_data(path) as ds:
+                ds.read(1, window=Window(0, 0, 1, 1))
+
+    _retry_transient(_do, path=path)  # a GDAL open's error names no file
 
 
 class StageTooLargeError(Exception):
@@ -1309,6 +1405,11 @@ class StageTooLargeError(Exception):
     gracefully (return None / fall back to header), so this is intentionally a
     plain ``Exception`` subclass.
     """
+
+
+def stage_max_bytes() -> int:
+    """The largest file (or VRT's sources, together) staged to local disk: ``GBX_STAGE_MAX_BYTES``, else 4 GiB."""
+    return int(os.environ.get("GBX_STAGE_MAX_BYTES", 4 * 1024**3))
 
 
 def _stage_local_if_needed(path: str) -> tuple[str, bool]:
@@ -1355,7 +1456,7 @@ def _stage_local_if_needed(path: str) -> tuple[str, bool]:
     # Size guard: refuse to stage files that exceed the configured cap.
     # This prevents silent OOM from staging a multi-GiB file to local disk.
     # Does NOT apply to the direct-FUSE-access success path above.
-    stage_max = int(os.environ.get("GBX_STAGE_MAX_BYTES", 4 * 1024**3))
+    stage_max = stage_max_bytes()
     try:
         file_size = os.path.getsize(path)
     except OSError:
@@ -1366,15 +1467,12 @@ def _stage_local_if_needed(path: str) -> tuple[str, bool]:
             f"GBX_STAGE_MAX_BYTES={stage_max:,}; use FUSE (as_local_file) instead"
         )
 
-    # Copy fallback: stage to a local temp (original behavior).
-    tmp = new_local_temp_file(suffix=os.path.splitext(path)[1] or ".tif")
-    try:
-        with open(path, "rb") as _src, open(tmp, "wb") as _dst:
-            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-    except Exception:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+    # Copy fallback: stage to a local temp, with the sidecars beside the file (an .aux.xml with its NoData, an ESRI .hdr)
+    # under the same prefix, as a raster stage does: GDAL finds them by the staged name, and a copy without them opens
+    # without the CRS or NoData they hold. The staged name is ``<uuid hex>_<random><source name>`` so that
+    # ``remove_staged`` finds the sidecars by the prefix.
+    tmp = new_staged_local_file(os.path.basename(path.rstrip("/")) or "source.tif")
+    copy_source_with_sidecars(path, tmp)  # removes what it staged if it fails
     return tmp, True
 
 
@@ -1400,13 +1498,21 @@ def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
 
     Returns:
         (stream_max_bytes, lru_max_bytes, max_count):
-        - Classic Spark: (256 MiB, 4 GiB, 4) — existing behavior.
-        - Spark Connect: (64 MiB, 512 MiB, 4) — serverless-safe.
+        - Classic compute: (256 MiB, 4 GiB, 4), for a classic session and for a Spark
+          Connect session of standard access mode (Connect over classic compute), whose
+          tasks run on classic executors.
+        - Serverless (a Connect session on Serverless compute): (64 MiB, 512 MiB, 4).
         - Env overrides win in both: GBX_STREAM_MAX_BYTES, GBX_LRU_MAX_BYTES.
         - Serverless worst case: 4 × 64 MiB = 256 MiB, well under ~1 GB task.
+    The kind is judged on the driver (``pyrx.core.budget.session_on_serverless``).
     """
-    is_connect = spark is not None and "connect" in type(spark).__module__
+    from databricks.labs.gbx.pyrx.core.budget import session_on_serverless
 
+    return _lru_sizing(session_on_serverless(spark))
+
+
+def _lru_sizing(is_connect: bool) -> tuple[int, int, int]:
+    """``_connect_aware_lru_sizing`` once it is known whether the tasks have Serverless's memory (``is_connect``)."""
     # Read raw os.environ to distinguish "explicitly set" from "default".
     # Module-level constants already baked the env-or-default at import.
     stream_max_bytes_env = os.environ.get("GBX_STREAM_MAX_BYTES")
@@ -1424,6 +1530,21 @@ def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
     max_count = 4
 
     return stream_max_bytes, lru_max_bytes, max_count
+
+
+def session_free_stream_cap() -> int:
+    """The stream cap (bytes) for code that has no session: a Python DataSource reader plans
+    in a worker with none, and ``_resolve_session_for_cap`` there starts a session of its
+    own (seconds) that is not the query's.
+
+    The runtime comes from the session-free probe ``raster_gbx`` sizes its tiles by
+    (``pyrx.core.budget.runtime_kind``): 64 MiB on Serverless, 256 MiB on classic, with
+    ``GBX_STREAM_MAX_BYTES`` winning in both. An undetected runtime is Serverless, the
+    safe side.
+    """
+    from databricks.labs.gbx.pyrx.core.budget import runtime_kind
+
+    return _lru_sizing(runtime_kind() == "serverless")[0]
 
 
 def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
@@ -1449,13 +1570,21 @@ def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
     """
     if fr.size <= stream_max_bytes:
         stream = fr.open()
-        ds = rasterio.open(stream)
+        ds = open_data(stream)
         if ds.profile.get("tiled", False):
             return ds, stream  # tiled/COG: seekable stream is efficient
         ds.close()
         stream.close()  # striped: release the stream before FUSE fallback
+    from databricks.labs.gbx.pyrx._env import readdir_mode, readdir_option
+
     local_path = fr.as_local_file()
-    return rasterio.open(local_path), None  # FUSE path: no stream
+    with readdir_option(readdir_mode(local_path)):  # as open_raster does
+        return open_data(local_path), None  # FUSE path: no stream
+
+
+# Drivers that read a dataset through the one file handle they opened and never open the
+# path again by name: a staged copy of such a file may be removed from disk once it is open.
+_SINGLE_HANDLE_DRIVERS = frozenset(("GTiff", "COG"))
 
 
 class _OpenerContext:
@@ -1482,17 +1611,34 @@ class _OpenerContext:
       prevent stream leaks alongside the DatasetReader.
     - ``_fuse_sources``: set of id(ds) for FUSE-opened handles — FUSE handles don't
       buffer into executor RAM, so ``weigh`` returns a small nominal for them.
+    - ``_unlinked_sizes``: id(ds) → size of a staged copy removed from disk as soon as it
+      was opened (``unlink_staged``); ``weigh`` uses it.
+
+    ``unlink_staged``: remove a staged copy from disk once it is open, when the dataset's
+    driver reads through the one handle it opened (``_SINGLE_HANDLE_DRIVERS``: GTiff,
+    COG). POSIX: the open handle still reads the file, and its space comes back when the
+    handle closes, however the process ends. For holders that outlive a task: a PySpark
+    worker exits with ``os._exit`` and runs no ``atexit`` handler, so a copy left on disk
+    would stay there. Any other driver may open the file again by name (a netCDF or HDF
+    subdataset, ``NETCDF:"<path>":var``; a fallback that reopens ``ds.name``), so its copy
+    stays on disk and ``close`` removes it (an eviction, the task-attempt boundary, the end
+    of the worker's Python process). Where the remove fails (a platform that cannot remove
+    an open file) the copy is removed by ``close`` as usual.
     """
 
-    def __init__(self, stream_max_bytes: int = _GBX_STREAM_MAX_BYTES):
+    def __init__(
+        self, stream_max_bytes: int = _GBX_STREAM_MAX_BYTES, unlink_staged: bool = False
+    ):
         # Mutable FileRef slot; a list so the partition loop can rebind it.
         self.fr_holder: "list[Any]" = [None]
         # Mutable size slot for metadata-derived tile size; a list to mirror fr_holder.
         self.size_holder: "list[int | None]" = [None]
         self._staged_temps: "dict[int, str]" = {}
+        self._unlinked_sizes: "dict[int, int]" = {}
         self._streams: "dict[int, Any]" = {}
         self._fuse_sources: "set[int]" = set()
         self._stream_max_bytes = stream_max_bytes
+        self._unlink_staged = unlink_staged
 
     def open(self, uri: str):
         import rasterio
@@ -1510,18 +1656,39 @@ class _OpenerContext:
                 pass  # all FILE paths failed → staging fallback
         # Staging fallback: fr unavailable or all FILE paths raised.
         # Import from preparer shim so test monkeypatches still work
+        from databricks.labs.gbx.pyrx._env import open_raster
         from databricks.labs.gbx.pyrx.core.preparer import (
             _stage_local_if_needed as _stage,
         )
 
         local_path, is_temp = _stage(uri)
-        ds = rasterio.open(local_path)
+        opened = False
+        try:
+            ds = open_raster(local_path)
+            opened = True
+        finally:
+            # not opened (a corrupt file the probe could not read either, or an interrupt):
+            # the copy just made would otherwise stay on local disk, once per attempt
+            if is_temp and not opened:
+                remove_staged(local_path)
         if is_temp:
             self._staged_temps[id(ds)] = local_path
+            if self._unlink_staged and ds.driver in _SINGLE_HANDLE_DRIVERS:
+                try:
+                    size = os.path.getsize(local_path)
+                    os.remove(local_path)
+                except OSError:
+                    pass  # stays in _staged_temps: close removes it
+                else:
+                    del self._staged_temps[id(ds)]
+                    self._unlinked_sizes[id(ds)] = size
+                    # the sidecars staged beside it (an .aux.xml, an .hdr) were read at open; they leave with the file
+                    remove_staged(local_path)
         return ds
 
     def close(self, src) -> None:
         tmp = self._staged_temps.pop(id(src), None)
+        self._unlinked_sizes.pop(id(src), None)
         stream = self._streams.pop(id(src), None)
         self._fuse_sources.discard(id(src))
         try:
@@ -1535,7 +1702,7 @@ class _OpenerContext:
                 pass
         if tmp:
             try:
-                os.remove(tmp)
+                remove_staged(tmp)
             except Exception:
                 pass
 
@@ -1556,7 +1723,9 @@ class _OpenerContext:
                 return int(fr.size)
             except Exception:
                 pass
-        # Staged fallback: use the on-disk size of the temp copy.
+        # Staged fallback: use the size of the temp copy (on disk, or open but unlinked).
+        if id(src) in self._unlinked_sizes:
+            return self._unlinked_sizes[id(src)]
         tmp = self._staged_temps.get(id(src))
         if tmp:
             try:
@@ -1651,7 +1820,7 @@ def open_for_read(
       `_stage_local_if_needed` probe→stage fallback for eventual-consistency.
 
     This is the base resolver; layer-specific callers (rasterio openers, vector readers) wrap it
-    and adapt to their I/O contract (e.g., rasterio.open(handle) for raster tile reads).
+    and adapt to their I/O contract (e.g., open_data(handle) for raster tile reads).
 
     Args:
         source: A path string (bare FUSE `/Volumes/...` or scheme-qualified `dbfs:/...`, `s3://...`).
@@ -1662,7 +1831,7 @@ def open_for_read(
 
     Returns:
         The source path unchanged. FILE routing is the caller's responsibility
-        (see Task 4 for reader/writer layer integration). Caller adapts based on
+        (the reader/writer layers integrate it). Caller adapts based on
         the resolved tier and access mode.
 
     Raises:
@@ -1772,7 +1941,7 @@ def open_for_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "auto",
+    file_mode: Optional[str] = None,
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -1782,7 +1951,13 @@ def open_for_write(
 
     Mode selection (``file_mode`` parameter):
 
-    - **"auto"** (default):
+    - **None** (default): ``"fuse"`` when no ``filespace`` is given. A ``filespace``
+      asks for FILE MANAGED, so with one and no explicit ``file_mode`` the mode
+      resolves as ``"auto"`` does: managed where the runtime has FILE, and the
+      ``ValueError`` below where it does not.
+    - **"fuse"**: plain Delta write regardless of FILE capability, so the
+      table reads on every compute.
+    - **"auto"** (opt in to FILE where the runtime has it):
       - FILE-capable runtime + ``filespace`` provided → ``"managed"``
         (FILE MANAGED via ``create_file``).
       - FILE-capable runtime + no ``filespace`` → ``"external"``
@@ -1791,7 +1966,6 @@ def open_for_write(
     - **"managed"** or **"external"**: explicit FILE mode.  Raises ``ValueError`` if
       FILE is not available on this runtime (tier='fuse'), or if ``"managed"`` is
       requested without a ``filespace``.
-    - **"fuse"**: plain Delta write regardless of FILE capability.
 
     Fuse mode writes the DataFrame as a plain Delta table with tile columns as
     ordinary columns (``path`` → STRING, ``raster`` → BINARY).  No FILE column,
@@ -1806,8 +1980,11 @@ def open_for_write(
         spark: SparkSession.
         df: DataFrame to write.  Must have a ``tile`` struct column or be pre-flattened.
         target: Fully-qualified Delta table name (e.g. ``"catalog.schema.table"``).
-        file_mode: ``"auto"`` (default), ``"managed"``, ``"external"``, or ``"fuse"``.
+        file_mode: ``None`` (default; ``"fuse"``, or the ``"auto"`` rule when ``filespace``
+                is given), ``"fuse"``, ``"auto"``, ``"managed"``, or ``"external"``.
+                An explicit value always wins.
         filespace: Required for managed mode — the filespace path (``/Volumes/…``).
+                Without an explicit ``file_mode`` it selects FILE MANAGED.
         layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``
                 (CLUSTER BY path + ORDER BY on FILE tables; ORDER BY + warning on fuse),
                 or ``"plain"`` (no ordering).  Any other value raises ``ValueError``.
@@ -1816,12 +1993,19 @@ def open_for_write(
 
     Raises:
         ValueError: If ``layout`` is invalid, if explicit ``"managed"`` is requested
-                    without a ``filespace``, or if ``"managed"`` / ``"external"`` is
-                    requested on a fuse-only runtime.
+                    without a ``filespace``, if ``"managed"`` / ``"external"`` is
+                    requested on a fuse-only runtime, or if a ``filespace`` is given
+                    with no ``file_mode`` on a runtime without FILE.
     """
     import warnings
 
-    from databricks.labs.gbx.pyrx.file_table import write_file_table
+    from databricks.labs.gbx.rasterx.file_table import write_file_table
+
+    # 0. A bare ``filespace`` signals FILE MANAGED intent: resolve it as "auto" would,
+    #    but through the explicit-mode branch so a runtime without FILE raises instead of
+    #    silently writing plain Delta.  No filespace -> the fuse default.
+    if file_mode is None:
+        file_mode = "managed" if filespace else "fuse"
 
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
@@ -1860,11 +2044,11 @@ def open_for_write(
                 f"\n"
                 f"Option 1: Upgrade your cluster to DBR 19+ with FILE support, then try again. "
                 f"\n"
-                f"Option 2: Set file_mode='auto' (default) to transparently use FUSE "
-                f"(fallback, no FILE column). "
+                f"Option 2: Use file_mode='fuse' (default) for a plain Delta write "
+                f"(FUSE only, no FILE-column registration). "
                 f"\n"
-                f"Option 3: Use file_mode='fuse' explicitly to bypass FILE (FUSE only, "
-                f"no FILE-column registration). "
+                f"Option 3: Set file_mode='auto' to use FILE where the runtime supports "
+                f"it and FUSE where it does not. "
             )
         effective_mode = file_mode
     elif file_mode == "fuse":
@@ -1979,7 +2163,7 @@ def ingest_files(
         ValueError: If FILE support is unavailable (tier='fuse'), or ``layout`` is
                     invalid.
     """
-    from databricks.labs.gbx.pyrx.file_table import build_create_sql
+    from databricks.labs.gbx.rasterx.file_table import build_create_sql
 
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
@@ -2042,12 +2226,12 @@ def ingest_files(
 
 
 # =============================================================================
-# FILE-column table helpers (moved from pyrx/file_table.py — shared core)
+# FILE-column table helpers (moved from rasterx/file_table.py — shared core)
 # =============================================================================
-# These helpers were formerly private to pyrx/file_table.py.  They are now
-# canonical here so both the raster reader (pyrx/file_table.py) and future
+# These helpers were formerly private to rasterx/file_table.py.  They are now
+# canonical here so both the raster reader (rasterx/file_table.py) and future
 # format-agnostic consumers (vector table read, gbx_file_read table mode) can
-# share them without duplication.  pyrx/file_table.py imports them from here.
+# share them without duplication.  rasterx/file_table.py imports them from here.
 
 
 def _table_props(spark: SparkSession, table: str) -> dict:
@@ -2131,7 +2315,7 @@ def resolve_file_table(
     **Ordering:** unless ``skip_ordering=True``, the result is sorted by
     ``source`` ascending with NULLs last (``F.col("source").asc_nulls_last()``)
     so that tiles from the same source file land in the same partition, which
-    amortizes per-source open costs (the T8 convention for table reads).
+    amortizes per-source open costs (the sort-by-source convention for table reads).
 
     Args:
         spark: Active SparkSession (driver-side; never called from a worker).
@@ -2362,7 +2546,7 @@ def gbx_file_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "auto",
+    file_mode: Optional[str] = None,
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -2374,6 +2558,12 @@ def gbx_file_write(
     Composes :func:`open_for_write` (MANAGED ``create_file`` / EXTERNAL
     ``try_to_file`` / FUSE plain Delta).  Resolves the session from
     ``df.sparkSession`` when *spark* is not given, so callers hold no session.
+
+    ``file_mode`` defaults to ``None``, which is ``"fuse"``: a plain Delta table that reads
+    on every compute. A ``filespace`` with no ``file_mode`` asks for FILE MANAGED (the
+    ``"auto"`` rule: managed where the runtime has FILE, a clear ``ValueError`` where it
+    does not). Pass ``"auto"`` (FILE where the runtime supports it), ``"external"`` or
+    ``"managed"`` for FILE references; an explicit ``file_mode`` always wins.
 
     Validates ``layout`` up front (fail before any side effect) and delegates
     everything else — including the ``managed``-without-``filespace`` guard and

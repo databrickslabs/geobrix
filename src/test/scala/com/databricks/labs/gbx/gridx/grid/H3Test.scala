@@ -36,6 +36,14 @@ class H3Test extends AnyFunSuite {
         assert(e15 > 0)
     }
 
+    test("H3.edgeLength is the h3 v4 average hexagon edge, the value the Python level uses") {
+        // h3 (Python, v4) average_hexagon_edge_length(r, unit="m"); h3-java 3.7.3 gives 1220.629759 m at r7
+        H3.edgeLength(7) * 1000.0 shouldBe 1406.475763
+        H3.edgeLength(8) * 1000.0 shouldBe 531.41401
+        H3.edgeLength(5) * 1000.0 shouldBe 9854.090989999999
+        an[IllegalArgumentException] should be thrownBy H3.edgeLength(16)
+    }
+
     test("H3.getResolution with Int should return the value in range") {
         H3.getResolution(0) shouldBe 0
         H3.getResolution(15) shouldBe 15

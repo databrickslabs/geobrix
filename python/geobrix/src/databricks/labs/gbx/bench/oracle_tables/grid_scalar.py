@@ -1,0 +1,1088 @@
+"""Oracle table for the grid scalars (BNG, quadbin, custom grid, H3): inputs -> expected, run at every level by
+test_family_cross_tier.py.
+
+Expected values come from the fixtures' definitions or an independent library, never from the function
+under test. A BNG cell is a square of EPSG:27700 metres: `TQ3080` is the 1 km square whose south-west corner
+is (530000, 180000), since the 100 km square `TQ` starts at (500000, 100000). A quadbin cell is a web-mercator
+tile (x, y, zoom); its corners come from the tile arithmetic below, and its id from the `quadbin` library. A
+custom-grid cell id is `position | resolution << 56` with `position = row * columns + column`. H3 values come
+from the `h3` library.
+"""
+
+import math
+import struct
+
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import recipe
+from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
+
+# The session rows of every scalar of this module's table (and of `gbx_bng_eastnorthasbng`, whose rows sit in the shared
+# MVP_S table) also run on the plain Python function behind the pandas UDF (test_family_oracle_l3_callables).
+L3_CALLABLE = True
+L3_CALLABLE_FNS = ("gbx_bng_eastnorthasbng",)
+
+TQ3080 = "POLYGON((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))"
+# A point whose coordinates are infinite: there is no cell for it (WKB, since WKT cannot spell infinity).
+INF_POINT = struct.pack("<BIdd", 1, 1, float("inf"), float("inf"))
+NAN_POINT = struct.pack("<BIdd", 1, 1, float("nan"), float("nan"))
+POINT_WKB = struct.pack("<BIdd", 1, 1, 530500.0, 180500.0)
+
+
+def _chip(cellid, core, wkt):
+    import shapely
+
+    return {
+        "cellid": cellid,
+        "core": core,
+        "chip": shapely.to_wkb(shapely.from_wkt(wkt)),
+    }
+
+
+# Two chips of TQ3080: its west half and its south half (EPSG:27700 metres).
+WEST = "POLYGON((530000 180000, 530500 180000, 530500 181000, 530000 181000, 530000 180000))"
+SOUTH = "POLYGON((530000 180000, 531000 180000, 531000 180500, 530000 180500, 530000 180000))"
+
+
+@builder("chip_west")
+def _chip_west(tmpdir):
+    return _chip("TQ3080", False, WEST)
+
+
+@builder("chip_south")
+def _chip_south(tmpdir):
+    return _chip("TQ3080", False, SOUTH)
+
+
+def _chip_ewkb(cellid, core, wkt, srid):
+    """A chip as gbx_bng_tessellate writes it on UC: the geometry as EWKB with its SRID."""
+    import shapely
+
+    return {
+        "cellid": cellid,
+        "core": core,
+        "chip": shapely.to_wkb(
+            shapely.set_srid(shapely.from_wkt(wkt), srid), include_srid=True
+        ),
+    }
+
+
+@builder("chip_west_ewkb")
+def _chip_west_ewkb(tmpdir):
+    return _chip_ewkb("TQ3080", False, WEST, 27700)
+
+
+@builder("chip_south_ewkb")
+def _chip_south_ewkb(tmpdir):
+    return _chip_ewkb("TQ3080", False, SOUTH, 27700)
+
+
+@builder("chip_west_4326")
+def _chip_west_4326(tmpdir):
+    return _chip_ewkb("TQ3080", False, WEST, 4326)
+
+
+@builder("chip_no_bytes")
+def _chip_no_bytes(tmpdir):
+    """A non-core chip with no geometry: what an empty intersection leaves in a chip table."""
+    return {"cellid": "TQ3080", "core": False, "chip": None}
+
+
+@builder("chip_west_core")
+def _chip_west_core(tmpdir):
+    return _chip("TQ3080", True, WEST)
+
+
+@builder("chip_other_cell")
+def _chip_other_cell(tmpdir):
+    return _chip(
+        "TQ3180",
+        False,
+        "POLYGON((531000 180000, 531500 180000, 531500 181000, 531000 181000, 531000 180000))",
+    )
+
+
+AWKB, AWKT, AREA, CENT = (
+    "gbx_bng_aswkb",
+    "gbx_bng_aswkt",
+    "gbx_bng_cellarea",
+    "gbx_bng_centroid",
+)
+DIST, EDIST, PAC = (
+    "gbx_bng_distance",
+    "gbx_bng_euclideandistance",
+    "gbx_bng_pointascell",
+)
+CINT, CUNI = "gbx_bng_cellintersection", "gbx_bng_cellunion"
+
+# The bytes of TQ3080's centre, laid out by hand: little-endian (NDR) like shapely, GDAL and st_asbinary, no SRID. The
+# same call must give these bytes at the lightweight and the JAR level. (A point has no ring to start anywhere, so the
+# bytes can only differ by byte order or flags.)
+TQ3080_CENTRE_WKB = struct.pack("<BIdd", 1, 1, 530500.0, 180500.0)
+
+
+def _square_wkb(x0, y0, x1, y1):
+    """A square's plain WKB, laid out by hand in the JVM's ring: little-endian polygon, one ring of five points that
+    starts at the south-west corner and runs counter-clockwise."""
+    ring = ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0))
+    return struct.pack("<BIII", 1, 3, 1, 5) + b"".join(
+        struct.pack("<dd", x, y) for x, y in ring
+    )
+
+
+TQ3080_WKB = _square_wkb(530000.0, 180000.0, 531000.0, 181000.0)
+
+GRID_SCALAR = (
+    Case("aswkb_tq3080", AWKB, ("TQ3080",), "geom_equals", TQ3080),
+    # The exact bytes (session surface only: the UC handler returns EWKB with the SRID).
+    Case(
+        "aswkb_tq3080_bytes",
+        AWKB,
+        ("TQ3080",),
+        "wkb_bytes",
+        TQ3080_WKB,
+        surfaces=("session",),
+    ),
+    Case("aswkb_null", AWKB, (None,), "null"),
+    # A malformed cell id is a data error: NULL, not a failed query.
+    Case("aswkb_bad_cell", AWKB, ("XX9999",), "null"),
+    Case("aswkt_tq3080", AWKT, ("TQ3080",), "geom_equals", TQ3080),
+    Case(
+        "aswkt_100km",
+        AWKT,
+        ("TQ",),
+        "geom_equals",
+        "POLYGON((500000 100000, 600000 100000, 600000 200000, 500000 200000, 500000 100000))",
+    ),
+    Case("aswkt_null", AWKT, (None,), "null"),
+    Case("cellarea_1km", AREA, ("TQ3080",), "exact", 1.0),
+    Case("cellarea_100km", AREA, ("TQ",), "exact", 10000.0),
+    # TQ38SW is the south-west 5 km quadrant of the 10 km square TQ38.
+    Case("cellarea_quadrant", AREA, ("TQ38SW",), "exact", 25.0),
+    Case("cellarea_null", AREA, (None,), "null", variants=(("XX9999",),)),
+    # A cell finer than 1 m has no area: the SQL form and the Python handler raise and name the cell. (UC only: the
+    # session levels raise their own error, a KeyError or a missing size, that does not name it.)
+    Case(
+        "cellarea_finer_than_1m",
+        AREA,
+        ("TQ300008000012",),
+        "raises",
+        "TQ300008000012",
+        surfaces=("uc",),
+    ),
+    Case("centroid_tq3080", CENT, ("TQ3080",), "geom_equals", "POINT(530500 180500)"),
+    # The exact bytes (session surface only: the UC handler returns EWKB with the SRID).
+    Case(
+        "centroid_tq3080_bytes",
+        CENT,
+        ("TQ3080",),
+        "wkb_bytes",
+        TQ3080_CENTRE_WKB,
+        surfaces=("session",),
+    ),
+    Case("centroid_null", CENT, (None,), "null"),
+    Case("centroid_bad_cell", CENT, ("!!",), "null"),
+    # TQ3282 is 2 cells east and 2 north of TQ3080.
+    Case("distance_diag", DIST, ("TQ3080", "TQ3282"), "exact", 4),
+    Case("distance_same", DIST, ("TQ3080", "TQ3080"), "exact", 0),
+    Case("distance_null", DIST, (None, "TQ3080"), "null", variants=(("TQ3080", None),)),
+    Case("edistance_diag", EDIST, ("TQ3080", "TQ3282"), "exact", 2),
+    Case("edistance_east", EDIST, ("TQ3080", "TQ3580"), "exact", 5),
+    Case("edistance_null", EDIST, (None, "TQ3080"), "null"),
+    Case("pac_point_1km", PAC, ("POINT(530500 180500)", 3), "exact", "TQ3080"),
+    Case("pac_point_wkb", PAC, (POINT_WKB, 3), "exact", "TQ3080"),
+    # The centroid of the 2 km square (530000..532000, 180000..182000) is (531000, 181000).
+    Case(
+        "pac_polygon_centroid",
+        PAC,
+        (
+            "POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))",
+            3,
+        ),
+        "exact",
+        "TQ3181",
+    ),
+    Case("pac_quadrant", PAC, ("POINT(530500 180500)", -3), "exact", "TQ38SW"),
+    Case("pac_null_geom", PAC, (None, 3), "null"),
+    Case("pac_empty", PAC, ("POINT EMPTY", 3), "null"),
+    # The name of the cell holding (530000, 180000) at every resolution: letters for the 100 km square (TQ), then the
+    # easting and northing digits within it (30000, 80000 metres, cut to the resolution), then a quadrant letter pair
+    # on the half-size resolutions (the point is the south-west corner of its 5 km, 500 m, 50 m and 5 m cells, and the
+    # north-west quarter of TQ at 50 km).
+    *(
+        Case(f"pac_name_res_{res}", PAC, ("POINT(530000 180000)", res), "exact", name)
+        for res, name in (
+            (-1, "T"),
+            (1, "TQ"),
+            (-2, "TQNW"),
+            (2, "TQ38"),
+            (-3, "TQ38SW"),
+            (3, "TQ3080"),
+            (-4, "TQ3080SW"),
+            (4, "TQ300800"),
+            (-5, "TQ300800SW"),
+            (5, "TQ30008000"),
+            (-6, "TQ30008000SW"),
+            (6, "TQ3000080000"),
+        )
+    ),
+    # The polygon and the area (km2) of each of those named cells: a cell is a square of the resolution's size whose
+    # south-west corner is (530000, 180000), except TQ (the 100 km square from (500000, 100000)) and TQNW (the 50 km
+    # quarter of it from (500000, 150000)).
+    *(
+        row
+        for name, (x, y, size) in {
+            "TQ": (500000, 100000, 100000),
+            "TQNW": (500000, 150000, 50000),
+            "TQ38": (530000, 180000, 10000),
+            "TQ38SW": (530000, 180000, 5000),
+            "TQ3080": (530000, 180000, 1000),
+            "TQ3080SW": (530000, 180000, 500),
+            "TQ300800": (530000, 180000, 100),
+            "TQ300800SW": (530000, 180000, 50),
+            "TQ30008000": (530000, 180000, 10),
+            "TQ30008000SW": (530000, 180000, 5),
+            "TQ3000080000": (530000, 180000, 1),
+        }.items()
+        for row in (
+            Case(
+                f"aswkt_{name}",
+                AWKT,
+                (name,),
+                "geom_equals",
+                f"POLYGON(({x} {y}, {x + size} {y}, {x + size} {y + size}, {x} {y + size}, {x} {y}))",
+            ),
+            Case(f"cellarea_{name}", AREA, (name,), "approx", (size / 1000) ** 2),
+        )
+    ),
+    # The 100 km square NE (the letter pair is a square, not a quadrant of N): easting 400-500 km, northing 900-1000 km.
+    Case("pac_100km_ne", PAC, ("POINT(450000 950000)", 1), "exact", "NE"),
+    Case(
+        "aswkt_100km_ne",
+        AWKT,
+        ("NE",),
+        "geom_equals",
+        "POLYGON((400000 900000, 500000 900000, 500000 1000000, 400000 1000000, 400000 900000))",
+    ),
+    Case("cellarea_100km_ne", AREA, ("NE",), "exact", 10000.0),
+    # The centre of the 100 km square NE.
+    Case("centroid_100km_ne", CENT, ("NE",), "geom_equals", "POINT(450000 950000)"),
+    # The 100 km squares at the corners of the 500 km squares and in the other 500 km squares (letter pair: the 500 km
+    # square, then the letter within it, lettered A-Z without I from the top-left, so V is the south-west corner). Each
+    # is a 100 km square at the easting and northing shown.
+    *(
+        row
+        for name, (x, y) in {
+            "SV": (0, 0),
+            "SZ": (400000, 0),
+            "SA": (0, 400000),
+            "SE": (400000, 400000),
+            "TV": (500000, 0),
+            "NV": (0, 500000),
+            "OV": (500000, 500000),
+            "NT": (300000, 600000),
+            "HP": (400000, 1200000),
+        }.items()
+        for row in (
+            Case(
+                f"aswkt_{name}",
+                AWKT,
+                (name,),
+                "geom_equals",
+                f"POLYGON(({x} {y}, {x + 100000} {y}, {x + 100000} {y + 100000}, {x} {y + 100000}, {x} {y}))",
+            ),
+            Case(f"cellarea_{name}", AREA, (name,), "exact", 10000.0),
+        )
+    ),
+    # The six 500 km squares (a single letter): S from (0, 0), T from (500000, 0), N from (0, 500000), O from (500000, 500000),
+    # H from (0, 1000000) and J from (500000, 1000000). A name reads as its own square, a point anywhere in the square
+    # (its corner, its centre, its far corner) writes as that name, and the centre of the name's polygon is the square's centre.
+    *(
+        row
+        for name, (x, y) in {
+            "S": (0, 0),
+            "T": (500000, 0),
+            "N": (0, 500000),
+            "O": (500000, 500000),
+            "H": (0, 1000000),
+            "J": (500000, 1000000),
+        }.items()
+        for row in (
+            Case(
+                f"aswkt_500km_{name}",
+                AWKT,
+                (name,),
+                "geom_equals",
+                f"POLYGON(({x} {y}, {x + 500000} {y}, {x + 500000} {y + 500000}, {x} {y + 500000}, {x} {y}))",
+            ),
+            Case(f"cellarea_500km_{name}", AREA, (name,), "exact", 250000.0),
+            Case(
+                f"centroid_500km_{name}",
+                CENT,
+                (name,),
+                "geom_equals",
+                f"POINT({x + 250000} {y + 250000})",
+            ),
+            Case(
+                f"pac_500km_{name}_corner",
+                PAC,
+                (f"POINT({x} {y})", "500km"),
+                "exact",
+                name,
+            ),
+            Case(
+                f"pac_500km_{name}_centre",
+                PAC,
+                (f"POINT({x + 250000} {y + 250000})", -1),
+                "exact",
+                name,
+            ),
+            Case(
+                f"pac_500km_{name}_far_corner",
+                PAC,
+                (f"POINT({x + 499999} {y + 499999})", -1),
+                "exact",
+                name,
+            ),
+        )
+    ),
+    # The one resolution contract: a whole number, its digit string or a named size; NULL is NULL; anything
+    # else raises naming the value.
+    Case("bng_res_null", PAC, ("POINT(530500 180500)", None), "null"),
+    Case("bng_res_3_5_raises", PAC, ("POINT(530500 180500)", 3.5), "raises", "3.5"),
+    Case("bng_res_digit_string", PAC, ("POINT(530500 180500)", "3"), "exact", "TQ3080"),
+    Case("bng_res_named", PAC, ("POINT(530500 180500)", "1km"), "exact", "TQ3080"),
+    Case("bng_res_whole_double", PAC, ("POINT(530500 180500)", 3.0), "exact", "TQ3080"),
+    Case("bng_res_bad_int", PAC, ("POINT(530500 180500)", 1001), "raises", "1001"),
+    # 2**32 + 3 narrowed to INT wraps to the valid index 3: a BIGINT outside INT raises naming the value instead.
+    Case(
+        "bng_res_huge_bigint",
+        PAC,
+        ("POINT(530500 180500)", 4294967299),
+        "raises",
+        "4294967299",
+    ),
+    Case("bng_res_unknown", PAC, ("POINT(530500 180500)", "3km"), "raises", "3km"),
+    # A NULL in an INT column hands a pandas batch over as floats: the valid rows around it still answer.
+    # (Session only: the batch is a pandas UDF artifact.)
+    Case(
+        "pac_mixed_null_res",
+        PAC,
+        (
+            ("POINT(530500 180500)", 3),
+            ("POINT(530500 180500)", None),
+            ("POINT(325500 673500)", 3),
+        ),
+        "exact_rows",
+        ("TQ3080", None, "NT2573"),
+        ("session",),
+    ),
+    # A non-finite point has no cell: NULL on every level.
+    Case("bng_inf_point", PAC, (INF_POINT, 3), "null"),
+    Case(
+        "cellint_halves",
+        CINT,
+        (Build("chip_west"), Build("chip_south")),
+        "cells",
+        {"cells": {"TQ3080": 250000.0}, "core": 0},
+    ),
+    # A core chip is the whole cell: the left one comes back unchanged.
+    Case(
+        "cellint_left_core",
+        CINT,
+        (Build("chip_west_core"), Build("chip_south")),
+        "cells",
+        {"cells": {"TQ3080": 500000.0}, "core": 1},
+    ),
+    # Chips of two different cells have nothing in common: an empty chip of the left cell.
+    Case(
+        "cellint_other_cell",
+        CINT,
+        (Build("chip_west"), Build("chip_other_cell")),
+        "cells",
+        {"cells": {}, "count": 1, "core": 0},
+    ),
+    Case("cellint_null", CINT, (None, Build("chip_south")), "null"),
+    Case(
+        "cellunion_halves",
+        CUNI,
+        (Build("chip_west"), Build("chip_south")),
+        "cells",
+        {"cells": {"TQ3080": 750000.0}, "core": 0},
+    ),
+    Case(
+        "cellunion_right_core",
+        CUNI,
+        (Build("chip_south"), Build("chip_west_core")),
+        "cells",
+        {"cells": {"TQ3080": 500000.0}, "core": 1},
+    ),
+    Case("cellunion_null", CUNI, (Build("chip_west"), None), "null"),
+    # A chip with NULL bytes (the empty result of an intersection) is an empty geometry: the union is the other chip.
+    Case(
+        "cellunion_empty_chip",
+        CUNI,
+        (Build("chip_no_bytes"), Build("chip_south")),
+        "cells",
+        {"cells": {"TQ3080": 500000.0}, "core": 0},
+    ),
+)
+
+
+# ---------------------------------------------------------------------------------------------- quadbin
+def qb_lon(x, z):
+    """The longitude of the west edge of tile column x at zoom z."""
+    return x / 2**z * 360.0 - 180.0
+
+
+def qb_lat(y, z):
+    """The latitude of the north edge of tile row y at zoom z."""
+    return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / 2**z))))
+
+
+def qb_tiles(x0, y0, x1, y1, z):
+    """The WKT of the rectangle that tiles x0..x1, y0..y1 (inclusive) cover."""
+    w, e, n, s = qb_lon(x0, z), qb_lon(x1 + 1, z), qb_lat(y0, z), qb_lat(y1 + 1, z)
+    return f"POLYGON(({w} {s}, {e} {s}, {e} {n}, {w} {n}, {w} {s}))"
+
+
+# Tile (163, 395) at zoom 10 holds San Francisco; ids are from quadbin.tile_to_cell. (The neighbours
+# and rings are in grid_array.)
+QB_C = 5233961839712272383
+QB_E = 5233961886956912639  # the tile to the east, (164, 395)
+QB_C5 = 5211447621146640383  # the zoom-5 tile that holds the same point, (5, 12)
+QB_LON, QB_LAT = -122.4194, 37.7749
+QB_PT = f"POINT({QB_LON} {QB_LAT})"
+QB_D2 = 5233961788172664831  # two steps from QB_C
+QB_Z0 = 5192650370358181887  # the one zoom-0 tile, (0, 0)
+QB_Z26 = 5305923650554237558  # the zoom-26 tile (12345678, 23456789): the finest zoom
+
+QPAC, QAWKB, QCENT, QRES = (
+    "gbx_quadbin_pointascell",
+    "gbx_quadbin_aswkb",
+    "gbx_quadbin_centroid",
+    "gbx_quadbin_resolution",
+)
+QDIST, QUNI = "gbx_quadbin_distance", "gbx_quadbin_cellunion"
+INF = float("inf")
+
+# ---------------------------------------------------------------------------------------------- custom grid
+CUSTOM_GRID = {
+    "bound_x_min": 0,
+    "bound_x_max": 1000000,
+    "bound_y_min": 0,
+    "bound_y_max": 1000000,
+    "cell_splits": 2,
+    "root_cell_size_x": 1000,
+    "root_cell_size_y": 1000,
+    "srid": 27700,
+}
+
+
+@builder("custom_grid_27700")
+def _custom_grid_27700(tmpdir):
+    return dict(CUSTOM_GRID)
+
+
+@builder("custom_grid_zero_splits")
+def _custom_grid_zero_splits(tmpdir):
+    return {**CUSTOM_GRID, "cell_splits": 1}
+
+
+@builder("custom_grid_no_crs")
+def _custom_grid_no_crs(tmpdir):
+    return {**CUSTOM_GRID, "srid": -1}
+
+
+def cg_id(col, row, res):
+    """The id of the cell at (col, row) of resolution res on CUSTOM_GRID: 1000 root columns, each split in two
+    per resolution."""
+    return row * 1000 * 2**res + col | res << 56
+
+
+# The cell at column 1061, row 361 of resolution 1 (500 m cells) is the square (530500, 180500)..(531000, 181000).
+CG_CELL = cg_id(1061, 361, 1)
+CG_BOX = "POLYGON((530500 180500, 531000 180500, 531000 181000, 530500 181000, 530500 180500))"
+CG_PT = "POINT(530750 180750)"
+# A cell id that is no cell of CUSTOM_GRID: a resolution byte of 99, and the position just past the last cell of resolution 0.
+CG_NOT_A_CELL = 99 << 56
+CG_PAST_END = cg_id(0, 1000, 0)
+CGRID, CPAC, CAWKB, CAWKT, CCENT, CDIST = (
+    "gbx_custom_grid",
+    "gbx_custom_pointascell",
+    "gbx_custom_cellaswkb",
+    "gbx_custom_cellaswkt",
+    "gbx_custom_centroid",
+    "gbx_custom_distance",
+)
+G = Build("custom_grid_27700")
+GN = Build("custom_grid_no_crs")  # the same grid, with no CRS (srid -1)
+
+# ---------------------------------------------------------------------------------------------- H3
+H3_CELL = 613196570331971583  # h3.latlng_to_cell(37.7749, -122.4194, 8)
+H3_LNG, H3_LAT = -122.41827103692466, 37.773515097238146  # h3.cell_to_latlng
+HBBOX = "gbx_h3_cell_bbox"
+# The centre of H3_CELL in web mercator (EPSG:3857): R * lon, R * ln(tan(pi/4 + lat/2)) with R = 6378137.
+H3_MERC_X, H3_MERC_Y = -13627539.595623404, 4547480.313025928
+
+GRID_SCALAR += (
+    # quadbin
+    Case("qb_pac_z10", QPAC, (QB_LON, QB_LAT, 10), "exact", QB_C),
+    Case("qb_pac_z5", QPAC, (QB_LON, QB_LAT, 5), "exact", QB_C5),
+    Case("qb_pac_null_lon", QPAC, (None, QB_LAT, 10), "null"),
+    # A latitude ON the north edge of zoom-10 tile row k (the double of the edge): its row is decided exactly, so the
+    # point lands in the row north of the edge (17, 119, 510), however the platform rounds tan, cos and log. Column
+    # 540 holds longitude 10 (floor((10 + 180) / 360 * 1024)); ids are from quadbin.tile_to_cell.
+    Case(
+        "qb_pac_edge_row_18",
+        QPAC,
+        (10.0, qb_lat(18, 10), 10),
+        "exact",
+        5234312321928527871,
+    ),
+    Case(
+        "qb_pac_edge_row_120",
+        QPAC,
+        (10.0, qb_lat(120, 10), 10),
+        "exact",
+        5234356474192330751,
+    ),
+    Case(
+        "qb_pac_edge_row_511",
+        QPAC,
+        (10.0, qb_lat(511, 10), 10),
+        "exact",
+        5235060702799986687,
+    ),
+    # At longitude 180 the product floors to column n and clamps to the easternmost tile; the quadbin library wraps to
+    # column 0 (5251197165530775551). Tile (n - 1, 0) at zoom 14.
+    Case(
+        "qb_pac_antimeridian_east_tile",
+        QPAC,
+        (180.0, 85.05112878, 14),
+        "exact",
+        5252698365400973311,
+    ),
+    Case("qb_pac_zoom_27_refused", QPAC, (0.0, 0.0, 27), "raises", "27"),
+    # a latitude past the web-mercator bound is clamped to it (the bound's own cell), never NULL
+    Case("qb_pac_lat_clamped", QPAC, (10.0, 89.0, 10), "exact", 5234310114315337727),
+    # The one resolution contract, as for BNG.
+    Case("quadbin_res_null", QPAC, (QB_LON, QB_LAT, None), "null"),
+    Case("quadbin_res_3_5_raises", QPAC, (QB_LON, QB_LAT, 3.5), "raises", "3.5"),
+    Case("quadbin_res_digit_string", QPAC, (QB_LON, QB_LAT, "10"), "exact", QB_C),
+    Case(
+        "quadbin_mixed_null_res",
+        QPAC,
+        (
+            (QB_LON, QB_LAT, 10),
+            (QB_LON, QB_LAT, None),
+            (QB_LON, QB_LAT, 5),
+        ),
+        "exact_rows",
+        (QB_C, None, QB_C5),
+        ("session",),
+    ),
+    # A coordinate that is not finite has no cell: NULL on every level.
+    Case(
+        "quadbin_inf_point",
+        QPAC,
+        (INF, QB_LAT, 10),
+        "null",
+        variants=((QB_LON, -INF, 10), (-INF, INF, 10)),
+    ),
+    Case("qb_aswkb", QAWKB, (QB_C,), "geom_equals", qb_tiles(163, 395, 163, 395, 10)),
+    Case("qb_aswkb_null", QAWKB, (None,), "null"),
+    Case(
+        "qb_centroid",
+        QCENT,
+        (QB_C,),
+        "geom_equals",
+        f"POINT({(qb_lon(163, 10) + qb_lon(164, 10)) / 2} {(qb_lat(395, 10) + qb_lat(396, 10)) / 2})",
+    ),
+    Case("qb_centroid_null", QCENT, (None,), "null"),
+    Case("qb_resolution", QRES, (QB_C,), "exact", 10),
+    Case("qb_resolution_z5", QRES, (QB_C5,), "exact", 5),
+    Case("qb_resolution_null", QRES, (None,), "null"),
+    # The zoom is the 5-bit field of the id, read as it is: from 0 (the world tile) to 26 (the finest). An id that is no
+    # cell is not checked (id 0 has a zero field), on every level.
+    Case("qb_resolution_z0", QRES, (QB_Z0,), "exact", 0),
+    Case("qb_resolution_z26", QRES, (QB_Z26,), "exact", 26),
+    Case("qb_resolution_not_a_cell", QRES, (0,), "exact", 0),
+    Case("qb_distance_1", QDIST, (QB_C, QB_E), "exact", 1),
+    Case("qb_distance_2", QDIST, (QB_C, QB_D2), "exact", 2),
+    Case("qb_distance_same", QDIST, (QB_C, QB_C), "exact", 0),
+    Case("qb_distance_null", QDIST, (None, QB_C), "null", variants=((QB_C, None),)),
+    Case("qb_distance_mixed_zoom", QDIST, (QB_C, QB_C5), "raises", "resolution"),
+    # A NULL beside real ids makes pandas hand the BIGINT column over as floats: an id past 2**53 (these are
+    # ~5.2e18) must still be the same cell, not the nearest float's. (Session only: the batch is a pandas artifact.)
+    Case(
+        "qb_distance_big_ids_beside_null",
+        QDIST,
+        ((QB_C, QB_E), (None, QB_C), (QB_C, QB_D2)),
+        "exact_rows",
+        (1, None, 2),
+        ("session",),
+    ),
+    Case(
+        "qb_cellunion",
+        QUNI,
+        ([QB_C, QB_E],),
+        "geom_equals",
+        qb_tiles(163, 395, 164, 395, 10),
+    ),
+    Case("qb_cellunion_null", QUNI, (None,), "null"),
+    # custom grid
+    Case(
+        "cg_grid",
+        CGRID,
+        (0, 1000000, 0, 1000000, 2, 1000, 1000, 27700),
+        "exact",
+        (0, 1000000, 0, 1000000, 2, 1000, 1000, 27700),
+    ),
+    # Seven arguments: no CRS, srid -1.
+    Case(
+        "cg_grid_no_srid",
+        CGRID,
+        (0, 1000000, 0, 1000000, 2, 1000, 1000),
+        "exact",
+        (0, 1000000, 0, 1000000, 2, 1000, 1000, -1),
+    ),
+    Case(
+        "cg_grid_bad_bounds",
+        CGRID,
+        (1000000, 0, 0, 1000000, 2, 1000, 1000, 27700),
+        "raises",
+        "bound_x_max",
+    ),
+    # Each refusal names its argument and the value it got, on every surface.
+    Case(
+        "cg_grid_bad_y_bounds",
+        CGRID,
+        (0, 1000000, 5, 5, 2, 1000, 1000, 27700),
+        "raises",
+        "bound_y_max (5) must be greater than bound_y_min (5)",
+    ),
+    Case(
+        "cg_grid_bad_splits",
+        CGRID,
+        (0, 1000000, 0, 1000000, 1, 1000, 1000, 27700),
+        "raises",
+        "cell_splits must be >= 2; got 1",
+    ),
+    Case(
+        "cg_grid_bad_root_x",
+        CGRID,
+        (0, 1000000, 0, 1000000, 2, 0, 1000, 27700),
+        "raises",
+        "root_cell_size_x must be > 0; got 0",
+    ),
+    Case(
+        "cg_grid_bad_root_y",
+        CGRID,
+        (0, 1000000, 0, 1000000, 2, 1000, -5, 27700),
+        "raises",
+        "root_cell_size_y must be > 0; got -5",
+    ),
+    # A NULL argument gives a NULL grid, not an error (the JVM constructor raises where the lightweight one answers).
+    Case(
+        "cg_grid_null_arg",
+        CGRID,
+        (0, None, 0, 1000000, 2, 1000, 1000, 27700),
+        "null",
+        variants=((0, 1000000, 0, 1000000, None, 1000, 1000, 27700),),
+    ),
+    Case("cg_pac_res1", CPAC, (CG_PT, G, 1), "exact", CG_CELL),
+    Case("cg_pac_res0", CPAC, (CG_PT, G, 0), "exact", cg_id(530, 180, 0)),
+    Case(
+        "cg_pac_wkb",
+        CPAC,
+        (struct.pack("<BIdd", 1, 1, 530750.0, 180750.0), G, 1),
+        "exact",
+        CG_CELL,
+    ),
+    Case("cg_pac_null_geom", CPAC, (None, G, 1), "null"),
+    Case("cg_pac_empty", CPAC, ("POINT EMPTY", G, 1), "null"),
+    # A point beyond the grid's bounds has no cell: NULL.
+    Case("cg_pac_outside", CPAC, ("POINT(2000000 180750)", G, 1), "null"),
+    Case("custom_res_null", CPAC, (CG_PT, G, None), "null"),
+    Case("custom_res_3_5_raises", CPAC, (CG_PT, G, 3.5), "raises", "3.5"),
+    Case(
+        "custom_res_huge_bigint", CPAC, (CG_PT, G, 4294967297), "raises", "4294967297"
+    ),
+    Case("custom_res_digit_string", CPAC, (CG_PT, G, "1"), "exact", CG_CELL),
+    Case(
+        "custom_mixed_null_res",
+        CPAC,
+        ((CG_PT, G, 1), (CG_PT, G, None), (CG_PT, G, 0)),
+        "exact_rows",
+        (CG_CELL, None, cg_id(530, 180, 0)),
+        ("session",),
+    ),
+    Case("custom_inf_point", CPAC, (INF_POINT, G, 1), "null"),
+    # A point outside the grid's bounds, or at its edges: below and past them there is no cell (NULL), at the origin and at
+    # the last metre of resolution 0 (1 km cells, 1000 of them) there are the first and the last.
+    Case("custom_oob_point", CPAC, ("POINT(2000000 2000000)", G, 1), "null"),
+    Case("custom_below_origin_point", CPAC, ("POINT(-1 -1)", G, 1), "null"),
+    Case("custom_nan_point", CPAC, (NAN_POINT, G, 1), "null", surfaces=("session",)),
+    Case("custom_origin_cell", CPAC, ("POINT(0 0)", G, 0), "exact", cg_id(0, 0, 0)),
+    Case(
+        "custom_last_cell",
+        CPAC,
+        ("POINT(999999 999999)", G, 0),
+        "exact",
+        cg_id(999, 999, 0),
+    ),
+    Case("cg_aswkb", CAWKB, (CG_CELL, G), "geom_equals", CG_BOX),
+    # The exact bytes: the same ring start and direction as the JVM's.
+    Case(
+        "cg_aswkb_bytes",
+        CAWKB,
+        (CG_CELL, G),
+        "wkb_bytes",
+        _square_wkb(530500.0, 180500.0, 531000.0, 181000.0),
+        surfaces=("session",),
+    ),
+    Case("cg_aswkb_null", CAWKB, (None, G), "null", variants=((CG_CELL, None),)),
+    Case("cg_aswkt", CAWKT, (CG_CELL, G), "geom_equals", CG_BOX),
+    Case("cg_aswkt_null", CAWKT, (None, G), "null"),
+    Case("cg_centroid", CCENT, (CG_CELL, G), "geom_equals", CG_PT),
+    Case("cg_centroid_null", CCENT, (None, G), "null"),
+    Case("cg_distance", CDIST, (CG_CELL, G, cg_id(1064, 363, 1)), "exact", 3),
+    Case("cg_distance_same", CDIST, (CG_CELL, G, CG_CELL), "exact", 0),
+    Case("cg_distance_null", CDIST, (None, G, CG_CELL), "null"),
+    # Same as qb_distance_big_ids_beside_null: custom ids are ~7.2e16, past 2**53.
+    Case(
+        "cg_distance_big_ids_beside_null",
+        CDIST,
+        (
+            (CG_CELL, G, cg_id(1064, 363, 1)),
+            (None, G, CG_CELL),
+            (CG_CELL, G, cg_id(1062, 361, 1)),
+        ),
+        "exact_rows",
+        (3, None, 1),
+        ("session",),
+    ),
+    # H3
+    Case(
+        "h3bbox_default", HBBOX, (H3_CELL,), "approx", (H3_LNG, H3_LAT, H3_LNG, H3_LAT)
+    ),
+    # spatial_envelope wraps the hexagon: min and max of h3.cell_to_boundary.
+    Case(
+        "h3bbox_envelope",
+        HBBOX,
+        (H3_CELL, 4326, "spatial_envelope"),
+        "approx",
+        (
+            -122.42419231791122,
+            37.76882308826447,
+            -122.41234965984782,
+            37.77820687262237,
+        ),
+    ),
+    Case("h3bbox_null", HBBOX, (None,), "null"),
+)
+
+# --- Unity Catalog rows: the GEOMETRY argument arrives as a value with an integer SRID, never as bytes or text.
+
+GRID_SCALAR = uc_view(
+    GRID_SCALAR,
+    {PAC: 27700, CPAC: 27700},
+    session_only=("pac_point_wkb", "bng_inf_point", "cg_pac_wkb", "custom_inf_point"),
+)
+
+GRID_SCALAR += (
+    # A WKB BINARY is not a GEOMETRY: the engine refuses it for a GEOMETRY parameter (never a silent NULL).
+    Case(
+        "uc_wkb_into_geometry_refused",
+        PAC,
+        (POINT_WKB, 3),
+        "raises",
+        "BINARY",  # the handler's message, and the engine's (a BINARY where GEOMETRY(ANY) is required)
+        ("uc",),
+        geom_srid=27700,
+    ),
+    # BNG cells are EPSG:27700: a geometry in another SRID is refused with a Fix:, not read as metres.
+    Case(
+        "uc_pac_wrong_srid",
+        PAC,
+        ("POINT(-0.1 51.5)", 3),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    # A recipe row (one whole statement, `{q}` the schema qualifier): the finest zoom of a column of cells, in plain SQL.
+    recipe(
+        "recipe_qb_finest_zoom",
+        QRES,
+        f"SELECT max({{q}}gbx_quadbin_resolution(c)) AS out FROM VALUES ({QB_C}), ({QB_C5}), (CAST(NULL AS BIGINT)) AS t(c)",
+        "exact",
+        10,
+    ),
+    # A quadbin cell id that is no cell is a data error: NULL. (The zoom function reads the id's bits as they are.)
+    Case("uc_qb_aswkb_not_a_cell", QAWKB, (0,), "null", None, ("uc",)),
+    Case("uc_qb_centroid_not_a_cell", QCENT, (0,), "null", None, ("uc",)),
+    Case(
+        "uc_qb_distance_not_a_cell",
+        QDIST,
+        (0, QB_C),
+        "null",
+        None,
+        ("uc",),
+        variants=((QB_C, 0),),
+    ),
+    # A UC BINARY result carries the integer SRID: EWKB with 4326 for a quadbin cell, as the session's quadbin bytes.
+    Case(
+        "uc_qb_aswkb_srid",
+        QAWKB,
+        (QB_C,),
+        "geom_srid",
+        (qb_tiles(163, 395, 163, 395, 10), 4326),
+        ("uc",),
+    ),
+    Case(
+        "uc_qb_centroid_srid",
+        QCENT,
+        (QB_C,),
+        "geom_srid",
+        (
+            f"POINT({(qb_lon(163, 10) + qb_lon(164, 10)) / 2} {(qb_lat(395, 10) + qb_lat(396, 10)) / 2})",
+            4326,
+        ),
+        ("uc",),
+    ),
+    # The union of a NULL beside two cells is the union of the two; a cell that is no cell, or no cell at all, is NULL.
+    Case(
+        "uc_qb_cellunion_srid",
+        QUNI,
+        ([QB_C, None, QB_E],),
+        "geom_srid",
+        (qb_tiles(163, 395, 164, 395, 10), 4326),
+        ("uc",),
+    ),
+    Case("uc_qb_cellunion_not_a_cell", QUNI, ([QB_C, 0],), "null", None, ("uc",)),
+    Case("uc_qb_cellunion_empty", QUNI, ([],), "null", None, ("uc",)),
+    # gbx_h3_cell_bbox on UC takes the output CRS as an SRID, EPSG:<n> or ESRI:<n> (the same CRS, three spellings), and
+    # refuses any other form with a Fix:. The expected values are web-mercator's closed form on the h3 library's cell
+    # centre and boundary, not the function's own reprojection.
+    Case(
+        "uc_h3bbox_srid_3857",
+        HBBOX,
+        (H3_CELL, 3857),
+        "approx",
+        (H3_MERC_X, H3_MERC_Y, H3_MERC_X, H3_MERC_Y),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_out_crs_epsg",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 0, "EPSG:3857"),
+        "approx",
+        (H3_MERC_X, H3_MERC_Y, H3_MERC_X, H3_MERC_Y),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_out_crs_esri",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 0, "ESRI:102100"),
+        "approx",
+        (H3_MERC_X, H3_MERC_Y, H3_MERC_X, H3_MERC_Y),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_envelope_3857",
+        HBBOX,
+        (H3_CELL, 3857, "spatial_envelope"),
+        "approx",
+        (
+            -13628198.749607671,
+            4546819.546062488,
+            -13626880.430942414,
+            4548141.089024238,
+        ),
+        ("uc",),
+    ),
+    # h3.grid_disk(cell, 1) centres: the box of the cell and its six neighbours
+    Case(
+        "uc_h3bbox_pad_1",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 1),
+        "approx",
+        (
+            -122.42866524710386,
+            37.76527949330821,
+            -122.40787564835524,
+            37.78175025546036,
+        ),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_wkt_refused",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 0, 'GEOGCS["WGS 84"]'),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_srid_zero_refused", HBBOX, (H3_CELL, 0), "uc_refused", None, ("uc",)
+    ),
+    Case(
+        "uc_h3bbox_bad_mode",
+        HBBOX,
+        (H3_CELL, 4326, "sideways"),
+        "raises",
+        "sideways",
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_negative_pad",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", -1),
+        "raises",
+        "-1",
+        ("uc",),
+    ),
+    # an id that is no H3 cell is a data error: NULL
+    Case("uc_h3bbox_not_a_cell", HBBOX, (0,), "null", None, ("uc",)),
+    # A cell id that is not a BNG cell is a data error: NULL.
+    Case("uc_aswkt_bad_cell", AWKT, ("XX9999",), "null", None, ("uc",)),
+    Case(
+        "uc_distance_bad_cell",
+        DIST,
+        ("XX9999", "TQ3080"),
+        "null",
+        None,
+        ("uc",),
+        variants=(("TQ3080", "XX9999"),),
+    ),
+    Case(
+        "uc_edistance_bad_cell",
+        EDIST,
+        ("XX9999", "TQ3080"),
+        "null",
+        None,
+        ("uc",),
+        variants=(("TQ3080", "XX9999"),),
+    ),
+    # The chips of gbx_bng_tessellate on UC are EWKB with SRID 27700: they go in as they come out, and the answer is the
+    # same chip. A chip in another SRID is refused with a Fix:.
+    Case(
+        "uc_cellunion_ewkb_chips",
+        CUNI,
+        (Build("chip_west_ewkb"), Build("chip_south_ewkb")),
+        "cells",
+        {"cells": {"TQ3080": 750000.0}, "core": 0},
+        ("uc",),
+    ),
+    Case(
+        "uc_cellint_ewkb_chips",
+        CINT,
+        (Build("chip_west_ewkb"), Build("chip_south_ewkb")),
+        "cells",
+        {"cells": {"TQ3080": 250000.0}, "core": 0},
+        ("uc",),
+    ),
+    Case(
+        "uc_cellunion_wrong_srid",
+        CUNI,
+        (Build("chip_west_4326"), Build("chip_south_ewkb")),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_cellint_wrong_srid",
+        CINT,
+        (Build("chip_south_ewkb"), Build("chip_west_4326")),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    # A custom grid is defined in its own SRID: a geometry in another one is refused with a Fix:. A grid with no CRS
+    # (srid -1) takes a geometry with SRID 0 and no other.
+    Case(
+        "uc_cg_pac_wrong_srid",
+        CPAC,
+        (CG_PT, G, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_pac_no_crs_srid0",
+        CPAC,
+        (CG_PT, GN, 1),
+        "exact",
+        CG_CELL,
+        ("uc",),
+        geom_srid=0,
+    ),
+    Case(
+        "uc_cg_pac_no_crs_wrong_srid",
+        CPAC,
+        (CG_PT, GN, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    # a resolution the grid does not have is a parameter error (the grid reaches 20 at most)
+    Case(
+        "uc_cg_pac_res_past_max",
+        CPAC,
+        (CG_PT, G, 99),
+        "raises",
+        "99",
+        ("uc",),
+        geom_srid=27700,
+    ),
+    # A cell id that is no cell of the grid (a resolution it does not have, a position past its last cell) is NULL.
+    Case(
+        "uc_cg_cell_not_a_cell",
+        CAWKB,
+        (CG_NOT_A_CELL, G),
+        "null",
+        None,
+        ("uc",),
+        variants=((CG_PAST_END, G),),
+    ),
+    Case("uc_cg_aswkt_not_a_cell", CAWKT, (CG_NOT_A_CELL, G), "null", None, ("uc",)),
+    Case("uc_cg_centroid_not_a_cell", CCENT, (CG_NOT_A_CELL, G), "null", None, ("uc",)),
+    Case(
+        "uc_cg_distance_not_a_cell",
+        CDIST,
+        (CG_NOT_A_CELL, G, CG_CELL),
+        "null",
+        None,
+        ("uc",),
+        variants=((CG_CELL, G, CG_PAST_END),),
+    ),
+    # A grid that gbx_custom_grid would refuse is a parameter error, not a wrong answer
+    Case(
+        "uc_cg_grid_not_a_grid",
+        CAWKB,
+        (CG_CELL, Build("custom_grid_zero_splits")),
+        "raises",
+        "cell_splits",
+        ("uc",),
+    ),
+    # The UC BINARY result carries the grid's SRID (the session's WKB carries none); a grid with no CRS has none.
+    Case(
+        "uc_cg_aswkb_srid", CAWKB, (CG_CELL, G), "geom_srid", (CG_BOX, 27700), ("uc",)
+    ),
+    Case(
+        "uc_cg_centroid_srid", CCENT, (CG_CELL, G), "geom_srid", (CG_PT, 27700), ("uc",)
+    ),
+    Case("uc_cg_aswkb_no_crs", CAWKB, (CG_CELL, GN), "geom_srid", (CG_BOX, 0), ("uc",)),
+    # A UC BINARY result carries the integer SRID: EWKB with 27700 (the session's WKB carries none).
+    Case("uc_bng_aswkb_srid", AWKB, ("TQ3080",), "geom_srid", (TQ3080, 27700), ("uc",)),
+    Case(
+        "uc_bng_centroid_srid",
+        CENT,
+        ("TQ3080",),
+        "geom_srid",
+        ("POINT(530500 180500)", 27700),
+        ("uc",),
+    ),
+)

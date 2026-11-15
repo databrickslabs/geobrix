@@ -6,6 +6,10 @@ import pytest
 
 pyspark = pytest.importorskip("pyspark")
 
+# These tests write with Spark to a bare tmp_path and look at the files with plain file I/O (or the reverse). A bare path is the
+# local disk only for a local Spark session; the session a Databricks node provides reads it from DBFS, so they run where the
+# session is local (the dev container, CI) and say so where it is not.
+from test._provided_spark import wanted as _provided_session  # noqa: E402
 from test.sample._fake_overture_catalog import open_fake_overture  # noqa: E402
 
 from pyspark.sql import Row  # noqa: E402
@@ -25,6 +29,11 @@ from databricks.labs.gbx.sample.overture import (  # noqa: E402
     _META_COLS,
     OvertureClient,
     _meta_dataframe,
+)
+
+needs_local_spark_paths = pytest.mark.skipif(
+    _provided_session(),
+    reason="a bare path is DBFS under the session a Databricks node provides, not the driver's disk",
 )
 
 
@@ -107,6 +116,7 @@ def _write_fake_overture_parquet(spark, path, bbox_struct=True):
     spark.createDataFrame(rows).write.mode("overwrite").parquet(path)
 
 
+@needs_local_spark_paths
 def test_download_distributed_writes_aoi_subset(spark, tmp_path):
     src = str(tmp_path / "src.parquet")
     _write_fake_overture_parquet(spark, src)
@@ -155,6 +165,7 @@ def test_download_distributed_writes_aoi_subset(spark, tmp_path):
     assert subset.collect()[0]["id"] == 1
 
 
+@needs_local_spark_paths
 def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
     """Two assets sharing (theme, type) must both survive — no shard clobber.
 
@@ -164,7 +175,7 @@ def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
     each asset writes to its own per-asset token subdir, both rows survive, and
     metadata has TWO distinct source values.
 
-    Regression test for C1 from the SP1 whole-branch review.
+    Regression test for the review finding that two assets sharing (theme, type) clobbered each other.
     """
     # Asset A: shard 1 — ids 10, 11 (both inside AOI)
     src_a = str(tmp_path / "shard_a.parquet")
@@ -253,7 +264,7 @@ def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
 def test_empty_meta_dataframe_matches_meta_cols(spark):
     """Empty-result meta DataFrame must have the exact _META_COLS schema.
 
-    Tasks 7/8 union meta DataFrames; a schema mismatch on the empty branch
+    Callers union meta DataFrames; a schema mismatch on the empty branch
     (missing path/last_update) causes a union error at runtime.
     """
     empty_meta = _meta_dataframe(spark, [], partitions=2)
@@ -278,6 +289,7 @@ def test_empty_meta_dataframe_matches_meta_cols(spark):
     assert empty_meta.count() == 0
 
 
+@needs_local_spark_paths
 def test_download_fallback_injected_fetcher(spark, tmp_path):
     # build a real source parquet, then serve its bytes through a fake _get_fn
     src = str(tmp_path / "asset.parquet")
@@ -324,7 +336,7 @@ def test_download_fallback_injected_fetcher(spark, tmp_path):
             (
                 "places",
                 "place",
-                "http://fake/place.parquet",
+                "http://93.184.216.34/place.parquet",
                 [0.0, 0.0, 1.0, 1.0],
                 "2024-07-01",
             )
@@ -340,6 +352,40 @@ def test_download_fallback_injected_fetcher(spark, tmp_path):
     assert os.path.exists(row["source"])
     assert row["source"] == row["path"]
     assert spark.read.parquet(row["source"]).count() == 2
+
+
+def test_the_download_fallback_fetches_only_the_hosts_allowed(spark, tmp_path):
+    """The fallback's fetch is the guarded one: an href off allowed_hosts is refused before any request (the fetcher
+    leaves a marker when it is called, in the UDF's process)."""
+    marker = tmp_path / "fetched"
+
+    def fake_get(href, timeout=None, stream=False):
+        marker.write_text(href)
+        raise RuntimeError("must not be called")
+
+    client = OvertureClient(
+        release="2024-07-01",
+        _catalog_opener=open_fake_overture,
+        _get_fn=fake_get,
+        allowed_hosts=["only.example"],
+    )
+    assets = spark.createDataFrame(
+        [
+            (
+                "places",
+                "place",
+                "http://93.184.216.34/place.parquet",
+                [0.0, 0.0, 1.0, 1.0],
+                "r",
+            )
+        ],
+        "theme string, type string, href string, asset_bbox array<double>, release string",
+    )
+    meta = client._download_fallback(
+        assets, str(tmp_path / "out"), validate=True, max_tries=2, partitions=1
+    )
+    assert meta.collect()[0]["is_out_file_valid"] is False
+    assert not marker.exists()
 
 
 def test_download_routes_cloud_to_distributed(spark, tmp_path):
@@ -477,6 +523,7 @@ def test_read_from_metadata_dataframe(spark, tmp_path):
     assert df.collect()[0]["id"] == 7
 
 
+@needs_local_spark_paths
 def test_download_routes_http_to_fallback(spark, tmp_path):
     """download() with an http:// href routes to _download_fallback (not distributed).
 
@@ -527,7 +574,7 @@ def test_download_routes_http_to_fallback(spark, tmp_path):
             (
                 "places",
                 "place",
-                "http://fake-overture.example.com/place.parquet",
+                "http://93.184.216.34/place.parquet",
                 [0.0, 0.0, 1.0, 1.0],
                 "2024-07-01",
             )
@@ -593,6 +640,7 @@ def test_read_from_table_name(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+@needs_local_spark_paths
 def test_download_via_cli_builds_meta(spark, tmp_path, monkeypatch):
     """_download_via_cli writes per-(theme,type) parquet and returns correct meta rows."""
     # Build a real parquet to serve as the CLI output.
@@ -754,6 +802,7 @@ def test_run_overture_download_raises_with_stderr_when_all_fail(tmp_path, monkey
     assert fake.calls == ["--stac", "--stac", "--no-stac"]
 
 
+@needs_local_spark_paths
 def test_download_via_cli_idempotent_skips_when_valid(spark, tmp_path, monkeypatch):
     """_download_via_cli skips the subprocess when the target already exists and is valid.
 
@@ -838,6 +887,7 @@ def test_download_via_cli_idempotent_skips_when_valid(spark, tmp_path, monkeypat
     ), f"Expected 2 CLI calls after force=True, got {call_count['n']}"
 
 
+@needs_local_spark_paths
 def test_download_via_cli_force_via_download_api(spark, tmp_path, monkeypatch):
     """download(..., force=True) is threaded through to _download_via_cli."""
     src = str(tmp_path / "force_src.parquet")

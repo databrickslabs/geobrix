@@ -1,7 +1,7 @@
 """lidar_gbx Writer Examples — single source of truth.
 
 Code shown in docs/docs/writers/lidar.mdx is imported from here. Pure-Python
-DataSource V2 writer (JAR-free, registered via gbx.ds.register). It is the
+DataSource V2 writer (JAR-free, registered by databricks.labs.gbx.register). It is the
 inverse of the lidar_gbx points reader:
 
 - parts (default): one .laz per Spark partition, named *_<group>_<cluster>.laz
@@ -16,7 +16,7 @@ The writer requires columns x, y, z (float64) and accepts optional r, g, b
 """
 
 REGISTER = """# Register the lightweight DataSources (once per session)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)"""
 
 WRITE_SHARDED = """# Parts mode (default): one .laz per Spark partition.
@@ -59,9 +59,9 @@ WRITE_MERGE = """# Post-hoc: merge .laz/.las files ALREADY in a directory into o
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs import gbx
 
-    register(spark)
+    gbx.register(spark)
 
 
 def _points_df(spark, n=20, with_rgb=True):
@@ -122,7 +122,9 @@ def write_singlefile(spark, out_dir):
     import os
 
     _register(spark)
-    df = _points_df(spark, n=20, with_rgb=True)
+    # Points only: the helper's group/cluster naming columns are for the grouped
+    # example; the v1 writer rejects columns it does not write.
+    df = _points_df(spark, n=20, with_rgb=True).drop("group", "cluster")
     (
         df.repartition(4)
         .write.format("lidar_gbx")

@@ -1,0 +1,114 @@
+package com.databricks.labs.gbx.rasterx.expressions
+
+import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.operations.{ProjDatabase, ProjDatabaseException, SpatialRefOps}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, V2Tile}
+import org.apache.spark.sql.types.BinaryType
+import com.databricks.labs.gbx.util.SerializationUtil
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.plans.PlanTest
+import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.unsafe.types.UTF8String
+import org.gdal.gdal.gdal
+import org.gdal.osr.{SpatialReference, osr}
+import org.scalatest.matchers.should.Matchers._
+
+import java.nio.file.{Files, Path, Paths}
+import java.util.concurrent.{Callable, Executors, TimeUnit}
+import scala.jdk.CollectionConverters._
+
+/**
+  * A Spark task thread whose PROJ context cannot read PROJ's database (proj.db) does not resolve an EPSG code. The
+  * resolution must give the code's CRS (PROJ re-pointed at its database and the code resolved again), or fail with
+  * the reason, never a silent NULL.
+  */
+class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
+
+    private def exprConf: UTF8String = UTF8String.fromString(ExpressionConfig(spark).toB64)
+
+    /** A 16 x 16 GeoTIFF tile on the British National Grid. */
+    private def bngTile(): InternalRow = {
+        GDALManager.init(ExpressionConfig(spark))
+        val ds = GDALManager.memDriver().Create("", 16, 16, 1)
+        ds.SetGeoTransform(Array(400000.0, 10.0, 0.0, 300000.0, 0.0, -10.0))
+        val sr = new SpatialReference()
+        sr.ImportFromEPSG(27700)
+        ds.SetProjection(sr.ExportToWkt())
+        sr.delete()
+        try V2Tile.row(cellid = 0L, raster = RasterDriver.writeToBytes(ds, Map("driver" -> "GTiff")),
+              metadata = SerializationUtil.toMapData(Map("driver" -> "GTiff")))
+        finally RasterDriver.releaseDataset(ds)
+    }
+
+    /** The directory PROJ reads now: its search path, else PROJ_DATA / PROJ_LIB. */
+    private def projDir(): Path = {
+        val set = Option(osr.GetPROJSearchPaths()).map(_.asScala.map(_.toString).toSeq).getOrElse(Nil)
+        val dirs = set ++ Seq("PROJ_DATA", "PROJ_LIB").flatMap(k => Option(gdal.GetConfigOption(k))).flatMap(_.split(":"))
+        dirs.map(Paths.get(_)).find(d => Files.isReadable(d.resolve("proj.db"))).getOrElse(Paths.get("/usr/share/proj"))
+    }
+
+    /** Run `body` with PROJ pointed at a copy of its data directory that is then deleted: a thread that creates its
+      * PROJ context afterwards finds no proj.db (as an executor whose payload directory went away). The search path
+      * is restored whole after (grid directories an earlier suite applied included). */
+    private def withProjDatabaseGone[T](body: => T): T = {
+        val dir = projDir()
+        val before = Option(osr.GetPROJSearchPaths()).map(_.asScala.map(_.toString).toSeq).getOrElse(Nil)
+        val copy = Files.createTempDirectory("gbx_proj_gone")
+        Files.list(dir).iterator().asScala.filter(Files.isRegularFile(_)).foreach(p => Files.copy(p, copy.resolve(p.getFileName)))
+        osr.SetPROJSearchPaths(new java.util.Vector[String](java.util.List.of(copy.toString)))
+        Files.list(copy).iterator().asScala.foreach(Files.delete(_))
+        try body
+        finally {
+            val restore = if (before.exists(d => Files.isReadable(Paths.get(d, "proj.db")))) before else Seq(dir.toString)
+            osr.SetPROJSearchPaths(new java.util.Vector[String](restore.asJava))
+            Files.deleteIfExists(copy)
+        }
+    }
+
+    /** `f` on `n` new threads at once (each a fresh PROJ context, as new Spark task threads). */
+    private def onFreshThreads[T](n: Int)(f: () => T): Seq[T] = {
+        val pool = Executors.newFixedThreadPool(n)
+        try pool.invokeAll((1 to n).map(_ => new Callable[T] { def call(): T = f() }).asJava).asScala.map(_.get()).toSeq
+        finally { pool.shutdown(); pool.awaitTermination(1, TimeUnit.MINUTES) }
+    }
+
+    test("an EPSG code resolves on fresh threads whose PROJ database is gone") {
+        withProjDatabaseGone {
+            onFreshThreads(4)(() => {
+                val sr = SpatialRefOps.resolveCrs("27700")
+                try SpatialRefOps.crsToCanonical(sr) finally sr.delete()
+            }) shouldBe Seq.fill(4)("EPSG:27700")
+        }
+    }
+
+    test("a PROJ database that stays unreadable fails the read with the reason, never NULL") {
+        val e = intercept[ProjDatabaseException] {
+            ProjDatabase.recoverOrFail(() => false, () => Seq("/gone/proj"), null)
+        }
+        e.getMessage should include("proj.db")
+        e.getMessage should include("/gone/proj")
+        e.getMessage should include("Fix:")
+        // the scalar safeEval (NULL on a data error) lets it through
+        intercept[ProjDatabaseException] {
+            RST_ErrorHandler.safeEval(() => throw new ProjDatabaseException("gone"), bngTile(), BinaryType, exprConf)
+        }
+    }
+
+    test("a refusal raised before another thread pointed PROJ at its data again is tried again") {
+        val attempts = Iterator[() => Int](() => throw new IllegalArgumentException("27700 is not a valid EPSG code"), () => 27700)
+        ProjDatabase.retriedWith[Int](() => attempts.next()(), _.isInstanceOf[IllegalArgumentException], () => true,
+          () => fail("recovered")) shouldBe 27700
+        // an unreadable database: recovered first, then tried again
+        var recovered = false
+        val again = Iterator[() => Int](() => throw new IllegalArgumentException("no"), () => 4326)
+        var reachable = false
+        ProjDatabase.retriedWith[Int](() => again.next()(), _.isInstanceOf[IllegalArgumentException], () => reachable,
+          () => { recovered = true; reachable = true; Seq("/proj") }) shouldBe 4326
+        recovered shouldBe true
+        // a refusal that stays is the refusal
+        intercept[IllegalArgumentException] {
+            ProjDatabase.retriedWith[Int](() => throw new IllegalArgumentException("bad"), _ => true, () => true, () => Nil)
+        }
+    }
+}

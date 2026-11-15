@@ -1,8 +1,10 @@
 package com.databricks.labs.gbx.rasterx.expressions.agg
 
-import com.databricks.labs.gbx.gridx.grid.GridSystem
+import com.databricks.labs.gbx.gridx.grid.{BNG, GridSystem}
 import com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometry
 import com.databricks.labs.gbx.vectorx.jts.JTS
+import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.types.NullType
 import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 
@@ -26,6 +28,68 @@ object RasterizeBurn {
 
     /** NoData sentinel, matching `cellraster._NODATA` in the lightweight tier. */
     val NoData: Double = -9999.0
+
+    /** What a NULL `value` burns, by the type of the value argument (the lightweight rule, the one contract): an
+     *  untyped NULL (the argument was omitted) is the presence mask, 1.0; a NULL in a typed column is a missing value,
+     *  NaN, which never wins against a number in its cell (see [[canonicalLut]]). */
+    def nullBurn(valueExpr: Expression): Double =
+        if (valueExpr.dataType == NullType) 1.0 else Double.NaN
+
+    /** The output SRID of a cell rasterizer: `out_srid` or `out_crs`, never both (the rule of every rasterizer; both
+     *  set raises), a missing one is `default`. `out_crs` is `EPSG:<n>` or a bare integer; any other CRS text is
+     *  refused with a `Fix:` (this level reads integer codes only), so a value never burns into the wrong CRS. */
+    def outSrid(fn: String, outCrs: Option[String], outSrid: Option[Int], default: => Int): Int =
+        outCrs.map(_.trim).filter(_.nonEmpty) match {
+            case Some(_) if outSrid.isDefined =>
+                throw new IllegalArgumentException(bothSetRefusal(fn))
+            case Some(crs) =>
+                val m = """(?i)^(?:EPSG:)?(\d+)$""".r
+                // a digit string past the Int range is no EPSG code either: the same Fix, never a NumberFormatException
+                def refuse: Nothing = throw new IllegalArgumentException(
+                    s"$fn: out_crs '$crs' is not an EPSG code. Fix: pass EPSG:<n> (or the integer out_srid).")
+                crs match {
+                    case m(code) => code.toIntOption.getOrElse(refuse)
+                    case _ => refuse
+                }
+            case None => outSrid.getOrElse(default)
+        }
+
+    /** The refusal of `out_srid` and `out_crs` set together; the light tier raises the same text. */
+    def bothSetRefusal(fn: String): String =
+        s"$fn: out_srid and out_crs are both set. Fix: set one."
+
+    /** Resolution of a BNG cell set (read from each cell's Long id); raises on a mixed-resolution set.
+     *
+     *  It lives here and not in the BNG aggregate's companion: that companion implements the Catalyst function
+     *  interface, so calling it needs Catalyst classes that the Java UDF facade does not have on a standard cluster. */
+    def bngResolutionOf(cellIds: Iterator[Long]): Int = {
+        var res = Int.MinValue
+        cellIds.foreach { c =>
+            val r = BNG.getResolution(BNG.cellDigits(c))
+            if (res == Int.MinValue) res = r
+            else if (r != res) throw new IllegalArgumentException(
+                s"gbx_rst_bng_rasterize_agg: BNG cell set has mixed resolutions ($res and $r)")
+        }
+        res
+    }
+
+    /** The cell-value lookup of a set of `(cell id, value)` pairs, a repeated cell keeping its LARGEST number
+     *  whatever order the pairs arrive in: they are written in `(cell id unsigned, value)` order, so the last write
+     *  for a cell is its maximum. A NaN sorts BEFORE every number, so it is overwritten by any number in its cell and
+     *  stays only for a cell with nothing but NaN (a NaN never wins, as on the lightweight tier). The order is a
+     *  valid one for the sort: `<` does not order a NaN at all, which can make the sort raise.
+     */
+    def canonicalLut(pairs: scala.collection.Seq[(Long, Double)]): scala.collection.mutable.LongMap[Double] = {
+        val lut = scala.collection.mutable.LongMap.empty[Double]
+        pairs.sortWith { (a, b) =>
+            if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0
+            else nanFirst(a._2, b._2) < 0
+        }.foreach { case (cellId, v) => lut.update(cellId, v) }
+        lut
+    }
+
+    private def nanFirst(a: Double, b: Double): Int =
+        if (a.isNaN) { if (b.isNaN) 0 else -1 } else if (b.isNaN) 1 else java.lang.Double.compare(a, b)
 
     /** Burn a cell-value lookup table into `rasterDs`, writing NoData for absent cells.
      *
@@ -78,7 +142,11 @@ object RasterizeBurn {
                             val c  = tp.getCoordinate
                             (c.x, c.y)
                         } else (xGeo, yGeo)
-                    val cellId = grid.pointToCellID(cx, cy, resolution)
+                    // A pixel centre outside the grid (a custom grid's bounds) is in no cell: NoData, as the
+                    // lightweight form gives. A canvas given by the caller may run past the grid.
+                    val cellId =
+                        try grid.pointToCellID(cx, cy, resolution)
+                        catch { case _: IllegalStateException => Long.MinValue }
                     rowBuf(px) = lut.getOrElse(cellId, NoData)
                     px += 1
                 }

@@ -3,9 +3,12 @@ package com.databricks.labs.gbx.gridx.bng.generators
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.{BNG, GeomDilation}
+import com.databricks.labs.gbx.kernels.Coerce
+import com.databricks.labs.gbx.util.GeomInput
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
+import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
 import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expression, Literal}
 import org.apache.spark.sql.types._
@@ -27,6 +30,9 @@ case class BNG_GeometryKLoopExplode(
     override def inline: Boolean = false
     override def children: Seq[Expression] = Seq(geom, resolution, k, mode, coverage)
 
+    /** The geometry is BINARY (WKB or EWKB) or STRING (WKT or EWKT); anything else is refused at analysis. */
+    override def checkInputDataTypes(): TypeCheckResult = GeomInput.checkType(geom, "first")
+
     // noinspection DuplicatedCode
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
         val geometryRaw = geom.eval(input)
@@ -37,13 +43,16 @@ case class BNG_GeometryKLoopExplode(
         if (geometryRaw == null || resolutionRaw == null || kRaw == null) {
             Seq.empty
         } else {
-            val resolutionVal = resolution.dataType match {
-                case StringType  => BNG.resolutionMap(resolutionRaw.asInstanceOf[UTF8String].toString)
-                case IntegerType => resolutionRaw.asInstanceOf[Int]
+            // PARAMETERS: a resolution BNG does not define and an unknown mode raise, naming the value; never zero rows
+            val resolutionVal = resolutionRaw match {
+                case i: java.lang.Integer => Coerce.bngResolution(i, digitStrings = false)
+                case other                => Coerce.bngResolution(other.toString, digitStrings = true)
             }
-            val kVal = kRaw.asInstanceOf[Int]
+            val kVal = GeomDilation.kAsInt(kRaw)
             val modeStr = if (modeRaw == null) GeomDilation.DEFAULT_MODE else modeRaw.asInstanceOf[UTF8String].toString
             val coverageStr = if (coverageRaw == null) GeomDilation.DEFAULT_COVERAGE else coverageRaw.asInstanceOf[UTF8String].toString
+            GeomDilation.requireMode(modeStr)
+            GeomDilation.requireCoverage(coverageStr)
 
             GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
                 val geometryVal = geom.dataType match {

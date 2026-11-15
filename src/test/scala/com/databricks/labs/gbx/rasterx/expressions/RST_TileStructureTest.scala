@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 import com.databricks.labs.gbx.udfs
@@ -25,7 +26,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString
 
@@ -69,7 +70,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString
 
@@ -93,7 +94,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -114,7 +115,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString
 
@@ -142,35 +143,11 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         extension should (be(".tif") or be(".TIF") or include("tif") or include("TIF"))
     }
 
-    test("Tessellated tiles should have non-null cellid") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        functions.register(spark)
-
-        val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString
-
-        // rst_h3_tessellate is a generator that produces multiple rows directly (no explode needed)
-        // Use resolution 1 (coarse) to avoid generating too many cells
-        val df = spark.range(1)
-          .withColumn("tile", udfs.rasterFromPath(lit(tifPath)))
-          .withColumn("tessellated", rst_h3_tessellate(col("tile"), lit(1)))
-          .select(col("tessellated.cellid").alias("cellid"))
-          .limit(10) // Limit results for test efficiency
-
-        val result = df.collect()
-
-        result should not be empty
-        // Tessellated tiles should have non-null cellid
-        result.forall(row => row.getAs[Long]("cellid") != 0) should be(true)
-        result.forall(row => row.getAs[Long]("cellid") > 0) should be(true)
-    }
-
     test("Tile structure should be compatible with accessor functions") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString
 
@@ -179,8 +156,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
           .select(
             col("tile"),
             col("tile.metadata").alias("metadata_direct"),
-            rst_width(col("tile")).alias("width"),
-            rst_height(col("tile")).alias("height")
+            rst_boundingbox(col("tile")).alias("bbox")
           )
 
         val result = df.collect()
@@ -191,17 +167,16 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         metadataDirect should contain key "driver"
 
         // Verify accessor functions work with tile
-        val width = result(0).getAs[Int]("width")
-        val height = result(0).getAs[Int]("height")
-        width should be > 0
-        height should be > 0
+        val bbox = result(0).getAs[Array[Byte]]("bbox")
+        bbox should not be null
+        bbox.length should be > 0
     }
 
     test("Filter tiles by metadata fields") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -233,7 +208,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 

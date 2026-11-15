@@ -3,6 +3,7 @@ import rasterio
 from pyspark.sql import functions as F
 
 from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 
 def _pixels(row):
@@ -33,11 +34,13 @@ def _mk_df(spark):
 
 
 def test_bin_points_tiled_parity(spark):
-    rx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _mk_df(spark)
     for s in ("max", "min", "mean", "count"):
         got = _pixels(
-            rx.bin_points_tiled(
+            rx_helpers.bin_points_tiled(
                 df,
                 x="x",
                 y="y",
@@ -56,7 +59,7 @@ def test_bin_points_tiled_parity(spark):
         ref = _pixels(
             df.groupBy("tk")
             .agg(
-                rx.rst_binpoints_agg(
+                rx._light_rst_binpoints_agg(
                     "x",
                     "y",
                     "z",
@@ -81,7 +84,9 @@ def test_bin_points_tiled_parity(spark):
 
 
 def test_bin_points_tiled_multi_tile(spark):
-    rx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = [
         (0.5, 0.5, 10.0, 1, 0.0, 0.0, 2.0, 2.0),
         (1.5, 1.5, 4.0, 1, 0.0, 0.0, 2.0, 2.0),
@@ -91,7 +96,7 @@ def test_bin_points_tiled_multi_tile(spark):
         rows,
         "x double,y double,z double,tk int,xmin double,ymin double,xmax double,ymax double",
     )
-    out = rx.bin_points_tiled(
+    out = rx_helpers.bin_points_tiled(
         df,
         x="x",
         y="y",
@@ -110,10 +115,12 @@ def test_bin_points_tiled_multi_tile(spark):
 
 
 def test_bin_points_tiled_empty(spark):
-    rx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _mk_df(spark).where(F.col("x") > 1000.0)  # no rows
     assert (
-        rx.bin_points_tiled(
+        rx_helpers.bin_points_tiled(
             df,
             x="x",
             y="y",
@@ -133,10 +140,12 @@ def test_bin_points_tiled_empty(spark):
 
 
 def test_bin_points_tiled_median_delegates(spark):
-    rx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _mk_df(spark)
     got = _pixels(
-        rx.bin_points_tiled(
+        rx_helpers.bin_points_tiled(
             df,
             x="x",
             y="y",
@@ -155,7 +164,7 @@ def test_bin_points_tiled_median_delegates(spark):
     ref = _pixels(
         df.groupBy("tk")
         .agg(
-            rx.rst_binpoints_agg(
+            rx._light_rst_binpoints_agg(
                 "x",
                 "y",
                 "z",
@@ -180,7 +189,9 @@ def test_bin_points_tiled_null_z_parity(spark):
     # A NULL z in a cell must behave like the reference rst_binpoints_agg:
     # count includes the point (counts every in-bounds point), and mean is
     # contaminated to NoData; max/min ignore the null.
-    rx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = [
         (0.5, 0.5, 10.0),
         (0.6, 0.6, None),  # null z, same cell as (0.5, 0.5)
@@ -196,7 +207,7 @@ def test_bin_points_tiled_null_z_parity(spark):
     )
     for s in ("count", "mean", "max", "min"):
         got = _pixels(
-            rx.bin_points_tiled(
+            rx_helpers.bin_points_tiled(
                 df,
                 x="x",
                 y="y",
@@ -215,7 +226,7 @@ def test_bin_points_tiled_null_z_parity(spark):
         ref = _pixels(
             df.groupBy("tk")
             .agg(
-                rx.rst_binpoints_agg(
+                rx._light_rst_binpoints_agg(
                     "x",
                     "y",
                     "z",

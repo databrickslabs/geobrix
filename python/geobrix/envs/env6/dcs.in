@@ -1,0 +1,10 @@
+# What the DCS image installs beside the env6 wheel (which it installs --no-deps): the wheel's declared
+# dependencies, the [vizx] extra, and rasterio as a distribution. Locked per architecture (dcs-<arch>.lock) with
+# the base image's packages held at the versions in dcs-base-<arch>.txt (click included).
+# The rasterio is GeoBrix's own build (scripts/native, bindings), made against the payload's GDAL with
+# OpenSSL 3: it satisfies the name requirement of any package that asks for a `rasterio` distribution and needs
+# no PyPI rasterio (which carries its own GDAL, and on x86_64 OpenSSL 1.1). `import rasterio` is still served by
+# the payload's copy. Regenerate with `gbx:dcs:build --relock`.
+-r core.txt
+-r extra-vizx.txt
+rasterio==1.5.2+gbx1

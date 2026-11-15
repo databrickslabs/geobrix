@@ -1,0 +1,304 @@
+---
+title: Availability by surface
+sidebar_label: Availability
+---
+
+# Availability by surface
+
+GeoBrix functions exist on up to three surfaces:
+
+- SQL in a notebook or job session: `gbx_*` after `databricks.labs.gbx.register(spark)`.
+- SQL in Unity Catalog: `<catalog>.<schema>.gbx_*` after `gbx.uc.install`.
+- The Python API.
+
+The **Scala** column marks a function with a JVM form in the GeoBrix JAR. The JAR is the performance tier, not an API: you call the function from SQL or Python. See [Functions the JAR speeds up](./jar-functions).
+
+Python names are relative to the `databricks.labs.gbx` package. For example,
+`gridx.bng.functions.bng_tessellate` is `from databricks.labs.gbx.gridx.bng import functions`.
+
+## Functions
+
+{/* BEGIN GENERATED functions: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Function | SQL (session) | SQL (Unity Catalog) | Python | Scala |
+|---|---|---|---|---|
+| `gbx_bng_aswkb` | ✓ | ✓ | `gridx.bng.functions.bng_aswkb` | ✓ |
+| `gbx_bng_aswkt` | ✓ | ✓ | `gridx.bng.functions.bng_aswkt` | ✓ |
+| `gbx_bng_cellarea` | ✓ | ✓ | `gridx.bng.functions.bng_cellarea` | ✓ |
+| `gbx_bng_cellfill` | ✓ |  | `gridx.bng.functions.bng_cellfill` | ✓ |
+| `gbx_bng_cellfill_array` | ✓ | ✓ | `gridx.bng.functions.bng_cellfill_array` |  |
+| `gbx_bng_cellintersection` | ✓ | ✓ | `gridx.bng.functions.bng_cellintersection` | ✓ |
+| `gbx_bng_cellintersection_agg` | ✓ |  | `gridx.bng.functions.bng_cellintersection_agg` |  |
+| `gbx_bng_cellintersection_array` | ✓ | ✓ | `gridx.bng.functions.bng_cellintersection_array` |  |
+| `gbx_bng_cellunion` | ✓ | ✓ | `gridx.bng.functions.bng_cellunion` | ✓ |
+| `gbx_bng_cellunion_agg` | ✓ |  | `gridx.bng.functions.bng_cellunion_agg` |  |
+| `gbx_bng_cellunion_array` | ✓ | ✓ | `gridx.bng.functions.bng_cellunion_array` |  |
+| `gbx_bng_centroid` | ✓ | ✓ | `gridx.bng.functions.bng_centroid` | ✓ |
+| `gbx_bng_distance` | ✓ | ✓ | `gridx.bng.functions.bng_distance` | ✓ |
+| `gbx_bng_eastnorthasbng` | ✓ | ✓ | `gridx.bng.functions.bng_eastnorthasbng` |  |
+| `gbx_bng_euclideandistance` | ✓ | ✓ | `gridx.bng.functions.bng_euclideandistance` | ✓ |
+| `gbx_bng_geomkloop` | ✓ | ✓ | `gridx.bng.functions.bng_geomkloop` | ✓ |
+| `gbx_bng_geomkloopexplode` | ✓ | ✓ | `gridx.bng.functions.bng_geomkloopexplode` | ✓ |
+| `gbx_bng_geomkring` | ✓ | ✓ | `gridx.bng.functions.bng_geomkring` | ✓ |
+| `gbx_bng_geomkringexplode` | ✓ | ✓ | `gridx.bng.functions.bng_geomkringexplode` | ✓ |
+| `gbx_bng_kloop` | ✓ | ✓ | `gridx.bng.functions.bng_kloop` | ✓ |
+| `gbx_bng_kloopexplode` | ✓ | ✓ | `gridx.bng.functions.bng_kloopexplode` | ✓ |
+| `gbx_bng_kring` | ✓ | ✓ | `gridx.bng.functions.bng_kring` | ✓ |
+| `gbx_bng_kringexplode` | ✓ | ✓ | `gridx.bng.functions.bng_kringexplode` | ✓ |
+| `gbx_bng_pointascell` | ✓ | ✓ | `gridx.bng.functions.bng_pointascell` | ✓ |
+| `gbx_bng_polyfill` | ✓ | ✓ | `gridx.bng.functions.bng_polyfill` | ✓ |
+| `gbx_bng_tessellate` | ✓ | ✓ | `gridx.bng.functions.bng_tessellate` | ✓ |
+| `gbx_bng_tessellateexplode` | ✓ | ✓ | `gridx.bng.functions.bng_tessellateexplode` | ✓ |
+| `gbx_custom_cellaswkb` | ✓ | ✓ | `gridx.custom.functions.custom_cellaswkb` | ✓ |
+| `gbx_custom_cellaswkt` | ✓ | ✓ | `gridx.custom.functions.custom_cellaswkt` | ✓ |
+| `gbx_custom_cellfill` | ✓ |  | `gridx.custom.functions.custom_cellfill` | ✓ |
+| `gbx_custom_cellfill_array` | ✓ | ✓ | `gridx.custom.functions.custom_cellfill_array` |  |
+| `gbx_custom_centroid` | ✓ | ✓ | `gridx.custom.functions.custom_centroid` | ✓ |
+| `gbx_custom_distance` | ✓ | ✓ | `gridx.custom.functions.custom_distance` | ✓ |
+| `gbx_custom_geomkloop` | ✓ | ✓ | `gridx.custom.functions.custom_geomkloop` | ✓ |
+| `gbx_custom_geomkloopexplode` | ✓ | ✓ | `gridx.custom.functions.custom_geomkloopexplode` | ✓ |
+| `gbx_custom_geomkring` | ✓ | ✓ | `gridx.custom.functions.custom_geomkring` | ✓ |
+| `gbx_custom_geomkringexplode` | ✓ | ✓ | `gridx.custom.functions.custom_geomkringexplode` | ✓ |
+| `gbx_custom_grid` | ✓ | ✓ | `gridx.custom.functions.custom_grid` | ✓ |
+| `gbx_custom_kloop` | ✓ | ✓ | `gridx.custom.functions.custom_kloop` | ✓ |
+| `gbx_custom_kring` | ✓ | ✓ | `gridx.custom.functions.custom_kring` | ✓ |
+| `gbx_custom_pointascell` | ✓ | ✓ | `gridx.custom.functions.custom_pointascell` | ✓ |
+| `gbx_custom_polyfill` | ✓ | ✓ | `gridx.custom.functions.custom_polyfill` | ✓ |
+| `gbx_drivers` | ✓ |  | `drivers.functions.drivers` |  |
+| `gbx_h3_cell_bbox` | ✓ | ✓ | `gridx.h3.functions.h3_cell_bbox` |  |
+| `gbx_h3_cellfill` | ✓ |  | `gridx.h3.functions.h3_cellfill` | ✓ |
+| `gbx_h3_cellfill_array` | ✓ | ✓ | `gridx.h3.functions.h3_cellfill_array` |  |
+| `gbx_h3_geomkloop` | ✓ | ✓ | `gridx.h3.functions.h3_geomkloop` |  |
+| `gbx_h3_geomkloopexplode` | ✓ | ✓ | `gridx.h3.functions.h3_geomkloopexplode` |  |
+| `gbx_h3_geomkring` | ✓ | ✓ | `gridx.h3.functions.h3_geomkring` |  |
+| `gbx_h3_geomkringexplode` | ✓ | ✓ | `gridx.h3.functions.h3_geomkringexplode` |  |
+| `gbx_pmtiles_agg` | ✓ |  | `pmtiles.functions.pmtiles_agg` |  |
+| `gbx_quadbin_aswkb` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_aswkb` |  |
+| `gbx_quadbin_cellfill` | ✓ |  | `gridx.quadbin.functions.quadbin_cellfill` |  |
+| `gbx_quadbin_cellfill_array` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_cellfill_array` |  |
+| `gbx_quadbin_cellunion` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_cellunion` |  |
+| `gbx_quadbin_cellunion_agg` | ✓ |  | `gridx.quadbin.functions.quadbin_cellunion_agg` |  |
+| `gbx_quadbin_centroid` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_centroid` |  |
+| `gbx_quadbin_distance` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_distance` |  |
+| `gbx_quadbin_geomkloop` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_geomkloop` |  |
+| `gbx_quadbin_geomkloopexplode` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_geomkloopexplode` |  |
+| `gbx_quadbin_geomkring` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_geomkring` |  |
+| `gbx_quadbin_geomkringexplode` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_geomkringexplode` |  |
+| `gbx_quadbin_kloop` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_kloop` |  |
+| `gbx_quadbin_kring` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_kring` |  |
+| `gbx_quadbin_pointascell` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_pointascell` |  |
+| `gbx_quadbin_polyfill` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_polyfill` |  |
+| `gbx_quadbin_resolution` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_resolution` |  |
+| `gbx_quadbin_tessellate` | ✓ | ✓ | `gridx.quadbin.functions.quadbin_tessellate` |  |
+| `gbx_rst_align_to` | ✓ | ✓ | `rasterx.functions.rst_align_to` |  |
+| `gbx_rst_asformat` | ✓ | ✓ | `rasterx.functions.rst_asformat` |  |
+| `gbx_rst_aspect` | ✓ | ✓ | `rasterx.functions.rst_aspect` |  |
+| `gbx_rst_avg` | ✓ | ✓ | `rasterx.functions.rst_avg` |  |
+| `gbx_rst_band` | ✓ | ✓ | `rasterx.functions.rst_band` |  |
+| `gbx_rst_bandmetadata` | ✓ | ✓ | `rasterx.functions.rst_bandmetadata` |  |
+| `gbx_rst_binpoints` | ✓ | ✓ | `rasterx.functions.rst_binpoints` |  |
+| `gbx_rst_binpoints_agg` | ✓ |  | `rasterx.functions.rst_binpoints_agg` |  |
+| `gbx_rst_binpoints_finalize` | ✓ | ✓ | `rasterx.functions.rst_binpoints_finalize` |  |
+| `gbx_rst_binpoints_partial` | ✓ | ✓ | `rasterx.functions.rst_binpoints_partial` |  |
+| `gbx_rst_bng_rasterize` | ✓ | ✓ | `rasterx.functions.rst_bng_rasterize` |  |
+| `gbx_rst_bng_rasterize_agg` | ✓ |  | `rasterx.functions.rst_bng_rasterize_agg` | ✓ |
+| `gbx_rst_bng_rasterize_tvf` | ✓ |  | `rasterx.functions.rst_bng_rasterize_tvf` |  |
+| `gbx_rst_bng_rastertogrid_partial` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogrid_partial` |  |
+| `gbx_rst_bng_rastertogridavg` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridavg` |  |
+| `gbx_rst_bng_rastertogridcount` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridcount` |  |
+| `gbx_rst_bng_rastertogridmax` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridmax` |  |
+| `gbx_rst_bng_rastertogridmedian` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridmedian` |  |
+| `gbx_rst_bng_rastertogridmin` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridmin` |  |
+| `gbx_rst_bng_rastertogridstddev` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridstddev` |  |
+| `gbx_rst_bng_rastertogridsum` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridsum` |  |
+| `gbx_rst_bng_rastertogridvariance` | ✓ | ✓ | `rasterx.functions.rst_bng_rastertogridvariance` |  |
+| `gbx_rst_bng_tessellate` | ✓ | ✓ | `rasterx.functions.rst_bng_tessellate` |  |
+| `gbx_rst_boundingbox` | ✓ | ✓ | `rasterx.functions.rst_boundingbox` | ✓ |
+| `gbx_rst_buildoverviews` | ✓ | ✓ | `rasterx.functions.rst_buildoverviews` |  |
+| `gbx_rst_chm` | ✓ | ✓ | `rasterx.functions.rst_chm` |  |
+| `gbx_rst_clip` | ✓ | ✓ | `rasterx.functions.rst_clip` |  |
+| `gbx_rst_cog_convert` | ✓ | ✓ | `rasterx.functions.rst_cog_convert` |  |
+| `gbx_rst_color_relief` | ✓ | ✓ | `rasterx.functions.rst_color_relief` |  |
+| `gbx_rst_combineavg` | ✓ | ✓ | `rasterx.functions.rst_combineavg` |  |
+| `gbx_rst_combineavg_agg` | ✓ |  | `rasterx.functions.rst_combineavg_agg` |  |
+| `gbx_rst_combinecount` | ✓ | ✓ | `rasterx.functions.rst_combinecount` |  |
+| `gbx_rst_combinemax` | ✓ | ✓ | `rasterx.functions.rst_combinemax` |  |
+| `gbx_rst_combinemedian` | ✓ | ✓ | `rasterx.functions.rst_combinemedian` |  |
+| `gbx_rst_combinemin` | ✓ | ✓ | `rasterx.functions.rst_combinemin` |  |
+| `gbx_rst_combinestddev` | ✓ | ✓ | `rasterx.functions.rst_combinestddev` |  |
+| `gbx_rst_combinesum` | ✓ | ✓ | `rasterx.functions.rst_combinesum` |  |
+| `gbx_rst_contour` | ✓ | ✓ | `rasterx.functions.rst_contour` |  |
+| `gbx_rst_convolve` | ✓ | ✓ | `rasterx.functions.rst_convolve` |  |
+| `gbx_rst_crs` | ✓ | ✓ | `rasterx.functions.rst_crs` |  |
+| `gbx_rst_custom_rasterize` | ✓ | ✓ | `rasterx.functions.rst_custom_rasterize` |  |
+| `gbx_rst_custom_rasterize_agg` | ✓ |  | `rasterx.functions.rst_custom_rasterize_agg` | ✓ |
+| `gbx_rst_custom_rastertogrid_partial` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogrid_partial` |  |
+| `gbx_rst_custom_rastertogridavg` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridavg` |  |
+| `gbx_rst_custom_rastertogridcount` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridcount` |  |
+| `gbx_rst_custom_rastertogridmax` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridmax` |  |
+| `gbx_rst_custom_rastertogridmedian` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridmedian` |  |
+| `gbx_rst_custom_rastertogridmin` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridmin` |  |
+| `gbx_rst_custom_rastertogridstddev` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridstddev` |  |
+| `gbx_rst_custom_rastertogridsum` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridsum` |  |
+| `gbx_rst_custom_rastertogridvariance` | ✓ | ✓ | `rasterx.functions.rst_custom_rastertogridvariance` |  |
+| `gbx_rst_custom_tessellate` | ✓ | ✓ | `rasterx.functions.rst_custom_tessellate` |  |
+| `gbx_rst_derivedband` | ✓ |  | `rasterx.functions.rst_derivedband` |  |
+| `gbx_rst_derivedband_agg` | ✓ |  | `rasterx.functions.rst_derivedband_agg` |  |
+| `gbx_rst_dtmfromgeoms` | ✓ | ✓ | `rasterx.functions.rst_dtmfromgeoms` |  |
+| `gbx_rst_dtmfromgeoms_agg` | ✓ |  | `rasterx.functions.rst_dtmfromgeoms_agg` |  |
+| `gbx_rst_evi` | ✓ | ✓ | `rasterx.functions.rst_evi` |  |
+| `gbx_rst_fillnodata` | ✓ | ✓ | `rasterx.functions.rst_fillnodata` |  |
+| `gbx_rst_filter` | ✓ | ✓ | `rasterx.functions.rst_filter` |  |
+| `gbx_rst_format` | ✓ | ✓ | `rasterx.functions.rst_format` |  |
+| `gbx_rst_frombands` | ✓ | ✓ | `rasterx.functions.rst_frombands` |  |
+| `gbx_rst_frombands_agg` | ✓ |  | `rasterx.functions.rst_frombands_agg` |  |
+| `gbx_rst_fromcontent` | ✓ | ✓ | `rasterx.functions.rst_fromcontent` | ✓ |
+| `gbx_rst_fromfile` | ✓ |  | `rasterx.functions.rst_fromfile` |  |
+| `gbx_rst_gdal` | ✓ |  | `rasterx.functions.rst_gdal` |  |
+| `gbx_rst_georeference` | ✓ | ✓ | `rasterx.functions.rst_georeference` |  |
+| `gbx_rst_getnodata` | ✓ | ✓ | `rasterx.functions.rst_getnodata` |  |
+| `gbx_rst_getsubdataset` | ✓ | ✓ | `rasterx.functions.rst_getsubdataset` |  |
+| `gbx_rst_gridfrompoints` | ✓ | ✓ | `rasterx.functions.rst_gridfrompoints` |  |
+| `gbx_rst_gridfrompoints_agg` | ✓ |  | `rasterx.functions.rst_gridfrompoints_agg` |  |
+| `gbx_rst_h3_rasterize` | ✓ | ✓ | `rasterx.functions.rst_h3_rasterize` |  |
+| `gbx_rst_h3_rasterize_agg` | ✓ |  | `rasterx.functions.rst_h3_rasterize_agg` | ✓ |
+| `gbx_rst_h3_rastertogrid_partial` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogrid_partial` |  |
+| `gbx_rst_h3_rastertogridavg` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridavg` |  |
+| `gbx_rst_h3_rastertogridcount` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridcount` |  |
+| `gbx_rst_h3_rastertogridmax` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridmax` |  |
+| `gbx_rst_h3_rastertogridmedian` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridmedian` |  |
+| `gbx_rst_h3_rastertogridmin` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridmin` |  |
+| `gbx_rst_h3_rastertogridstddev` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridstddev` |  |
+| `gbx_rst_h3_rastertogridsum` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridsum` |  |
+| `gbx_rst_h3_rastertogridvariance` | ✓ | ✓ | `rasterx.functions.rst_h3_rastertogridvariance` |  |
+| `gbx_rst_h3_tessellate` | ✓ | ✓ | `rasterx.functions.rst_h3_tessellate` |  |
+| `gbx_rst_height` | ✓ | ✓ | `rasterx.functions.rst_height` |  |
+| `gbx_rst_hillshade` | ✓ | ✓ | `rasterx.functions.rst_hillshade` |  |
+| `gbx_rst_histogram` | ✓ | ✓ | `rasterx.functions.rst_histogram` |  |
+| `gbx_rst_index` | ✓ | ✓ | `rasterx.functions.rst_index` |  |
+| `gbx_rst_initnodata` | ✓ | ✓ | `rasterx.functions.rst_initnodata` |  |
+| `gbx_rst_isempty` | ✓ | ✓ | `rasterx.functions.rst_isempty` |  |
+| `gbx_rst_isoband` | ✓ | ✓ | `rasterx.functions.rst_isoband` |  |
+| `gbx_rst_land_cover` | ✓ | ✓ | `rasterx.functions.rst_land_cover` |  |
+| `gbx_rst_maketiles` | ✓ | ✓ | `rasterx.functions.rst_maketiles` |  |
+| `gbx_rst_mapalgebra` | ✓ | ✓ | `rasterx.functions.rst_mapalgebra` |  |
+| `gbx_rst_max` | ✓ | ✓ | `rasterx.functions.rst_max` |  |
+| `gbx_rst_median` | ✓ | ✓ | `rasterx.functions.rst_median` |  |
+| `gbx_rst_memsize` | ✓ | ✓ | `rasterx.functions.rst_memsize` |  |
+| `gbx_rst_merge` | ✓ | ✓ | `rasterx.functions.rst_merge` |  |
+| `gbx_rst_merge_agg` | ✓ |  | `rasterx.functions.rst_merge_agg` |  |
+| `gbx_rst_merge_tvf` | ✓ |  | `rasterx.functions.rst_merge_tvf` |  |
+| `gbx_rst_metadata` | ✓ | ✓ | `rasterx.functions.rst_metadata` |  |
+| `gbx_rst_min` | ✓ | ✓ | `rasterx.functions.rst_min` |  |
+| `gbx_rst_nbr` | ✓ | ✓ | `rasterx.functions.rst_nbr` |  |
+| `gbx_rst_ndvi` | ✓ | ✓ | `rasterx.functions.rst_ndvi` |  |
+| `gbx_rst_ndwi` | ✓ | ✓ | `rasterx.functions.rst_ndwi` |  |
+| `gbx_rst_numbands` | ✓ | ✓ | `rasterx.functions.rst_numbands` |  |
+| `gbx_rst_percentile_stretch` | ✓ | ✓ | `rasterx.functions.rst_percentile_stretch` |  |
+| `gbx_rst_pixelcount` | ✓ | ✓ | `rasterx.functions.rst_pixelcount` |  |
+| `gbx_rst_pixelheight` | ✓ | ✓ | `rasterx.functions.rst_pixelheight` |  |
+| `gbx_rst_pixelwidth` | ✓ | ✓ | `rasterx.functions.rst_pixelwidth` |  |
+| `gbx_rst_polygonize` | ✓ | ✓ | `rasterx.functions.rst_polygonize` |  |
+| `gbx_rst_proximity` | ✓ | ✓ | `rasterx.functions.rst_proximity` |  |
+| `gbx_rst_quadbin_rasterize` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rasterize` |  |
+| `gbx_rst_quadbin_rasterize_agg` | ✓ |  | `rasterx.functions.rst_quadbin_rasterize_agg` | ✓ |
+| `gbx_rst_quadbin_rastertogrid_partial` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogrid_partial` |  |
+| `gbx_rst_quadbin_rastertogridavg` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridavg` |  |
+| `gbx_rst_quadbin_rastertogridcount` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridcount` |  |
+| `gbx_rst_quadbin_rastertogridmax` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridmax` |  |
+| `gbx_rst_quadbin_rastertogridmedian` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridmedian` |  |
+| `gbx_rst_quadbin_rastertogridmin` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridmin` |  |
+| `gbx_rst_quadbin_rastertogridstddev` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridstddev` |  |
+| `gbx_rst_quadbin_rastertogridsum` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridsum` |  |
+| `gbx_rst_quadbin_rastertogridvariance` | ✓ | ✓ | `rasterx.functions.rst_quadbin_rastertogridvariance` |  |
+| `gbx_rst_quadbin_tessellate` | ✓ | ✓ | `rasterx.functions.rst_quadbin_tessellate` |  |
+| `gbx_rst_rasterize` | ✓ | ✓ | `rasterx.functions.rst_rasterize` |  |
+| `gbx_rst_rasterize_agg` | ✓ |  | `rasterx.functions.rst_rasterize_agg` |  |
+| `gbx_rst_rastertoworldcoord` | ✓ | ✓ | `rasterx.functions.rst_rastertoworldcoord` |  |
+| `gbx_rst_rastertoworldcoordx` | ✓ | ✓ | `rasterx.functions.rst_rastertoworldcoordx` |  |
+| `gbx_rst_rastertoworldcoordy` | ✓ | ✓ | `rasterx.functions.rst_rastertoworldcoordy` |  |
+| `gbx_rst_resample` | ✓ | ✓ | `rasterx.functions.rst_resample` |  |
+| `gbx_rst_resample_to_res` | ✓ | ✓ | `rasterx.functions.rst_resample_to_res` |  |
+| `gbx_rst_resample_to_size` | ✓ | ✓ | `rasterx.functions.rst_resample_to_size` |  |
+| `gbx_rst_retile` | ✓ | ✓ | `rasterx.functions.rst_retile` |  |
+| `gbx_rst_rotation` | ✓ | ✓ | `rasterx.functions.rst_rotation` |  |
+| `gbx_rst_roughness` | ✓ | ✓ | `rasterx.functions.rst_roughness` |  |
+| `gbx_rst_sample` | ✓ | ✓ | `rasterx.functions.rst_sample` |  |
+| `gbx_rst_savi` | ✓ | ✓ | `rasterx.functions.rst_savi` |  |
+| `gbx_rst_scalex` | ✓ | ✓ | `rasterx.functions.rst_scalex` |  |
+| `gbx_rst_scaley` | ✓ | ✓ | `rasterx.functions.rst_scaley` |  |
+| `gbx_rst_separatebands` | ✓ | ✓ | `rasterx.functions.rst_separatebands` |  |
+| `gbx_rst_setcrs` | ✓ | ✓ | `rasterx.functions.rst_setcrs` |  |
+| `gbx_rst_setsrid` | ✓ | ✓ | `rasterx.functions.rst_setsrid` |  |
+| `gbx_rst_skewx` | ✓ | ✓ | `rasterx.functions.rst_skewx` |  |
+| `gbx_rst_skewy` | ✓ | ✓ | `rasterx.functions.rst_skewy` |  |
+| `gbx_rst_slope` | ✓ | ✓ | `rasterx.functions.rst_slope` |  |
+| `gbx_rst_srid` | ✓ | ✓ | `rasterx.functions.rst_srid` |  |
+| `gbx_rst_stats_partial` | ✓ | ✓ | `rasterx.functions.rst_stats_partial` |  |
+| `gbx_rst_subdatasets` | ✓ | ✓ | `rasterx.functions.rst_subdatasets` |  |
+| `gbx_rst_summary` | ✓ | ✓ | `rasterx.functions.rst_summary` |  |
+| `gbx_rst_threshold` | ✓ | ✓ | `rasterx.functions.rst_threshold` |  |
+| `gbx_rst_tilexyz` | ✓ | ✓ | `rasterx.functions.rst_tilexyz` | ✓ |
+| `gbx_rst_to_webmercator` | ✓ | ✓ | `rasterx.functions.rst_to_webmercator` |  |
+| `gbx_rst_tooverlappingtiles` | ✓ | ✓ | `rasterx.functions.rst_tooverlappingtiles` |  |
+| `gbx_rst_tpi` | ✓ | ✓ | `rasterx.functions.rst_tpi` |  |
+| `gbx_rst_transform` | ✓ | ✓ | `rasterx.functions.rst_transform` |  |
+| `gbx_rst_transformcrs` | ✓ | ✓ | `rasterx.functions.rst_transformcrs` |  |
+| `gbx_rst_tri` | ✓ | ✓ | `rasterx.functions.rst_tri` |  |
+| `gbx_rst_tryopen` | ✓ | ✓ | `rasterx.functions.rst_tryopen` |  |
+| `gbx_rst_type` | ✓ | ✓ | `rasterx.functions.rst_type` |  |
+| `gbx_rst_updatetype` | ✓ | ✓ | `rasterx.functions.rst_updatetype` |  |
+| `gbx_rst_upperleftx` | ✓ | ✓ | `rasterx.functions.rst_upperleftx` |  |
+| `gbx_rst_upperlefty` | ✓ | ✓ | `rasterx.functions.rst_upperlefty` |  |
+| `gbx_rst_viewshed` | ✓ | ✓ | `rasterx.functions.rst_viewshed` |  |
+| `gbx_rst_width` | ✓ | ✓ | `rasterx.functions.rst_width` |  |
+| `gbx_rst_worldtorastercoord` | ✓ | ✓ | `rasterx.functions.rst_worldtorastercoord` |  |
+| `gbx_rst_worldtorastercoordx` | ✓ | ✓ | `rasterx.functions.rst_worldtorastercoordx` |  |
+| `gbx_rst_worldtorastercoordy` | ✓ | ✓ | `rasterx.functions.rst_worldtorastercoordy` | ✓ |
+| `gbx_rst_xyzpyramid` | ✓ | ✓ | `rasterx.functions.rst_xyzpyramid` |  |
+| `gbx_st_asmvt` | ✓ |  | `vectorx.functions.st_asmvt` |  |
+| `gbx_st_asmvt_array` | ✓ | ✓ | `vectorx.functions.st_asmvt_array` |  |
+| `gbx_st_asmvt_pyramid` | ✓ | ✓ | `vectorx.functions.st_asmvt_pyramid` |  |
+| `gbx_st_coverageinvalidedges` | ✓ |  | `vectorx.functions.st_coverageinvalidedges` |  |
+| `gbx_st_coverageinvalidedges_array` | ✓ | ✓ | `vectorx.functions.st_coverageinvalidedges_array` |  |
+| `gbx_st_coverageisvalid` | ✓ |  | `vectorx.functions.st_coverageisvalid` |  |
+| `gbx_st_coverageisvalid_array` | ✓ | ✓ | `vectorx.functions.st_coverageisvalid_array` |  |
+| `gbx_st_crs` | ✓ |  | `vectorx.functions.st_crs` |  |
+| `gbx_st_explainvalidity` | ✓ | ✓ | `vectorx.functions.st_explainvalidity` |  |
+| `gbx_st_interpolateelevationbbox` | ✓ | ✓ | `vectorx.functions.st_interpolateelevationbbox` | ✓ |
+| `gbx_st_interpolateelevationgeom` | ✓ | ✓ | `vectorx.functions.st_interpolateelevationgeom` |  |
+| `gbx_st_legacyaswkb` | ✓ | ✓ | `vectorx.functions.st_legacyaswkb` | ✓ |
+| `gbx_st_makevalid` | ✓ | ✓ | `vectorx.functions.st_makevalid` |  |
+| `gbx_st_node` | ✓ | ✓ | `vectorx.functions.st_node` |  |
+| `gbx_st_reduceprecision` | ✓ | ✓ | `vectorx.functions.st_reduceprecision` |  |
+| `gbx_st_removerepeatedpoints` | ✓ | ✓ | `vectorx.functions.st_removerepeatedpoints` |  |
+| `gbx_st_setcrs` | ✓ |  | `vectorx.functions.st_setcrs` |  |
+| `gbx_st_shiftlongitude` | ✓ | ✓ | `vectorx.functions.st_shiftlongitude` |  |
+| `gbx_st_simplifypreservetopology` | ✓ | ✓ | `vectorx.functions.st_simplifypreservetopology` |  |
+| `gbx_st_snap` | ✓ | ✓ | `vectorx.functions.st_snap` |  |
+| `gbx_st_split` | ✓ | ✓ | `vectorx.functions.st_split` |  |
+| `gbx_st_transformcrs` | ✓ |  | `vectorx.functions.st_transformcrs` | ✓ |
+| `gbx_st_triangulate` | ✓ | ✓ | `vectorx.functions.st_triangulate` | ✓ |
+| `gbx_st_wrapx` | ✓ | ✓ | `vectorx.functions.st_wrapx` |  |
+{/* END GENERATED functions */}
+
+## Readers and writers
+
+{/* BEGIN GENERATED datasources: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Format | Read | Write | Implementation | Page |
+|---|---|---|---|---|
+| `cog_gbx` | ✓ | ✓ | python | [readers/cog](../readers/cog) |
+| `exif_gbx` | ✓ |  | python | [readers/exif](../readers/exif) |
+| `file_gbx` | ✓ |  | python | [readers/file](../readers/file) |
+| `file_gdb_gbx` | ✓ | ✓ | python | [readers/filegdb](../readers/filegdb) |
+| `geojson_gbx` | ✓ | ✓ | python | [readers/geojson](../readers/geojson) |
+| `geojsonl_gbx` | ✓ | ✓ | python | [writers/geojsonl](../writers/geojsonl) |
+| `gpkg_gbx` | ✓ | ✓ | python | [readers/geopackage](../readers/geopackage) |
+| `gtiff_gbx` | ✓ | ✓ | python | [readers/geotiff](../readers/geotiff) |
+| `lidar_gbx` | ✓ | ✓ | python | [readers/lidar](../readers/lidar) |
+| `netcdf_gbx` | ✓ | ✓ | python | [readers/netcdf](../readers/netcdf) |
+| `pmtiles_gbx` | ✓ | ✓ | python | [readers/pmtiles](../readers/pmtiles) |
+| `raster_gbx` | ✓ | ✓ | python | [readers/raster](../readers/raster) |
+| `shapefile_gbx` | ✓ | ✓ | python | [readers/shapefile](../readers/shapefile) |
+| `vector_gbx` | ✓ | ✓ | python | [readers/vector](../readers/vector) |
+| `zarr_gbx` | ✓ |  | python | [readers/zarr](../readers/zarr) |
+{/* END GENERATED datasources */}

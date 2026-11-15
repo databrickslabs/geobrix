@@ -4,3 +4,9 @@ Copyright (2018) Databricks, Inc.
 
 
 This Software includes software developed at Databricks (https://www.databricks.com/) and its use is subject to the included LICENSE file.
+
+Third-party software bundled in the GeoBrix JAR:
+
+- GDAL Java bindings (org.gdal:gdal, https://gdal.org), MIT licence. GeoBrix builds them from GDAL with its
+  native stack (scripts/native/maven/gdal-<version>.jar); that jar's META-INF/LICENSE-GDAL.TXT holds the full
+  licence text.

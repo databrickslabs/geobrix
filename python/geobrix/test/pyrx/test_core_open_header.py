@@ -23,6 +23,7 @@ Discriminating design for virtual tests:
 """
 
 import unittest.mock
+from test._volume_safe import open_raster
 
 import numpy as np
 import rasterio
@@ -56,7 +57,7 @@ def _big_virtual(tmp_path):
         transform=from_origin(10, 50, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.zeros((2048, 2048), "float32"), 1)
     return {
         "cellid": 0,

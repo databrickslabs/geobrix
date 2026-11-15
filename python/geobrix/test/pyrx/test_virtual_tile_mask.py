@@ -1,0 +1,637 @@
+"""A light virtual tile keeps its source's own (per-dataset) mask band when it is read.
+
+``rst_fromfile`` returns virtual tiles by default, so a masked source (JPEG/YCbCr
+imagery often carries an internal mask band) is read through ``open_tile``'s window
+paths. Those paths wrote the window without the mask, so every masked pixel came back
+valid in every light operation that starts from a lazily read tile.
+
+Layout (the canonical-module matrix once, one wiring test per consumer):
+
+  * the window read, the pending nodata / band-select instructions, the warp and
+    clip variants and the materializers: ``open_tile`` results against the source
+    read directly or the eager operation on the same bytes;
+  * consumers (``rst_initnodata``, covering, BNG tessellate, raster-to-grid) run
+    through Spark from ``rst_fromfile`` and from ``rst_fromcontent``: same output,
+    and no masked source pixel in it.
+"""
+
+import unittest.mock
+from pathlib import Path
+from test._volume_safe import open_raster
+
+import numpy as np
+import pytest
+import rasterio
+import shapely
+from rasterio.enums import MaskFlags
+from rasterio.transform import from_origin
+from rasterio.windows import Window
+from shapely.geometry import box
+
+from databricks.labs.gbx.pyrx.core import edit
+from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
+from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx
+
+from . import _tessellate_parity as tp
+
+N = 40
+MASKED_ROWS = (10, 11)
+MARKER = 9999  # the pixels under the mask: not a ramp value, not 7, not 65535
+ORIGIN = (1.0, 52.6)
+PX = 0.005
+
+
+def _values(count=1):
+    """Ramp 1..1600; row 3 holds 65535 (the uint16 fallback NoData); the masked rows
+    hold MARKER, so a masked pixel read as data shows up as 9999."""
+    vals = (np.arange(N * N) + 1).reshape(N, N).astype("uint16")
+    vals[3, :] = 65535
+    vals[list(MASKED_ROWS), :] = MARKER
+    return np.stack([vals + b for b in range(count)]) if count > 1 else vals[None]
+
+
+def _profile(*, count=1, nodata=None, crs="EPSG:4326", origin=ORIGIN, px=PX):
+    return dict(
+        driver="GTiff",
+        width=N,
+        height=N,
+        count=count,
+        dtype="uint16",
+        crs=crs,
+        transform=from_origin(origin[0], origin[1], px, px),
+        nodata=nodata,
+    )
+
+
+def write_masked(path, *, count=1, nodata=None, **kw):
+    """uint16 GTiff with an internal per-dataset mask over ``MASKED_ROWS``."""
+    mask = np.full((N, N), 255, dtype="uint8")
+    mask[list(MASKED_ROWS), :] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with open_raster(
+            path, "w", **_profile(count=count, nodata=nodata, **kw)
+        ) as dst:
+            dst.write(_values(count))
+            dst.write_mask(mask)
+    with rasterio.open(path) as chk:
+        assert chk.mask_flag_enums[0] == [MaskFlags.per_dataset], "fixture needs a mask"
+    return str(path)
+
+
+def virtual(path, window=(0, 0, N, N), **kw):
+    return VirtualTile(cellid=0, path=str(path), window=window, **kw)
+
+
+def source_view(path, window=None):
+    """(data, valid) of the source file read directly, optionally one window."""
+    with rasterio.open(path) as src:
+        win = None if window is None else Window(*window)
+        return src.read(window=win), src.read_masks(window=win) != 0
+
+
+def read_tile(tile):
+    with ot.open_tile(tile) as ds:
+        return ds.read(), ds.read_masks() != 0, ds.nodata
+
+
+def decode(raster_bytes):
+    with rasterio.MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        return ds.read(), ds.read_masks() != 0, ds.nodata
+
+
+def assert_same_pixels(got, want, label):
+    """Same validity everywhere, same values where valid."""
+    (g_data, g_valid), (w_data, w_valid) = got, want
+    assert g_valid.shape == w_valid.shape, f"{label}: shape {g_valid.shape}"
+    assert (
+        g_valid == w_valid
+    ).all(), f"{label}: {int((g_valid != w_valid).sum())} pixels differ in validity"
+    assert (g_data[g_valid] == w_data[w_valid]).all(), f"{label}: values differ"
+
+
+# ---------------------------------------------------------------------------
+# the window read
+# ---------------------------------------------------------------------------
+
+WINDOWS = [
+    None,
+    (0, 0, N, N),
+    (0, 5, N, 20),  # spans the masked rows
+    (5, 8, 20, 10),  # clips them at the top
+    (0, 20, N, 10),  # misses them
+]
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+@pytest.mark.parametrize("window", WINDOWS, ids=str)
+def test_window_read_keeps_the_mask(tmp_path, nodata, window):
+    p = write_masked(tmp_path / "m.tif", nodata=nodata)
+    data, valid, _ = read_tile(virtual(p, window=window))
+    want = source_view(p, None if window is None else window)
+    assert_same_pixels((data, valid), want, f"window={window} nodata={nodata}")
+
+
+def test_window_read_matches_a_tile_that_starts_from_bytes(tmp_path):
+    p = write_masked(tmp_path / "m.tif")
+    from_bytes = VirtualTile(cellid=0, raster=Path(p).read_bytes())
+    data, valid, _ = read_tile(virtual(p))
+    b_data, b_valid, _ = read_tile(from_bytes)
+    assert_same_pixels((data, valid), (b_data, b_valid), "virtual vs bytes")
+    assert not valid[:, list(MASKED_ROWS), :].any()
+
+
+def test_a_source_without_a_mask_is_read_as_before(tmp_path):
+    p = str(tmp_path / "plain.tif")
+    with open_raster(p, "w", **_profile(nodata=7.0)) as dst:
+        dst.write(_values())
+    with ot.open_tile(virtual(p)) as ds:
+        assert ds.mask_flag_enums[0] == [MaskFlags.nodata]
+        assert (ds.read() == _values()).all()
+
+
+def test_an_external_mask_file_is_kept(tmp_path):
+    """A mask kept next to the file (``m.tif.msk``) is a per-dataset mask too."""
+    p = str(tmp_path / "ext.tif")
+    mask = np.full((N, N), 255, dtype="uint8")
+    mask[list(MASKED_ROWS), :] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False):
+        with open_raster(p, "w", **_profile()) as dst:
+            dst.write(_values())
+            dst.write_mask(mask)
+    assert (tmp_path / "ext.tif.msk").exists(), "fixture needs an external mask"
+    _, valid, _ = read_tile(virtual(p))
+    assert not valid[:, list(MASKED_ROWS), :].any()
+    assert valid.sum() == N * N - len(MASKED_ROWS) * N
+
+
+def test_an_alpha_band_is_left_to_the_alpha_band(tmp_path):
+    """An alpha source is read as before: the alpha band stays a band (no mask band is
+    added) and decides which pixels are valid."""
+    from databricks.labs.gbx.pyrx.core import _nodata as nd
+
+    p = str(tmp_path / "rgba.tif")
+    data = np.full((4, N, N), 50, dtype="uint8")
+    data[3] = 255
+    data[3, 5, :] = 0  # transparent row, colour bands not 0
+    prof = {**_profile(count=4), "dtype": "uint8"}
+    with open_raster(p, "w", **prof) as dst:
+        dst.write(data)
+    with rasterio.open(p) as src:
+        assert nd.has_alpha(src) and not nd.has_own_mask(src)
+        want = nd.valid_mask(src)
+    with ot.open_tile(virtual(p, window=(0, 2, N, 20))) as ds:
+        assert ds.count == 4 and nd.has_alpha(ds) and not nd.has_own_mask(ds)
+        assert (ds.read() == data[:, 2:22, :]).all()
+        assert (nd.valid_mask(ds) == want[2:22, :]).all()
+    assert not want[5].any() and want[6].all()
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+def test_pending_initnodata_matches_eager_initnodata(tmp_path, nodata):
+    """The deferred rst_initnodata of a virtual tile equals the eager one on its bytes:
+    the NoData is declared and the masked pixels take it."""
+    p = write_masked(tmp_path / "m.tif", nodata=nodata)
+    with rasterio.open(p) as src:
+        eager = decode(edit.init_nodata(src))
+    tile = virtual(p, metadata={ot.PENDING_NODATA: ot.PENDING_NODATA_AUTO})
+    data, valid, got_nodata = read_tile(tile)
+    assert got_nodata == eager[2] == (65535.0 if nodata is None else nodata)
+    assert_same_pixels((data, valid), (eager[0], eager[1]), f"nodata={nodata}")
+    assert not valid[:, list(MASKED_ROWS), :].any()
+    assert (data[:, list(MASKED_ROWS), :] == got_nodata).all()
+
+
+def test_pending_nodata_that_does_not_fit_still_keeps_the_mask(tmp_path):
+    """-9999 does not fit uint16, so no NoData is stamped; the mask is the only guard."""
+    p = write_masked(tmp_path / "m.tif")
+    tile = virtual(p, metadata={ot.PENDING_NODATA: "-9999"})
+    data, valid, got_nodata = read_tile(tile)
+    assert got_nodata is None
+    assert not valid[:, list(MASKED_ROWS), :].any()
+    assert valid.sum() == N * N - len(MASKED_ROWS) * N
+
+
+def test_pending_band_select_keeps_the_mask(tmp_path):
+    p = write_masked(tmp_path / "m.tif", count=2)
+    tile = virtual(p, metadata={ot.PENDING_BANDS: "2"})
+    data, valid, _ = read_tile(tile)
+    assert data.shape[0] == 1 and not valid[:, list(MASKED_ROWS), :].any()
+    assert valid.sum() == N * N - len(MASKED_ROWS) * N
+
+
+# ---------------------------------------------------------------------------
+# the warp variants: a tile with a target CRS
+# ---------------------------------------------------------------------------
+
+
+def _index_file(path, nodata):
+    """Same grid as the masked source, no mask: pixel (r, c) holds r + 100, so the warp
+    of this file names the source row of every output pixel."""
+    idx = np.repeat((np.arange(N) + 100)[:, None], N, axis=1).astype("uint16")
+    with open_raster(path, "w", **_profile(nodata=nodata)) as dst:
+        dst.write(idx, 1)
+    return str(path)
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+@pytest.mark.parametrize("target", ["EPSG:3857", "ESRI:54008"])
+def test_warp_variants_keep_the_mask(tmp_path, target, nodata):
+    """The warp moves the mask with the pixels: the output pixels that come from masked
+    source rows are invalid, and nothing else is (outside the footprint the warp fills
+    with the NoData, or with plain zeros when the source declares none)."""
+    masked = write_masked(tmp_path / "m.tif", nodata=nodata)
+    index = _index_file(tmp_path / "idx.tif", nodata)
+    data, valid, _ = read_tile(virtual(masked, crs=target))
+    idx, _, _ = read_tile(virtual(index, crs=target))
+    fill = 0 if nodata is None else nodata
+    covered = idx[0] != fill
+    from_masked = covered & np.isin(idx[0].astype("int64") - 100, MASKED_ROWS)
+    assert from_masked.any(), "fixture: the warp must keep some masked source pixels"
+    # a declared NoData also takes the (unmasked) ramp pixel equal to it
+    want = (
+        ~from_masked if nodata is None else covered & ~from_masked & (data[0] != fill)
+    )
+    assert (valid[0] == want).all(), (
+        f"{target} nodata={nodata}: masked pixels valid: "
+        f"{int((valid[0] & from_masked).sum())}, valid pixels lost: "
+        f"{int((~valid[0] & want).sum())}"
+    )
+
+
+@pytest.mark.parametrize("target", ["EPSG:3857", "EPSG:27700", "ESRI:54008"])
+def test_warped_mask_holds_only_0_and_255(tmp_path, target):
+    """Valid is 255 in the warped mask. (GDAL moves a value that collides with the NoData
+    it warps with, 255 here, to 254; the mask file stores one bit, so the output does
+    not show it, but the array handed to it must be clean.)"""
+    from rasterio.vrt import WarpedVRT
+
+    p = write_masked(tmp_path / "m.tif")
+    with rasterio.open(p) as src:
+        window_bytes = ot._window_dataset_bytes(
+            src, Window(0, 0, N, N), mark_masked=True
+        )
+    with rasterio.MemoryFile(window_bytes) as mf, mf.open() as wds:
+        with WarpedVRT(wds, crs=target) as vrt:
+            warped = ot._warped_mask(wds, vrt)
+    assert warped.dtype == np.uint8
+    assert set(np.unique(warped)) <= {0, 255}, np.unique(warped)
+    assert (warped == 0).any() and (warped == 255).any()
+
+
+def test_warp_to_the_same_crs_is_the_plain_read(tmp_path):
+    p = write_masked(tmp_path / "m.tif")
+    _, valid, _ = read_tile(virtual(p, crs="EPSG:4326"))
+    assert not valid[:, list(MASKED_ROWS), :].any()
+
+
+def test_one_warp_rule_for_a_non_epsg_target_equal_to_the_source_crs(tmp_path):
+    """A target CRS the source already has asks for no warp, in every reader of a tile:
+    the pixels are the plain window's (no resampling), also for a non-EPSG CRS, and the
+    block-streaming materializer does not hand such a tile to the in-memory one."""
+    esri = "ESRI:54008"
+    p = str(tmp_path / "sinu.tif")
+    mask = np.full((N, N), 255, dtype="uint8")
+    mask[list(MASKED_ROWS), :] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with open_raster(
+            p, "w", **_profile(crs=esri, origin=(1e5, 5e6), px=100.0)
+        ) as dst:
+            dst.write(_values())
+            dst.write_mask(mask)
+    want = source_view(p)
+    tile = virtual(p, crs=esri)
+    data, valid, _ = read_tile(tile)
+    assert_same_pixels((data, valid), want, "open_tile")
+    assert_same_pixels(decode(ot._tile_to_bytes(tile))[:2], want, "_tile_to_bytes")
+    with unittest.mock.patch.object(
+        ot, "materialize_to_bytes", side_effect=AssertionError("not streamed")
+    ):
+        streamed = decode(ot._windowed_materialize_bytes(tile))
+    assert_same_pixels(streamed[:2], want, "_windowed_materialize_bytes")
+
+
+# ---------------------------------------------------------------------------
+# the clip variant: a tile with a cutline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+def test_clip_variant_equals_the_eager_clip(tmp_path, nodata):
+    p = write_masked(tmp_path / "m.tif", nodata=nodata)
+    x0, y0 = ORIGIN
+    cut = box(x0 + 5 * PX, y0 - 25 * PX, x0 + 30 * PX, y0 - 5 * PX)
+    wkb = shapely.to_wkb(cut)
+    with rasterio.open(p) as src:
+        eager = decode(edit.clip_to_geom(src, cut))
+    got = read_tile(virtual(p, clip_polygon=wkb, clip_crs="EPSG:4326"))
+    assert (
+        got[0] == eager[0]
+    ).all(), "clipped pixels differ from the eager clip of the bytes"
+    assert (got[1] == eager[1]).all(), "clipped validity differs"
+    # a source with no NoData is filled with its dtype's fallback, which the clip declares: never a valid zero
+    fill = fallback_nodata("uint16") if nodata is None else nodata
+    assert (got[0] == MARKER).sum() == 0, "a masked pixel survived the clip"
+    assert (got[1][got[0] == fill] == 0).all(), "the fill reads as valid"
+    assert (got[0] == fill).any(), "the clip left no fill where the mask was"
+
+
+def test_a_subpixel_cutline_keeps_its_pixel_in_a_virtual_tile_as_in_the_eager_clip(
+    tmp_path,
+):
+    """A cutline under one pixel holds no pixel centre: the clip keeps the pixel it touches, the same pixel in the eager
+    clip of the bytes and in the virtual tile that reads window by window."""
+    p = write_masked(tmp_path / "m.tif", nodata=None)
+    x0, y0 = ORIGIN
+    cut = box(
+        x0 + 12.1 * PX, y0 - 20.3 * PX, x0 + 12.3 * PX, y0 - 20.1 * PX
+    )  # inside the pixel (column 12, row 20), away from its centre
+    with rasterio.open(p) as src:
+        eager = decode(edit.clip_to_geom(src, cut))
+    got = read_tile(virtual(p, clip_polygon=shapely.to_wkb(cut), clip_crs="EPSG:4326"))
+    assert eager[0].shape[1:] == (1, 1), "the eager clip keeps one pixel"
+    assert got[0].shape == eager[0].shape and (got[0] == eager[0]).all()
+    assert (got[1] == eager[1]).all()
+
+
+def test_a_thin_cutline_that_holds_pixel_centres_keeps_just_those_pixels(tmp_path):
+    """A sliver under one pixel's area that still holds the centres of ten pixels of row 20 keeps those ten with the
+    centre rule: it does not turn to the pixels it touches (twelve), in the eager clip or in the virtual tile.
+    """
+    p = write_masked(tmp_path / "m.tif", nodata=None)
+    x0, y0 = ORIGIN
+    cut = box(x0 + 4.6 * PX, y0 - 20.525 * PX, x0 + 15.4 * PX, y0 - 20.475 * PX)
+    assert cut.area < PX * PX
+    with rasterio.open(p) as src:
+        assert not edit.holds_no_pixel_centre(cut, src.transform, N, N)
+        eager = decode(edit.clip_to_geom(src, cut, all_touched=False))
+        want = src.read(1)[20, 5:15]
+    got = read_tile(virtual(p, clip_polygon=shapely.to_wkb(cut), clip_crs="EPSG:4326"))
+    for data, valid, _nd in (eager, got):
+        kept = valid[0]
+        assert int(kept.sum()) == 10, f"{int(kept.sum())} pixels kept"
+        assert (data[0][kept] == want).all()
+
+
+def test_the_centre_check_scans_past_the_representative_point_and_judges_the_grid(
+    monkeypatch,
+):
+    """An L of thin bars whose representative point sits on the leg (no centre) holds centres along its foot: the strip
+    scan finds them over several strips. The centres are the grid's, so a tile the foot only grazes keeps the centre
+    rule, as the whole raster does; a cutline that misses the raster keeps the caller's rule.
+    """
+    t = from_origin(0, N, 1, 1)  # a column is x, a row is N - y
+    leg = box(3.6, N - 29.55, 3.7, N - 2)  # between the centres of columns 3 and 4
+    foot = box(3.6, N - 29.55, 10.3, N - 29.45)  # the centres of row 29, columns 4 to 9
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 2 * 8)  # two rows a strip
+    assert not edit.holds_no_pixel_centre(leg.union(foot), t, N, N)
+    assert edit.holds_no_pixel_centre(leg, t, N, N)
+    grazed = from_origin(
+        10, N, 1, 1
+    )  # the tile of columns 10 to 14: the foot reaches 0.3 into it
+    assert not edit.holds_no_pixel_centre(foot, grazed, 5, N)
+    assert not edit.holds_no_pixel_centre(box(100.2, 1.1, 100.3, 1.2), t, N, N)
+    # a scan over its cap stops and keeps the caller's rule, in blocks no wider than a strip
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 4)
+    assert edit.holds_no_pixel_centre(leg, t, N, N)
+    monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", 8)
+    assert not edit.holds_no_pixel_centre(leg, t, N, N)
+
+
+def test_a_window_wider_than_a_strip_is_scanned_block_by_block(monkeypatch):
+    """A cutline whose only centres sit past its first blocks of columns is found there, with every block no wider than a
+    strip; the same cutline without them holds none."""
+    import rasterio.features
+
+    t = from_origin(0, N, 1, 1)
+    leg = box(3.6, N - 2.3, 3.7, N - 1.0)  # the representative point's pixel: no centre
+    bar = box(3.6, N - 2.3, 12, N - 2.2)  # above the centres of row 2
+    low = box(
+        11, N - 2.55, 20.3, N - 2.2
+    )  # down onto the centres of row 2, columns 11 to 19
+    widths, mask = [], rasterio.features.geometry_mask
+
+    def recorded(geoms, out_shape, *a, **k):
+        widths.append(out_shape[1])
+        return mask(geoms, out_shape, *a, **k)
+
+    monkeypatch.setattr(rasterio.features, "geometry_mask", recorded)
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 4)
+    assert not edit.holds_no_pixel_centre(leg.union(bar).union(low), t, N, N)
+    # row 1 holds no centre; row 2 finds one in its third block (columns 11 to 14)
+    assert widths == [4, 4, 4, 4, 2, 4, 4, 4]
+    assert edit.holds_no_pixel_centre(leg.union(bar), t, N, N)
+
+
+def test_a_bound_on_a_pixel_edge_is_snapped_and_the_cap_is_exact(monkeypatch):
+    """A bound on a pixel edge that float noise puts a hair past it (14.000000000000004 for 0.1 pixels) does not widen
+    the window by a column; a block that would pass the scan's cap is not rasterized; and a cutline on a pixel edge,
+    thinner than the snap, still turns to the pixels it touches."""
+    import rasterio.features
+
+    shapes, mask = [], rasterio.features.geometry_mask
+
+    def recorded(geoms, out_shape, *a, **k):
+        shapes.append(tuple(out_shape))
+        return mask(geoms, out_shape, *a, **k)
+
+    monkeypatch.setattr(rasterio.features, "geometry_mask", recorded)
+    fine = from_origin(1.0, 52.6, 0.1, 0.1)
+    edge = box(1.0 + 13.6 * 0.1, 52.6 - 0.25, 1.0 + 14 * 0.1, 52.6 - 0.1)
+    assert (~fine * (1.0 + 14 * 0.1, 52.6))[0] != 14  # the noise this guards against
+    assert edit.holds_no_pixel_centre(edge, fine, N, N)
+    assert shapes == [(2, 1)]  # rows 1-2 of column 13, not columns 13-14
+    t = from_origin(0, N, 1, 1)
+    short = box(3.6, N - 10, 3.7, N - 2)  # rows 2 to 9: two blocks of four
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 4)
+    for cap, held, calls in ((8, True, 2), (6, False, 1)):
+        monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", cap)
+        shapes.clear()
+        assert edit.holds_no_pixel_centre(short, t, N, N) is held
+        assert len(shapes) == calls
+    monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", 1 << 24)
+    assert edit.holds_no_pixel_centre(box(4 - 1e-8, N - 10, 4 + 1e-8, N - 2), t, N, N)
+    # on the raster's right edge too: the column left of it is the raster's
+    on_edge = box(N - 1e-8, N - 10, N + 1e-8, N - 2)
+    assert edit.holds_no_pixel_centre(on_edge, t, N, N)
+    # and on the row axis: inside the raster and on its bottom edge (y = 0 is row N)
+    assert edit.holds_no_pixel_centre(box(2, N - 4 - 1e-8, 10, N - 4 + 1e-8), t, N, N)
+    assert edit.holds_no_pixel_centre(box(2, -1e-8, 10, 1e-8), t, N, N)
+
+
+# ---------------------------------------------------------------------------
+# the materializers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+def test_materializers_keep_the_mask(tmp_path, nodata):
+    p = write_masked(tmp_path / "m.tif", nodata=nodata)
+    vt = virtual(p)
+    want = source_view(p)
+    for label, raster in (
+        ("materialize_to_bytes", ot.materialize_to_bytes(vt).raster),
+        ("_tile_to_bytes", ot._tile_to_bytes(vt)),
+        ("_windowed_materialize_bytes", ot._windowed_materialize_bytes(vt)),
+    ):
+        data, valid, _ = decode(raster)
+        assert_same_pixels((data, valid), want, f"{label} nodata={nodata}")
+
+
+def test_streamed_materialization_equals_the_in_memory_one(tmp_path):
+    """The block-streaming path writes the same pixels, validity and NoData."""
+    p = write_masked(tmp_path / "m.tif")
+    for md in ({}, {ot.PENDING_NODATA: ot.PENDING_NODATA_AUTO}):
+        vt = virtual(p, window=(0, 4, N, 20), metadata=md)
+        a = decode(ot.materialize_to_bytes(vt).raster)
+        b = decode(ot._windowed_materialize_bytes(vt))
+        assert a[2] == b[2], f"{md}: NoData {a[2]} vs {b[2]}"
+        assert_same_pixels((a[0], a[1]), (b[0], b[1]), f"streamed {md}")
+
+
+# ---------------------------------------------------------------------------
+# consumers: the same output from rst_fromfile (virtual) and rst_fromcontent
+# ---------------------------------------------------------------------------
+
+
+def _tile_df(spark, path, *, virtual_start):
+    from pyspark.sql import functions as f
+
+    if virtual_start:
+        df = spark.createDataFrame([(str(path),)], ["path"]).select(
+            rx.rst_fromfile("path").alias("tile")
+        )
+        # the "virtual" case must start from a tile without bytes
+        assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"
+        return df
+    raw = Path(path).read_bytes()
+    return spark.createDataFrame([(bytearray(raw),)], ["raster"]).select(
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+def test_rst_fromfile_materialize_keeps_the_mask(spark, tmp_path, nodata):
+    """``rst_fromfile(path, materialize=True)`` reads the file now; its bytes hold the
+    mask, so the tile equals the virtual read of the same file."""
+
+    p = write_masked(tmp_path / "m.tif", nodata=nodata)
+    row = (
+        spark.createDataFrame([(p,)], ["path"])
+        .select(rx.rst_fromfile("path", materialize=True).alias("tile"))
+        .first()["tile"]
+    )
+    assert row["raster"] is not None, "materialize=True gave a virtual tile"
+    data, valid, got_nodata = decode(bytes(row["raster"]))
+    v_data, v_valid, v_nodata = read_tile(virtual(p))
+    assert not valid[:, list(MASKED_ROWS), :].any()
+    assert got_nodata == v_nodata == nodata
+    assert_same_pixels((data, valid), (v_data, v_valid), "materialized vs virtual")
+
+
+def test_rst_initnodata_from_a_virtual_tile(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
+    p = write_masked(tmp_path / "m.tif")
+    got = {}
+    for start in (True, False):
+        df = _tile_df(spark, p, virtual_start=start)
+        row = df.select(
+            rx.rst_pixelcount(rx.rst_initnodata("tile")).alias("n"),
+            rx.rst_max(rx.rst_initnodata("tile")).alias("mx"),
+        ).collect()[0]
+        got[start] = (list(row["n"]), list(row["mx"]))
+    # 1600 pixels - 80 masked - 40 real 65535s (the NoData it stamps)
+    assert got[False][0] == [N * N - 80 - 40]
+    assert got[True] == got[False], f"virtual {got[True]} vs bytes {got[False]}"
+    assert got[True][1][0] < MARKER
+
+
+def _chips(spark, path, *, virtual_start, sql_name, resolution, assignment, coverage):
+    raw = Path(path).read_bytes()
+    raster = tp.staged(raw, path) if virtual_start else raw
+    return tp.light_chips(
+        spark,
+        raster,
+        sql_name,
+        resolution,
+        assignment,
+        coverage,
+        lambda cid: cid,
+    )
+
+
+@pytest.mark.parametrize(
+    "case,sql_name,resolution,assignment",
+    [
+        ("covering", "gbx_rst_h3_tessellate", 7, "covering"),
+        ("bng", "gbx_rst_bng_tessellate", 3, "centroid"),
+    ],
+)
+def test_tessellate_from_a_virtual_tile(
+    spark, tmp_path, case, sql_name, resolution, assignment
+):
+    """Covering (H3, the source's own CRS) and BNG (warped to EPSG:27700): the chips of
+    a virtual tile hold the same valid pixels as the chips of its bytes, and none of
+    them is a masked source pixel."""
+    p = write_masked(tmp_path / "m.tif")
+    chips = {
+        start: _chips(
+            spark,
+            p,
+            virtual_start=start,
+            sql_name=sql_name,
+            resolution=resolution,
+            assignment=assignment,
+            coverage="sparse",
+        )
+        for start in (True, False)
+    }
+    assert chips[False], f"{case}: the bytes tile emitted no chips"
+    assert not tp.error_rows(chips[True]), f"{case}: virtual start gave error rows"
+    for start, rows in chips.items():
+        values = []
+        for _, b, _ in rows:
+            with rasterio.MemoryFile(b) as mf, mf.open() as ds:
+                values.append(ds.read(1)[ds.read_masks(1) != 0])
+        v = np.concatenate(values)
+        assert v.size, f"{case} start={'virtual' if start else 'bytes'}: no valid pixel"
+        assert MARKER not in v, (
+            f"{case} start={'virtual' if start else 'bytes'}: "
+            f"{int((v == MARKER).sum())} masked source pixels are valid"
+        )
+    got = sorted((cid, tuple(np.sort(_valid_values(b)))) for cid, b, _ in chips[True])
+    want = sorted((cid, tuple(np.sort(_valid_values(b)))) for cid, b, _ in chips[False])
+    assert got == want, f"{case}: virtual start emits different chips than bytes"
+
+
+def _valid_values(raster_bytes):
+    with rasterio.MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        return ds.read(1)[ds.read_masks(1) != 0]
+
+
+@pytest.mark.parametrize("agg", ["count", "max"])
+def test_rastertogrid_from_a_virtual_tile(spark, tmp_path, agg):
+    """BNG raster-to-grid of a 4326 source (warped to EPSG:27700): same cells and
+    measures from a virtual tile as from its bytes, with no masked pixel aggregated."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
+    p = write_masked(tmp_path / "m.tif")
+    out = {}
+    for start in (True, False):
+        _tile_df(spark, p, virtual_start=start).createOrReplaceTempView("_vm_grid")
+        rows = spark.sql(
+            f"SELECT t.cellID AS c, t.measure AS m FROM _vm_grid, "
+            f"LATERAL gbx_rst_bng_rastertogrid{agg}(tile, 3, 'sparse', 'centroid') t"
+        ).collect()
+        out[start] = {r["c"]: r["m"] for r in rows}
+    assert out[False], "the bytes tile aggregated nothing"
+    assert out[True] == out[False], f"{agg}: virtual start differs from bytes start"
+    if agg == "count":
+        # at most the valid source pixels: the masked rows and the 65535 row are out
+        assert sum(out[True].values()) <= N * N - 80 - 40
+    else:
+        assert max(out[True].values()) < MARKER, "a masked source pixel was aggregated"

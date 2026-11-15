@@ -11,3 +11,10 @@
 # Syntax: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
 
 * @databrickslabs/geobrix-write
+
+# The GDAL Java classes the JAR is built against are a committed jar in no repository: its sha256 pin
+# (GDAL_JAVA_JAR_SHA256 in rust-pins.conf) is the trust anchor of its noSig entry in .maven-keys.list, and no CI
+# job rebuilds the jar from source, so a change to either is reviewed as the native supply chain it is. Listed
+# explicitly so they stay owned if the catch-all above is ever narrowed.
+/scripts/native/maven/ @databrickslabs/geobrix-write
+/scripts/native/rust-pins.conf @databrickslabs/geobrix-write

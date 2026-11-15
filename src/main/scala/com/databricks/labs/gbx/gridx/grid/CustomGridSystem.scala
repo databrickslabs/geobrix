@@ -36,7 +36,9 @@ case class CustomGridSystem(conf: GridConf) extends GridSystem {
     def parse(id: String): Long = id.toLong
 
     /**
-      * Get the k ring of indices around the provided cell id.
+      * Get the k ring of indices around the provided cell id: the cells that exist in the grid, positions clamped to
+      * `[0, totalCells - 1]`. A ring at the east edge does not wrap into the next row, and a ring at the north edge
+      * names no cell outside the grid.
       *
       * @param cellID
       *   Cell ID to be used as a center of k ring.
@@ -56,10 +58,10 @@ case class CustomGridSystem(conf: GridConf) extends GridSystem {
         val posY = getCellPositionY(cellPosition, res)
 
         val fromX = math.max(posX - k, 0)
-        val toX = math.min(posX + k, totalCellsX(res))
+        val toX = math.min(posX + k, totalCellsX(res) - 1)
 
         val fromY = math.max(posY - k, 0)
-        val toY = math.min(posY + k, totalCellsY(res))
+        val toY = math.min(posY + k, totalCellsY(res) - 1)
 
         (fromX to toX)
             // Get all cells that overlap with the bounding box

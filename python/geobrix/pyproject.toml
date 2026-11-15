@@ -24,8 +24,65 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     'Operating System :: OS Independent'
 ]
+# This is the plain wheel. It exists only for GeoBrix's own development loop: the host venv's
+# editable install (gbx:venv:sync), the dev container, and CI tooling. It is not a user install and
+# is not a release asset. Users run GeoBrix on Databricks and install the env wheel for the
+# runtime instead (geobrix-<version>+env5 for DBR 17.3 / 18, Serverless environment 5 and Lakeflow
+# pipelines; geobrix-<version>+env6 for DBR 19, Serverless environment 6, SQL warehouses and UC
+# functions): it carries one GDAL stack built for it and holds the runtime's preinstalled packages.
+#
+# The base dependencies are the light tier, so the editable install gives the dev loop a working
+# light tier. Floors only, no caps: the dev loop has no preinstalled base to hold, and a cap only
+# turns a newer release into a resolution failure. rasterio, pyogrio, pyproj, shapely and
+# netCDF4 bring their own GDAL / PROJ / GEOS builds from PyPI here.
+#
+# PySpark is NOT a base dependency. Every supported runtime provides its own (DBR 17.3/18/19
+# classic ship it on /databricks/spark/python; Serverless env 5/6 and Lakeflow pipelines register
+# a Spark Connect pyspark), and a declared `pyspark` made `%pip install geobrix[...]` download
+# ~450 MB of OSS PySpark on Connect-based compute for nothing. The dev loop gets PySpark (4.0.0 or
+# newer) from its locks; the [test] extra carries it for tests and local runs.
 dependencies = [
-    "pyspark>=4.0.0",
+    "rasterio>=1.3.0",
+    "shapely>=2.1.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    # 14.0.1 fixes CVE-2023-47248 (IPC/Parquet deserialization). Every target runtime ships 19.0.1 or
+    # 21.0.0, so the floor moves nothing on Databricks.
+    "pyarrow>=14.0.1",
+    "scipy>=1.11.0",
+    # PIL is imported by rasterx (ortho, imagery) and the exif_gbx reader. The lowest runtime base is 11.1.0
+    # (DBR 17.3, DBR 18, env 5; DBR 19 and env 6 ship 12.0.0).
+    "pillow>=11.1.0",
+    # rio-tiler imports it (rio_tiler.expression, loaded by every rio_tiler import). The env wheels vendor
+    # rio-tiler without its requirements, so it is declared here. GeoBrix code does not import it.
+    "numexpr>=2.14.1",
+    "h3>=4.1",
+    "quadbin>=0.2",
+    # Protomaps PMTiles archive writer/reader (pure Python) for the pmtiles_gbx backend.
+    "pmtiles>=3.4",
+    # OGR-free vector reading for the light *_gbx vector DataSources (pyogrio bundles its own
+    # libgdal; pyproj maps CRS -> srid/proj4).
+    "pyogrio>=0.12",
+    "pyproj>=3.6",
+    # Web-mercator XYZ tiling. rio-tiler 9.x declares TypedDict(extra_items=...) (PEP 728),
+    # which works from typing_extensions 4.13.0 while rio-tiler's own metadata asks only for
+    # 4.10: the floor below is what lets `import rio_tiler` succeed.
+    "rio-tiler>=9.0",
+    "typing_extensions>=4.13",
+    "mapbox-vector-tile>=2.1",
+    # NetCDF decode for the netcdf_gbx reader (and gbx.zarr's xarray views): xarray with the
+    # netcdf4 engine, one wheel bundling netcdf-c and HDF5 (NetCDF-3 and NetCDF-4/HDF5).
+    "xarray>=2025.1",
+    "netcdf4>=1.6",
+    # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes (the stdlib
+    # parser is open to XXE / billion-laughs on an untrusted .vrt).
+    "defusedxml>=0.7",
+    # LiDAR point clouds (lidar_gbx; lazrs is the pure-Rust LAZ backend). lazrs 0.8.2 returns
+    # an error where 0.8.0 / 0.8.1 printed a Rust panic on a short LAZ file.
+    "laspy>=2.7",
+    "lazrs>=0.8.2",
+    # Camera / GPS EXIF from drone imagery (exif_gbx), pure Python.
+    "exifread>=3.0",
 ]
 
 [project.urls]
@@ -41,245 +98,123 @@ dev = [
     # to newer black/isort than CI, so host-formatted files failed CI's black --check.
     # When bumping requirements-ci.in, bump these in the same commit.
     "isort==8.0.1",
-    "black==26.3.1",
+    "black==26.10.1",
     "flake8==7.3.0",
     "flake8-pyproject==1.2.4",
     "build==1.6.1",
 ]
 test = [
+    # Not a base dependency (Databricks provides it) — tests and local Spark runs need it.
+    "pyspark>=4.0.0",
     "pytest>=7.0",
     "shapely>=2.1.0",
     "rasterio>=1.3.0",
     "numpy>=1.24.0",
     # pyvx (light VectorX / MVT) tests use mapbox-vector-tile as the decode
-    # oracle. Pinned to 2.1.x — see the [light_dbr17] extra for why (protobuf <6
-    # on classic DBR 17.3/18; [light_env5] and [light_dbr17/18] are protobuf-5).
+    # oracle. Pinned to 2.1.x: 2.2 needs protobuf 6, which DBR 17.3 / 18 and Serverless
+    # environment 5 do not have (the env5 wheel vendors 2.1.0).
     # 2.1.0 still has the 2.x native-typed-attribute encode API.
     "mapbox-vector-tile>=2.1,<2.2",
 ]
-# Internal composition extra — NOT for direct user installation.
-# Intentionally named `light-base` (not a runtime extra) to distinguish it from
-# user-facing extras. pip has no mechanism to mark an extra as private; contributors
-# must treat it as a build-time composition tool. Install geobrix[light_env6]
-# (Serverless env 6, recommended) or geobrix[light_env5] (env 5), or
-# geobrix[light_dbr17/18/19] for classic clusters — NOT [light-base] directly.
-light-base = [
-    "rasterio>=1.3.0",
-    "shapely>=2.1.0",
-    "numpy>=1.24.0",
-    "pandas>=2.0.0",
-    "pyarrow>=11.0.0",
-    # Cap <2 to guard against a future scipy 2.x major at resolve time (no 2.x
-    # exists yet — a no-op today, like the pyproj<4 / rio-tiler<9.3 pins). scipy is
-    # floor-only elsewhere and floats to latest on the dev-container / transitive
-    # path, so bound it like the other runtime-sensitive deps rather than leave it open.
-    "scipy>=1.11.0,<2",
-    "numexpr>=2.8.0",
-    "rio-cogeo>=7.0,<8",
-    "h3>=4.1,<5",
-    "quadbin>=0.2,<0.3",
-    # Protomaps PMTiles archive writer/reader (pure-Python) for the pmtiles_gbx
-    # tiled-output backend. Writer needs ascending tileid; Reader used in tests.
-    "pmtiles>=3.4,<4",
-    # OGR-free vector reading for the light *_gbx vector DataSources. pyogrio
-    # bundles its own libgdal; pyproj (pulled by pyogrio) maps CRS->srid/proj4.
-    "pyogrio>=0.12,<1",
-    # Cap pyproj: a floor-only, native-PROJ-tied dep that floats to "latest" on
-    # Serverless (not held by the immutable base) — same float-and-break risk as
-    # rio-tiler 9.3.0. No 4.x exists yet, so <4 is a no-op today but future-proofs.
-    "pyproj>=3.6,<4",
-    # Functional floor only; the protobuf-5 cap (light_dbr17/18/env5) and the
-    # protobuf-6 floor (light_dbr19/env6) live in the per-regime variant deltas below.
-    "mapbox-vector-tile>=2.1",
-    "scikit-image>=0.22,<1",
-    # scikit-image does `import lazy_loader` at import time. On Serverless, %pip installs
-    # scikit-image into the notebook-scoped env but does NOT pull its transitive lazy_loader
-    # there: the base ships lazy_loader 0.4, which already satisfies scikit-image's >=0.4, so
-    # pip never copies it into the notebook env — and the rst_land_cover worker runs FROM that
-    # env (can't see the base copy), dying on `from skimage.morphology import disk`
-    # (ModuleNotFoundError: lazy_loader). Pin ABOVE the base's 0.4 so pip is FORCED to install
-    # lazy_loader into the notebook-scoped env. Empirically required (verified on Serverless
-    # env5): drop this pin and rst_land_cover fails; with >=0.5 it works. NB: the example
-    # notebooks' `%pip --no-deps --force-reinstall` line must install bare `geobrix` WITHOUT
-    # [extras] — otherwise this pin gets expanded on that line and fails the install against the
-    # base pins; the real dep install (with extras) happens on the following plain %pip line.
-    "lazy_loader>=0.5",
-    "xarray-spatial>=0.4,<1",
-    # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
-    # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
-    # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
-    # Folded into [light-base] so any geobrix[light_*] reads NetCDF out of the box.
-    # Floor pinned; add a ceiling if a future release floats/breaks on py3.12,
-    # same discipline as the rio-tiler / mapbox-vector-tile pins above.
-    "netcdf4>=1.6,<2",
-    # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes
-    # (raster_gbx VRT expansion). The stdlib xml.etree parser is vulnerable to
-    # XXE / billion-laughs on an untrusted .vrt; defusedxml is the safe parser
-    # _parse_vrt_members prefers. Dep-free, pure Python. Floor pinned; <1
-    # future-proofs (no 1.x exists today).
-    "defusedxml>=0.7,<1",
-    # --- LiDAR point-cloud reading (lidar_gbx DataSource; lazrs = pure-Rust LAZ backend) ---
-    "laspy>=2.5,<2.6",
-    "lazrs>=0.6,<0.7",
-    # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
-    # Pure-Python; no native dep. Available without the [photogrammetry] extra so
-    # any light_* install can read EXIF tags without pulling the full SfM stack.
-    "exifread>=3.0,<4",
+# ---------------------------------------------------------------------------
+# The 0.5.x runtime extras are TRIPWIRES. On Databricks GeoBrix 0.6.0 installs the env wheel for
+# the runtime, with no light extra: geobrix-<version>+env5 (DBR 17.3, DBR 18, Serverless
+# environment 5, Lakeflow pipelines) or geobrix-<version>+env6 (DBR 19, Serverless environment 6,
+# SQL warehouses, UC functions). Each old name requires that env wheel, so an install that still
+# asks for it fails at resolution (pip: ResolutionImpossible), naming the wheel to install,
+# instead of installing this plain wheel's PyPI GDAL stack beside the runtime's packages. The env
+# wheels declare the other family's names the same way. The version is __version__'s (a guard
+# row checks it); [light-base] is gone: its packages are the base dependencies above.
+# ---------------------------------------------------------------------------
+light_dbr17 = ["geobrix==0.6.0+env5"]
+light_dbr18 = ["geobrix==0.6.0+env5"]
+light_env5 = ["geobrix==0.6.0+env5"]
+light_dbr17_all = ["geobrix==0.6.0+env5"]
+light_dbr18_all = ["geobrix==0.6.0+env5"]
+light_env5_all = ["geobrix==0.6.0+env5"]
+light_dbr19 = ["geobrix==0.6.0+env6"]
+light_env6 = ["geobrix==0.6.0+env6"]
+light_dbr19_all = ["geobrix==0.6.0+env6"]
+light_env6_all = ["geobrix==0.6.0+env6"]
+# ---------------------------------------------------------------------------
+# Zarr transactional stores (gbx.zarr). Canonical body: zarr_dbr19. Alias: zarr_env6. Dev loop
+# only: the dev container installs zarr_dbr19 (ensure_zarr_extra in scripts/commands/common.sh) and
+# the light CI all-features lock compiles `.[stac,vizx,zarr_dbr19]`. On Databricks the env6
+# wheel's [zarr] carries these pins (DBR 19, DBR 19 ML, Serverless env 6; envs/env6/extra-zarr.txt):
+#   pip install "geobrix[zarr] @ file:///Volumes/.../geobrix-<version>+env6-py3-none-any.whl"
+#
+# Source of the pins: the per-runtime dependency report (2026-10-21), which reads the package
+# tables of the DBR 19, Serverless env 6 and DBR 19 ML release notes. Its result: the pins
+# "do not move any preinstalled package on DBR 19, Serverless env 6 or DBR 19 ML". So no
+# package moves for a stated reason, and every pin is a floor plus a cap at the next minor
+# (or major) release. Do NOT cap the shared packages below: a cap under a later base bump
+# becomes a downgrade.
+#
+# None of the eight packages is preinstalled on DBR 19, env 6 or DBR 19 ML (CPU or GPU): the
+# report's tables list each as "absent" on all three. What they require of packages the
+# runtimes DO ship is met by the same version on all three runtimes. The report: "Every floor
+# the zarr stack imposes on a shared package (numpy>=2, typing_extensions>=4.14,
+# packaging>=22, google-crc32c>=1.5, pyyaml) is already met by the base of all three
+# runtimes." Preinstalled version -> floor asked (report section 3):
+#   numpy 2.3.4 -> zarr >=2, numcodecs >=2.0, ml_dtypes >=2.0.0, tensorstore >=1.22.0,
+#                  zarrs >=1.24
+#   typing_extensions 4.15.0 -> zarr >=4.14
+#   packaging 25.0 -> zarr >=22.0
+#   google-crc32c 1.8.0 -> zarr >=1.5
+#   pyyaml 6.0.3 -> donfig (no floor)
+# Not for DBR 17.3 / 18 / env 5: Zarr support targets DBR 19 and env 6 only (zarr 3.4 needs
+# typing_extensions>=4.14, and their base ships 4.12.2). The report's open item: zarrs
+# subclasses zarr internals and documents no zarr ceiling, so each package is minor-capped;
+# widen a cap only after a re-test.
+# ---------------------------------------------------------------------------
+zarr_dbr19 = [
+    # zarr: not preinstalled on DBR 19, env 6 or DBR 19 ML. Sharded v3 stores. Pulls
+    # msgspec>=0.19 and donfig>=0.8 (below); its other floors are listed above.
+    "zarr>=3.4.1,<3.5",
+    # numcodecs: not preinstalled on DBR 19, env 6 or DBR 19 ML. Needs python>=3.12 and
+    # numpy>=2 (numpy 2.3.4 preinstalled). Report: "nothing from the base requires it" (0.17.x
+    # over 0.16.x); 0.17.1 makes Pickle.decode opt-in, and the range admits it.
+    "numcodecs>=0.17,<0.18",
+    # zarrs: not preinstalled on DBR 19, env 6 or DBR 19 ML. ZarrsCodecPipeline. Declares only
+    # zarr>=3.1, and "documents no zarr upper bound": hence the zarr cap above.
+    "zarrs>=0.2.3,<0.3",
+    # tensorstore: not preinstalled on DBR 19, env 6 or DBR 19 ML. Needs ml_dtypes>=0.5.0 and
+    # numpy>=1.22.0 (numpy 2.3.4 preinstalled). 0.1.85 is the version the spike measured.
+    "tensorstore>=0.1.85,<0.2",
+    # obstore: not preinstalled on DBR 19, env 6 or DBR 19 ML. Object-store access; replaces
+    # fsspec/s3fs (preinstalled fsspec is 2023.5.0, which the zarr path does not import).
+    # Needs typing-extensions (python<3.13) with no floor (4.15.0 preinstalled). Report:
+    # "take 0.12.0 if the cluster index serves it"; 0.11 is the floor.
+    "obstore>=0.11,<0.13",
+    # ml_dtypes: not preinstalled on DBR 19, env 6 or DBR 19 ML. tensorstore's floor; 0.6.0
+    # itself needs numpy>=2.0.0 (2.3.4 preinstalled).
+    "ml_dtypes>=0.5,<1",
+    # msgspec: not preinstalled on DBR 19, env 6 or DBR 19 ML. Hard dependency of zarr>=3.4.0
+    # (JSON metadata validation); floor from zarr 3.4.x.
+    "msgspec>=0.19,<1",
+    # donfig: not preinstalled on DBR 19, env 6 or DBR 19 ML. zarr's config; floor from zarr.
+    # Its pyyaml has no floor (6.0.3 preinstalled).
+    "donfig>=0.8,<1",
 ]
-# ---------------------------------------------------------------------------
-# protobuf-5 regime — classic DBR 17.3, DBR 18, Serverless env 5
-# Base images ship protobuf 3.x/4.x; mapbox-vector-tile 2.2 would pull
-# protobuf>=6, so cap at <2.2. idna base is 3.7; cap <3.8 to silence the
-# "core package changed: idna" notebook notice.
-# Canonical body: light_dbr17. Aliases: light_dbr18, light_env5.
-# ---------------------------------------------------------------------------
-# Canonical protobuf-5 runtime extra. Classic DBR 17.3.
-light_dbr17 = [
-    "geobrix[light-base]",
-    "typing_extensions>=4.12",
-    # Hold preinstalled core packages at the Serverless env5 / DBR17.3-18 base so a
-    # cluster %pip install is silent (no "a core Python package changed" notice).
-    # Bases: pandas 2.2.3, numpy 2.1.3, urllib3 2.3.0 (verified 2026-09-03).
-    "pandas<2.3",
-    "numpy<2.2",
-    "urllib3<2.4",
-    # rio-tiler 9.3.0 regressed a PEP 728 TypedDict import on Python 3.12; both
-    # pb5 and pb6 environments are py3.12, so <9.3 is unified across all regimes.
-    "rio-tiler>=9.0,<9.3",
-    "httpcore>=1.0.9",
-    "idna<3.8",                     # DBR 17.3/18/env5 protobuf-5 base idna 3.7
-    "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
-]
-# Classic DBR 18 — identical package set to DBR 17.3 (protobuf-5 regime).
-# Aliases the canonical protobuf-5 extra [light_dbr17].
-light_dbr18 = ["geobrix[light_dbr17]"]
-# Serverless env 5 — protobuf-5 regime (same package set as DBR 17.3/18).
-# Aliases the canonical protobuf-5 extra [light_dbr17].
-light_env5 = ["geobrix[light_dbr17]"]
-
-# ---------------------------------------------------------------------------
-# protobuf-6 regime — classic DBR 19, Serverless env 6 (recommended)
-# Base images ship protobuf 6.x; mapbox-vector-tile 2.2 installs cleanly.
-# idna base is 3.11; cap <3.12 to silence the "core package changed: idna"
-# notebook notice. Env 6 is the recommended Serverless environment.
-# Canonical body: light_dbr19. Alias: light_env6.
-# ---------------------------------------------------------------------------
-# Canonical protobuf-6 runtime extra. Classic DBR 19.
-light_dbr19 = [
-    "geobrix[light-base]",
-    # --- Classic DBR 19 / Serverless env 6 runtime-sensitive pins ---
-    "typing_extensions>=4.12",  # relaxed >=4.13 -> >=4.12 to admit env5/DBR17.3-18 base 4.12.2; env6/DBR19 ship 4.13+ (unaffected)
-    # Hold preinstalled core packages at the Serverless env6 / DBR19 base.
-    # Bases: pandas 2.3.3, numpy 2.3.4, urllib3 2.5.0 (verified 2026-09-03).
-    "pandas<2.4",
-    "numpy<2.4",
-    "urllib3<2.6",
-    # rio-tiler <9.3 unified across both regimes: 9.3.0 has a PEP 728 TypedDict
-    # regression on Python 3.12 (both pb5 and pb6 environments are py3.12).
-    # Tightened from the previous <9.4 relaxation, which was unverified and
-    # could silently resolve to a broken 9.3.x on py3.12.
-    "rio-tiler>=9.0,<9.3",
-    "httpcore>=1.0.9",          # DBR 19 / env 6 ship >=1.0.9; floor harmless
-    # idna cap: DBR 19 / env 6 base idna is 3.11; cap <3.12 to silence the
-    # "a core package changed: idna" notebook notice. idna is API-stable 3.x;
-    # the cap is cosmetic but keeps the base idna consistent. Confirmed 2026-08-23:
-    # light_dbr19 also runs on dogfood Serverless env 6 — the notice applies there.
-    "idna<3.12",
-    # Protobuf-6 floor: require >=2.2 (drops the protobuf-5-era <2.2 cap).
-    "mapbox-vector-tile>=2.2",
-]
-# Serverless env 6 — protobuf-6 regime, RECOMMENDED on Serverless.
-# Aliases the canonical protobuf-6 extra [light_dbr19].
-# On Serverless, prefer env 6; use [light_env5] only when targeting env 5.
-light_env6 = ["geobrix[light_dbr19]"]
-
-# ---------------------------------------------------------------------------
-# Feature-complete (_all) umbrellas — [light_dbrNN] + [stac] + [vizx]
-# [stac] stays: it is a generic, quiet STAC client (pystac-client/planetary-computer).
-# [overture] and [earthdata] are opt-in source-specific downloaders NOT in _all:
-#   overturemaps 1.x needs click>=8.4 (a base package move — accepted for a
-#   downloader, like [earthdata]); keeping it out lets _all stay silent on-cluster.
-# The umbrellas also cap `click` at the per-regime base (pb5 <8.2 base 8.1.8;
-#   pb6 >=8.2,<8.3 base 8.2.1 — the floor stops a downgrade to 8.1.8) so
-#   [stac]/[vizx]'s closure can't float it (verified: env6
-#   _all floats click 8.2.1->8.5.0 without this). The cap lives HERE, not in the
-#   shared light_dbrNN extra, so it does not bind the [overture] opt-in path.
-#   To add Overture on top of _all, install it as a SEPARATE step, e.g.
-#   `pip install geobrix[light_env6,overture]` after geobrix[light_env6_all] —
-#   a single combined geobrix[light_env6_all,overture] transaction is intentionally
-#   unsolvable (the second install upgrades click freely; the umbrella cap is
-#   dormant when only [overture] is requested).
-# [databricks] is NOT included: it is a Databricks SDK integration (sample-data
-# upload helpers), not a geo feature, and Databricks compute already provides
-# its runtime. Install [databricks] explicitly if needed.
-# pb5-all canonical: light_dbr17_all. Aliases: light_dbr18_all, light_env5_all.
-# pb6-all canonical: light_dbr19_all. Alias: light_env6_all.
-# ---------------------------------------------------------------------------
-# Canonical protobuf-5 all-features extra.
-light_dbr17_all = [
-    "geobrix[light_dbr17]",
-    "geobrix[stac]",
-    "geobrix[vizx]",
-    # Hold click at the env5 / DBR17.3-18 base (8.1.8) so _all installs silently.
-    # Umbrella-only (see the header note) — does not bind the [overture] opt-in.
-    "click<8.2",
-]
-# Classic DBR 18 all-features — aliases the canonical pb5 all-features extra.
-light_dbr18_all = ["geobrix[light_dbr17_all]"]
-# Serverless env 5 all-features — aliases the canonical pb5 all-features extra.
-light_env5_all = ["geobrix[light_dbr17_all]"]
-# Canonical protobuf-6 all-features extra.
-light_dbr19_all = [
-    "geobrix[light_dbr19]",
-    "geobrix[stac]",
-    "geobrix[vizx]",
-    # Hold click at the env6 / DBR19 base (8.2.1) so _all installs silently.
-    # The floor matters: a bare click<8.3 lets the resolver DOWNGRADE to 8.1.8
-    # (verified on-cluster), so pin the 8.2.x line. Umbrella-only (see the header
-    # note) — does not bind the [overture] opt-in.
-    "click>=8.2,<8.3",
-]
-# Serverless env 6 all-features — aliases the canonical pb6 all-features extra.
-# Recommended for Serverless full installs.
-light_env6_all = ["geobrix[light_dbr19_all]"]
+# Serverless env 6 -- aliases the canonical protobuf-6 Zarr extra [zarr_dbr19].
+zarr_env6 = ["geobrix[zarr_dbr19]"]
 # For sample-data bundle uploads to Unity Catalog Volumes and gbx:test:bundle-databricks
 databricks = [
     "databricks-sdk",
 ]
-# Overture Maps data source (gbx.sample.overture): static-STAC catalog traversal.
-# pystac is the static-catalog reader; geopandas/pyarrow (in [light-base]) do parquet read.
-# overturemaps 1.x requires click>=8.4 (a base package move), so [overture] is an
-# opt-in downloader kept OUT of _all — like [earthdata]. Users who need Overture
-# install geobrix[light_env6,overture] and accept the click bump.
-overture = [
-    "pystac>=1.9,<2",
-    "overturemaps>=1.0,<2",
-]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.
-# Optional extra so [light_env6] users who don't need STAC don't pull pystac/planetary-computer.
+# Dev loop: the light CI all-features lock compiles it (`.[stac,vizx]`).
+# The env wheels' [stac] holds the runtime's requests instead (envs/env<N>/extra-stac.txt).
 stac = [
     "pystac-client>=0.7,<1",
     "planetary-computer>=1.0,<2",
     "tenacity>=8,<10",
     "requests>=2.34.2",
 ]
-# NASA Earthdata / LP DAAC client (gbx.earthdata) + the EMIT CH4 sample downloader
-# (gbx.sample.emit). Opt-in and NOT part of any *_all umbrella: earthaccess pulls
-# s3fs, which ties fsspec+botocore to one release era and CANNOT be installed
-# quietly against a Databricks base carrying old fsspec (2023.5.0) + new botocore
-# (1.40.45) — installing it WILL move fsspec (and/or botocore/urllib3). Keep it out
-# of _all so the feature bundle stays silent on Serverless; EMIT users add [earthdata]
-# explicitly and accept the churn.
-earthdata = [
-    "earthaccess>=0.11,<1",
-    # earthaccess -> s3fs -> aiobotocore -> botocore. Ceiling <1.44.0 spans supported
-    # bases without forcing botocore above the pre-installed boto3's own floor.
-    "botocore<1.44.0",
-]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based
-# tile simplification.  Optional so light-tier users who don't visualize don't
-# pull the GUI stack.  Package code imports only matplotlib + geopandas at
+# tile simplification.  Dev loop: the light CI all-features lock compiles it
+# (`.[stac,vizx]`).  Package code imports only matplotlib + geopandas at
 # module level; anywidget, tippecanoe, and mapclassify are optional at call time.
 vizx = [
     "matplotlib>=3.7,<4",
@@ -287,78 +222,25 @@ vizx = [
     "mapclassify>=2.6,<3",
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",
-    "tippecanoe>=2.45,<3",
+    "tippecanoe>=2.72.0,<3",
     "imageio>=2.28,<3",
     "imageio-ffmpeg>=0.4,<2",
 ]
-# Photogrammetry (example-only): COLMAP SfM + ortho render deps. Not pulled by base light.
-# CPU wheel runs on Serverless CPU env5/6 + classic; GPU variant is Phase 2.
-photogrammetry = [
-    "pycolmap==4.2.0",
-    "rasterio>=1.3",
-    "rio-cogeo>=3.5",
-    "folium",
-    "pymbtiles",
-    "mercantile",
-    "pmtiles",
-]
-# GPU is env5-only on purpose: Serverless GPU AI Runtime env5 = CUDA 12 (matches pycolmap-cuda12).
-# env6 = CUDA 13 and no pycolmap-cuda13 wheel exists on the proxy -> no photogrammetry_gpu_env6 until it does.
-photogrammetry_gpu_env5 = [
-    "pycolmap-cuda12==4.2.0",
-    "rasterio>=1.3",
-    "rio-cogeo>=3.5",
-    "folium",
-    "pymbtiles",
-    "mercantile",
-    "pmtiles",
-]
-# Model-backed raster inference (gbx.models): GeoSAM (segment-geospatial / SamGeo)
-# segmentation + Unity Catalog model serving. CPU-importable surface only -- torch and
-# segment-geospatial are imported lazily inside gbx.models (see geosam.py/__init__.py),
-# so importing the package never requires a GPU-capable torch build. The plain
-# `segment-geospatial` PyPI wheel already pulls its own default
-# torch/torchvision/segment-anything/rasterio/shapely closure; use
-# [models_gpu_env5] for a CUDA-12-pinned runtime install instead.
-models = [
-    "segment-geospatial",
-]
-# GPU is env5-only on purpose, mirroring [photogrammetry_gpu_env5]: Serverless GPU AI
-# Runtime env5 = CUDA 12, env6 = CUDA 13, and GeoBrix standardizes its whole GPU stack on
-# CUDA 12 (pycolmap-cuda12 has no CUDA-13 build -- see nb1b / Part 1b). torch's default PyPI
-# Linux wheel bundles CUDA 12 through torch 2.10.x; torch==2.11.0 flips the default wheel to
-# CUDA 13 (nvidia-*-cu13 / cuda-toolkit==13.0.2 -- confirmed via each release's wheel METADATA
-# on the PyPI mirror, 2026-09-28). So torch MUST stay pinned below 2.11 to remain CUDA-12,
-# else segment-geospatial floats it to a CUDA-13 build. Pin to the env5 BASE's torch
-# (2.9.0 / torchvision 0.24.0 -- itself CUDA-12, cu129) rather than the newest CUDA-12 release
-# (2.10.0): both honor the CUDA-12 requirement, but matching the base means pip does NOT
-# upgrade the base torch -- a 2.10.0 upgrade otherwise collides with the base's
-# torch==2.9.0-pinned torchaudio / vllm / xformers and prints noisy pip "ERROR" conflict lines
-# (ugly in a public example). torchvision pins its torch exactly per release (0.24.0 -> 2.9.0),
-# so both are pinned. No models_gpu_env6 until a CUDA-13 torch pairing is verified, same as
-# photogrammetry_gpu_env5/env6.
-models_gpu_env5 = [
-    "torch==2.9.0",
-    "torchvision==0.24.0",
-    "segment-geospatial",
-    # segment-geospatial pulls opencv-python-headless UNPINNED, so it inherits the GPU
-    # AI Runtime base env's opencv-python-headless 5.0.0.93. OpenCV *5.x*'s bundled libs
-    # trip an OpenSSL FIPS self-test abort (crypto/fips/fips.c:154 -> SIGABRT) the moment
-    # `import cv2` runs on the GPU node -- killing `segment_raster` before it starts
-    # (verified env5+A10 and env5+H100, 2026-09-29). Pinning back to the latest OpenCV
-    # 4.x avoids the defect (verified: env5+H100 with this pin runs GeoSAM end to end).
-    # See memory: check-actual-gpu-env-packages.
-    "opencv-python-headless==4.11.0.86",
-]
-# Generic GPU umbrella (env5-only): composes the GPU-requiring extras on top of a
-# separately-installed light_env5 base (mirrors how photogrammetry_gpu_env5 is used
-# today) -- deliberately does NOT include light_env5_all. The runner installs it via
-# `--extras gpu_env5_all` alongside `light_env5`, e.g.
-# geobrix[light_env5,gpu_env5_all,vizx] = light base + vizx + both GPU stacks.
-gpu_env5_all = [
-    "geobrix[photogrammetry_gpu_env5]",
-    "geobrix[models_gpu_env5]",
-]
+# ---------------------------------------------------------------------------
+# The 0.5.x GPU extras are TRIPWIRES too, like the light_* names above: each requires the env6
+# wheel, so an install that still asks for one fails at resolution (pip: ResolutionImpossible)
+# naming geobrix==<version>+env6. The UDF workers of the Serverless GPU runtime run environment 6
+# whatever the driver runs, so a GPU notebook that runs UDFs (GeoSAM, land cover) installs the env6
+# wheel. A driver-only GPU step (dense MVS with pycolmap-cuda12) can stay on the env5 wheel,
+# installed with no extra. Install the GPU packages as a separate step after the wheel:
+#   photogrammetry: pycolmap-cuda12==4.2.1
+#   models (GeoSAM): torch==2.9.0 torchvision==0.24.0 segment-geospatial opencv-python-headless==4.11.0.86
+#     (the env5 base's CUDA-12 torch pair; OpenCV 4.x, as 5.x aborts in its FIPS self-test on the
+#     GPU node: gbx.models.serving.MODEL_DEPS)
+# ---------------------------------------------------------------------------
+photogrammetry_gpu_env5 = ["geobrix==0.6.0+env6"]
+models_gpu_env5 = ["geobrix==0.6.0+env6"]
+gpu_env5_all = ["geobrix==0.6.0+env6"]
 
 [tool.coverage.run]
 # Exclude sample-data bundle from coverage total so reported % reflects main library (gridx, rasterx, vectorx)
@@ -378,6 +260,11 @@ exclude_lines = ["pragma: no cover"]
 pythonpath = [ "src", "." ]
 markers = [
     "integration: tests that need network or long-running setup (excluded from CI)",
+    "perf: slow tessellate / geomk / streamed-merge cases (some are correctness oracles that are only slow, some bound memory); skipped by gbx:test:pyrx and gbx:test:light by default (--perf includes them), still run by CI",
+    "delta: tests that run on the local Spark/Delta session (test/zarr marks them in its conftest.py, other tests mark themselves); -m 'not delta' is the fast, Spark-free inner loop",
+    "gdal_policy: a row of the GDAL driver policy; the policy_meta row fails if one skipped where the payload is present",
+    "policy_meta: the one meta-row that checks the gdal_policy rows' outcomes (runs after them, see test/conftest.py)",
+    "connect: tests that use the spark_connect_local fixture (marked in test/conftest.py, not by hand); they cannot share a process with classic-session tests, so gbx:test:pyrx / gbx:test:light run them in a second pytest process and gbx:test:parity leaves them out",
 ]
 filterwarnings = [
     "ignore:Support for class-based .* config.* deprecated:",
@@ -385,7 +272,7 @@ filterwarnings = [
 ]
 
 [build-system]
-requires = ["setuptools>=61.2", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 
 [tool.setuptools]
 include-package-data = false
@@ -410,6 +297,8 @@ geobrix = ["lib/*.jar", "resources/*.png"]
 # tree (e.g. the wheel on a cluster). Kept in sync with the canonical
 # docs/tests-function-info/registered_functions.txt by check-binding-parity.py.
 "databricks.labs.gbx.bench" = ["registered_functions.txt"]
+# The per-surface manifest (functions.json) is read at runtime by the registrar and the UC DDL emitter.
+"databricks.labs.gbx.manifest" = ["*.json"]
 
 [tool.setuptools.dynamic]
 version = {attr = "databricks.labs.gbx.__version__"}

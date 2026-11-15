@@ -9,12 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-APP_DIR="$PROJECT_ROOT/apps/genie_map"
+APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 
 # The Genie Space id + warehouse are resolved per-environment from `databricks
 # bundle summary` (the space the bundle actually deployed), so this works for
 # WHATEVER workspace you deploy to — no hardcoded ids and no profile assumptions
-# (oauth-fe is perpetually at capacity; deploys go to other envs). --profile is
+# --profile is
 # still required (which workspace to talk to); --space-id / --warehouse override
 # the bundle-resolved values if ever needed.
 PROFILE=""
@@ -28,7 +28,7 @@ show_help() {
 $(print_banner "🌱 GeoBrix: Seed Genie Space")
 
 Seed the Genie Space instructions + example SQL queries from the tracked source
-of truth (apps/genie_map/docs/GENIE-SPACE.md, Paste blocks A and B) via the
+of truth (examples/apps/genie_map/docs/GENIE-SPACE.md, Paste blocks A and B) via the
 Genie spaces update API. Run this AFTER every 'gbx:app:deploy' — the DAB
 genie_space resource re-applies only the table set and wipes the curated
 instructions/examples, and this restores them without manual UI pasting.
@@ -47,11 +47,11 @@ OPTIONS:
 By default the Genie Space id and warehouse are read from
 'databricks bundle summary' for the given profile — i.e. the space this bundle
 deployed to THAT workspace — so this command follows your deploy target
-wherever it is (oauth-fe is perpetually at capacity, so deploys go elsewhere).
+wherever it is.
 
 EXAMPLES:
-    bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env
-    bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env --dry-run
+    bash scripts/commands/gbx-app-seed-genie.sh --profile <profile>
+    bash scripts/commands/gbx-app-seed-genie.sh --profile <profile> --dry-run
 EOF
   exit 0
 }

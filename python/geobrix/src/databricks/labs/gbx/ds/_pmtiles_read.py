@@ -1,15 +1,147 @@
-"""DataSourceReaders for pmtiles_gbx: raster (per-tile mosaic pyramid) + archive."""
+"""DataSourceReaders for pmtiles_gbx: raster (per-tile mosaic pyramid) + archive.
+
+Both readers need random access to their inputs (rio-tiler window reads of the
+source rasters; per-tile range reads of the archive), which UC Volume FUSE
+serves poorly. Each input is therefore copied to worker-local disk once per
+worker process, sequentially, through a bounded :class:`StageCache` and shared
+by every partition that worker reads. Archive planning reads only the header
+and directories, straight from the source.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Dict, Iterator, List, Sequence, Tuple
+import os
+from functools import lru_cache
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 
-from databricks.labs.gbx.ds import _listing, _xyz_mosaic
+from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.ds import _listing, _quarantine, _xyz_mosaic
+from databricks.labs.gbx.pmtiles._directory import (
+    _iter_entries,
+    _read_directory,
+    _read_header,
+)
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    StageCache,
+    copy_source_sequential,
+    retried_source_signature,
+)
 
 _LOG = logging.getLogger(__name__)
+
+_MAX_DEPTH = 4  # directory nesting the PMTiles v3 spec allows (root + leaves)
+_DIR_CACHE = 8  # deserialized directories kept per partition read
+
+
+# ---------------------------------------------------------------------------
+# Worker-local staging (process-global; see local_temp.StageCache)
+# ---------------------------------------------------------------------------
+
+
+def _stage_render_source(source_path: str, local_path: str) -> None:
+    """Stage a source raster render-ready: copy it, then (RGBA imagery) replace
+    the copy with its RGB form so tile masks come from the footprint, not an
+    alpha band that reads ~0 after decimation (see ``to_render_rgb``)."""
+    copy_source_sequential(source_path, local_path)
+    try:
+        rgb = _xyz_mosaic.to_render_rgb(local_path)
+        if rgb != local_path:
+            os.replace(rgb, local_path)
+    except BaseException:
+        for leftover in (local_path, local_path + ".rgb.tif"):
+            with contextlib.suppress(OSError):
+                os.remove(leftover)
+        raise
+
+
+# Each archive / source raster is copied to local disk once per worker process
+# and shared by every partition read there, within a bounded cache.
+_ARCHIVE_STAGE = StageCache(
+    "gbx_pmtiles_arc_", copy_source_sequential, retried_source_signature
+)
+_RENDER_STAGE = StageCache(
+    "gbx_pmtiles_rst_", _stage_render_source, retried_source_signature
+)
+
+
+# ---------------------------------------------------------------------------
+# PMTiles range reads
+# ---------------------------------------------------------------------------
+
+
+def _range_source(fh) -> Callable[[int, int], bytes]:
+    """``get_bytes(offset, length)`` over an open binary file (seek + read). A
+    range past the end of the file is cut at it (fewer bytes, or none): a
+    garbled header or directory entry can hold any offset and length, and a read
+    of that length would try to allocate it."""
+    size = os.fstat(fh.fileno()).st_size
+
+    def get_bytes(offset: int, length: int) -> bytes:
+        if offset < 0 or length <= 0 or offset >= size:
+            return b""
+        fh.seek(offset)
+        return fh.read(min(length, size - offset))
+
+    return get_bytes
+
+
+def _list_tiles(path: str) -> List[Tuple[int, int, int]]:
+    """Every addressed tile of an archive, from its header and directories
+    (a few sequential section reads, no tile data)."""
+    with _listing._retry_transient(lambda: open(path, "rb")) as fh:
+        get_bytes = _range_source(fh)
+        header = _read_header(get_bytes)
+        return [
+            zxy
+            for zxy, _entry in _iter_entries(
+                get_bytes, header, header["root_offset"], header["root_length"]
+            )
+        ]
+
+
+class _TileLookup:
+    """Tile bytes by (z, x, y) over ``get_bytes``, with the header read once and
+    the last few directories kept deserialized. ``pmtiles.reader.Reader.get``
+    re-reads and re-parses the header, root and leaf directory for every tile;
+    this resolves tiles by the same search (``find_tile``, leaf descent up to
+    the spec's depth) but reads each directory once while a partition's
+    consecutive tiles fall in it."""
+
+    def __init__(self, get_bytes):
+        self._get_bytes = get_bytes
+        self._header = _read_header(get_bytes)
+        self._directory = lru_cache(maxsize=_DIR_CACHE)(
+            lambda offset, length: _read_directory(
+                get_bytes, self._header, offset, length
+            )
+        )
+
+    def get(self, z: int, x: int, y: int) -> Optional[bytes]:
+        found = self.lookup(z, x, y)
+        return None if found is None else found[0]
+
+    def lookup(self, z: int, x: int, y: int) -> Optional[Tuple[bytes, int]]:
+        """``(tile bytes, length its directory entry declares)``, or None."""
+        from pmtiles.tile import find_tile, zxy_to_tileid
+
+        h = self._header
+        tile_id = zxy_to_tileid(z, x, y)
+        offset, length = h["root_offset"], h["root_length"]
+        for _ in range(_MAX_DEPTH):
+            entry = find_tile(self._directory(offset, length), tile_id)
+            if entry is None:
+                return None
+            if entry.run_length == 0:  # leaf directory pointer
+                offset = h["leaf_directory_offset"] + entry.offset
+                length = entry.length
+                continue
+            data = self._get_bytes(h["tile_data_offset"] + entry.offset, entry.length)
+            return data, entry.length
+        return None
 
 
 class _TilesPartition(InputPartition):
@@ -47,7 +179,6 @@ class PMtilesRasterReader(DataSourceReader):
 
     def partitions(self) -> Sequence[InputPartition]:
         import morecantile
-        import rasterio
         from rasterio.warp import transform_bounds
 
         sources = _listing.list_files(self.path, self.filter_regex)
@@ -57,7 +188,7 @@ class PMtilesRasterReader(DataSourceReader):
         # per-source WGS84 bounds, to attach only intersecting sources to each chunk
         src_bounds = []
         for p in sources:
-            with rasterio.open(p) as ds:
+            with open_data(p) as ds:
                 src_bounds.append(
                     (p, transform_bounds(ds.crs, "EPSG:4326", *ds.bounds))
                 )
@@ -90,38 +221,28 @@ class PMtilesRasterReader(DataSourceReader):
         return parts
 
     def read(self, partition: "_TilesPartition") -> Iterator[Tuple]:
-        import os
-        import shutil
-
+        if _listing.is_empty_plan(partition):
+            return
         from databricks.labs.gbx.pyrx import _env
-        from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
         _env.configure_gdal_env()
-        # FUSE-safe + vsimem-bug-safe: sequentially copy each source's bytes to a
-        # NODE-LOCAL temp file (local disk supports the random window seeks rio-tiler
-        # needs; UC-Volume FUSE does not), then hand render_tile the local PATHS.
-        # render_tile takes paths (NOT open datasets): on rasterio 1.5.0 / rio-tiler
-        # 9.0.6, passing open in-memory MemoryFile datasets to mosaic_reader corrupts a
-        # sibling dataset's vsimem bytes (TIFFReadDirectory failure) — Task 1 confirmed.
-        tmpdir = new_local_temp_dir("gbx_pmtiles_src_")
-        local_paths: List[str] = []
-        try:
-            for i, p in enumerate(partition.sources):
-                lp = os.path.join(tmpdir, f"src_{i}.tif")
-                with open(p, "rb") as src_fh, open(lp, "wb") as dst_fh:
-                    shutil.copyfileobj(src_fh, dst_fh)  # sequential, FUSE-safe
-                # RGBA imagery (e.g. NAIP) -> render from RGB so the tile mask comes from
-                # the footprint, not an alpha band that reads ~0 post-decimation (which
-                # would mask the valid imagery to transparent). Strip on the LOCAL copy.
-                local_paths.append(_xyz_mosaic.to_render_rgb(lp))
+        # FUSE-safe + vsimem-bug-safe: each source is staged (sequential copy, made
+        # render-ready RGB) to NODE-LOCAL disk once per worker process -- local disk
+        # supports the random window seeks rio-tiler needs; UC-Volume FUSE does not
+        # -- and render_tile gets the local PATHS. render_tile takes paths (NOT open
+        # datasets): on rasterio 1.5.0 / rio-tiler 9.0.6, passing open in-memory
+        # MemoryFile datasets to mosaic_reader corrupts a sibling dataset's vsimem
+        # bytes (TIFFReadDirectory failure).
+        with contextlib.ExitStack() as staged:
+            local_paths = [
+                staged.enter_context(_RENDER_STAGE.use(p)) for p in partition.sources
+            ]
             for z, x, y in partition.tiles:
                 png = _xyz_mosaic.render_tile(
                     z, x, y, local_paths, tile_format=self.tile_format
                 )
                 if png is not None:
                     yield (z, x, y, png)
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class PMtilesArchiveReader(DataSourceReader):
@@ -134,28 +255,40 @@ class PMtilesArchiveReader(DataSourceReader):
         self.path = _listing.to_local_path(self.path)
         self.tiles_per_partition = int(options.get("tilesPerPartition", "2048"))
 
-    def _entries(self) -> List[Tuple[int, int, int]]:
-        from pmtiles.reader import MemorySource, all_tiles
-
-        with open(self.path, "rb") as fh:
-            raw = fh.read()
-        return [(z, x, y) for (z, x, y), _ in all_tiles(MemorySource(raw))]
-
     def partitions(self) -> Sequence[InputPartition]:
-        entries = self._entries()
+        # Header + directories only: planning never reads tile data.
+        entries = _list_tiles(self.path)
         return [
             _TilesPartition(list(c), [self.path])
             for c in _chunk(entries, self.tiles_per_partition)
         ]
 
     def read(self, partition: "_TilesPartition") -> Iterator[Tuple]:
-        from pmtiles.reader import MemorySource, Reader
-
-        # FUSE-safe: read archive bytes sequentially, then serve tiles in memory
-        with open(partition.sources[0], "rb") as fh:
-            raw = fh.read()
-        reader = Reader(MemorySource(raw))
-        for z, x, y in partition.tiles:
-            data = reader.get(z, x, y)
-            if data is not None:
+        if _listing.is_empty_plan(partition):
+            return
+        # Range reads on a worker-local copy (staged once per worker process): a
+        # partition reads the header, the directories its tiles fall in and its
+        # own tiles -- not the whole archive.
+        # With read_paths' on_error="skip" (a hook on the reader) a tile whose
+        # bytes are shorter than its directory entry (a truncated archive) is a
+        # bad record; without one it is returned as read.
+        hook = _quarantine.hook_of(self)
+        with (
+            _ARCHIVE_STAGE.use(partition.sources[0]) as local,
+            open(local, "rb") as fh,
+        ):
+            tiles = _TileLookup(_range_source(fh))
+            for z, x, y in partition.tiles:
+                found = tiles.lookup(z, x, y)
+                if found is None:
+                    continue
+                data, declared = found
+                if hook is not None and len(data) != declared:
+                    hook(
+                        f"tile={z}/{x}/{y}",
+                        _quarantine.SHORT_TILE,
+                        f"tile has {len(data)} of the {declared} bytes its "
+                        "directory entry declares: the archive is truncated",
+                    )
+                    continue
                 yield (z, x, y, bytes(data))

@@ -28,7 +28,7 @@ except ImportError:
 try:
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 except ImportError:
     rx = None
     bx = None
@@ -45,13 +45,14 @@ def verify_installation():
 
 def import_pattern_rasterx(spark):
     """Import pattern for RasterX."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     
     # Register functions
-    rx.register(spark)
+    gbx.register(spark)
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     
     # Use functions
     df = rasters.select(rx.rst_boundingbox("tile"))
@@ -61,23 +62,24 @@ def import_pattern_rasterx(spark):
 
 def import_pattern_gridx(spark):
     """Import pattern for GridX (BNG)."""
-    from databricks.labs.gbx.gridx.bng import functions as bx
+    from databricks.labs import gbx
     
     # Register functions
-    bx.register(spark)
+    gbx.register(spark)
     
     # Use functions (gbx_bng_cellarea returns square kilometres)
-    df = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area_km2")
+    df = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2")
     df.show()
     return df
 
 
 def import_pattern_vectorx(spark):
     """Import pattern for VectorX."""
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs import gbx
+    from databricks.labs.gbx.vectorx import functions as vx
     
     # Register functions
-    vx.register(spark)
+    gbx.register(spark)
     
     # Load legacy data
     legacy_data = spark.table("legacy_geometries")
@@ -89,10 +91,11 @@ def import_pattern_vectorx(spark):
 
 def rst_boundingbox_example(spark):
     """Get the bounding box of a raster."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     bbox_df = rasters.select(
         "path",
         rx.rst_boundingbox("tile").alias("bbox")
@@ -103,10 +106,11 @@ def rst_boundingbox_example(spark):
 
 def rst_width_example(spark):
     """Get raster width in pixels."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     width_df = rasters.select(rx.rst_width("tile").alias("width"))
     width_df.limit(1).show()
     return width_df
@@ -114,10 +118,11 @@ def rst_width_example(spark):
 
 def rst_height_example(spark):
     """Get raster height in pixels."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     height_df = rasters.select(rx.rst_height("tile").alias("height"))
     height_df.limit(1).show()
     return height_df
@@ -125,10 +130,11 @@ def rst_height_example(spark):
 
 def rst_numbands_example(spark):
     """Get number of bands in raster."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     bands_df = rasters.select(rx.rst_numbands("tile").alias("num_bands"))
     bands_df.limit(1).show()
     return bands_df
@@ -136,10 +142,11 @@ def rst_numbands_example(spark):
 
 def rst_metadata_example(spark):
     """Get raster metadata."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     metadata_df = rasters.select(rx.rst_metadata("tile").alias("metadata"))
     metadata_df.limit(1).show(truncate=False)
     return metadata_df
@@ -147,10 +154,11 @@ def rst_metadata_example(spark):
 
 def rst_srid_example(spark):
     """Get spatial reference identifier."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     srid_df = rasters.select(rx.rst_srid("tile").alias("srid"))
     srid_df.limit(1).show()
     return srid_df
@@ -158,12 +166,13 @@ def rst_srid_example(spark):
 
 def rst_clip_example(spark):
     """Clip raster by geometry. Geometry must be WKT or WKB (GeoBrix does not accept DBR st_geomfromtext)."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql.functions import lit
     
-    rx.register(spark)
+    gbx.register(spark)
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     clip_wkt = "POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))"
     clipped = rasters.select(
         rx.rst_clip("tile", lit(clip_wkt), lit(True)).alias("clipped_tile")
@@ -174,14 +183,15 @@ def rst_clip_example(spark):
 
 def rasterx_complete_example(spark):
     """Complete RasterX example."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql.functions import expr
     
     # Register functions
-    rx.register(spark)
+    gbx.register(spark)
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     
     # Extract metadata and process
     result = rasters.select(
@@ -201,21 +211,22 @@ def rasterx_complete_example(spark):
 
 def bng_cellarea_example(spark):
     """Calculate area of a BNG grid cell (returns square kilometres)."""
-    from databricks.labs.gbx.gridx.bng import functions as bx
-    bx.register(spark)
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     # Calculate cell area (result in km²)
-    area = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area_km2")
+    area = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2")
     area.show()
     return area
 
 
 def bng_pointtocell_example(spark):
     """Convert point to BNG grid cell. Point must be WKT or WKB (GeoBrix does not accept st_point)."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.gridx.bng import functions as bx
     from pyspark.sql.functions import lit
     
-    bx.register(spark)
+    gbx.register(spark)
     # Point in BNG coordinates (eastings, northings); resolution '1km' or integer 3
     df = spark.range(1).select(
         bx.bng_pointascell(lit("POINT(530000 180000)"), lit("1km")).alias("bng_cell")
@@ -226,11 +237,11 @@ def bng_pointtocell_example(spark):
 
 def gridx_complete_example(spark):
     """Complete GridX example. Point as WKT (GeoBrix does not accept st_point)."""
-    from databricks.labs.gbx.gridx.bng import functions as bx
+    from databricks.labs import gbx
     from pyspark.sql.functions import count
     
     # Register functions
-    bx.register(spark)
+    gbx.register(spark)
     
     # Aggregate points by BNG cell (point as WKT in SQL)
     result = spark.sql("""
@@ -249,11 +260,12 @@ def gridx_complete_example(spark):
 
 def st_legacyaswkb_example(spark):
     """Convert legacy Mosaic geometry to WKB."""
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs import gbx
+    from databricks.labs.gbx.vectorx import functions as vx
     from pyspark.sql.functions import expr
     
     # Register functions
-    vx.register(spark)
+    gbx.register(spark)
     
     # Convert legacy geometries
     legacy = spark.table("legacy_mosaic_table")
@@ -275,11 +287,12 @@ def st_legacyaswkb_example(spark):
 
 def dataframe_select_operations(spark):
     """DataFrame select operations."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     # Single function
     result = df.select(rx.rst_boundingbox("tile"))
@@ -301,11 +314,12 @@ def dataframe_select_operations(spark):
 
 def dataframe_filter_operations(spark):
     """DataFrame filter operations."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     # Filter based on GeoBrix function results
     result = df.filter(
@@ -323,11 +337,12 @@ def dataframe_filter_operations(spark):
 
 def dataframe_withcolumn_operations(spark):
     """DataFrame withColumn operations."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx.register(spark)
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     # Add new columns
     result = df.withColumn("bbox", rx.rst_boundingbox("tile"))
@@ -346,11 +361,11 @@ def dataframe_withcolumn_operations(spark):
 
 def using_with_sql(spark):
     """Using GeoBrix functions with SQL."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     # Create temp view
     rasters.createOrReplaceTempView("rasters")
     
@@ -382,7 +397,8 @@ def type_hints_and_ide_support(spark):
         Returns:
             DataFrame with extracted metadata
         """
-        rx.register(df.sparkSession)
+        from databricks.labs import gbx
+        gbx.register(df.sparkSession)
         
         return df.select(
             "path",
@@ -392,20 +408,21 @@ def type_hints_and_ide_support(spark):
         )
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     result = process_rasters(rasters)
     return result
 
 
 def error_handling_example(spark):
     """Error handling example."""
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     try:
-        rx.register(spark)
+        gbx.register(spark)
         result = df.select(rx.rst_boundingbox("tile"))
         result.limit(3).show()
         return result

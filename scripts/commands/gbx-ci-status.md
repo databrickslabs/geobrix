@@ -5,12 +5,13 @@ Shows recent GitHub Actions workflow runs for the current branch (build main, do
 ## Usage
 
 ```bash
-bash scripts/commands/gbx-ci-status.sh [LIMIT]
+bash scripts/commands/gbx-ci-status.sh [LIMIT] [--help]
 ```
 
 ## Options
 
-- **LIMIT** (optional) — Number of recent runs to show (default: 10).
+- **LIMIT** (optional) — Number of recent runs to show (default: 10); must be a number.
+- `--help`, `-h` — Show usage (an option is never taken as the limit).
 
 ## Prerequisites
 

@@ -1,11 +1,15 @@
 """Python-only escape-hatches for users whose needs fall outside the rst_* surface.
 
 NOT SQL-registered (tile_to_numpy returns a host object; rst_apply takes a Python
-callable), so neither appears in registered_functions.txt / function-info.json.
+callable), so neither appears in the function manifest / function-info.json.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from pyspark.sql import Column
-from pyspark.sql.functions import udf
 from pyspark.sql.types import DataType, DoubleType
 
 from databricks.labs.gbx.pyrx._udf import _col
@@ -32,7 +36,14 @@ def rst_apply(tile_col, fn, returnType: DataType = DoubleType()) -> Column:
     tile -> null.
     """
 
-    @udf(returnType=returnType)
+    from databricks.labs.gbx._transport import SessionTileUdf
+
+    # a DDL string ('double'), as @udf takes it: the Arrow form needs the DataType
+    if isinstance(returnType, str):
+        from pyspark.sql.types import _parse_datatype_string
+
+        returnType = _parse_datatype_string(returnType)
+
     def _apply(tile):
         from databricks.labs.gbx.pyrx.core import open_tile as _ot
 
@@ -45,4 +56,5 @@ def rst_apply(tile_col, fn, returnType: DataType = DoubleType()) -> Column:
         with _ot.open_tile(_ot._to_virtual_tile(tile)) as ds:
             return fn(ds)
 
-    return _apply(_col(tile_col))
+    # the tile crosses to Python in Arrow batches where the session runs Spark 4.1+, as a pickle elsewhere
+    return SessionTileUdf(_apply, returnType)(_col(tile_col))

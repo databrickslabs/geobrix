@@ -6,21 +6,18 @@ title: Raster Sampling
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
-import Tier from '@site/src/components/Tier';
 
 # Raster Sampling
 
-**Raster sampling** is the operation of reading raster values at one or more point locations — the equivalent of Esri's ArcGIS **Sample** tool and its `RS_VALUE` output columns. You have a raster (a DEM, a satellite scene, a modeled surface) and a set of coordinates; you want the cell value at each coordinate.
+**Raster sampling** is the operation of reading raster values at one or more point locations. It is the equivalent of Esri's ArcGIS **Sample** tool and its `RS_VALUE` output columns. You have a raster (a DEM, a satellite scene, a modeled surface) and a set of coordinates; you want the cell value at each coordinate.
 
-GeoBrix covers this with [`rst_sample`](./raster-functions#rst_sample), available in both execution tiers.
+GeoBrix covers this with [`rst_sample`](./raster-functions#rst_sample), available on every compute.
 
 :::note Coordinate reference systems
 Sampling functions accept a `crs` parameter (source role) to declare the CRS of a plain WKB/WKT point; an EWKB/EWKT embedded SRID always takes precedence. The point is reprojected to the raster's CRS before the pixel lookup. `out_srid` / `out_crs` parameters on related functions (such as `rst_gridfrompoints`) control the output CRS. See [Coordinate reference systems](./coordinate-reference-systems) for the full source-vs-output CRS model.
 :::
 
 ## Value at a point — `rst_sample`
-
-<Tier both/>
 
 ```sql
 gbx_rst_sample(tile, geom [, crs])  →  ARRAY<DOUBLE>
@@ -45,6 +42,10 @@ If the point falls outside the raster's extent, or if the raster's geotransform 
 ### Sampling method
 
 `rst_sample` uses **nearest-pixel** sampling. For bilinear, cubic, or other interpolation methods, see [Interpolation](#interpolation-bilinear-and-cubic) below.
+
+### Many points on a virtual tile
+
+On a [virtual tile](./virtual-tiles), the Python level of `rst_sample` reads only the block of the file that holds the point. The points of one file in a Spark task share one open of it. Many points per tile are cheap when a file's rows stay together in a task. They do when a tile DataFrame is cross-joined with a broadcast point table. After a shuffle that scatters them, group them again with `repartition(n, "tile.path").sortWithinPartitions("tile.path")` (see [Virtual tile read performance](./performance#virtual-tile-read-performance)). A clipped or reprojected virtual tile is read whole, as the other pixel functions read it.
 
 For `rst_sample` examples (doc-tested), see the [`rst_sample` function reference](./raster-functions#rst_sample).
 
@@ -73,7 +74,7 @@ For `rst_resample*` examples (doc-tested), see the [`rst_resample` function refe
 
 ## Workflows
 
-The patterns below are **illustrative** SQL, Python, and Scala sketches. A runnable end-to-end sampling notebook is a doc-test follow-up.
+The patterns below are **illustrative** SQL and Python sketches. A runnable end-to-end sampling notebook is a doc-test follow-up.
 
 ### Workflow 1 — single point value
 
@@ -105,8 +106,7 @@ FROM dem_rasters;
 
 ```python
 import pyspark.sql.functions as F
-from databricks.labs.gbx.pyrx import functions as rx      # lightweight
-# from databricks.labs.gbx.rasterx import functions as rx  # heavyweight — same call
+from databricks.labs.gbx.rasterx import functions as rx
 
 point = F.lit("SRID=32618;POINT(500320 4500320)")
 
@@ -125,34 +125,6 @@ df_bilinear = df.select(
         rx.rst_resample("tile", F.lit(1.0), F.lit("bilinear")),
         point
     )[0].alias("elevation_bilinear"),
-)
-```
-
-</TabItem>
-<TabItem value="scala" label="Scala">
-
-```scala
-import com.databricks.labs.gbx.rasterx.functions as rasterx
-import org.apache.spark.sql.functions.lit
-
-val point = lit("SRID=32618;POINT(500320 4500320)")
-
-val df = spark.table("dem_rasters")
-
-// Nearest-pixel
-val dfSampled = df.select(
-  col("tile_id"),
-  rasterx.rst_sample(col("tile"), point).alias("elevation_array"),
-  rasterx.rst_sample(col("tile"), point).getItem(0).alias("elevation_m")
-)
-
-// Bilinear: resample first, then sample
-val dfBilinear = df.select(
-  col("tile_id"),
-  rasterx.rst_sample(
-    rasterx.rst_resample(col("tile"), lit(1.0), lit("bilinear")),
-    point
-  ).getItem(0).alias("elevation_bilinear")
 )
 ```
 
@@ -190,7 +162,7 @@ FROM
 <TabItem value="python" label="Python">
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx
+from databricks.labs.gbx.rasterx import functions as rx
 
 point = F.lit("SRID=32618;POINT(500320 4500320)")
 
@@ -245,7 +217,7 @@ WHERE d.tile_bounds IS NOT NULL;
 <TabItem value="python" label="Python">
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import functions as rx
 from pyspark.sql import functions as F
 
 points = spark.table("points_table")
@@ -271,7 +243,7 @@ result = (
 
 #### Option B — grid index join (H3 or BNG)
 
-When the raster is already indexed by a discrete grid (H3, BNG, quadbin), a grid-key equi-join scales better than a geometry predicate at millions of rows.
+A raster already indexed by a discrete grid (H3, BNG, quadbin) suits a grid-key equi-join. That join scales better than a geometry predicate at millions of rows.
 
 <Tabs groupId="gbx-lang" queryString="lang">
 <TabItem value="sql" label="SQL">
@@ -292,7 +264,7 @@ FROM
 <TabItem value="python" label="Python">
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import functions as rx
 # h3_pointash3 is a Databricks built-in H3 function
 from pyspark.sql.functions import expr
 
@@ -314,7 +286,7 @@ result = (
 </Tabs>
 
 :::tip Scale note
-For millions of points × thousands of tiles, the **grid-index equi-join** is significantly faster than a geometry intersection — it avoids a cross-product and uses Spark's hash or sort-merge join. Index the raster tiles at ingest time with `rst_h3_tessellate` (see [Grid raster tessellation](./grid-raster-tessellation)) and assign points the same H3 resolution at query time.
+For millions of points × thousands of tiles, the **grid-index equi-join** is significantly faster than a geometry intersection. It avoids a cross-product and uses Spark's hash or sort-merge join. Index the raster tiles at ingest time with `rst_h3_tessellate` (see [Grid raster tessellation](./grid-raster-tessellation)) and assign points the same H3 resolution at query time.
 :::
 
 ---
@@ -335,7 +307,7 @@ The `rst_*_rastertogrid*` family and `rst_gridfrompoints*` answer **area questio
 
 ## Function reference cross-links
 
-- [`rst_sample`](./raster-functions#rst_sample) — full signature, examples, tier notes
+- [`rst_sample`](./raster-functions#rst_sample) — full signature, examples, implementation notes
 - [`rst_resample`](./raster-functions#rst_resample) — resample by factor
 - [`rst_resample_to_res`](./raster-functions#rst_resample_to_res) — resample by ground resolution
 - [`rst_resample_to_size`](./raster-functions#rst_resample_to_size) — resample by pixel dimensions

@@ -32,7 +32,8 @@ def test_encode_tile_gtiff_stamps_gtiff():
     assert cog.sniff_header(b).is_cog is False
 
 
-def test_encode_tile_cog_emits_and_stamps_cog():
+def test_encode_tile_cog_emits_and_stamps_cog(caplog):
+    # the source's own block and tiling options are not the COG driver's: it has no complaint
     with _open() as ds:
         _, b, md = _encode.encode_tile(
             ds, (0, 0, 512, 512), "/x.tif", "", tile_format="cog", cog_blocksize=256
@@ -40,6 +41,7 @@ def test_encode_tile_cog_emits_and_stamps_cog():
     assert md[cog.GBX_FORMAT] == "cog"
     info = cog.sniff_header(b)
     assert info.is_cog is True and info.overview_levels >= 1
+    assert not [r for r in caplog.records if "creation option" in r.getMessage()]
 
 
 def test_encode_tile_cog_auto_resolves_to_zstd():

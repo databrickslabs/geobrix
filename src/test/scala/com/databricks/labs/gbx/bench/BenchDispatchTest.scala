@@ -19,7 +19,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   override def afterAll(): Unit = if (ds != null) ds.delete()
 
   test("registry covers the ds-in functions with categories + min_bands") {
-    assert(BenchDispatch.all.toSet.contains("rst_width"))
+    assert(BenchDispatch.all.toSet.contains("rst_boundingbox"))
     // 19 representative + 15 Task 2 scalar + 7 Task 3 coord + 6 Task 4 map/struct
     // + 13 Task 5 tile-out scalar-args + 10 Task 6 tile-out complex-args
     // + 5 bucket-C C1/C2 (readers + buildoverviews + subdataset fns; rst_fromfile
@@ -29,7 +29,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   separatebands/xyzpyramid -> raster_collection fingerprint)
     // + 11 bucket-B B-grid (DGGS: h3_tessellate + 10 {h3,quadbin}
     //   rastertogrid{avg,count,max,median,min} -> dggs_grid fingerprint)
-    // + 2 bucket-B B-vec (contour, polygonize -> vector fingerprint)
+    // + 2 bucket-B B-vec (contour, polygonize -> vector fingerprint; both have left since)
     // + 3 bucket-D geometry-in (rasterize/gridfrompoints/dtmfromgeoms -> raster fp)
     // + 7 bucket-A aggregators (the 7 *_agg, Spark groupBy aggregate harness)
     // + 1 H3 rasterize aggregator (rst_h3_rasterize_agg, grid_aggregate kind)
@@ -39,7 +39,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   variance,stddev})
     // + 3 CRS-string ops (rst_crs accessor, rst_setcrs relabel, rst_transformcrs
     //   warp) -- the string siblings of the benchmarked rst_srid/setsrid/transform.
-    // + 3 cellfill grouped aggregators heavy-dispatched here ({h3,quadbin,bng}_cellfill;
+    // + 3 cellfill grouped aggregators heavy-dispatched here ({h3,bng}_cellfill; quadbin_cellfill left with its companion;
     //   custom_cellfill needs a grid-struct arg the heavy dispatch can't stream, so it
     //   is a pyrx-tier timing-only fn, not counted here) -> 128 + 3 = 131
     // + 6 Stage-3 combine-stats fns (combinemin/max/median/sum/stddev/count) -> 131 + 6 = 137.
@@ -47,20 +47,48 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // + 4 LiDAR-DSM fns: rst_binpoints + rst_isoband (vector), rst_chm (format),
     //   rst_binpoints_agg (vector aggregator) -> 138 + 4 = 142.
     // + 1 rst_percentile_stretch (edit category) -> 142 + 1 = 143.
-    assert(BenchDispatch.all.size == 143)
-    // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
-    assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
-    assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
-    assert(BenchDispatch.inputKind("rst_rasterize_agg") == "geometry_aggregate")
-    assert(BenchDispatch.inputKind("rst_dtmfromgeoms_agg") == "geometry_aggregate")
+    // + 1 rst_h3_tessellate_centroid (a second rst_h3_tessellate case, the default
+    //   centroid + complete assignment) -> 143 + 1 = 144.
+    // The raster-to-grid reducers (24), rst_retile, rst_merge_agg, rst_rasterize, rst_dtmfromgeoms,
+    // rst_gridfrompoints_agg and rst_dtmfromgeoms_agg left with their companions: 144 - 30 = 114.
+    // gbx_quadbin_cellfill left with its companion: 111 - 1 = 110.
+    // rst_transformcrs, rst_cog_convert, rst_align_to and rst_binpoints left with their companions: 110 - 4 = 106.
+    // rst_gridfrompoints left with its companion: 106 - 1 = 105.
+    // rst_combine{avg,count,max,median,min,stddev,sum} and rst_bng_tessellate left with their companions: 105 - 8 = 97.
+    // the accessors and statistics that return an array, a map or a struct (avg, min, max, pixelcount, sample,
+    // getnodata, type, georeference, bandmetadata, subdatasets and the two coordinate pairs) left with their companions: 97 - 12 = 85.
+    // rst_buildoverviews left with its companion (light measured 2.2x faster): 85 - 1 = 84.
+    // rst_percentile_stretch left with its companion (its JVM form took another percentile rule than light, unmeasured): 84 - 1 = 83.
+    // rst_filter left with its companion (its JVM form left a different NoData mask than light, unmeasured): 83 - 1 = 82.
+    // rst_slope left with its companion (the GDAL spec engine's JVM form measured no faster than light): 82 - 1 = 81.
+    // rst_ndvi, ndwi, nbr, evi, savi, index, threshold, mapalgebra and chm (their light level is the GDAL engine) and
+    // rst_contour (it runs the lightweight level only) left with their companions: 81 - 10 = 71.
+    // rst_aspect, tpi, roughness and color_relief (measured under 1.2x of light) and the orphan rst_hillshade left with
+    // their companions: 71 - 5 = 66.
+    // rst_polygonize left with its companion (its light level is the GDAL spec engine's table function): 66 - 1 = 65.
+    // rst_viewshed left with its expression (its light level is the GDAL spec engine): 65 - 1 = 64.
+    // rst_clip left with its expression (it was never registered; its light level is lightweight only): 64 - 1 = 63.
+    // rst_transform, resample, resample_to_res, fillnodata, proximity and summary left with their companions (measured under
+    // 1.2x of light, or a different output): 63 - 6 = 57. rst_to_webmercator and rst_resample_to_size left too (0.98x): 57 - 2 = 55.
+    // The JVM forms the level order never picks left: the tile and geometry aggregates (combineavg, frombands,
+    // derivedband, rasterize, binpoints), the tiling and tessellate generators (maketiles, tooverlappingtiles,
+    // separatebands, h3 and quadbin tessellate, and the h3 centroid case), isempty, tryopen, isoband and merge: 55 - 15 = 40.
+    // derivedband and xyzpyramid left too (the level order never picks them): 40 - 2 = 38.
+    // asformat, convolve, initnodata, updatetype and frombands left (slower than light on dedicated compute): 38 - 5 = 33.
+    // band, setsrid, setcrs, getsubdataset and tri left too (0.28x to 1.16x of light on dedicated compute): 33 - 5 = 28.
+    // crs, format, height, memsize, pixelheight, pixelwidth, rotation, scalex, scaley, skewx, skewy, srid, upperleftx and
+    // rastertoworldcoordy left too (1.05x to 1.19x of the Arrow light form on dedicated compute): 28 - 14 = 14.
+    // width, numbands, upperlefty, rastertoworldcoordx and worldtorastercoordx left too (pooled 1.07x to 1.20x of the
+    // Arrow light form on dedicated compute, under 1.2x at both scales): 14 - 5 = 9.
+    assert(BenchDispatch.all.size == 9)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
     assert(BenchDispatch.h3RasterizeCells().size == BenchDispatch.h3RaggNCells)
     assert(BenchDispatch.h3RasterizeCells().toSet.size == BenchDispatch.h3RaggNCells)
     // cellfill grouped aggregators: grid_aggregate kind + dggs category (heavy-dispatched
-    // {h3,quadbin,bng}; custom is pyrx-tier timing-only, absent from cats/cellFill).
-    for (fn <- Seq("h3_cellfill", "quadbin_cellfill", "bng_cellfill")) {
+    // {h3,bng}; custom is pyrx-tier timing-only, absent from cats/cellFill).
+    for (fn <- Seq("h3_cellfill", "bng_cellfill")) {
       assert(BenchDispatch.inputKind(fn) == "grid_aggregate")
       assert(BenchDispatch.category(fn) == "dggs")
       assert(BenchDispatch.cellFill.contains(fn))
@@ -74,62 +102,22 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8(1) == java.lang.Double.valueOf(1.0) && cfv8(7) == java.lang.Double.valueOf(7.0))
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
-    assert(BenchDispatch.cellFillLongCells("quadbin_cellfill").size == BenchDispatch.quadbinRaggNCells)
-    assert(BenchDispatch.aggSynthRecipe("rst_combineavg_agg") == "combineavg")
-    assert(BenchDispatch.aggSynthRecipe("rst_merge_agg") == "merge")
-    assert(BenchDispatch.aggSynthRecipe("rst_frombands_agg") == "frombands")
-    assert(BenchDispatch.aggSynthRecipe("rst_derivedband_agg") == "frombands")
-    assert(BenchDispatch.category("rst_merge_agg") == "format")
-    assert(BenchDispatch.category("rst_gridfrompoints_agg") == "vector")
-    assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
-    assert(BenchDispatch.inputKind("rst_rasterize") == "geometry")
-    assert(BenchDispatch.inputKind("rst_gridfrompoints") == "geometry")
-    assert(BenchDispatch.inputKind("rst_dtmfromgeoms") == "geometry")
-    assert(BenchDispatch.category("rst_rasterize") == "vector")
-    assert(BenchDispatch.category("rst_quadbin_rastertogridavg") == "dggs")
-    assert(BenchDispatch.category("rst_contour") == "vector")
-    assert(BenchDispatch.category("rst_polygonize") == "vector")
-    assert(BenchDispatch.category("rst_xyzpyramid") == "format")
-    assert(BenchDispatch.category("rst_separatebands") == "format")
-    assert(BenchDispatch.minBands("rst_ndvi") == 2)
-    assert(BenchDispatch.minBands("rst_band") == 2)
-    assert(BenchDispatch.minBands("rst_evi") == 2)
-    assert(BenchDispatch.minBands("rst_index") == 2)
-    assert(BenchDispatch.category("rst_proximity") == "analysis")
-    assert(BenchDispatch.minBands("rst_width") == 1)
-    assert(BenchDispatch.category("rst_resample") == "resample")
-    assert(BenchDispatch.category("rst_slope") == "terrain")
-    assert(BenchDispatch.category("rst_srid") == "accessor")
-    // CRS-string ops: rst_crs is an accessor (like rst_srid); rst_transformcrs is a
-    // warp (like rst_transform); rst_setcrs is an edit/relabel (like rst_setsrid).
-    assert(BenchDispatch.category("rst_crs") == "accessor")
-    assert(BenchDispatch.category("rst_transformcrs") == "warp")
-    assert(BenchDispatch.category("rst_setcrs") == "edit")
-    assert(BenchDispatch.inputKind("rst_crs") == "tile")
-    assert(BenchDispatch.inputKind("rst_setcrs") == "tile")
-    assert(BenchDispatch.inputKind("rst_transformcrs") == "tile")
+    assert(BenchDispatch.minBands("rst_boundingbox") == 1)
+    assert(BenchDispatch.category("rst_worldtorastercoordy") == "accessor")
+    assert(BenchDispatch.inputKind("rst_worldtorastercoordy") == "tile")
   }
 
-  test("BenchDispatch registers the 9 BNG/quadbin raster-grid functions") {
-    val reducers = Seq(
-      "rst_bng_rastertogridavg", "rst_bng_rastertogridcount", "rst_bng_rastertogridmax",
-      "rst_bng_rastertogridmin", "rst_bng_rastertogridmedian")
-    val tessellates = Seq("rst_bng_tessellate", "rst_quadbin_tessellate")
+  test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
     val aggs = Seq("rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
-    (reducers ++ tessellates ++ aggs).foreach { fn =>
+    aggs.foreach { fn =>
       assert(BenchDispatch.all.contains(fn), s"$fn not in BenchDispatch.all")
-      // reducers + tessellate + rasterize_agg are all DGGS shape (like H3/quadbin).
+      // the rasterize_aggs are DGGS shape (like H3).
       assert(BenchDispatch.category(fn) == "dggs", s"$fn should be dggs")
     }
     // The 2 rasterize_aggs route to the grid-aggregate branch (the same branch that
     // holds rst_h3_rasterize_agg), NOT the tile/geometry aggregate branches.
     Seq("rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg").foreach { fn =>
       assert(BenchDispatch.inputKind(fn) == "grid_aggregate", s"$fn should be grid_aggregate")
-    }
-    // The reducers + tessellates take tile+resolution, so they must NOT be caught by
-    // the byte / tile-array / geometry / aggregate input-classification sets: plain "tile".
-    (reducers ++ tessellates).foreach { fn =>
-      assert(BenchDispatch.inputKind(fn) == "tile", s"$fn should be plain tile input")
     }
     // Fixed-cell-set parity contracts (deterministic input for the light-vs-heavy check).
     assert(BenchDispatch.quadbinRasterizeCells().size == BenchDispatch.quadbinRaggNCells)
@@ -138,27 +126,11 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.bngRasterizeCells().toSet.size == BenchDispatch.bngRaggNCells)
   }
 
-  test("pureCore runs an accessor and a terrain op, returning a fingerprint") {
-    val wfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_width", ds, Map.empty))
-    assert(wfp.get("kind").asText() == "scalar")
-    val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_slope", ds, Map.empty))
-    assert(sfp.get("kind").asText() == "raster")
+  test("pureCore runs a timing-only accessor, and pureCoreBytes fingerprints the constructor's raster") {
+    assert(BenchDispatch.pureCore("rst_boundingbox", ds, Map.empty) == BenchFingerprint.empty)
+    val bytes = com.databricks.labs.gbx.rasterx.gdal.RasterDriver.writeToBytes(ds, Map("driver" -> "GTiff"))
+    val fp = new ObjectMapper().readTree(BenchDispatch.pureCoreBytes("rst_fromcontent", bytes, Map.empty))
+    assert(fp.get("kind").asText() == "raster")
   }
 
-  // The heavy runner passes an empty args map, so the default in BenchDispatch IS the
-  // value compared cross-engine. It must equal the authoritative pyrx FnSpec default
-  // (bench/spec.py rst_tooverlappingtiles overlap=25). A mismatched default (was 32)
-  // produced different overlapping-window positions and a ~3% pooled-pixel divergence.
-  test("tooverlappingtiles default overlap matches the pyrx spec (25, not 32)") {
-    val mapper = new ObjectMapper()
-    val deflt = mapper.readTree(BenchDispatch.pureCore("rst_tooverlappingtiles", ds, Map.empty))
-    val ov25 = mapper.readTree(
-      BenchDispatch.pureCore("rst_tooverlappingtiles", ds, Map("overlap" -> "25")))
-    val ov32 = mapper.readTree(
-      BenchDispatch.pureCore("rst_tooverlappingtiles", ds, Map("overlap" -> "32")))
-    // Default must agree with the spec value (25) and differ from the old default (32).
-    assert(deflt.get("agg").get("mean").asDouble() == ov25.get("agg").get("mean").asDouble())
-    assert(deflt.get("agg").get("std").asDouble() == ov25.get("agg").get("std").asDouble())
-    assert(deflt.get("agg").get("mean").asDouble() != ov32.get("agg").get("mean").asDouble())
-  }
 }

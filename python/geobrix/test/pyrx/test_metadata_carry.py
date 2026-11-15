@@ -30,7 +30,7 @@ def test_gbx_format_survives_op_chain():
     b, md = _cog_tile()
     assert md[cog.GBX_FORMAT] == "cog"
     # Simulate a non-COG-aware op that rebuilds bytes but preserves format:
-    # it MUST re-stamp from its output bytes (R2). Here the op is identity.
+    # it MUST re-stamp from its output bytes. Here the op is identity.
     out_bytes = b
     md2 = cog.stamp_format_metadata(out_bytes, md)
     assert md2[cog.GBX_FORMAT] == "cog"

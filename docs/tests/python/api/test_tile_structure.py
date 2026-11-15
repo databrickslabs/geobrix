@@ -18,10 +18,23 @@ def test_sql_cellid_non_tessellated():
     assert "SELECT" in tile_structure.SQL_CELLID_NON_TESSELLATED
 
 
-def test_sql_cellid_tessellated():
-    """Test SQL cellid tessellated constant."""
-    assert isinstance(tile_structure.SQL_CELLID_TESSELLATED, str)
-    assert "explode" in tile_structure.SQL_CELLID_TESSELLATED
+def _statements(sql):
+    """The statements of a SQL example, with its ``--`` comment lines dropped."""
+    lines = [ln for ln in sql.splitlines() if not ln.lstrip().startswith("--")]
+    return [s.strip() for s in "\n".join(lines).split(";") if s.strip()]
+
+
+def test_sql_cellid_tessellated_runs(spark):
+    """The tessellated example calls the table function with LATERAL (a table function has no place in explode)."""
+    sql = tile_structure.SQL_CELLID_TESSELLATED
+    assert "LATERAL gbx_rst_h3_tessellate" in sql and "explode" not in sql
+    if not Path(tile_structure.SAMPLE_NYC_RASTER).exists():
+        pytest.skip("NYC sample raster not available")
+    *setup, query = _statements(sql)
+    for stmt in setup:
+        spark.sql(stmt)
+    ids = [r["cellid"] for r in spark.sql(query).collect()]
+    assert ids and all(isinstance(i, int) and i > 0 for i in ids)
 
 
 def test_access_path_and_binary(spark):
@@ -40,8 +53,12 @@ def test_access_metadata_fields(spark):
 
 
 def test_accessing_tile_fields_python(spark):
-    """Test accessing tile fields in Python (structure check)."""
-    assert callable(tile_structure.accessing_tile_fields_python)
+    """The reader the example uses hands back the raster bytes it selects."""
+    df = tile_structure.accessing_tile_fields_python(spark)
+    rows = df.select("tile.raster", "tile.metadata.driver").collect()
+    assert rows
+    assert all(r["raster"] is not None and len(r["raster"]) > 0 for r in rows)
+    assert {r["driver"] for r in rows} == {"GTiff"}
 
 
 def test_sql_accessing_tile_fields():
@@ -56,13 +73,23 @@ def test_filtering_by_metadata(spark):
 
 
 def test_using_tiles_in_custom_udfs(spark):
-    """Test using tiles in custom UDFs (structure check)."""
-    assert callable(tile_structure.using_tiles_in_custom_udfs)
+    """data_size is the byte length of each tile's raster: positive, not the 0 a virtual tile gives."""
+    df = tile_structure.using_tiles_in_custom_udfs(spark)
+    sizes = [r["data_size"] for r in df.select("data_size").collect()]
+    assert sizes
+    assert all(n > 0 for n in sizes)
 
 
 def test_processing_binary_raster_data(spark):
-    """Test processing binary raster data (structure check)."""
-    assert callable(tile_structure.processing_binary_raster_data)
+    """mean_value is the band-1 mean of the file, not None."""
+    import rasterio
+
+    df = tile_structure.processing_binary_raster_data(spark)
+    means = [r["mean_value"] for r in df.select("mean_value").collect()]
+    assert len(means) == 1 and means[0] is not None
+    with rasterio.open(tile_structure.SAMPLE_NYC_RASTER) as src:
+        expected = float(src.read(1).mean())
+    assert means[0] == pytest.approx(expected, rel=1e-6)
 
 
 def test_comparing_fromfile_vs_fromcontent_tiles(spark):
@@ -71,13 +98,19 @@ def test_comparing_fromfile_vs_fromcontent_tiles(spark):
 
 
 def test_non_tessellated_tiles(spark):
-    """Test non-tessellated tiles (structure check)."""
-    assert callable(tile_structure.non_tessellated_tiles)
+    """The tiles carry the raster bytes the example selects."""
+    df = tile_structure.non_tessellated_tiles(spark)
+    rows = df.select("tile.raster", "tile.cellid").collect()
+    assert rows
+    assert all(r["raster"] is not None and len(r["raster"]) > 0 for r in rows)
+    assert all(r["cellid"] == -1 for r in rows)  # the documented value of a tile that was not tessellated
 
 
 def test_tessellated_tiles(spark):
-    """Test tessellated tiles (structure check)."""
-    assert callable(tile_structure.tessellated_tiles)
+    """The example gives tiles that each carry an H3 cell id, not -1."""
+    df = tile_structure.tessellated_tiles(spark)
+    cellids = [r[0] for r in df.select("tile.cellid").collect()]
+    assert cellids and -1 not in cellids
 
 
 def test_best_practice_access_fields_efficiently(spark):
@@ -101,13 +134,26 @@ def test_pattern_conditional_processing_based_on_metadata(spark):
 
 
 def test_pattern_joining_tiles_by_cell_id(spark):
-    """Test pattern for joining tiles (structure check)."""
-    assert callable(tile_structure.pattern_joining_tiles_by_cell_id)
+    """The join pairs tiles of one H3 cell."""
+    pairs = tile_structure.pattern_joining_tiles_by_cell_id(spark).select(
+        "tile1.cellid", "tile2.cellid"
+    ).collect()
+    assert pairs and all(a == b and a != -1 for a, b in pairs)
 
 
-def test_pattern_extract_binary_for_external_processing(spark):
-    """Test pattern for extracting binary (structure check)."""
-    assert callable(tile_structure.pattern_extract_binary_for_external_processing)
+def test_pattern_extract_binary_for_external_processing(spark, tmp_path):
+    """The exported parquet holds the raster bytes, and they open as a raster."""
+    from rasterio.io import MemoryFile
+
+    exported = tile_structure.pattern_extract_binary_for_external_processing(
+        spark, export_path=str(tmp_path / "export")
+    )
+    rows = exported.collect()
+    assert rows
+    for r in rows:
+        assert r["raster_bytes"] is not None and len(r["raster_bytes"]) > 0
+        with MemoryFile(bytes(r["raster_bytes"])) as mem, mem.open() as src:
+            assert src.width > 0 and src.height > 0
 
 
 def test_performance_io_patterns(spark):
@@ -116,10 +162,16 @@ def test_performance_io_patterns(spark):
 
 
 def test_troubleshooting_inspect_raster_field(spark):
-    """Test troubleshooting raster-field inspection (structure check)."""
-    assert callable(tile_structure.troubleshooting_inspect_raster_field)
+    """The raster field is non-empty binary, so its length is a real byte count."""
+    df = tile_structure.troubleshooting_inspect_raster_field(spark)
+    sizes = [r[0] for r in df.select(tile_structure.f.length("tile.raster")).collect()]
+    assert sizes
+    assert all(n and n > 0 for n in sizes)
 
 
 def test_troubleshooting_null_cellid(spark):
-    """Test troubleshooting null cellid (structure check)."""
-    assert callable(tile_structure.troubleshooting_null_cellid)
+    """The example keeps only the tessellated tiles of a mix: some rows survive, none carries cellid -1."""
+    df = tile_structure.troubleshooting_null_cellid(spark)
+    cellids = [r[0] for r in df.select("tile.cellid").collect()]
+    assert cellids, "the filter kept no tile, so the -1 check below would pass vacuously"
+    assert -1 not in cellids

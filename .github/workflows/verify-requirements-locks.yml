@@ -1,0 +1,58 @@
+name: verify-requirements-locks
+
+# Guard against a stale lock: CI installs the committed hash-pinned `.txt`
+# locks via `pip install --require-hashes` and never recompiles them, so a
+# `requirements-*.in` bump that forgets to regenerate its `.txt` is silently
+# inert (CI keeps installing the old pins) and leaves stale-lockfile alerts.
+# This fails such a PR, pointing at the `uv pip compile` regen command.
+
+on:
+  pull_request:
+    paths:
+      - "python/geobrix/requirements-*.in"
+      - "python/geobrix/requirements-*.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  lock-pairing:
+    name: requirements .in/.txt pairing
+    runs-on:
+      group: databrickslabs-protected-runner-group
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Each changed requirements .in must regenerate its .txt lock
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Files this PR changes, limited to the python/geobrix requirements locks.
+          mapfile -t changed < <(git diff --name-only "${BASE_SHA}...HEAD" -- \
+            'python/geobrix/requirements-*.in' 'python/geobrix/requirements-*.txt' || true)
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "No python/geobrix requirements lock files changed in this PR."
+            exit 0
+          fi
+          fail=0
+          for f in "${changed[@]}"; do
+            [ "${f%.in}" != "$f" ] || continue          # only react to .in files
+            txt="${f%.in}.txt"
+            [ -f "$txt" ] || continue                   # only when a compiled lock exists
+            if ! printf '%s\n' "${changed[@]}" | grep -qxF "$txt"; then
+              echo "::error file=${f}::'${f}' changed but its hash-pinned lock '${txt}' was not regenerated."
+              echo "    Regenerate (host, with the pip proxy index), then commit the lock:"
+              echo "      cd python/geobrix && uv pip compile --generate-hashes --python-version 3.12 -o $(basename "$txt") $(basename "$f")"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::A requirements '.in' changed without its compiled '.txt'. CI installs the committed '.txt' via --require-hashes and never recompiles it, so the bump is silently inert (old pins stay) and leaves stale-lockfile alerts. Recompile and commit the lock(s) listed above."
+            exit 1
+          fi
+          echo "OK -- every changed requirements '.in' has a matching '.txt' change."

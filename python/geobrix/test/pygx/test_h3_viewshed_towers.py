@@ -20,7 +20,10 @@ h3 = pytest.importorskip("h3")
 
 from pyspark.sql import SparkSession  # noqa: E402
 
-from databricks.labs.gbx.pygx import h3_los_visible, h3_viewshed_towers  # noqa: E402
+from databricks.labs.gbx.gridx.helpers import (  # noqa: E402
+    h3_los_visible,
+    h3_viewshed_towers,
+)
 
 VRES = 12
 

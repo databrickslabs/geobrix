@@ -1,4 +1,4 @@
-"""Task 4 (RasterX CRS-100, Group A): source-CRS declaration on geometry inputs.
+"""Source-CRS declaration on geometry inputs.
 
 rst_clip (clip_crs), rst_sample (crs), rst_viewshed (crs) — a plain WKB/WKT
 geometry can declare its source CRS; an embedded EWKB SRID still wins per-geom;

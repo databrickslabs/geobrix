@@ -30,7 +30,7 @@ class ResultRow:
     throughput_mpix_s: float
     throughput_rows_s: float
     peak_rss_mb: float
-    status: str  # "ok" | "na_by_design" | "error"
+    status: str  # "ok" | "na_by_design" | "error" | "skipped" (projected past the rung cap) | "over-bar" (stopped at its deadline)
     note: str
     env_arch: str
     env_cpu_model: str
@@ -79,16 +79,87 @@ class ResultRow:
     # (write strategy of the table the leg read/wrote; na for plain reads).
     file_mode: str = "na"
     layout: str = "na"
-    # Parallelism / fanout (spec 2e-bis). input_partitions: partitions carrying data
+    # Parallelism / fanout. input_partitions: partitions carrying data
     # on the timed input (Connect-safe spark_partition_id distinct-count).
     # launched_tasks: tasks launched for the timed stage (== input_partitions for the
-    # single-stage read/write legs here; a precise multi-stage tally needs the Spark
-    # REST API and is out of scope). slots_available: cluster task slots.
-    input_partitions: int = 0
-    launched_tasks: int = 0
+    # single-stage read/write legs here). The levels leg reads both from the Spark REST API
+    # (tasks of the completed stages of the timed execution; tasks of the stages that read
+    # input). NULL (None) when the session cannot say (a Connect session has no REST API),
+    # never 0: 0 would read as a measurement. slots_available: cluster task slots.
+    input_partitions: Optional[int] = None
+    launched_tasks: Optional[int] = None
     slots_available: int = 0
     # Vector reader chunkSize option for the leg (0 = not applicable / not a vector leg).
     chunk_size: int = 0
+    # Levels leg (bench/levels.py): which implementation level served the function ("L1" |
+    # "L2" | "L3" | "L4"), the form timed (the L3 variant, or a shape label), and the compute
+    # the run was on ("dedicated" | "standard" | "serverless"). "na" on every other leg.
+    level: str = "na"
+    form: str = "na"
+    compute: str = "na"
+    # Attribution split (bench/attribution.py). Bytes, seconds and MB. NULL (None) means no
+    # value: the session could not report it, or it does not apply to this level (a JVM level
+    # has no Python worker); `note` says which. 0 is a measured zero, never a placeholder.
+    # Every figure is the plan of the LAST measured iteration, not a median over iterations.
+    ser_sent_bytes: Optional[int] = (
+        None  # NULL unless it scales with rows across the scales
+    )
+    ser_recv_bytes: Optional[int] = None
+    # Python-worker task-seconds (plan metric "time to run Python workers"), summed over the
+    # tasks of the execution. Divided by the execution's executor task-seconds it is
+    # py_eval_frac, a ratio of like units in (0, 1]. Unlike py_eval_s it does not grow with
+    # the number of slots the run used. It is recorded, not a decision input: a stage whose time
+    # is the UDF scores about 1 whether that time is the kernel or the Arrow shell around it
+    # (a no-op UDF scores 0.84-0.96); the `floor` form's median is what tells those apart.
+    py_eval_s: Optional[float] = None
+    py_eval_frac: Optional[float] = None
+    native_s: Optional[float] = None  # NULL until a level reports its native time
+    shuffle_bytes: Optional[int] = None
+    spill_bytes: Optional[int] = None
+    peak_exec_mem_bytes: Optional[int] = None
+    gc_s: Optional[float] = None
+    # Peak RSS (MB) of the Python workers that ran the shape: the kernel's high-water mark, reset
+    # on every worker just before; an idle pooled worker, whatever RSS it holds, is not counted.
+    # NULL, with the reason in the row's note, rather than a number that may leave a worker out:
+    # on a Connect session, off Linux, with spark.python.worker.reuse=false, when no Python worker
+    # ran during the shape, when the shape's physical plan has an early stop (CollectLimit,
+    # GlobalLimit, LocalLimit or TakeOrderedAndProject: it can end a worker before the read) or
+    # cannot be read, when a worker that was there at the reset has exited, in any pool (Spark
+    # stops an idle one after 60 s), when the Spark REST API shows a failed, killed or retried task,
+    # gives no answer, or leaves a 50 s wait between task ends in a shape longer than that, when the
+    # executors' slots disagree with the default parallelism or a worker cannot be reset, when an
+    # executor that held workers is gone, when the shape ran Python workers in more than one
+    # environment (a worker of one can exit unseen), and when no slot frees up within 60 s (a busy
+    # cluster). Known limits, not NULL: a non-limit consumer that stops reading early without
+    # failing a task can end a worker unseen; a JVM tail over 10 s after a task's Python output
+    # defeats the 50 s guard's margin.
+    py_worker_rss_mb: Optional[float] = None
+    # Why an error row failed ("ExceptionType: message"); "" on every other row.
+    failure_mode: str = ""
+    # Cold start, in seconds. setup_s: the form's start to its first iteration (the work before the
+    # timed loop: input listing, registration, session setup). warmup_s: the warmup iterations' wall
+    # time (0.0 when there are none). 0.0 on a row that did not time (and on every other leg).
+    setup_s: float = 0.0
+    warmup_s: float = 0.0
+    # How the run was set up. run_mode: "isolate" (timing-grade: one run on its compute) or "explore" (parts may share a
+    # cluster; the numbers are for finding what is slow, not for a comparison). concurrent: the most parts running on the
+    # cluster at once (1 when alone). cluster_id: the cluster a classic run used ("" on Serverless). part: which part of
+    # a split run this row is from (the function of --split-by fn; "" for a whole run).
+    run_mode: str = "isolate"
+    concurrent: int = 1
+    cluster_id: str = ""
+    part: str = ""
+    # Provenance of the Spark the row ran on. env_spark_version: the SERVER's spark.version (on Connect, not the client's);
+    # env_pyspark_version: the client pyspark; env_dbr_version: the runtime (the cluster's runtime key on a classic cluster,
+    # DATABRICKS_RUNTIME_VERSION otherwise); env_version: the Serverless environment version. env_caps: what each Spark
+    # capability resolved to, as JSON {"name": "on|off:source"} (manager.capabilities; no probe is run for it). path: which
+    # code path the form took, when a capability chose it (e.g. "merge_agg:arrow_iter"). "" where not known or not chosen.
+    env_spark_version: str = ""
+    env_pyspark_version: str = ""
+    env_dbr_version: str = ""
+    env_version: str = ""
+    env_caps: str = ""
+    path: str = ""
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:
@@ -308,7 +379,12 @@ def summarize(rows: List[ResultRow], pool_size=None) -> str:
         "",
         "## Status",
         "",
-        f"ok {len(ok)} · na_by_design {len(na)} · error {len(errs)}",
+        f"ok {len(ok)} · na_by_design {len(na)} · error {len(errs)}"
+        + "".join(
+            f" · {st} {n}"
+            for st in ("skipped", "over-bar")
+            if (n := sum(1 for r in rows if r.status == st))
+        ),
         "",
     ]
 

@@ -1,9 +1,9 @@
 """CRS-string handling for non-EPSG CRS (ESRI:54008, WKT-stored) through the pyrx pipeline.
 
-Task 4 TDD tests — cover the 6 bug sites:
+TDD tests — cover the 6 bug sites:
   1. agg._pick_ref_crs: deterministic for all-non-EPSG groups
   2. warp.reproject_to_srid: identity check uses CRS-object comparison
-  3. functions._transform_bytes: same CRS-object identity check (via reproject_to_srid path)
+  3. the engine's rst_transform: same CRS identity check
   4. tessellate (5 sites): H3/quadbin/BNG CRS-object branch decisions
   5. gridagg.already_bng: CRS-object compare
   6. open_tile: non-EPSG tile.crs triggers warp (via _warp_window_bytes_crs)
@@ -227,23 +227,23 @@ def test_reproject_to_srid_non_epsg_to_4326_reprojects():
 
 
 # ---------------------------------------------------------------------------
-# Bug 3: functions._transform_bytes / _transform_udf identity check
+# Bug 3: the engine's rst_transform identity check
 # ---------------------------------------------------------------------------
 
 
-def test_transform_bytes_identity_for_epsg4326_raster():
-    """_transform_bytes with a materialized EPSG:4326 tile and target_srid=4326 must
-    return the original raster bytes (identity short-circuit preserved).
-
-    Post-fix, identity check uses CRS-object comparison: ds.crs == CRS.from_epsg(4326).
-    For a standard EPSG:4326 raster this is equivalent to the to_epsg() path.
+def test_transform_identity_for_epsg4326_raster():
+    """rst_transform of a materialized EPSG:4326 tile to 4326 returns the original raster bytes (the
+    identity short-circuit is kept): the tile's CRS is compared as a CRS, not as a string.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     tile_bytes = _small_4326_bytes()
     v1_tile = {"cellid": 0, "raster": bytearray(tile_bytes), "metadata": {}}
-    result = prx._transform_bytes(v1_tile, 4326)
-    assert isinstance(result, bytes) and len(result) > 0
+    result = engine_l3.c0("gbx_rst_transform").func(v1_tile, 4326)
+    assert bytes(result["raster"]) == tile_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -251,46 +251,57 @@ def test_transform_bytes_identity_for_epsg4326_raster():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
-def test_h3_tessellate_esri54008_produces_cells():
-    """H3 tessellate with ESRI:54008 raster produces cells (covers the
-    `None != 4326 = True` branch — correctly identifies need_reproject).
-
-    This test documents EXISTING working behavior: the covering mode fires the
-    `need_reproject = dst_epsg != 4326` check.  With CRS-object comparison,
-    `ds.crs is None or ds.crs != CRS.from_epsg(4326)` is also True for
-    ESRI:54008, so behavior is preserved.
-    """
+def _h3_cells(ds):
     from databricks.labs.gbx.pyrx.core import tessellate as T
 
-    modis_bytes = _small_modis_bytes()
-    with MemoryFile(modis_bytes) as mf, mf.open() as ds:
+    return list(T.iter_tessellate_h3(ds, resolution=4, mode="covering"))
+
+
+def _quadbin_cells(ds):
+    from databricks.labs.gbx.pyrx.core import tessellate as T
+
+    return list(T.iter_tessellate_quadbin(ds, resolution=6, mode="covering"))
+
+
+def _bng_cells(ds):
+    from databricks.labs.gbx.pyrx.core import tessellate as T
+
+    return list(T.iter_tessellate_bng(ds, resolution="1km", mode="covering"))
+
+
+def _bng_aggregate(ds):
+    from databricks.labs.gbx.pyrx.core import gridagg as GA
+
+    return GA._raster_to_bng(ds, resolution=3, agg="avg")
+
+
+@pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
+@pytest.mark.parametrize(
+    "site,needs_cells",
+    [
+        (_h3_cells, True),
+        (_quadbin_cells, True),
+        # This MODIS tile covers Mexico, outside the BNG envelope; BNG cell math is not clamped to GB,
+        # so the contract for the two BNG sites is only: a non-EPSG input reprojects and does not raise.
+        (_bng_cells, False),
+        (_bng_aggregate, False),
+    ],
+    ids=["h3", "quadbin", "bng_tessellate", "bng_gridagg"],
+)
+def test_a_non_epsg_raster_takes_the_reproject_branch_at_every_grid_site(
+    site, needs_cells
+):
+    """ESRI:54008 is not the grid's CRS, whatever ``to_epsg()`` says: the CRS-object compare at the
+    tessellate and gridagg sites fires the warp and the site completes."""
+    with MemoryFile(_small_modis_bytes()) as mf, mf.open() as ds:
         assert ds.crs.to_epsg() is None  # ESRI:54008
-        chips = list(T.iter_tessellate_h3(ds, resolution=4, mode="covering"))
-
-    assert len(chips) > 0, "H3 tessellate with ESRI:54008 must produce cells"
-    for cellid, raster_bytes in chips:
-        assert isinstance(cellid, int)
-        assert isinstance(raster_bytes, bytes) and len(raster_bytes) > 0
-
-
-@pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
-def test_quadbin_tessellate_esri54008_produces_cells():
-    """Quadbin tessellate with ESRI:54008 (covering mode) produces cells.
-
-    Same as H3 — the CRS-object comparison for the reproject branch must fire
-    for ESRI:54008.
-    """
-    from databricks.labs.gbx.pyrx.core import tessellate as T
-
-    modis_bytes = _small_modis_bytes()
-    with MemoryFile(modis_bytes) as mf, mf.open() as ds:
-        chips = list(T.iter_tessellate_quadbin(ds, resolution=6, mode="covering"))
-
-    assert len(chips) > 0, "Quadbin tessellate with ESRI:54008 must produce cells"
-    for cellid, raster_bytes in chips:
-        assert isinstance(cellid, int)
-        assert isinstance(raster_bytes, bytes) and len(raster_bytes) > 0
+        out = site(ds)
+    assert isinstance(out, list)
+    if needs_cells:
+        assert out, "must produce cells"
+        for cellid, raster_bytes in out:
+            assert isinstance(cellid, int)
+            assert isinstance(raster_bytes, bytes) and len(raster_bytes) > 0
 
 
 def test_bng_tessellate_27700_wkt_crs_identity_no_rewarp():
@@ -316,53 +327,9 @@ def test_bng_tessellate_27700_wkt_crs_identity_no_rewarp():
         assert isinstance(raster_bytes, bytes) and len(raster_bytes) > 0
 
 
-@pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
-def test_bng_tessellate_esri54008_reprojects_without_error():
-    """BNG tessellate with ESRI:54008 (a non-EPSG sinusoidal CRS) must warp to
-    27700 and complete WITHOUT error — the CRS-object compare in _as_bng_dataset
-    fires the warp (ESRI:54008 != CRS.from_epsg(27700)) instead of skipping it.
-
-    Note: this MODIS tile covers Mexico, whose 27700 coordinates fall far outside
-    the valid BNG envelope (E[0,700k] N[0,1.3M]). GeoBrix does NOT clamp BNG cell
-    math to the GB envelope (that would be a separate feature), so out-of-GB
-    coordinates still yield cells. The CRS contract under test is only: non-EPSG
-    input reprojects and does not raise.
-    """
-    from databricks.labs.gbx.pyrx.core import tessellate as T
-
-    modis_bytes = _small_modis_bytes()
-    with MemoryFile(modis_bytes) as mf, mf.open() as ds:
-        chips = list(T.iter_tessellate_bng(ds, resolution="1km", mode="covering"))
-
-    assert isinstance(chips, list), "_as_bng_dataset must not raise for ESRI:54008"
-
-
 # ---------------------------------------------------------------------------
 # Bug 5: gridagg.already_bng CRS-object compare
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
-def test_gridagg_bng_esri54008_reprojects_without_error():
-    """BNG gridagg (raster_to_bng) with ESRI:54008 (non-EPSG) must warp to 27700
-    and complete WITHOUT error — the CRS-object compare fires the warp branch.
-
-    Pre-fix: `ds.crs.to_epsg() == 27700` → None == 27700 → False → warp fires.
-    Post-fix: `ds.crs == CRS.from_epsg(27700)` → False → warp fires. Behavior
-    preserved. As with BNG tessellate, this Mexico tile's 27700 coordinates fall
-    outside the GB envelope; GeoBrix does not clamp BNG to GB, so cells are still
-    produced. The contract under test is: non-EPSG input reprojects, no raise,
-    returns a list.
-    """
-    from databricks.labs.gbx.pyrx.core import gridagg as GA
-
-    modis_bytes = _small_modis_bytes()
-    with MemoryFile(modis_bytes) as mf, mf.open() as ds:
-        result = GA._raster_to_bng(ds, resolution=3, agg="avg")
-
-    assert isinstance(
-        result, list
-    ), "_raster_to_bng must return a list for a non-EPSG raster (no raise)"
 
 
 def test_gridagg_bng_27700_already_bng_identity():

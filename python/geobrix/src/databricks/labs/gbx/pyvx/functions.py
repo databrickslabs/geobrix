@@ -9,17 +9,24 @@ Signatures mirror databricks.labs.gbx.vectorx.functions so light <-> heavy is a
 one-line import swap. Register once with vx.register(spark), then use on columns.
 """
 
-from typing import List, Optional, Union
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
+from typing import Union
 
 import pandas as pd
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column
 from pyspark.sql import functions as f
-from pyspark.sql.functions import pandas_udf, udtf
-from pyspark.sql.types import BinaryType, BooleanType, StringType
+from pyspark.sql.functions import pandas_udf
+from pyspark.sql.types import BinaryType, BooleanType
 
-from databricks.labs.gbx import _register
+# an array of geometries (a whole coverage, the features of an MVT layer) crosses as Arrow batches on Spark 4.1+
+from databricks.labs.gbx._transport import tile_udf as _session_udf
+from databricks.labs.gbx._transport import tile_udtf as _session_udtf
 
-from . import _env, _legacy, _mvt, _tin
+from . import _legacy, _mvt, _tin
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -51,7 +58,7 @@ def _asmvt_udf(geom: pd.Series, attrs: pd.Series, layer: pd.Series) -> bytes:
 
 
 @pandas_udf(BooleanType())
-def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series) -> bool:
+def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series = None) -> bool:
     """Grouped-agg: is this group's polygon set a valid coverage?"""
     from . import _coverage as _cov
 
@@ -62,7 +69,7 @@ def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series) -> bool:
 
 
 @pandas_udf(BinaryType())
-def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series) -> bytes:
+def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series = None) -> bytes:
     """Grouped-agg: union of this coverage's invalid edges (EWKB; empty when clean)."""
     from . import _coverage as _cov
 
@@ -70,6 +77,64 @@ def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series) -> bytes:
     if gap_width is not None and len(gap_width) > 0 and gap_width.iloc[0] is not None:
         gw = float(gap_width.iloc[0])
     return _cov.coverage_invalid_edges_agg(list(geom), gw)
+
+
+# --- the array twins of the three aggregates: one scalar over a collected array -------------------------------------
+# gbx_st_asmvt_array, gbx_st_coverageisvalid_array and gbx_st_coverageinvalidedges_array take the group as one ARRAY
+# (collect_list), so a Unity Catalog query can call them; a session registers the same names with the same answers. The
+# members are WKB or EWKB, and the attributes of a feature are JSON text (a struct of any fields has no UC type).
+def _array_coverage(geoms, gap_width, kernel: str, fn: str):
+    """One coverage answer over an array: a wrong ``gap_width`` raises with a Fix, a member that is no polygon is NULL,
+    as on Unity Catalog (the same ``forms._gap_width``)."""
+    from shapely.errors import ShapelyError
+
+    from databricks.labs.gbx.uc import forms
+
+    from . import _coverage as _cov
+
+    if geoms is None:
+        return None
+    gw = forms._gap_width(fn, gap_width)
+    members = [bytes(g) for g in geoms if g is not None]
+    try:
+        return getattr(_cov, kernel)(members, gw)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (ValueError, ShapelyError):
+        return None
+
+
+@_session_udf(returns=BooleanType(), tiles=())
+def _coverageisvalid_array_udf(geoms, gap_width=None):
+    return _array_coverage(
+        geoms, gap_width, "coverage_is_valid_agg", "gbx_st_coverageisvalid_array"
+    )
+
+
+@_session_udf(returns=BinaryType(), tiles=())
+def _coverageinvalidedges_array_udf(geoms, gap_width=None):
+    return _array_coverage(
+        geoms,
+        gap_width,
+        "coverage_invalid_edges_agg",
+        "gbx_st_coverageinvalidedges_array",
+    )
+
+
+@_session_udf(returns=BinaryType(), tiles=())
+def _asmvt_array_udf(features, layer_name, extent=None):
+    from databricks.labs.gbx.uc import forms
+
+    fn = "gbx_st_asmvt_array"
+    if features is None or layer_name is None:
+        return None
+    ext = forms._extent(fn, extent)
+    feats = [
+        {"geometry": bytes(r["geom"]), "properties": forms._attrs(fn, r["attrs"])}
+        for r in features
+        if r is not None and r["geom"] is not None
+    ]
+    return _mvt.encode_layer(feats, str(layer_name), ext)
 
 
 def _legacyaswkb_impl(geom):
@@ -88,9 +153,13 @@ def _mvt_tile_return():
     return TILE_SCHEMA
 
 
-@udtf(returnType=_mvt_tile_return())
+@_session_udtf(returnType=_mvt_tile_return())
 class _AsMvtPyramidUDTF:
     def eval(self, geom, attrs, min_z: int, max_z: int, layer_name=None, extent=None):
+        if (
+            min_z is None or max_z is None
+        ):  # a NULL required argument: no rows, as explode(NULL)
+            return
         ln = "layer" if layer_name is None else str(layer_name)
         ex = _mvt.DEFAULT_EXTENT if extent is None else int(extent)
         # Yield incrementally — never build the full list (fan-out OOM guard).
@@ -100,47 +169,29 @@ class _AsMvtPyramidUDTF:
             yield (z, x, y, blob)
 
 
-# --- st_triangulate: constrained-Delaunay TIN UDTF -----------------------------------------
+# --- st_triangulate: Delaunay TIN UDTF ------------------------------------------------------
 # Returns one 2D-WKB triangle (Polygon) per row.  Constrained mode (default) uses scipy +
-# Sloan recovery; conforming mode is heavy-only and raises.
+# Sloan recovery; conforming mode is JTS's conforming Delaunay (pyvx/_conforming.py).
 
 
-def _geoms_from_array(arr):
-    """Decode an ARRAY<BINARY|STRING> of geometries via the shared parse_geom
-    contract (WKB/EWKB/WKT/EWKT)."""
-    from ._geom import parse_geom
-
-    out = []
-    for g in arr or []:
-        geom = parse_geom(g)
-        if geom is not None:
-            out.append(geom)
-    return out
+_geoms_from_array = _tin.geoms_from_array
+_all_xyz = _tin.all_xyz
+_validate_mode = _tin.validate_mode
 
 
-def _all_xyz(geom):
-    """Recursively flatten any geometry to a list of (x, y, z) coordinate tuples.
-
-    Handles multi-part geometries (MULTIPOINT/MULTILINESTRING/etc. expose
-    ``.geoms``, not ``.coords``) and pads 2D coordinates with z=0.0. Used to
-    extract triangulation/elevation sites from the points array, so a single
-    MULTIPOINT element doesn't crash on a missing ``.coords``.
-    """
-    if hasattr(geom, "geoms"):
-        return [c for g in geom.geoms for c in _all_xyz(g)]
-    return [(c[0], c[1], c[2] if len(c) == 3 else 0.0) for c in geom.coords]
+# The default of a TIN table function's ``mode``: Spark passes an argument left out as nothing and a NULL as None, so
+# this tells the two apart (a NULL gives no rows, as for any NULL argument; left out is 'constrained'). A str, compared
+# by value, so a copy made by pickling the class still matches.
+_MODE_LEFT_OUT = "\x00gbx:mode-left-out"
 
 
-def _validate_mode(mode):
-    m = (mode or "constrained").lower()
-    if m == "conforming":
-        raise NotImplementedError(
-            "mode='conforming' (Steiner-point conforming Delaunay) is heavy-only; "
-            "use the heavyweight vectorx tier, or mode='constrained' in light."
-        )
-    if m != "constrained":
-        raise ValueError(f"mode must be 'constrained' or 'conforming'; got {mode!r}")
-    return m
+def _mode_arg(mode):
+    """The ``mode`` of a TIN table function: ``'constrained'`` when left out, None for a NULL, else the word checked."""
+    if mode == _MODE_LEFT_OUT:
+        return "constrained"
+    if mode is not None:
+        _validate_mode(mode)
+    return mode
 
 
 def _triangulate_schema():
@@ -149,7 +200,7 @@ def _triangulate_schema():
     return TRIANGLE_SCHEMA
 
 
-@udtf(returnType=_triangulate_schema())
+@_session_udtf(returnType=_triangulate_schema())
 class _TriangulateUDTF:
     def eval(
         self,
@@ -158,25 +209,28 @@ class _TriangulateUDTF:
         merge_tolerance,
         snap_tolerance,
         split_point_finder,
-        mode=None,
+        mode=_MODE_LEFT_OUT,
     ):
-        _validate_mode(mode)
-        import numpy as np
-        from shapely import to_wkb
-        from shapely.geometry import Polygon
-
-        pt_geoms = _geoms_from_array(points)
-        if not pt_geoms:
-            return
-        coords = np.array([xyz for g in pt_geoms for xyz in _all_xyz(g)], dtype=float)
-        bls = [np.array(g.coords, dtype=float) for g in _geoms_from_array(breaklines)]
-        for t in _tin.triangulate(
-            coords, bls, float(merge_tolerance), float(snap_tolerance)
+        mode = _mode_arg(mode)
+        if (
+            merge_tolerance is None
+            or snap_tolerance is None
+            or split_point_finder is None
+            or mode is None
         ):
-            yield (to_wkb(Polygon([(p[0], p[1]) for p in t])),)
+            return  # a NULL argument: no rows, as explode(NULL)
+        for blob in _tin.triangle_wkbs(
+            points,
+            breaklines,
+            merge_tolerance,
+            snap_tolerance,
+            mode,
+            split_point_finder,
+        ):
+            yield (blob,)
 
 
-# --- st_interpolateelevation{bbox,geom}: barycentric Z over the constrained TIN -------------
+# --- st_interpolateelevation{bbox,geom}: barycentric Z over the TIN ---------------------------
 # One POINT Z WKB row per in-hull grid cell center (column-major); outside-hull cells dropped.
 
 
@@ -187,28 +241,15 @@ def _elevation_schema():
 
 
 def _emit_elevation(points, breaklines, mt, st, spf, mode, cell_iter, srid):
-    _validate_mode(mode)
-    import numpy as np
-    from shapely import set_srid, to_wkb
-    from shapely.geometry import Point
-
-    pt_geoms = _geoms_from_array(points)
-    if not pt_geoms:
-        return
-    coords = np.array([xyz for g in pt_geoms for xyz in _all_xyz(g)], dtype=float)
-    bls = [np.array(g.coords, dtype=float) for g in _geoms_from_array(breaklines)]
-    tris = _tin.triangulate(coords, bls, float(mt), float(st))
-    for x, y in cell_iter:
-        z = _tin.interpolate_z(tris, x, y)
-        if z is None:
-            continue
-        p = Point(x, y, z)
-        if srid:
-            p = set_srid(p, int(srid))
-        yield (to_wkb(p, output_dimension=3),)
+    if mt is None or st is None or spf is None or mode is None:
+        return  # a NULL argument: no rows, as explode(NULL)
+    for blob in _tin.elevation_wkbs(
+        points, breaklines, mt, st, cell_iter, srid, mode=mode, split_point_finder=spf
+    ):
+        yield (blob,)
 
 
-@udtf(returnType=_elevation_schema())
+@_session_udtf(returnType=_elevation_schema())
 class _InterpElevBBoxUDTF:
     def eval(
         self,
@@ -224,8 +265,11 @@ class _InterpElevBBoxUDTF:
         width_px,
         height_px,
         srid,
-        mode=None,
+        mode=_MODE_LEFT_OUT,
     ):
+        mode = _mode_arg(mode)
+        if None in (xmin, ymin, xmax, ymax, width_px, height_px, srid):
+            return  # a NULL required argument: no rows, as explode(NULL)
         yield from _emit_elevation(
             points,
             breaklines,
@@ -245,7 +289,7 @@ class _InterpElevBBoxUDTF:
         )
 
 
-@udtf(returnType=_elevation_schema())
+@_session_udtf(returnType=_elevation_schema())
 class _InterpElevGeomUDTF:
     def eval(
         self,
@@ -259,12 +303,15 @@ class _InterpElevGeomUDTF:
         grid_rows,
         cell_size_x,
         cell_size_y,
-        mode=None,
+        mode=_MODE_LEFT_OUT,
     ):
+        mode = _mode_arg(mode)
         from shapely import get_srid
 
         from ._geom import parse_geom
 
+        if None in (grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y):
+            return  # a NULL required argument: no rows, as explode(NULL)
         og = parse_geom(grid_origin)
         ox, oy = (og.x, og.y) if og is not None else (0.0, 0.0)
         srid = get_srid(og) if og is not None else 0
@@ -287,288 +334,7 @@ class _InterpElevGeomUDTF:
         )
 
 
-def _registrar_groups() -> List[_register.Group]:
-    mvt = {
-        "gbx_st_asmvt": lambda s: s.udf.register("gbx_st_asmvt", _asmvt_udf),
-        "gbx_st_asmvt_pyramid": lambda s: s.udtf.register(
-            "gbx_st_asmvt_pyramid", _AsMvtPyramidUDTF
-        ),
-    }
-    legacy = {
-        "gbx_st_legacyaswkb": lambda s: s.udf.register(
-            "gbx_st_legacyaswkb", _legacyaswkb_impl, BinaryType()
-        ),
-    }
-    tin = {
-        "gbx_st_triangulate": lambda s: s.udtf.register(
-            "gbx_st_triangulate", _TriangulateUDTF
-        ),
-        "gbx_st_interpolateelevationbbox": lambda s: s.udtf.register(
-            "gbx_st_interpolateelevationbbox", _InterpElevBBoxUDTF
-        ),
-        "gbx_st_interpolateelevationgeom": lambda s: s.udtf.register(
-            "gbx_st_interpolateelevationgeom", _InterpElevGeomUDTF
-        ),
-    }
-
-    def _reg_pmtiles(s):
-        from databricks.labs.gbx.pmtiles import register_pmtiles_agg
-
-        register_pmtiles_agg(s)
-
-    pmtiles = {"gbx_pmtiles_agg": _reg_pmtiles}
-
-    def _reg_gbx_st_crs(s):
-        from . import _crs as _c
-
-        s.udf.register("gbx_st_crs", _c.st_crs, StringType())
-
-    def _reg_gbx_st_setcrs(s):
-        from . import _crs as _c
-
-        s.udf.register("gbx_st_setcrs", _c._udf_st_setcrs, BinaryType())
-
-    def _reg_gbx_st_transformcrs(s):
-        from databricks.labs.gbx.core import proj_grids
-        from databricks.labs.gbx.pyrx import _env
-
-        from . import _crs as _c
-
-        _grid_dirs = tuple(
-            proj_grids.get_registered_dirs()
-        )  # captured at build → pickled
-
-        def _transformcrs_udf(geom, target_crs, source_crs=None):
-            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
-            return _c._udf_st_transformcrs(geom, target_crs, source_crs)
-
-        s.udf.register("gbx_st_transformcrs", _transformcrs_udf, BinaryType())
-
-    crs = {
-        "gbx_st_crs": _reg_gbx_st_crs,
-        "gbx_st_setcrs": _reg_gbx_st_setcrs,
-        "gbx_st_transformcrs": _reg_gbx_st_transformcrs,
-    }
-
-    def _reg_gbx_st_shiftlongitude(s):
-        from . import _antimeridian as _am
-
-        s.udf.register(
-            "gbx_st_shiftlongitude", _am._udf_st_shiftlongitude, BinaryType()
-        )
-
-    def _reg_gbx_st_wrapx(s):
-        from . import _antimeridian as _am
-
-        s.udf.register("gbx_st_wrapx", _am._udf_st_wrapx, BinaryType())
-
-    def _reg_gbx_st_split(s):
-        from . import _antimeridian as _am
-
-        s.udf.register("gbx_st_split", _am._udf_st_split, BinaryType())
-
-    antimeridian = {
-        "gbx_st_shiftlongitude": _reg_gbx_st_shiftlongitude,
-        "gbx_st_wrapx": _reg_gbx_st_wrapx,
-        "gbx_st_split": _reg_gbx_st_split,
-    }
-
-    def _reg_gbx_st_makevalid(s):
-        from . import _validity as _v
-
-        def _makevalid_udf(geom, level=None):
-            return _v._udf_st_makevalid(geom, level)
-
-        s.udf.register("gbx_st_makevalid", _makevalid_udf, BinaryType())
-
-    def _reg_gbx_st_explainvalidity(s):
-        from . import _validity as _v
-
-        s.udf.register(
-            "gbx_st_explainvalidity", _v._udf_st_explainvalidity, StringType()
-        )
-
-    validity = {
-        "gbx_st_makevalid": _reg_gbx_st_makevalid,
-        "gbx_st_explainvalidity": _reg_gbx_st_explainvalidity,
-    }
-
-    def _reg_gbx_st_simplifypreservetopology(s):
-        from . import _cleaning as _cl
-
-        s.udf.register(
-            "gbx_st_simplifypreservetopology",
-            _cl._udf_st_simplifypreservetopology,
-            BinaryType(),
-        )
-
-    def _reg_gbx_st_removerepeatedpoints(s):
-        from . import _cleaning as _cl
-
-        def _rrp_udf(geom, tolerance=None):
-            return _cl._udf_st_removerepeatedpoints(geom, tolerance)
-
-        s.udf.register("gbx_st_removerepeatedpoints", _rrp_udf, BinaryType())
-
-    def _reg_gbx_st_reduceprecision(s):
-        from . import _cleaning as _cl
-
-        s.udf.register(
-            "gbx_st_reduceprecision", _cl._udf_st_reduceprecision, BinaryType()
-        )
-
-    def _reg_gbx_st_node(s):
-        from . import _cleaning as _cl
-
-        s.udf.register("gbx_st_node", _cl._udf_st_node, BinaryType())
-
-    def _reg_gbx_st_snap(s):
-        from . import _cleaning as _cl
-
-        s.udf.register("gbx_st_snap", _cl._udf_st_snap, BinaryType())
-
-    cleaning = {
-        "gbx_st_simplifypreservetopology": _reg_gbx_st_simplifypreservetopology,
-        "gbx_st_removerepeatedpoints": _reg_gbx_st_removerepeatedpoints,
-        "gbx_st_reduceprecision": _reg_gbx_st_reduceprecision,
-        "gbx_st_node": _reg_gbx_st_node,
-        "gbx_st_snap": _reg_gbx_st_snap,
-    }
-
-    def _reg_gbx_st_coverageisvalid(s):
-        s.udf.register("gbx_st_coverageisvalid", _coverageisvalid_udf)
-
-    def _reg_gbx_st_coverageinvalidedges(s):
-        s.udf.register("gbx_st_coverageinvalidedges", _coverageinvalidedges_udf)
-
-    coverage = {
-        "gbx_st_coverageisvalid": _reg_gbx_st_coverageisvalid,
-        "gbx_st_coverageinvalidedges": _reg_gbx_st_coverageinvalidedges,
-    }
-    return [
-        (lambda: _env.assert_mvt_available(), mvt),
-        (lambda: _env.assert_legacy_available(), legacy),
-        (lambda: _env.assert_tin_available(), tin),
-        (lambda: None, pmtiles),
-        (lambda: _env.assert_crs_available(), crs),
-        (lambda: True, antimeridian),
-        (lambda: True, validity),
-        (lambda: True, cleaning),
-        (lambda: True, coverage),
-    ]
-
-
-def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> None:
-    """Register the pyvx VectorX SQL functions (Serverless-safe: udf/udtf only).
-
-    Args:
-        spark: Spark session (uses the active session if not provided).
-        only: Optional list of function names to register (instead of all).
-            Accepts SQL names (``gbx_st_asmvt``) or short names (``st_asmvt``),
-            case-insensitively. ``None`` registers everything; ``[]`` registers
-            nothing. An unrecognized name raises ``ValueError``. A sub-module's
-            availability guard runs only when >=1 of its functions is selected.
-    """
-    if spark is None:
-        spark = SparkSession.builder.getOrCreate()
-    _register.run_groups(_registrar_groups(), spark, only)
-    globals()["_gbx_registered"] = True
-
-
-def st_asmvt_pyramid(
-    geom: ColLike,
-    attrs: ColLike,
-    min_z: ColLike,
-    max_z: ColLike,
-    layer_name: Union[ColLike, None] = None,
-    extent: Union[ColLike, None] = None,
-):
-    """Generator: one (z,x,y,mvt_bytes) row per intersecting tile across [min_z,max_z].
-
-    In the light tier the pyramid generator is a Python UDTF and is invoked only via
-    SQL LATERAL — it has no Python DataFrame Column form (unlike the heavy tier, which
-    exposes a Column API for this generator). Calling this wrapper directly raises
-    NotImplementedError; instead register and call it as a SQL LATERAL table function:
-
-        SELECT t.* FROM features, LATERAL gbx_st_asmvt_pyramid(geom, attrs, 0, 12, 'layer', 4096) t
-
-    The output schema (z,x,y,mvt_bytes) matches the heavyweight generator and feeds
-    gbx_pmtiles_agg downstream, so the two tiers are interchangeable at the SQL level.
-    """
-    raise NotImplementedError(
-        "Light st_asmvt_pyramid has no Python Column form; invoke the registered UDTF as a "
-        "SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, layer, extent) t"
-    )
-
-
-def st_triangulate(
-    points_array,
-    breaklines_array,
-    merge_tolerance,
-    snap_tolerance,
-    split_point_finder,
-    mode: ColLike = "constrained",
-):
-    """Constrained Delaunay triangulation. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_triangulate(points_array, breaklines_array, mt, st, spf, mode) t
-    mode='conforming' is heavy-only."""
-    raise NotImplementedError(
-        "Light st_triangulate has no Python Column form; invoke the registered UDTF via SQL LATERAL."
-    )
-
-
-def st_interpolateelevationbbox(
-    points_array,
-    breaklines_array,
-    merge_tolerance,
-    snap_tolerance,
-    split_point_finder,
-    xmin,
-    ymin,
-    xmax,
-    ymax,
-    width_px,
-    height_px,
-    srid,
-    mode: ColLike = "constrained",
-):
-    """Interpolate barycentric Z over the constrained TIN at bbox grid centers. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_interpolateelevationbbox(
-        points_array, breaklines_array, mt, st, spf, xmin, ymin, xmax, ymax, width_px, height_px, srid, mode) t
-    One POINT Z WKB per in-hull cell (outside-hull dropped). mode='conforming' is heavy-only.
-    """
-    raise NotImplementedError(
-        "Light st_interpolateelevationbbox has no Python Column form; "
-        "invoke the registered UDTF via SQL LATERAL."
-    )
-
-
-def st_interpolateelevationgeom(
-    points_array,
-    breaklines_array,
-    merge_tolerance,
-    snap_tolerance,
-    split_point_finder,
-    grid_origin,
-    grid_cols,
-    grid_rows,
-    cell_size_x,
-    cell_size_y,
-    mode: ColLike = "constrained",
-):
-    """Interpolate barycentric Z over the constrained TIN at origin-grid centers. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_interpolateelevationgeom(
-        points_array, breaklines_array, mt, st, spf, origin, cols, rows, cell_x, cell_y, mode) t
-    SRID is taken from the origin EWKB. One POINT Z WKB per in-hull cell (outside-hull dropped).
-    mode='conforming' is heavy-only."""
-    raise NotImplementedError(
-        "Light st_interpolateelevationgeom has no Python Column form; "
-        "invoke the registered UDTF via SQL LATERAL."
-    )
-
-
-def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
+def _light_st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """Aggregator: encode a group of features into an MVT protobuf blob (BINARY).
 
     geom: per-row geometry (WKB, EWKB, WKT, or EWKT) in tile-local coordinates.
@@ -580,278 +346,18 @@ def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     return _asmvt_udf(_col(geom), _col(attrs), _col(layer_name))
 
 
-def st_legacyaswkb(geom: ColLike) -> Column:
-    """Decode a legacy Mosaic geometry struct to ISO WKB (Z + holes preserved)."""
-    return f.call_function("gbx_st_legacyaswkb", _col(geom))
-
-
-def _crs_col(x: ColLike) -> Column:
-    """Coerce a CRS argument: plain str -> f.lit (CRS string literal, not column name)."""
-    if isinstance(x, str):
-        return f.lit(x)
-    return _col(x)
-
-
-def st_crs(geom: ColLike) -> Column:
-    """Return the canonical CRS string embedded in a geometry's SRID, or NULL.
-
-    Reads the integer SRID from EWKB / EWKT and classifies it via the authoritative
-    PROJ code sets (``EPSG:<n>`` or ``ESRI:<n>``). Returns NULL for plain WKB / WKT
-    geometries with no embedded SRID.
-
-    Args:
-        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-
-    Returns:
-        STRING column: canonical CRS string (e.g. ``'EPSG:4326'``, ``'ESRI:54008'``),
-        or NULL when no SRID is embedded.
-    """
-    return f.call_function("gbx_st_crs", _col(geom))
-
-
-def st_setcrs(geom: ColLike, crs: ColLike) -> Column:
-    """Stamp a CRS on a geometry without reprojecting (SQL surface, BINARY output).
-
-    Assigns the EPSG or ESRI SRID to the geometry. Authority-less CRS strings
-    (WKT / PROJ4 with no authority code) are rejected because a geometry SRID
-    must be an integer.
-
-    The SQL UDF always returns BINARY (EWKB), regardless of input encoding.
-    For the medium-preserving Python core (bytes -> bytes, str -> str) use
-    ``pyvx._crs.st_setcrs`` directly.
-
-    Args:
-        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        crs:  Column, CRS string literal (e.g. ``'EPSG:32633'``), or integer
-              SRID. A plain Python str is treated as a CRS literal, not a column
-              name. WKT / PROJ4 strings raise at execution time.
-
-    Returns:
-        BINARY column: EWKB geometry with the new SRID stamped.
-    """
-    return f.call_function("gbx_st_setcrs", _col(geom), _crs_col(crs))
-
-
-def st_transformcrs(
-    geom: ColLike,
-    target_crs: ColLike,
-    source_crs: Optional[ColLike] = None,
-) -> Column:
-    """Reproject a geometry to the target CRS (SQL surface, BINARY output).
-
-    Source CRS resolution order:
-    1. Embedded SRID from the geometry (EWKB / EWKT).
-    2. Explicit ``source_crs`` column / literal (for plain WKB / WKT inputs).
-    3. No source CRS resolvable -> input returned UNCHANGED (never-error).
-
-    The SQL UDF always returns BINARY (WKB / EWKB), regardless of input encoding.
-    For the medium-preserving Python core use ``pyvx._crs.st_transformcrs``.
-
-    Args:
-        geom:       BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        target_crs: Column, CRS string literal (e.g. ``'EPSG:32633'``), or
-                    integer SRID. A plain Python str is treated as a CRS literal,
-                    not a column name.
-        source_crs: Optional Column, CRS string literal, or integer SRID —
-                    explicit source CRS for plain (SRID-less) geometries.
-
-    Returns:
-        BINARY column: reprojected geometry (EWKB when target has an authority
-        code, plain WKB when authority-less), or the original bytes when no
-        source CRS is resolvable.
-    """
-    if source_crs is None:
-        return f.call_function("gbx_st_transformcrs", _col(geom), _crs_col(target_crs))
-    return f.call_function(
-        "gbx_st_transformcrs", _col(geom), _crs_col(target_crs), _crs_col(source_crs)
-    )
-
-
-def st_shiftlongitude(geom: ColLike) -> Column:
-    """Shift longitude from [-180,180] to [0,360] (SQL surface, BINARY output)."""
-    return f.call_function("gbx_st_shiftlongitude", _col(geom))
-
-
-def st_wrapx(geom: ColLike, wrap_x_origin: ColLike, wrap_direction: ColLike) -> Column:
-    """Wrap X coordinates around an origin by a direction (SQL surface, BINARY output).
-
-    PostGIS ST_WrapX semantics: wrap_direction < 0 moves coordinates with
-    x >= wrap_x_origin by wrap_direction; wrap_direction > 0 moves coordinates
-    with x <= wrap_x_origin by wrap_direction.
-
-    Args:
-        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        wrap_x_origin: X threshold value (numeric literal or column).
-        wrap_direction: Amount to shift qualifying coordinates (numeric literal or column).
-
-    Returns:
-        BINARY column: EWKB geometry with wrapped X coordinates.
-    """
-    return f.call_function(
-        "gbx_st_wrapx", _col(geom), _col(wrap_x_origin), _col(wrap_direction)
-    )
-
-
-def st_split(input_geom: ColLike, blade_geom: ColLike) -> Column:
-    """Split a geometry by a blade; returns a GEOMETRYCOLLECTION (BINARY).
-
-    MULTI inputs are decomposed — each part split individually, all pieces
-    recollected into a single GEOMETRYCOLLECTION (pure shapely, no second engine).
-
-    Args:
-        input_geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        blade_geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) blade geometry.
-
-    Returns:
-        BINARY column: EWKB GEOMETRYCOLLECTION of the split pieces.
-    """
-    return f.call_function("gbx_st_split", _col(input_geom), _col(blade_geom))
-
-
-def st_makevalid(geom: ColLike, level: ColLike = None) -> Column:
-    """Repair a geometry to OGC-SFS validity (SQL surface, BINARY output).
-
-    Args:
-        geom:  BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        level: Repair strategy: ``'linework'`` (default), ``'structure'``, or
-               ``'ogc'`` (OGC topology repair only, no ring-orientation normalization).
-               ``'cleaning'`` / ``'full'`` are reserved for a later release.
-
-    Returns:
-        BINARY column: EWKB repaired geometry, or NULL when input is NULL.
-    """
-    if level is None:
-        return f.call_function("gbx_st_makevalid", _col(geom))
-    return f.call_function("gbx_st_makevalid", _col(geom), _col(level))
-
-
-def st_explainvalidity(geom: ColLike) -> Column:
-    """Diagnose SFS validity: JSON ``{valid, reason, code, location}`` (STRING).
-
-    Args:
-        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-
-    Returns:
-        STRING column: JSON object with keys ``valid`` (bool), ``reason`` (str),
-        ``code`` (int or null — stable GeoBrix reason code), ``location``
-        (WKT POINT or null — GEOS-reported violation site). NULL when input is NULL.
-    """
-    return f.call_function("gbx_st_explainvalidity", _col(geom))
-
-
-def st_simplifypreservetopology(geom: ColLike, tolerance: ColLike) -> Column:
-    """Douglas-Peucker simplify that preserves topology (SQL surface, BINARY output).
-
-    The topology-preserving counterpart to the product's ``st_simplify`` (which can
-    split or collapse a geometry).
-
-    Args:
-        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        tolerance: Simplification distance tolerance (numeric literal or column).
-
-    Returns:
-        BINARY column: EWKB simplified geometry, or NULL when input is NULL.
-    """
-    return f.call_function(
-        "gbx_st_simplifypreservetopology", _col(geom), _col(tolerance)
-    )
-
-
-def st_removerepeatedpoints(
-    geom: ColLike, tolerance: Optional[ColLike] = None
-) -> Column:
-    """Remove consecutive duplicate (or within-tolerance near-duplicate) vertices.
-
-    Args:
-        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        tolerance: Optional distance tolerance; duplicate vertices within this
-                   distance are collapsed. Defaults to 0.0 (exact duplicates only).
-
-    Returns:
-        BINARY column: EWKB geometry with repeated points removed.
-    """
-    if tolerance is None:
-        return f.call_function("gbx_st_removerepeatedpoints", _col(geom))
-    return f.call_function("gbx_st_removerepeatedpoints", _col(geom), _col(tolerance))
-
-
-def st_reduceprecision(geom: ColLike, grid_size: ColLike) -> Column:
-    """Snap coordinates to a grid of ``grid_size`` (a.k.a. snap-to-grid).
-
-    Uses GEOS precision model (``set_precision(mode="valid_output")``) so the
-    result stays valid after snapping.
-
-    Args:
-        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        grid_size: Grid cell size (numeric literal or column).
-
-    Returns:
-        BINARY column: EWKB geometry with coordinates snapped to the grid.
-    """
-    return f.call_function("gbx_st_reduceprecision", _col(geom), _col(grid_size))
-
-
-def st_node(geom: ColLike) -> Column:
-    """Node a linework: split at all self/pairwise intersections (SQL surface, BINARY output).
-
-    Args:
-        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-
-    Returns:
-        BINARY column: EWKB noded linework (MultiLineString or LineString).
-    """
-    return f.call_function("gbx_st_node", _col(geom))
-
-
-def st_snap(geom: ColLike, reference: ColLike, tolerance: ColLike) -> Column:
-    """Snap ``geom``'s vertices onto ``reference`` where within ``tolerance``.
-
-    Args:
-        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        reference: BINARY (WKB / EWKB) or STRING (WKT / EWKT) reference geometry.
-        tolerance: Snap distance tolerance (numeric literal or column).
-
-    Returns:
-        BINARY column: EWKB geometry with snapped vertices.
-    """
-    return f.call_function("gbx_st_snap", _col(geom), _col(reference), _col(tolerance))
-
-
-def st_coverageisvalid(geom: ColLike, gap_width: float = 0.0) -> Column:
+def _light_st_coverageisvalid(geom: ColLike, gap_width: float = 0.0) -> Column:
     """Column (grouped-agg): valid-coverage boolean over the grouped polygon set."""
     return _coverageisvalid_udf(_col(geom), f.lit(gap_width))
 
 
-def st_coverageinvalidedges(geom: ColLike, gap_width: float = 0.0) -> Column:
+def _light_st_coverageinvalidedges(geom: ColLike, gap_width: float = 0.0) -> Column:
     """Column (grouped-agg): union of the coverage's invalid edges (BINARY)."""
     return _coverageinvalidedges_udf(_col(geom), f.lit(gap_width))
 
 
-def coverage_simplify(
-    df,
-    group_col,
-    geom_col,
-    tolerance,
-    simplify_boundary=True,
-    out_col="geom_simplified",
-):
-    """Topology-preserving simplification of a whole coverage (Python-API only).
+def __getattr__(name):
+    """A removed public name: say where it went (no alias keeps working)."""
+    from databricks.labs.gbx import _moved
 
-    Groups df by group_col and simplifies each coverage together (shared edges stay
-    shared). N rows in -> N rows out; every input column preserved, EWKB written to
-    out_col. Serverless-safe (groupBy().applyInPandas()).
-    """
-    from pyspark.sql.types import StructField, StructType
-
-    from . import _coverage as _cov
-
-    out_schema = StructType(
-        list(df.schema.fields) + [StructField(out_col, BinaryType(), True)]
-    )
-
-    def _fn(pdf):
-        return _cov.coverage_simplify_pdf(
-            pdf, geom_col, tolerance, simplify_boundary, out_col
-        )
-
-    return df.groupBy(group_col).applyInPandas(_fn, schema=out_schema)
+    return _moved.removed_name(__name__, name)

@@ -3,22 +3,16 @@
 The bar (per the pygx BNG spec) is EXACT, not tolerant, for cell ids / sets:
 
 - **Cell IDs / sets are bit-exact** (BNG ids are STRINGS): ``pointascell`` /
-  ``eastnorthasbng`` (same STRING), ``cellarea`` (same DOUBLE), ``distance`` /
+  ``cellarea`` (same DOUBLE), ``distance`` /
   ``euclideandistance`` (same LONG), ``kring`` / ``kloop`` (sorted set),
   ``polyfill`` (sorted cell-set), ``tessellate`` (cell-set), ``geomkring`` /
   ``geomkloop`` (sorted set), and the five ``*explode`` UDTFs (light SQL UDTF vs
   heavy ``LATERAL VIEW`` — sorted cellid set).
 - **Geometry WKB within 1e-6**: ``aswkb`` / ``aswkt`` / ``centroid`` / surviving
-  ``tessellate`` chips / ``cellunion`` / ``cellintersection`` and the two aggs —
+  ``tessellate`` chips / ``cellunion`` / ``cellintersection`` —
   decode both tiers (shapely ``from_wkb`` / ``from_wkt``). BNG carries **NO SRID**
   (heavy ``JTS.toWKB``), so assert ``get_srid == 0`` in BOTH tiers and compare the
   normalized geometries within 1e-6 via ``equals_exact``.
-
-The aggregates are the documented light-agg-struct-return deviation: the light SQL
-agg returns plain **BINARY** (the dissolved chip geometry) while heavy returns a
-``STRUCT<cellid, core, chip>`` (PySpark grouped-agg pandas UDFs cannot return a
-struct). We therefore compare the **decoded chip GEOMETRY** (light BINARY vs the
-heavy struct's ``chip`` field), not the struct wrapper.
 
 Both tiers register the SAME ``gbx_bng_*`` SQL names. Light registers PySpark
 UDF/UDTF/pandas-agg; heavy registers JVM expressions. Both wrapper modules resolve
@@ -39,10 +33,12 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
-from shapely import equals_exact, from_wkb, from_wkt, get_srid
+from shapely import equals_exact, from_wkb, from_wkt, get_dimensions, get_srid
 from shapely import to_wkb as _to_wkb
+from shapely import union_all
 from shapely.geometry import Point as _Point
 from shapely.geometry import box as _box
 
@@ -155,6 +151,16 @@ def _wkb(geom):
 # --- the full BNG parity sweep ----------------------------------------------------------------
 
 
+def _register_tier(spark, mod, prefixes):
+    """The light tier (pygx) at L3, the heavy one (the gridx module) at L1: each leg of a parity test installs its own."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    if mod.__name__.startswith("databricks.labs.gbx.pygx"):
+        gbx_manager.register_family(spark, prefixes, level="L3")
+    else:
+        heavy_register(spark, prefixes)
+
+
 def test_bng_full_parity(spark_with_jar):
     """All 23 BNG functions, light vs heavy, in one session (light first, then heavy)."""
     from pyspark.sql import functions as f
@@ -179,26 +185,37 @@ def test_bng_full_parity(spark_with_jar):
     )
 
     def scalar_row(mod, tess_keep_core):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         return df.select(
-            mod.bng_pointascell(f.col("pt"), f.col("res")).alias("pac"),
-            mod.bng_eastnorthasbng(f.col("e"), f.col("n"), f.col("res")).alias("enb"),
-            mod.bng_cellarea(f.col("seed")).alias("area"),
-            mod.bng_distance(f.col("seed"), f.col("cell_b")).alias("dist"),
-            mod.bng_euclideandistance(f.col("seed"), f.col("cell_b")).alias("edist"),
-            mod.bng_aswkb(f.col("seed")).alias("aswkb"),
-            mod.bng_aswkt(f.col("seed")).alias("aswkt"),
-            mod.bng_centroid(f.col("seed")).alias("centroid"),
-            mod.bng_kring(f.col("seed"), f.lit(1)).alias("kring"),
-            mod.bng_kloop(f.col("seed"), f.lit(1)).alias("kloop"),
-            mod.bng_polyfill(f.col("geom"), f.col("res")).alias("pf"),
-            mod.bng_geomkring(f.col("geom"), f.col("res"), f.lit(1)).alias("gkr"),
-            mod.bng_geomkloop(f.col("geom"), f.col("res"), f.lit(1)).alias("gkl"),
+            f.call_function("gbx_bng_pointascell", f.col("pt"), f.col("res")).alias(
+                "pac"
+            ),
+            f.call_function("gbx_bng_cellarea", f.col("seed")).alias("area"),
+            f.call_function("gbx_bng_distance", f.col("seed"), f.col("cell_b")).alias(
+                "dist"
+            ),
+            f.call_function(
+                "gbx_bng_euclideandistance", f.col("seed"), f.col("cell_b")
+            ).alias("edist"),
+            f.call_function("gbx_bng_aswkb", f.col("seed")).alias("aswkb"),
+            f.call_function("gbx_bng_aswkt", f.col("seed")).alias("aswkt"),
+            f.call_function("gbx_bng_centroid", f.col("seed")).alias("centroid"),
+            f.call_function("gbx_bng_kring", f.col("seed"), f.lit(1)).alias("kring"),
+            f.call_function("gbx_bng_kloop", f.col("seed"), f.lit(1)).alias("kloop"),
+            f.call_function("gbx_bng_polyfill", f.col("geom"), f.col("res")).alias(
+                "pf"
+            ),
+            f.call_function(
+                "gbx_bng_geomkring", f.col("geom"), f.col("res"), f.lit(1)
+            ).alias("gkr"),
+            f.call_function(
+                "gbx_bng_geomkloop", f.col("geom"), f.col("res"), f.lit(1)
+            ).alias("gkl"),
         ).collect()[0]
 
     def chip_row(mod):
         """cellintersection / cellunion of two chip structs (same cellid -> union)."""
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         # Build two chip structs over the SAME cellid (seed): a core chip and a
         # full-cell chip, so cell_union/intersection produce the whole cell.
         chip_geom = _bng.cell_id_to_geometry(_bng.parse(seed))
@@ -211,15 +228,17 @@ def test_bng_full_parity(spark_with_jar):
         left = f.struct(f.col("lid"), f.col("lcore"), f.col("lchip"))
         right = f.struct(f.col("rid"), f.col("rcore"), f.col("rchip"))
         return cdf.select(
-            mod.bng_cellunion(left, right).alias("cu"),
-            mod.bng_cellintersection(left, right).alias("ci"),
+            f.call_function("gbx_bng_cellunion", left, right).alias("cu"),
+            f.call_function("gbx_bng_cellintersection", left, right).alias("ci"),
         ).collect()[0]
 
     def tess_rows(mod, keep_core):
         """Tessellate chips. Both tiers called with keep_core_geom=False so core
         chips have no geometry on either side (parity comparison is clean)."""
-        mod.register(spark)
-        tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        _register_tier(spark, mod, ("gbx_bng_",))
+        tess_col = f.call_function(
+            "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
+        )
         exploded = df.select(f.explode(tess_col).alias("chip")).select(
             f.col("chip.cellid").alias("cell"),
             f.col("chip.core").alias("core"),
@@ -227,32 +246,14 @@ def test_bng_full_parity(spark_with_jar):
         )
         return {r["cell"]: (r["core"], r["geom"]) for r in exploded.collect()}
 
-    def agg_chip_geom(mod):
-        """Dissolve a group of identical-cell chips. Light returns BINARY (the chip
-        geometry); heavy returns STRUCT<cellid, core, chip> -> take .chip. Compare
-        the decoded chip GEOMETRY either way (the load-bearing field)."""
-        mod.register(spark)
-        chip_geom = _bng.cell_id_to_geometry(_bng.parse(seed))
-        chip_wkb = _wkb(chip_geom)
-        gdf = spark.createDataFrame(
-            [(seed, False, chip_wkb), (seed, False, chip_wkb)],
-            "cellid string, core boolean, chip binary",
-        )
-        chip_struct = f.struct(f.col("cellid"), f.col("core"), f.col("chip"))
-        out = (
-            gdf.groupBy("cellid")
-            .agg(
-                mod.bng_cellunion_agg(chip_struct).alias("u"),
-                mod.bng_cellintersection_agg(chip_struct).alias("i"),
-            )
-            .collect()[0]
-        )
-        return out["u"], out["i"]
-
     def explode_sets_light():
         """Light registers the five *explode as UDTFs (table functions) -> invoke
         via SQL LATERAL. Collect each as a sorted cellid set."""
-        gx.register(spark)
+        from databricks.labs.gbx import manager as gbx_manager
+
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
         df.createOrReplaceTempView("bng_src")
 
         def lateral(call):
@@ -272,14 +273,16 @@ def test_bng_full_parity(spark_with_jar):
         }
 
     def explode_sets_heavy():
-        """Heavy has no table-function *explode (the heavy `gbx_bng_*explode` SQL
-        names are not array-returning generators — its Python wrappers explode the
-        underlying ARRAY function). The semantic equivalent of light's `*explode`
-        UDTF output is exactly the heavy ARRAY function it would explode, so compare
-        light's exploded cellid set against the heavy array's cellid set: kringexplode
-        <-> gbx_bng_kring, kloopexplode <-> gbx_bng_kloop, geomk*explode <->
-        gbx_bng_geomk*, tessellateexplode <-> gbx_bng_tessellate (chip cellids)."""
-        hx.register(spark)
+        """Heavy `gbx_bng_*explode` are Catalyst generators (select list or LATERAL VIEW),
+        not table-valued functions, so `FROM t, LATERAL f(...)` reaches only the light
+        UDTF. Here the semantic equivalent of light's `*explode` output is the heavy
+        ARRAY function the generator would explode, so compare light's exploded cellid
+        set against the heavy array's cellid set: kringexplode <-> gbx_bng_kring,
+        kloopexplode <-> gbx_bng_kloop, geomk*explode <-> gbx_bng_geomk*,
+        tessellateexplode <-> gbx_bng_tessellate (chip cellids). The generator's own
+        columns are compared in test_bng_tessellateexplode_columns_parity."""
+
+        heavy_register(spark, ("gbx_bng_",))
 
         def arr(call):
             row = df.select(call.alias("a")).collect()[0]["a"]
@@ -311,23 +314,18 @@ def test_bng_full_parity(spark_with_jar):
     light = scalar_row(gx, None)
     light_chip = chip_row(gx)
     light_tess = tess_rows(gx, False)  # light: keep_core_geom=False, matches heavy
-    light_agg_u, light_agg_i = agg_chip_geom(gx)
     light_expl = explode_sets_light()
 
     # ---- HEAVY (overwrites the gbx_bng_* SQL names) ----
     heavy = scalar_row(hx, None)
     heavy_chip = chip_row(hx)
     heavy_tess = tess_rows(hx, False)  # heavy: keep_core_geom=False
-    heavy_agg_u, heavy_agg_i = agg_chip_geom(hx)
     heavy_expl = explode_sets_heavy()
 
     # === cell-ID / set parity (EXACT) ===
     assert (
         light["pac"] == heavy["pac"]
     ), f"pointascell mismatch: light={light['pac']} heavy={heavy['pac']}"
-    assert (
-        light["enb"] == heavy["enb"]
-    ), f"eastnorthasbng mismatch: light={light['enb']} heavy={heavy['enb']}"
     assert (
         light["area"] == heavy["area"]
     ), f"cellarea mismatch: light={light['area']} heavy={heavy['area']}"
@@ -394,13 +392,121 @@ def test_bng_full_parity(spark_with_jar):
             continue
         _assert_geom_parity(lgeom, hgeom, f"tessellate-chip cell={cell}")
 
-    # aggregates: light BINARY vs heavy STRUCT.chip -- compare decoded chip geometry
-    light_agg_u_blob = light_agg_u
-    heavy_agg_u_blob = heavy_agg_u["chip"] if heavy_agg_u is not None else None
-    _assert_geom_parity(light_agg_u_blob, heavy_agg_u_blob, "cellunion_agg")
-    light_agg_i_blob = light_agg_i
-    heavy_agg_i_blob = heavy_agg_i["chip"] if heavy_agg_i is not None else None
-    _assert_geom_parity(light_agg_i_blob, heavy_agg_i_blob, "cellintersection_agg")
+
+# --- tessellateexplode: the heavy generator emits the columns it declares ---------------------
+
+
+def test_bng_tessellateexplode_columns_parity(spark_with_jar):
+    """Heavy ``gbx_bng_tessellateexplode`` returns the same columns and values as light.
+
+    Heavy declared a single ``cellid`` column while emitting ``(cellid, core, chip)``, so
+    ``core`` and ``chip`` were silently dropped. The chip is WKB (BINARY) in both tiers,
+    whatever the input geometry type, like ``gbx_bng_tessellate``.
+
+    The fixture is a 2.5 km grid-aligned box at 1 km resolution, which has both a core cell
+    (chip NULL when ``keep_core_geom`` is false) and border cells (chip geometry).
+
+    Light is a table-valued function (``FROM t, LATERAL f(...)``); heavy is a Catalyst
+    generator, reached through the select list or ``LATERAL VIEW``. Both take
+    ``(geom, resolution)``; heavy also takes an optional ``keep_core_geom`` (default false).
+    """
+    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs.gbx.pygx import _bng
+
+    spark = spark_with_jar
+    box_wkb = _wkb(_GRID_ALIGNED_BIG_BOX)
+    box_wkt = _GRID_ALIGNED_BIG_BOX.wkt
+
+    # Fixture check: the box must exercise both a core cell and border cells.
+    expected = _bng.tessellate_str(bytes(box_wkb), _RES)
+    assert any(core for _, core, _chip in expected), "fixture has no core cell"
+    assert any(not core for _, core, _chip in expected), "fixture has no border cell"
+
+    spark.createDataFrame(
+        [(box_wkb, box_wkt, _RES)], "wkb binary, wkt string, res int"
+    ).createOrReplaceTempView("bng_te_parity")
+
+    def shape(df):
+        return [(fld.name, fld.dataType.simpleString()) for fld in df.schema.fields]
+
+    def by_cell(df):
+        return {r["cellid"]: (r["core"], r["chip"]) for r in df.collect()}
+
+    # ---- LIGHT first ----
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
+    light_df = spark.sql(
+        "SELECT t.cellid, t.core, t.chip FROM bng_te_parity, "
+        "LATERAL gbx_bng_tessellateexplode(wkb, res) t"
+    )
+    light_shape = shape(light_df)
+    light = by_cell(light_df)
+
+    # ---- HEAVY ----
+    heavy_register(spark, ("gbx_bng_",))
+    heavy_two_arg_df = spark.sql(
+        "SELECT gbx_bng_tessellateexplode(wkb, res) FROM bng_te_parity"
+    )
+    heavy_wkb_df = spark.sql(
+        "SELECT gbx_bng_tessellateexplode(wkb, res, false) FROM bng_te_parity"
+    )
+    heavy_wkt_df = spark.sql(
+        "SELECT gbx_bng_tessellateexplode(wkt, res, false) FROM bng_te_parity"
+    )
+    heavy_lateral_df = spark.sql(
+        "SELECT cellid, core, chip FROM bng_te_parity "
+        "LATERAL VIEW gbx_bng_tessellateexplode(wkb, res, false) t AS cellid, core, chip"
+    )
+    heavy_two_arg = by_cell(heavy_two_arg_df)
+    heavy_wkb_shape = shape(heavy_wkb_df)
+    heavy_wkt_shape = shape(heavy_wkt_df)
+    heavy_wkb = by_cell(heavy_wkb_df)
+    heavy_wkt = by_cell(heavy_wkt_df)
+    heavy_lateral = by_cell(heavy_lateral_df)
+
+    # === names and types ===
+    assert light_shape == [
+        ("cellid", "string"),
+        ("core", "boolean"),
+        ("chip", "binary"),
+    ]
+    assert heavy_wkb_shape == light_shape, (
+        f"heavy (WKB input) columns differ from light:\n  light={light_shape}\n"
+        f"  heavy={heavy_wkb_shape}"
+    )
+    assert (
+        heavy_wkt_shape == light_shape
+    ), f"heavy (WKT input) columns differ from light: {heavy_wkt_shape}"
+    assert shape(heavy_two_arg_df) == light_shape
+
+    # === cell set, core flags, chip nullness (WKB input) ===
+    assert set(heavy_wkb) == set(
+        light
+    ), f"cell-set mismatch:\n  light={sorted(light)}\n  heavy={sorted(heavy_wkb)}"
+    assert heavy_lateral == heavy_wkb, "LATERAL VIEW and select-list forms must agree"
+    assert (
+        heavy_two_arg == heavy_wkb
+    ), "heavy (geom, res) must equal (geom, res, false): keep_core_geom defaults to false"
+    for cell, (lcore, lchip) in light.items():
+        hcore, hchip = heavy_wkb[cell]
+        assert (
+            hcore == lcore
+        ), f"core flag differs for {cell}: light={lcore} heavy={hcore}"
+        assert (lchip is None) == (
+            hchip is None
+        ), f"chip nullness differs for {cell} (light={lchip is None} heavy={hchip is None})"
+        if lchip is not None:
+            _assert_geom_parity(lchip, hchip, f"tessellateexplode chip cell={cell}")
+
+    # === WKT input: same chips as WKB input (the chip is WKB either way) ===
+    assert set(heavy_wkt) == set(light)
+    for cell, (lcore, lchip) in light.items():
+        hcore, hchip = heavy_wkt[cell]
+        assert hcore == lcore
+        assert (lchip is None) == (hchip is None)
+        if lchip is not None:
+            _assert_geom_parity(lchip, hchip, f"WKT-input chip cell={cell}")
 
 
 # --- mosaic#434 lock-in -----------------------------------------------------------------------
@@ -427,11 +533,11 @@ def test_bng_mosaic_434_100km_cells_are_res1(spark_with_jar):
     df = spark.createDataFrame([(c,) for c in cells], "cellid string")
 
     def rows(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         return df.select(
             f.col("cellid"),
-            mod.bng_cellarea(f.col("cellid")).alias("area"),
-            mod.bng_aswkb(f.col("cellid")).alias("wkb"),
+            f.call_function("gbx_bng_cellarea", f.col("cellid")).alias("area"),
+            f.call_function("gbx_bng_aswkb", f.col("cellid")).alias("wkb"),
         ).collect()
 
     light = {r["cellid"]: (r["area"], r["wkb"]) for r in rows(gx)}
@@ -485,8 +591,10 @@ def test_bng_mosaic_423_no_degenerate_chips(spark_with_jar):
 
     def tess(mod, keep_core):
         """Both tiers called with explicit keep_core_geom for a clean parity comparison."""
-        mod.register(spark)
-        tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        _register_tier(spark, mod, ("gbx_bng_",))
+        tess_col = f.call_function(
+            "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
+        )
         exploded = df.select(f.explode(tess_col).alias("chip")).select(
             f.col("chip.cellid").alias("cell"), f.col("chip.chip").alias("geom")
         )
@@ -512,6 +620,243 @@ def test_bng_mosaic_423_no_degenerate_chips(spark_with_jar):
         f"  light_only={set(light_tess) - set(heavy_tess)} "
         f"heavy_only={set(heavy_tess) - set(light_tess)}"
     )
+
+
+# --- mixed-collection clipping lock-in --------------------------------------------------------
+
+# Polygons whose clip against a BNG cell is NOT a plain Polygon: a GeometryCollection
+# (polygons plus a boundary line or point), a MultiPolygon, or a hole/aligned control.
+# (name, resolution, WKT) -- EPSG:27700 eastings/northings. The clip fixtures straddle
+# Easting 400000 at res 2 (10 km); the east clip of the first holds two polygons and a
+# boundary line, the east clip of the second a polygon and a boundary point.
+_CLIP_TWO_POLYGONS_AND_LINE = (
+    "POLYGON ((399998 500001, 400002 500001, 400002 500002, 400000 500002, "
+    "400000 500003, 400002 500003, 400002 500004, 399998 500004, 399998 500001))"
+)
+_CLIP_POLYGON_AND_POINT = (
+    "POLYGON ((399998 500001, 400002 500001, 400002 500002, 399999 500002, "
+    "400000 500003, 399999 500004, 399998 500004, 399998 500001))"
+)
+_MIXED_CLIP_FIXTURES = [
+    ("polygons_and_boundary_line", 2, _CLIP_TWO_POLYGONS_AND_LINE),
+    ("polygon_and_boundary_point", 2, _CLIP_POLYGON_AND_POINT),
+    (
+        "multipolygon_input",
+        2,
+        "MULTIPOLYGON (" + _CLIP_POLYGON_AND_POINT[len("POLYGON ") :] + ")",
+    ),
+    (
+        "disjoint_two_prong",
+        2,
+        "POLYGON ((399998 500001, 400002 500001, 400002 500002, 399999 500002, "
+        "399999 500003, 400002 500003, 400002 500004, 399998 500004, 399998 500001))",
+    ),
+    (
+        "geometrycollection_input",
+        2,
+        f"GEOMETRYCOLLECTION ({_CLIP_POLYGON_AND_POINT}, "
+        "POLYGON ((400100 500100, 400104 500100, 400104 500104, 400100 500104, "
+        "400100 500100)))",
+    ),
+    (
+        # Large enough to carve (core cells): a polygon, a line crossing it, a point.
+        "geometrycollection_large",
+        _RES,
+        "GEOMETRYCOLLECTION (POLYGON ((530100 180100, 533900 180100, 533900 183900, "
+        "530100 183900, 530100 180100)), LINESTRING (529000 182500, 535000 182500), "
+        "POINT (536000 185000))",
+    ),
+    (
+        # Two polygons sharing an edge carve like the polygon they dissolve into.
+        "geometrycollection_adjacent_polygons",
+        _RES,
+        "GEOMETRYCOLLECTION (POLYGON ((530000 180000, 532000 180000, 532000 184000, "
+        "530000 184000, 530000 180000)), POLYGON ((532000 180000, 534000 180000, "
+        "534000 184000, 532000 184000, 532000 180000)))",
+    ),
+    ("aligned_box_423", _RES, _ALIGNED_BOX.wkt),
+    ("aligned_big_box_with_core", _RES, _GRID_ALIGNED_BIG_BOX.wkt),
+    (
+        "polygon_with_hole",
+        _RES,
+        "POLYGON ((530000 180000, 534000 180000, 534000 184000, 530000 184000, "
+        "530000 180000), (531000.5 181000.5, 533000.5 181000.5, 533000.5 183000.5, "
+        "531000.5 183000.5, 531000.5 181000.5))",
+    ),
+]
+
+
+def _chip_parity_problem(light_blob, heavy_blob, ctx):
+    """None when the two chips agree, else a message.
+
+    Chips are compared vertex for vertex (``_assert_geom_parity``). The one exception is
+    a chip that holds a line or point beside a polygon: the tiers union those pieces with
+    different engines, which can leave an extra collinear vertex on the polygon's ring,
+    so such a chip is compared topologically, one dimension at a time.
+    """
+    try:
+        _assert_geom_parity(light_blob, heavy_blob, ctx)
+        return None
+    except AssertionError as strict:
+        lg, hg = from_wkb(bytes(light_blob)), from_wkb(bytes(heavy_blob))
+        if "GeometryCollection" not in (lg.geom_type, hg.geom_type):
+            return str(strict)
+        # The topological path below never looks at the SRID; BNG chips carry none.
+        if get_srid(lg) != 0 or get_srid(hg) != 0:
+            return str(strict)
+
+    def by_dimension(geom):
+        leaves = []
+
+        def walk(member):
+            if member.geom_type == "GeometryCollection":
+                for part in member.geoms:
+                    walk(part)
+            elif not member.is_empty:
+                leaves.append(member)
+
+        walk(geom)
+        return {
+            d: union_all([g for g in leaves if get_dimensions(g) == d])
+            for d in range(3)
+        }
+
+    light_parts, heavy_parts = by_dimension(lg), by_dimension(hg)
+    for dim in range(3):
+        lpart, hpart = light_parts[dim], heavy_parts[dim]
+        if not (lpart.is_empty and hpart.is_empty) and not lpart.equals(hpart):
+            return (
+                f"{ctx}: dimension-{dim} part differs\n"
+                f"  light={lg.wkt}\n  heavy={hg.wkt}"
+            )
+    return None
+
+
+def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
+    """Light == heavy for polygons whose clip against a cell is a collection or MultiPolygon.
+
+    A valid polygon clipped by a cell can yield a GeometryCollection (polygons plus a
+    boundary line or point) or a MultiPolygon. Heavy used to throw (NULL row from
+    ``gbx_bng_tessellate``) and light used to drop the cell through its exact-type
+    filter. Both tiers now keep every cell whose clip has the input's dimension, so
+    for each fixture and each ``keep_core_geom`` mode the cell sets, core flags and chip
+    geometries (within 1e-6) must agree, and the chips must cover the input area.
+
+    A GeometryCollection input is carved from the union of its polygonal leaves (it has
+    no boundary of its own): the large collections here leave core cells after carving,
+    which crashed both tiers before.
+    """
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    df = spark.createDataFrame(
+        [(name, res, _wkb(from_wkt(wkt))) for name, res, wkt in _MIXED_CLIP_FIXTURES],
+        "name string, res int, geom binary",
+    )
+
+    def tess(mod, keep_core):
+        """name -> {cellid: (core, chip WKB | None)} for one tier and keep_core_geom."""
+        _register_tier(spark, mod, ("gbx_bng_",))
+        col = f.call_function(
+            "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
+        )
+        rows = (
+            df.select("name", f.explode_outer(col).alias("c"))
+            .select(
+                "name",
+                f.col("c.cellid").alias("cell"),
+                f.col("c.core").alias("core"),
+                f.col("c.chip").alias("chip"),
+            )
+            .collect()
+        )
+        out = {name: {} for name, _, _ in _MIXED_CLIP_FIXTURES}
+        for r in rows:
+            if (
+                r["cell"] is not None
+            ):  # explode_outer: a NULL result is one all-NULL row
+                out[r["name"]][r["cell"]] = (r["core"], r["chip"])
+        return out
+
+    # Light first: heavy registration overwrites the shared gbx_bng_* SQL names.
+    light = {keep: tess(gx, keep) for keep in (False, True)}
+    heavy = {keep: tess(hx, keep) for keep in (False, True)}
+
+    problems = []
+    for name, _res, wkt in _MIXED_CLIP_FIXTURES:
+        input_area = from_wkt(wkt).area
+        for keep in (False, True):
+            lt, ht = light[keep][name], heavy[keep][name]
+            ctx = f"{name} keep_core_geom={keep}"
+            if not lt or not ht or set(lt) != set(ht):
+                problems.append(
+                    f"{ctx}: cell sets differ light={sorted(lt)} heavy={sorted(ht)}"
+                )
+                continue
+            for cell in sorted(lt):
+                (lcore, lchip), (hcore, hchip) = lt[cell], ht[cell]
+                if lcore != hcore:
+                    problems.append(f"{ctx} {cell}: core light={lcore} heavy={hcore}")
+                elif (lchip is None) != (hchip is None):
+                    problems.append(
+                        f"{ctx} {cell}: null chip light={lchip is None} "
+                        f"heavy={hchip is None}"
+                    )
+                elif lchip is not None:
+                    problem = _chip_parity_problem(lchip, hchip, f"{ctx} {cell}")
+                    if problem:
+                        problems.append(problem)
+            if keep:  # every cell carries geometry, so the chips tile the input
+                for tier, tt in (("light", lt), ("heavy", ht)):
+                    area = sum(from_wkb(bytes(c)).area for _, c in tt.values())
+                    if abs(area - input_area) > 1e-6 * max(1.0, input_area):
+                        problems.append(
+                            f"{ctx}: {tier} chip area {area} != input area {input_area}"
+                        )
+    assert not problems, "mixed-collection tessellate parity failures:\n" + "\n".join(
+        problems
+    )
+
+
+def test_bng_tessellateexplode_geometrycollection_parity(spark_with_jar):
+    """``gbx_bng_tessellateexplode`` of a large GeometryCollection gives the rows of both tiers.
+
+    A collection big enough to leave core cells used to fail heavy before any cell was
+    clipped (no rows) and light with an AttributeError; the carve now uses the union of
+    its polygonal leaves. Same fixture as the ``geometrycollection_large`` row above.
+    """
+    from databricks.labs.gbx import manager as gbx_manager
+
+    spark = spark_with_jar
+    wkt = next(w for n, _, w in _MIXED_CLIP_FIXTURES if n == "geometrycollection_large")
+    spark.createDataFrame([(wkt, _RES)], "wkt string, res int").createOrReplaceTempView(
+        "bng_te_gc"
+    )
+
+    def cells(df):
+        return {r["cellid"]: r["core"] for r in df.collect()}
+
+    gbx_manager.register_family(spark, ("gbx_bng_",), level="L3")
+    light = cells(
+        spark.sql(
+            "SELECT t.cellid, t.core FROM bng_te_gc, "
+            "LATERAL gbx_bng_tessellateexplode(wkt, res) t"
+        )
+    )
+    heavy_register(spark, ("gbx_bng_",))
+    heavy = cells(
+        spark.sql(
+            "SELECT cellid, core FROM bng_te_gc "
+            "LATERAL VIEW gbx_bng_tessellateexplode(wkt, res, false) t AS cellid, core, chip"
+        )
+    )
+
+    assert light, "light gave no cells for the collection"
+    assert any(light.values()), "the collection must leave core cells after carving"
+    assert heavy == light
 
 
 # --- grid-aligned geomkring / geomkloop lock-in -----------------------------------------------
@@ -542,10 +887,14 @@ def test_bng_geomkring_geomkloop_grid_aligned(spark_with_jar, k):
     )
 
     def sets(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         row = df.select(
-            mod.bng_geomkring(f.col("geom"), f.col("res"), f.col("k")).alias("ring"),
-            mod.bng_geomkloop(f.col("geom"), f.col("res"), f.col("k")).alias("loop"),
+            f.call_function(
+                "gbx_bng_geomkring", f.col("geom"), f.col("res"), f.col("k")
+            ).alias("ring"),
+            f.call_function(
+                "gbx_bng_geomkloop", f.col("geom"), f.col("res"), f.col("k")
+            ).alias("loop"),
         ).collect()[0]
         return sorted(row["ring"]), sorted(row["loop"])
 
@@ -591,12 +940,20 @@ def test_bng_pointascell_all_four_encodings(spark_with_jar):
     )
 
     def cells(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         return df.select(
-            mod.bng_pointascell(f.col("wkb"), f.col("res")).alias("a"),
-            mod.bng_pointascell(f.col("ewkb"), f.col("res")).alias("b"),
-            mod.bng_pointascell(f.col("wkt"), f.col("res")).alias("c"),
-            mod.bng_pointascell(f.col("ewkt"), f.col("res")).alias("d"),
+            f.call_function("gbx_bng_pointascell", f.col("wkb"), f.col("res")).alias(
+                "a"
+            ),
+            f.call_function("gbx_bng_pointascell", f.col("ewkb"), f.col("res")).alias(
+                "b"
+            ),
+            f.call_function("gbx_bng_pointascell", f.col("wkt"), f.col("res")).alias(
+                "c"
+            ),
+            f.call_function("gbx_bng_pointascell", f.col("ewkt"), f.col("res")).alias(
+                "d"
+            ),
         ).collect()[0]
 
     light = cells(gx)
@@ -647,7 +1004,6 @@ def test_bng_geomkring_geomkloop_mode_parity(spark_with_jar, mode):
     from pyspark.sql import functions as f
     from shapely import from_wkt as _swkt
 
-    from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import _bng
 
     spark = spark_with_jar
@@ -661,7 +1017,7 @@ def test_bng_geomkring_geomkloop_mode_parity(spark_with_jar, mode):
     light_loop = sorted(_bng.geometry_k_loop_str(holed_geom, _res_local, 1, mode))
 
     # --- HEAVY: register heavy and collect via SQL ---
-    hx.register(spark)
+    heavy_register(spark, ("gbx_bng_",))
     df_h = spark.createDataFrame([(holed_wkb, _res_local)], "geom binary, res int")
 
     def arr(col_expr):

@@ -1,0 +1,153 @@
+---
+title: Breaking changes in 0.6.0
+sidebar_label: Breaking
+description: The installs, calls and defaults to update when you move from GeoBrix 0.5.x to 0.6.0, each with what to do.
+---
+
+# Breaking changes in 0.6.0
+
+:::note
+v0.6.0 is under development and not yet released.
+:::
+
+Each entry says what is different in 0.6.0 and what to do. A 0.5.x call that no longer exists raises an error with a `Fix:` that gives the new form. The [migration guide](../../migration-0-6.mdx) maps each old install line, import and call to its new one.
+
+## Install {#install}
+
+### The env wheel replaces the light extras {#light-extras}
+
+- **Install the [env wheel](./new.mdx#env-wheels) for the runtime, with no light extra.** The 0.5.x extras `light_env5`, `light_env6`, `light_dbr17`, `light_dbr18`, `light_dbr19` and their `_all` forms fail at resolution. The error names the wheel to install.
+- **To migrate,** replace `"geobrix[light_env6,<extras>] @ …/geobrix-<version>-py3-none-any.whl"` with `"geobrix[<extras>] @ …/geobrix-<version>+env6-py3-none-any.whl"`.
+  - Use `+env5` where you used `light_env5`, `light_dbr17` or `light_dbr18`.
+  - An `_all` form becomes `[stac,vizx]`, plus `[zarr]` on env6.
+- **`[models]`, `[photogrammetry]`, `[overture]` and `[earthdata]` are not extras.** Install their packages as a separate step after the env wheel. See [Installation](../../installation.mdx#env-wheel).
+
+### GPU installs use the env6 wheel {#gpu-install}
+
+- **The GPU extras `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all` name the env6 wheel.** The UDF workers of the Serverless GPU runtime run environment 6, even under an environment 5 driver.
+- **To migrate,** select environment 6 and install the env6 wheel for a notebook that runs UDFs, such as GeoSAM. Then install the GPU packages as a separate step:
+  - Photogrammetry: `pycolmap-cuda12==4.2.1`.
+  - Models (GeoSAM): `torch==2.9.0`, `torchvision==0.24.0`, `segment-geospatial` and `opencv-python-headless==4.11.0.86`.
+- **A driver-only GPU step,** such as dense MVS with `pycolmap-cuda12`, can stay on the env5 wheel. See [GeoSAM](../../models/geosam.mdx).
+
+### The init-script install is removed {#init-script}
+
+- **GeoBrix 0.6.0 has no GDAL init script and no GDAL bundle.** The JVM level takes GDAL, PROJ and GEOS from the env wheel.
+- **To migrate,** remove the init script and the GDAL bundle from the cluster. Then install the env wheel and the JAR as cluster libraries on a dedicated cluster.
+  - Stage the JAR with [`gbx.stage_jar`](./new.mdx#stage-jar). The release page no longer carries it.
+  - A 0.6.0 wheel beside the init script's system GDAL puts two GDAL stacks in one cluster.
+- See [Cluster libraries](../../installation.mdx#env-wheel-and-jar) and [Which functions run where](./changes.mdx#jar-levels).
+
+### GeoBrix does not install PySpark {#pyspark}
+
+- **Databricks provides PySpark.** For a local Spark session, install `pyspark>=4.0.0` beside GeoBrix. See [Installation](../../installation.mdx).
+
+## Python API and registration {#python-api}
+
+### `pyrx`, `pygx` and `pyvx` are internal {#old-modules}
+
+- **The Python API is [`rasterx`, `gridx.<grid>`, `vectorx` and `pmtiles`](./new.mdx#one-python-api).** The `pyrx`, `pygx` and `pyvx` packages export nothing.
+- **To migrate,** change the import path. Each function keeps its name: `pyrx.functions.rst_width` is `rasterx.functions.rst_width`.
+  - Python-only helpers moved to `rasterx.helpers`, `gridx.helpers` and `vectorx.helpers`.
+  - `gridx.h3.functions.h3_geomkring` and `h3_geomkloop` replace `geomkring` and `geomkloop`.
+  - An old import path raises an error that gives the new path.
+- See [Entry points](../../migration-0-6.mdx#entry-points).
+
+### One registrar: `gbx.register(spark)` {#one-registrar}
+
+- **The per-package `register()` functions are removed.** That covers `rasterx`, `gridx.<grid>`, `vectorx`, `pyrx`, `pygx`, `pyvx`, `databricks.labs.gbx.ds.register` and `vectorx.jts.legacy`. Each raises an `AttributeError` that gives the fix.
+- **Importing `databricks.labs.gbx.ds` no longer registers the readers.**
+- **To migrate,** call `from databricks.labs import gbx`, then `gbx.register(spark)`. It registers every function and every `*_gbx` data source. See [One registrar](./new.mdx#one-registrar).
+
+### Scala registers no SQL {#scala-registration}
+
+- **The `register` function of every Scala package is removed.** Register once from Python or SQL with `gbx.register(spark)`, then call the SQL names from Scala.
+- **Scala keeps the per-name wrappers only for the functions whose JVM form stays.** [Which functions run where](./changes.mdx#jar-levels) lists them.
+- **For every other function, call `call_function("gbx_<name>", ...)` or `expr(...)`.** The JAR holds no JVM class for a function that runs at the Python level. Scala code that names such a class does not compile.
+- See [Scala](../../migration-0-6.mdx#scala) and [SQL from a JVM job](../../installation.mdx#jvm-sql).
+
+## Readers and writers {#readers-writers}
+
+### The Scala readers and writers are retired {#readers-retired}
+
+- **The JAR registers no data source.** A read with a retired format name gives "data source not found".
+- **To migrate,** use the `*_gbx` reader after `gbx.register(spark)`:
+
+| Retired format | Use |
+|---|---|
+| `gdal`, `gtiff_gdal`, `netcdf_gdal` | `raster_gbx`, `gtiff_gbx`, `netcdf_gbx` |
+| `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr` | `vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `gpkg_gbx`, `file_gdb_gbx` |
+| `netcdf_ogr` | `netcdf_gbx` with `mode="vector"` |
+| `geojsonl_ogr` (write), `pmtiles` (write) | `geojsonl_gbx`, `pmtiles_gbx` |
+
+- **Write rasters with `raster_gbx`, `gtiff_gbx` or `cog_gbx`.** A write with the `gdal` or `gtiff_gdal` format fails with a `Fix:`. See [Raster Writer](../../writers/raster.mdx).
+- **A Python data source cannot be queried by path in SQL.** Create a view instead: `CREATE VIEW v USING raster_gbx OPTIONS (path '...')`.
+
+### `gbx_file_write` defaults to `file_mode="fuse"` {#file-write}
+
+- **`gbx_file_write` and `open_for_write` write a plain Delta table by default.** That table reads on every compute. The 0.5.x default, `"auto"`, wrote a FILE column wherever the runtime had one.
+- **To keep FILE columns,** pass `file_mode="auto"`, `"external"` or `"managed"`. Passing `filespace=` with no `file_mode` still asks for FILE MANAGED.
+
+## Function calls {#function-calls}
+
+### Renamed and reordered arguments {#signature-changes}
+
+These changes affect callers that pass keywords or named arguments, or the changed positions.
+
+- **`rst_mapalgebra`: `json_spec` is now `expression`,** in GDAL's `muparser` grammar. NumPy spellings raise. Write a condition as `A > 0 ? A : 0`.
+- **`rst_color_relief(tile, color_table)`** takes the color table's text, not a file path. To use a file, read its text first.
+- **`rst_transformcrs`: `crs` is now `target_crs`.** `rst_align_to` takes `(tile, reference_tile)`.
+- **`rst_land_cover(tile, method, n_clusters, smooth)`** replaces the keyword-only form. `classes` is gone.
+- **`rst_bng_rasterize_agg` takes twelve required arguments:** `cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad`. Its optional `out_crs` must be NULL, because BNG output is always EPSG:27700.
+- **`rst_custom_rasterize_agg(cellid, value, grid, ...)`** replaces `(cellid, grid, value, ...)`.
+- **`custom_pointascell` takes `point`, and `custom_distance` takes `cellid1` and `cellid2`.**
+- **`h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)`** names its SRID argument `srid`.
+- **`pmtiles_agg(bytes, z, x, y, metadata_json=None)`** replaces `bytes_col`.
+- **`rst_tilexyz` reads `rescale` as `'auto'`, `'none'` or the text `'min,max'`.** A tuple is refused.
+- **`rst_derivedband` and `rst_derivedband_agg` take the pixel function as a Python string only** in Python. SQL is unchanged.
+- **`rst_fillnodata` takes whole numbers for `max_search_dist` and `smoothing_iter`.**
+- **The `rst_fromfile` Python default is a virtual tile.** Pass `materialize=True` for a materialized tile.
+- **String arguments are literals.** These names read a string as its value, not as a column name: `format`, `resampling`, `rescale`, `compression`, `overview_resampling`, `color_table`, `crs`, `metadata_json`, `new_format`, `operation`, `python_func`, `func_name`, `subset_name`, `new_type`, `method`, `driver`, `coverage`, `assignment`, `layer_name`, `attr_field`, `statistic`, `mode`, `algorithm`, `command`, `expression`, `formula_name`, `level`, `op`, `unit`, `dist_units`, `target_values`, `clip_crs`, `source_crs` and `target_crs`.
+  - Also every `out_crs` except that of `h3_cell_bbox`, the BNG `resolution`, and the TIN `split_point_finder` and `grid_origin`.
+  - A column can no longer supply those arguments row by row.
+
+### Generators and aggregates change shape {#shape-changes}
+
+- **Generators are DataFrame calls in Python.** `rst_retile`, `rst_polygonize`, `rst_xyzpyramid`, `rst_maketiles`, the tessellation, TIN and explode functions take the DataFrame and return it joined with the new rows.
+  - Example: `rasterx.functions.rst_retile(df, "tile", 512, 512)`.
+  - The retile rows carry the tile's fields as columns. To pass one to a tile function, rebuild it with `F.struct("cellid", "raster", "path", "path_mode", "window", "clip_polygon", "clip_crs", "crs", "metadata").alias("tile")`.
+- **In SQL, call a generator with `FROM t, LATERAL f(...)`.** This works on every compute. The `rst_*_rastertogrid*` reducers return rows, not an `ARRAY`.
+- **Aggregates return `BINARY` GeoTIFF bytes on every compute.** This covers `rst_merge_agg`, `rst_combineavg_agg`, `rst_frombands_agg`, `rst_rasterize_agg` and the cell rasterize aggregates. Wrap the result with `rst_fromcontent(col, "GTiff")` for a tile.
+- **The four cell-fill aggregates return the `BINARY` payload.**
+- **`gbx_rst_summary` returns GDAL's own JSON.** A query that reads its keys must change:
+  - `bands[].min` and `bands[].max` are now `bands[].minimum` and `bands[].maximum`.
+  - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
+
+### BNG tessellation drops the core geometry by default {#bng-tessellate-default}
+
+- **`bng_tessellate` and `bng_tessellateexplode` default `keep_core_geom` to false in every API.** A core cell's `chip` is NULL unless you ask for it. Border cells always carry their geometry.
+- **To keep the 0.5.x wrapper result,** pass `keep_core_geom` as true.
+- **JVM-level `bng_tessellateexplode` returns `cellid`, `core` and `chip`**, as the Python level does. A query that names the whole output with one alias needs one name per column.
+
+## Results {#results}
+
+These changes alter results without a change to the call. Read each before you upgrade. [Changes](./changes.mdx) lists the rest.
+
+- **`rst_clip` fills with NoData outside the cutline,** not valid zeros. See [NoData, alpha and mask bands](./changes.mdx#nodata-alpha-mask).
+- **TIN `snap_tolerance` and `merge_tolerance` can change the triangles,** because points now snap to break lines before triangulating. See [TIN functions](./changes.mdx#tin).
+- **Centroid tessellation tiles are cropped to their cell.** Code that stacks tiles as same-shape arrays must change. See [Raster tessellation](./changes.mdx#tessellation-parity).
+- **British National Grid transforms use OSTN15,** and move by up to about 5 m. See [PROJ data and OSTN15](./changes.mdx#proj-data).
+
+## Examples {#examples}
+
+### Wireless Coverage Lakeflow: drop `wc_lidar_pts` once {#wireless-coverage-upgrade}
+
+- **`wc_lidar_pts` is now a streaming table.** It reads only the `.laz` tiles that reached the `laz_inventory` stream since the last update.
+- **To upgrade a deployment,** run `DROP MATERIALIZED VIEW <catalog>.<schema>.wc_lidar_pts` once, then run the pipeline. Without it, the first update fails with `CANNOT_CHANGE_DATASET_TYPE`, and a full refresh does not fix it.
+- **After changing `full_aoi`, `tile_m` or `srid`,** run the pipeline with `--full-refresh wc_lidar_pts`. See [Wireless Coverage](../../notebooks/wireless-coverage.mdx).
+
+### Genie Map: the AI Assistant calls a Unity Catalog model service {#genie-map-model}
+
+- **The model is now `system.ai.gpt-5-2`.** The serving endpoint `databricks-gpt-5-2` is refused with `PERMISSION_DENIED`.
+- **To migrate,** set `DATABRICKS_LLM_MODEL` in `app.yaml` and the bundle variable `llm_model`, to the same value. They replace `DATABRICKS_SERVING_ENDPOINT_NAME` and `serving_endpoint_name`.
+- **The app's resource grants `EXECUTE` on the model service,** in place of `CAN_QUERY` on a serving endpoint. See [Genie Map](../../examples/genie-map.mdx).

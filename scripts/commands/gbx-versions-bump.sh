@@ -153,11 +153,8 @@ show_separator
 
 echo -e "${CYAN}4. Diagram version pills (generators + committed SVG)${NC}"
 PILL_FILES=(
-    "resources/images/generators/rasterx-function-categories.py"
     "resources/images/generators/rasterx-tile-structure.py"
     "resources/images/generators/vapor-eyes-lakeflow-functions.py"
-    "resources/images/diagrams/rasterx/rasterx-function-categories.svg"
-    "resources/images/diagrams/rasterx/rasterx-function-categories_landscape.svg"
     "resources/images/diagrams/rasterx/rasterx-tile-structure.svg"
     "resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-functions.svg"
 )
@@ -178,7 +175,7 @@ RESID=$(git grep -nE "(^|[^0-9.])${O_ESC}([^0-9]|$)" -- . \
     ':!:docs/package.json' \
     ':!:**/package-lock.json' ':!:**/pnpm-lock.yaml' \
     ':!:docs/build*/**' ':!:.superpowers/**' \
-    ':!:docs/docs/release-notes.mdx' \
+    ':!:docs/docs/release-notes.mdx' ':!:docs/docs/release-notes/**' ':!:docs/docs/release-notes-0-5-and-earlier.mdx' \
     ':!:resources/images/generators/*' ':!:resources/images/diagrams/**' 2>/dev/null \
     | grep -vE "geobrix-${O_ESC}-(py3-none-any\.whl|jar-with-dependencies\.jar)" \
     | grep -vE "Current version \*\*${O_ESC}\*\*")
@@ -195,9 +192,9 @@ echo -e "${CYAN}Verify (after applying):${NC}"
 echo -e "  1. ${YELLOW}pom.xml${NC}, ${YELLOW}__init__.py${NC}, ${YELLOW}docs/package.json${NC} all read ${GREEN}${NEW_VER}${NC}."
 echo -e "  2. ${YELLOW}git grep -n \"${OLD_VER}-py3-none-any.whl\\|${OLD_VER}-jar-with-dependencies\"${NC} returns nothing."
 echo -e "  3. ${YELLOW}git grep -n \"Current version: ${OLD_VER}\"${NC} returns nothing."
-echo -e "  4. Build sanity: wheel builds as ${GREEN}dblabs_geobrix-${NEW_VER}-*.whl${NC}, JAR as ${GREEN}geobrix-${NEW_VER}-jar-with-dependencies.jar${NC}"
+echo -e "  4. Build sanity: wheel builds as ${GREEN}geobrix-${NEW_VER}-py3-none-any.whl${NC}, JAR as ${GREEN}geobrix-${NEW_VER}-jar-with-dependencies.jar${NC}"
 echo -e "     (the release workflow parses VERSION from the JAR name)."
-echo -e "  5. Run affected tests: function-info, bindings/parity, and any JAR-path-pinned conftest/parity test."
+echo -e "  5. Run affected tests: the manifest gate (gbx:manifest:gen --check), parity, and any JAR-path-pinned conftest/parity test."
 show_separator
 
 echo -e "${CYAN}Manual step — diagram PNGs (NOT done by this command):${NC}"
@@ -210,7 +207,8 @@ echo -e "${CYAN}Release flow (after this PR merges to main):${NC}"
 echo -e "  git tag -a v${NEW_VER} <merge-sha> && git push origin v${NEW_VER}"
 echo -e "  gh release create v${NEW_VER} --latest --title \"GeoBrix v${NEW_VER} (Beta)\" --notes \"...\""
 echo -e "  gh workflow run \"package geobrix artifacts\" -f ref=v${NEW_VER} -f attach_to_tag=v${NEW_VER}"
-echo -e "  (6 assets; docs deploy auto-triggers on the docs-touching merge to main)."
+echo -e "  (attaches the JAR, docs zip and DCS Dockerfile; docs deploy auto-triggers on the docs-touching merge to main)."
+echo -e "  Then build and attach the env wheels (+env5, +env6): see 'Release' in scripts/commands/gbx-build-wheel.md."
 show_separator
 
 if [ "$DRY_RUN" -eq 0 ] && [ ${#CHANGED_FILES[@]} -gt 0 ]; then

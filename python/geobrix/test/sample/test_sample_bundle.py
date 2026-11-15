@@ -4,12 +4,16 @@ Tests for databricks.labs.gbx.sample (sample-data bundle helpers).
 Covers get_volumes_path, get_temp_dir, _ensure_dir, _is_volume_path,
 _path_exists_for_skip, _copy_final_to_volumes, _bundle_debug, download_to_path
 (skip_if_exists), and run_essential_bundle / run_complete_bundle (with mocked
-requests where needed) to raise coverage without requiring network or UC.
+requests where needed) to raise coverage without requiring network or UC. The
+NYC FileGDB step (nyc/filegdb/NYC_Sample.gdb.zip) is tested offline against tiny
+layers through geopandas and pyogrio only, so it runs in the light CI env too.
 """
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
+from test._volume_safe import written_locally
 from unittest.mock import patch
 
 import pytest
@@ -280,3 +284,355 @@ def test_run_complete_bundle_returns_dict_shape():
     assert isinstance(result["errors"], list)
     assert isinstance(result["file_count"], int)
     assert isinstance(result["total_size_mb"], (int, float))
+
+
+# ========== NYC FileGDB step (nyc/filegdb/NYC_Sample.gdb.zip) ==========
+
+FILEGDB_REL = Path("nyc") / "filegdb" / "NYC_Sample.gdb.zip"
+FILEGDB_LAYERS = {"NYC_Boroughs", "NYC_TaxiZones", "NYC_Parks", "NYC_SubwayStations"}
+
+
+def _gdb_uri(zip_path: Path) -> str:
+    return f"/vsizip/{zip_path.as_posix()}/NYC_Sample.gdb"
+
+
+def _zip_layers(zip_path: Path) -> set:
+    pyogrio = pytest.importorskip("pyogrio")
+    return {str(row[0]) for row in pyogrio.list_layers(_gdb_uri(zip_path))}
+
+
+@pytest.fixture
+def local_work():
+    """The staging step's work folder on local disk, as a caller gives it: the step builds its FileGDB there, which a
+    Volume (``tmp_path`` under the Serverless runner) cannot hold while it is written.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="gbx-bundle-work-") as d:
+        yield Path(d)
+
+
+def _write_tiny_nyc_layers(base: Path) -> None:
+    """Write the four NYC layers the FileGDB step reads, in the bundle's own layout and columns."""
+    gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
+    import zipfile
+
+    from shapely.geometry import MultiPolygon, Point, Polygon
+
+    def square(x, y):
+        return Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)])
+
+    def put(rel, gdf, driver):
+        out = base / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with written_locally(str(out)) as _local:
+            gdf.to_file(_local, driver=driver)
+
+    put(
+        "nyc/boroughs/nyc_boroughs.geojson",
+        gpd.GeoDataFrame(
+            {"boroname": ["Bronx", "Queens"], "borocode": ["2", "4"]},
+            geometry=[square(0, 0), square(2, 0)],
+            crs="EPSG:4326",
+        ),
+        "GeoJSON",
+    )
+    put(
+        "nyc/taxi-zones/nyc_taxi_zones.geojson",
+        gpd.GeoDataFrame(
+            {"zone": ["A", "B", "C"], "locationid": ["1", "2", "3"]},
+            geometry=[square(0, 0), square(1, 0), square(2, 0)],
+            crs="EPSG:4326",
+        ),
+        "GeoJSON",
+    )
+    shapefiles = {
+        # one Polygon and one MultiPolygon: like the real parks layer, only a multi-type layer holds both
+        "nyc/parks/nyc_parks.shp.zip": gpd.GeoDataFrame(
+            {
+                "name311": ["Park One", "Park Two"],
+                "acres": [3.5, 1.25],
+                "borough": ["Q", "M"],
+            },
+            geometry=[square(0, 0), MultiPolygon([square(5, 5), square(7, 7)])],
+            crs="EPSG:4326",
+        ),
+        "nyc/subway/nyc_subway.shp.zip": gpd.GeoDataFrame(
+            {"stop_name": ["Main St", "Elm St"], "line": ["Flushing", "Broadway"]},
+            geometry=[Point(0.5, 0.5), Point(2.5, 0.5)],
+            crs="EPSG:4326",
+        ),
+    }
+    for rel, gdf in shapefiles.items():
+        zpath = base / rel
+        zpath.parent.mkdir(parents=True, exist_ok=True)
+        shp_dir = zpath.parent / "_shp"
+        shp_dir.mkdir()
+        with written_locally(str(shp_dir / "layer.shp")) as _local:
+            gdf.to_file(_local, driver="ESRI Shapefile")
+        with zipfile.ZipFile(zpath, "w") as z:
+            for f in shp_dir.iterdir():
+                z.write(f, f.name)
+        shutil.rmtree(shp_dir)
+
+
+def test_run_complete_bundle_stages_nyc_filegdb_zip(tmp_path, monkeypatch):
+    """The Complete bundle writes nyc/filegdb/NYC_Sample.gdb.zip next to its other NYC layers."""
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+
+    def offline(*args, **kwargs):
+        raise RuntimeError("offline")
+
+    # Every download step fails and is recorded in errors; the FileGDB is built from local layers.
+    monkeypatch.setattr(_bundle_mod, "download_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "download_srtm_to_path", offline)
+    result = run_complete_bundle(str(base), temp_dir=str(tmp_path / "tmp"))
+
+    assert (base / FILEGDB_REL).is_file()
+    assert "FileGDB" not in [name for name, _ in result["errors"]]
+
+
+def test_nyc_filegdb_zip_holds_the_four_feature_classes(tmp_path, local_work):
+    """The zip opens as a File Geodatabase with the four feature classes, real attributes and multi geometries."""
+    pyogrio = pytest.importorskip("pyogrio")
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+
+    dest = _bundle_mod._stage_nyc_filegdb(base, local_work)
+
+    assert dest == base / FILEGDB_REL
+    assert _zip_layers(dest) == FILEGDB_LAYERS
+
+    def read(layer):
+        return pyogrio.read_dataframe(_gdb_uri(dest), layer=layer)
+
+    boroughs = read("NYC_Boroughs")
+    assert sorted(boroughs["BORO_NAME"]) == ["Bronx", "Queens"]
+    assert sorted(boroughs["BORO_CODE"]) == ["2", "4"]
+    assert sorted(read("NYC_TaxiZones")["LOCATION_ID"]) == [1, 2, 3]
+    parks = read("NYC_Parks")
+    assert sorted(parks["PARK_NAME"]) == ["Park One", "Park Two"]
+    assert set(parks.geom_type) == {"MultiPolygon"}  # the Polygon park was promoted
+    subway = read("NYC_SubwayStations")
+    assert sorted(subway["STATION_NAME"]) == ["Elm St", "Main St"]
+    assert sorted(subway["LINE"]) == ["Broadway", "Flushing"]
+
+
+def test_nyc_filegdb_step_writes_no_zip_when_a_source_layer_is_missing(
+    tmp_path, local_work
+):
+    """No partial geodatabase is frozen: a missing source layer raises and leaves no zip."""
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    (base / "nyc" / "subway" / "nyc_subway.shp.zip").unlink()
+
+    with pytest.raises(RuntimeError, match="missing: nyc/subway/nyc_subway.shp.zip"):
+        _bundle_mod._stage_nyc_filegdb(base, local_work)
+
+    assert not (base / FILEGDB_REL).exists()
+
+
+def test_nyc_filegdb_step_writes_no_zip_when_a_source_column_is_missing(
+    tmp_path, local_work
+):
+    """A source layer without a mapped column fails loudly instead of writing an empty field."""
+    gpd = pytest.importorskip("geopandas")
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    boroughs = base / "nyc" / "boroughs" / "nyc_boroughs.geojson"
+    with written_locally(str(boroughs)) as _local:
+        gpd.read_file(boroughs).rename(columns={"boroname": "name"}).to_file(
+            _local, driver="GeoJSON"
+        )
+
+    with pytest.raises(RuntimeError, match="has no column boroname"):
+        _bundle_mod._stage_nyc_filegdb(base, local_work)
+
+    assert not (base / FILEGDB_REL).exists()
+
+
+def test_nyc_filegdb_step_skips_a_complete_zip_and_replaces_an_incomplete_one(
+    tmp_path, local_work
+):
+    gpd = pytest.importorskip("geopandas")
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    dest = _bundle_mod._stage_nyc_filegdb(base, local_work)
+    before = dest.stat().st_mtime_ns
+
+    # a complete zip is left alone
+    assert _bundle_mod._stage_nyc_filegdb(base, local_work) == dest
+    assert dest.stat().st_mtime_ns == before
+
+    # a zip with only some of the feature classes is rebuilt
+    gdb = tmp_path / "partial" / "NYC_Sample.gdb"
+    gdb.parent.mkdir()
+    with written_locally(str(gdb)) as _local:
+        gpd.read_file(base / "nyc" / "boroughs" / "nyc_boroughs.geojson").to_file(
+            _local, layer="NYC_Boroughs", driver="OpenFileGDB"
+        )
+    dest.unlink()
+    shutil.make_archive(str(dest.with_suffix("")), "zip", gdb.parent, "NYC_Sample.gdb")
+    assert _zip_layers(dest) == {"NYC_Boroughs"}
+    assert _bundle_mod._stage_nyc_filegdb(base, local_work) == dest
+    assert _zip_layers(dest) == FILEGDB_LAYERS
+
+
+@pytest.mark.parametrize(
+    "kind,values,dtype,expected",
+    [
+        ("str", ["a", None, float("nan"), 3], "object", ["a", None, None, "3"]),
+        (
+            "str",
+            ["a", "pd.NA"],
+            "object",
+            ["a", None],
+        ),  # a nullable-dtype missing value
+        ("int", ["1", "2"], "int32", [1, 2]),
+        ("int", ["1", None, "3"], "float64", [1.0, None, 3.0]),  # int cannot hold null
+        ("float", ["1.5", "x"], "float64", [1.5, None]),
+    ],
+)
+def test_fgdb_column_converts_to_the_field_dtype_and_keeps_missing_values_null(
+    kind, values, dtype, expected
+):
+    pd = pytest.importorskip("pandas")
+    values = [pd.NA if v == "pd.NA" else v for v in values]
+
+    out = _bundle_mod._fgdb_column(pd.Series(values, dtype=object), kind)
+
+    assert str(out.dtype) == dtype
+    assert [None if pd.isna(v) else v for v in out] == expected
+
+
+def test_nyc_filegdb_step_keeps_a_zip_whose_size_cannot_be_read(
+    tmp_path, local_work, monkeypatch
+):
+    """A FUSE mount can report a file present but not its size; that zip is not rebuilt each run."""
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    dest = _bundle_mod._stage_nyc_filegdb(base, local_work)
+    before = dest.stat().st_mtime_ns
+    exists = _bundle_mod._path_exists_for_skip
+    monkeypatch.setattr(
+        _bundle_mod,
+        "_path_exists_for_skip",
+        lambda p: (exists(p)[0], None) if Path(p) == dest else exists(p),
+    )
+
+    assert _bundle_mod._stage_nyc_filegdb(base, local_work) == dest
+
+    assert dest.stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize("bundle", ["essential", "complete"])
+def test_a_present_file_whose_size_cannot_be_read_is_never_downloaded_again(
+    tmp_path, monkeypatch, bundle
+):
+    """A FUSE mount can report a file present but not its size: every step of the bundles skips what
+    is present, whatever it can say of its size."""
+
+    def offline(*args, **kwargs):
+        raise AssertionError("a present file was downloaded again")
+
+    monkeypatch.setattr(_bundle_mod, "_path_exists_for_skip", lambda p: (True, None))
+    monkeypatch.setattr(_bundle_mod, "download_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "download_srtm_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "_stage_nyc_filegdb", lambda *a, **k: None)
+    run = run_essential_bundle if bundle == "essential" else run_complete_bundle
+    base = tmp_path / "geobrix-examples"
+    (base / "nyc" / "hrrr-weather").mkdir(
+        parents=True
+    )  # the one step that lists a folder
+    (base / "nyc" / "hrrr-weather" / "hrrr_nyc_20260101_12z.grib2").write_bytes(b"x")
+
+    result = run(str(base), temp_dir=str(tmp_path / "tmp"))
+
+    assert result["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "error,reported",
+    [
+        (
+            ImportError("No module named 'pyogrio'"),
+            "geopandas and pyogrio required: No module named 'pyogrio'",
+        ),
+        (RuntimeError("source layer missing"), "source layer missing"),
+    ],
+)
+def test_run_complete_bundle_records_a_failed_filegdb_step(
+    tmp_path, monkeypatch, error, reported
+):
+    """A FileGDB step that fails is recorded in errors with its cause, and the bundle carries on."""
+
+    def offline(*args, **kwargs):
+        raise RuntimeError("offline")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(_bundle_mod, "download_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "download_srtm_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "_stage_nyc_filegdb", fail)
+
+    result = run_complete_bundle(
+        str(tmp_path / "geobrix-examples"), temp_dir=str(tmp_path / "tmp")
+    )
+
+    assert ("FileGDB", reported) in result["errors"]
+
+
+def test_the_bundle_gdal_steps_raise_the_missing_osgeo_error(tmp_path, monkeypatch):
+    """Without GDAL's Python bindings the SRTM conversion and the viewable Byte copy raise the
+    helper's error, its Fix: included (the bundles record it under the dataset), instead of a
+    silent False / None."""
+    import sys
+
+    from databricks.labs.gbx import _osgeo
+
+    for name in [n for n in sys.modules if n.split(".")[0] in ("osgeo", "osgeo_utils")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "osgeo", None)
+    tif = tmp_path / "red.tif"
+    tif.write_bytes(b"II*\x00")
+    for call in (
+        lambda: _bundle_mod.srtm_hgt_to_geotiff(
+            tmp_path / "N40W074.hgt",
+            tmp_path / "srtm.tif",
+            (0, 0, 1, 1),
+            "SRTM",
+            quiet=True,
+        ),
+        lambda: _bundle_mod._scale_raster_to_viewable_byte(tif),
+    ):
+        with pytest.raises(
+            _osgeo.OsgeoUnavailable, match=r"Fix: install the env wheel"
+        ):
+            call()
+
+
+# ========== Socrata row cap (no network) ==========
+
+
+def test_socrata_url_asks_for_every_row():
+    """NYC Neighborhoods (9nt8-h7nd) holds 262 rows; a `$limit=250` dropped 12 of them.
+
+    Socrata returns exactly `$limit` rows with no continuation marker, so the cap
+    must sit far above any dataset in the bundle.
+    """
+    url = _bundle_mod._socrata_geojson_url("9nt8-h7nd")
+    assert (
+        url == "https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=50000"
+    )
+    assert _bundle_mod._SOCRATA_MAX_ROWS >= 263  # largest bundle dataset (taxi zones)
+
+
+def test_bundle_has_no_hand_tuned_socrata_limit():
+    """Every NYC Open Data URL in the bundle goes through the helper."""
+    import re
+
+    src = Path(_bundle_mod.__file__).read_text()
+    assert not re.search(r"geojson\?\$limit=\d", src)

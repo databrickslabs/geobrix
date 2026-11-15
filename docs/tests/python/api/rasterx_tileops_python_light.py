@@ -21,11 +21,6 @@ CONSTRUCTORS (produce a tile from bytes/path, not from an existing tile):
     rst_fromcontent, rst_frombands, rst_fromfile
 """
 
-try:
-    from databricks.labs.gbx.pyrx import functions as rx
-except ImportError:
-    rx = None
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers — imported from _fixtures.py
@@ -51,9 +46,9 @@ def _get_multiband_df(spark):
 # ---------------------------------------------------------------------------
 
 
-def rst_asformat_python_light_example(spark):
+def rst_asformat_python_example(spark):
     """Convert a raster tile to another GDAL format using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -61,7 +56,7 @@ def rst_asformat_python_light_example(spark):
     return result["tile"]
 
 
-rst_asformat_python_light_example_output = """
+rst_asformat_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -78,13 +73,13 @@ rst_asformat_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_band_python_light_example(spark):
+def rst_band_python_example(spark):
     """Extract band 1 from a multi-band raster tile using the light pyrx tier.
 
     Uses the multiband fixture (rgb_nir_small.tif, 3 bands) to demonstrate
     band extraction. The result is a new single-band tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("multiband_rasters")
@@ -92,7 +87,7 @@ def rst_band_python_light_example(spark):
     return result["tile"]
 
 
-rst_band_python_light_example_output = """
+rst_band_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -109,19 +104,19 @@ rst_band_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_buildoverviews_python_light_example(spark):
+def rst_buildoverviews_python_example(spark):
     """Add internal overview levels to a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
     result = df.select(
-        rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
+        rx_api.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
     ).first()
     return result["tile"]
 
 
-rst_buildoverviews_python_light_example_output = """
+rst_buildoverviews_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -139,7 +134,7 @@ rst_buildoverviews_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_clip_python_light_example(spark):
+def rst_clip_python_example(spark):
     """Clip a raster tile to a geometry cutline using the light pyrx tier.
 
     Uses a plain WKT polygon in the raster's native CRS (EPSG:32618), covering
@@ -147,7 +142,7 @@ def rst_clip_python_light_example(spark):
     Omitting an SRID means the geometry is assumed to be in the raster's CRS.
     To clip with a WGS84 geometry, embed the SRID as EWKT: 'SRID=4326;POLYGON(...)'.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -159,7 +154,7 @@ def rst_clip_python_light_example(spark):
     return result["tile"]
 
 
-rst_clip_python_light_example_output = """
+rst_clip_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -176,16 +171,16 @@ rst_clip_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_cog_convert_python_light_example(spark):
+def rst_cog_convert_python_example(spark):
     """Re-layout a raster tile as a Cloud Optimized GeoTIFF using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     df = spark.table("rasters")
-    result = df.select(rx.rst_cog_convert("tile").alias("tile")).first()
+    result = df.select(rx_api.rst_cog_convert("tile").alias("tile")).first()
     return result["tile"]
 
 
-rst_cog_convert_python_light_example_output = """
+rst_cog_convert_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -203,9 +198,9 @@ rst_cog_convert_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_convolve_python_light_example(spark):
+def rst_convolve_python_example(spark):
     """Apply a 3x3 identity convolution kernel to a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -218,7 +213,7 @@ def rst_convolve_python_light_example(spark):
     return result["tile"]
 
 
-rst_convolve_python_light_example_output = """
+rst_convolve_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -235,9 +230,9 @@ rst_convolve_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_fillnodata_python_light_example(spark):
+def rst_fillnodata_python_example(spark):
     """Fill NoData pixels in a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -247,7 +242,7 @@ def rst_fillnodata_python_light_example(spark):
     return result["tile"]
 
 
-rst_fillnodata_python_light_example_output = """
+rst_fillnodata_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -264,9 +259,9 @@ rst_fillnodata_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_filter_python_light_example(spark):
+def rst_filter_python_example(spark):
     """Apply a 3x3 median spatial filter to a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -276,7 +271,7 @@ def rst_filter_python_light_example(spark):
     return result["tile"]
 
 
-rst_filter_python_light_example_output = """
+rst_filter_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -287,13 +282,39 @@ rst_filter_python_light_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# rst_percentile_stretch — per-band percentile contrast stretch to 8 bits
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
+# Output: tile struct (returns the stretched UInt8 raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_percentile_stretch_python_example(spark):
+    """Stretch the contrast of a raster tile between its 2nd and 98th percentiles."""
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    df = spark.table("rasters")
+    result = df.select(rx.rst_percentile_stretch("tile", 2.0, 98.0).alias("tile")).first()
+    return result["tile"]
+
+
+rst_percentile_stretch_python_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(stretched tile; UInt8 values 0-255, 0 is NoData; light tier returns a materialized v2 Tile)
+"""
+
+
+# ---------------------------------------------------------------------------
 # rst_fromcontent — create a tile from binary content (constructor)
 # Fuller example: read bytes via binaryFile reader, construct tile, verify format.
 # Note: constructor — no pre-existing tile; example shows the canonical build pattern.
 # ---------------------------------------------------------------------------
 
 
-def rst_fromcontent_python_light_example(spark):
+def rst_fromcontent_python_example(spark):
     """Build a tile from binary raster bytes using the light pyrx tier.
 
     Constructor: reads bytes via Spark's binaryFile reader and constructs a tile
@@ -302,10 +323,9 @@ def rst_fromcontent_python_light_example(spark):
     compute — both lightweight and heavyweight tiers.
     """
     from ._fixtures import single_band_path  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
     path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     tile_df = binary_df.select(
@@ -315,7 +335,7 @@ def rst_fromcontent_python_light_example(spark):
     return result["format"]
 
 
-rst_fromcontent_python_light_example_output = """
+rst_fromcontent_python_example_output = """
 +------+
 |format|
 +------+
@@ -333,30 +353,30 @@ rst_fromcontent_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_frombands_python_light_example(spark):
+def rst_frombands_python_example(spark):
     """Stack an array of single-band tiles into a multi-band tile using the light pyrx tier.
 
     Constructor: takes an ARRAY<tile> of single-band tiles and stacks them in
     array order (element 0 → band 1). Example splits the multiband fixture into
     per-band tiles via rst_band, then re-stacks them into a 3-band tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("multiband_rasters")
     # Build an array of per-band tiles (band 1, band 2, band 3) then stack
     with_bands = df.select(
         f.array(
-            rx.rst_band("tile", f.lit(1)),
-            rx.rst_band("tile", f.lit(2)),
-            rx.rst_band("tile", f.lit(3)),
+            rx_api.rst_band("tile", f.lit(1)),
+            rx_api.rst_band("tile", f.lit(2)),
+            rx_api.rst_band("tile", f.lit(3)),
         ).alias("bands")
     )
-    result = with_bands.select(rx.rst_frombands("bands").alias("tile")).first()
+    result = with_bands.select(rx_api.rst_frombands("bands").alias("tile")).first()
     return result["tile"]
 
 
-rst_frombands_python_light_example_output = """
+rst_frombands_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -373,7 +393,7 @@ rst_frombands_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_fromfile_python_light_example(spark):
+def rst_fromfile_python_example(spark):
     """Reference a raster by path — a VIRTUAL tile by default (light pyrx tier).
 
     The default tile is bytes-free: ``raster`` is null and it points at the file
@@ -387,17 +407,18 @@ def rst_fromfile_python_light_example(spark):
     tile column. We use the same committed single-band fixture the ``rasters``
     view is itself built from, passing its path in a column.
     """
+    from databricks.labs import gbx
     from ._fixtures import single_band_path  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx.register(spark)
     path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
     # Default: a VIRTUAL v2 tile — raster is null, path + window are populated.
-    return path_df.select(rx.rst_fromfile("path").alias("tile")).first()["tile"]
+    return path_df.select(rx_api.rst_fromfile("path").alias("tile")).first()["tile"]
 
 
-rst_fromfile_python_light_example_output = """
+rst_fromfile_python_example_output = """
 # Default — a VIRTUAL v2 tile (same struct as always, just bytes-free):
 +------------------------------------------------------------+
 |tile                                                        |
@@ -418,16 +439,16 @@ rst_fromfile_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_initnodata_python_light_example(spark):
+def rst_initnodata_python_example(spark):
     """Initialize NoData values on a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
     df = spark.table("rasters")
     result = df.select(rx.rst_initnodata("tile").alias("tile")).first()
     return result["tile"]
 
 
-rst_initnodata_python_light_example_output = """
+rst_initnodata_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -445,9 +466,9 @@ rst_initnodata_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_resample_python_light_example(spark):
+def rst_resample_python_example(spark):
     """Resample a raster tile by a 2x factor using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -457,7 +478,7 @@ def rst_resample_python_light_example(spark):
     return result["tile"]
 
 
-rst_resample_python_light_example_output = """
+rst_resample_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -475,9 +496,9 @@ rst_resample_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_resample_to_res_python_light_example(spark):
+def rst_resample_to_res_python_example(spark):
     """Resample a raster tile to an explicit ground resolution using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -489,7 +510,7 @@ def rst_resample_to_res_python_light_example(spark):
     return result["tile"]
 
 
-rst_resample_to_res_python_light_example_output = """
+rst_resample_to_res_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -507,9 +528,9 @@ rst_resample_to_res_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_resample_to_size_python_light_example(spark):
+def rst_resample_to_size_python_example(spark):
     """Resample a raster tile to an explicit pixel grid size using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -521,7 +542,7 @@ def rst_resample_to_size_python_light_example(spark):
     return result["tile"]
 
 
-rst_resample_to_size_python_light_example_output = """
+rst_resample_to_size_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -539,9 +560,9 @@ rst_resample_to_size_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_setcrs_python_light_example(spark):
+def rst_setcrs_python_example(spark):
     """Stamp a CRS string onto a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -551,7 +572,7 @@ def rst_setcrs_python_light_example(spark):
     return result["crs"]
 
 
-rst_setcrs_python_light_example_output = """
+rst_setcrs_python_example_output = """
 +----------+
 |crs       |
 +----------+
@@ -568,9 +589,9 @@ rst_setcrs_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_setsrid_python_light_example(spark):
+def rst_setsrid_python_example(spark):
     """Stamp an EPSG SRID onto a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -578,7 +599,7 @@ def rst_setsrid_python_light_example(spark):
     return result["tile"]
 
 
-rst_setsrid_python_light_example_output = """
+rst_setsrid_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -589,15 +610,15 @@ rst_setsrid_python_light_example_output = """
 
 
 # ---------------------------------------------------------------------------
-# rst_threshold — binarize a raster: pixels matching op/value → 1, others → 0
+# rst_threshold — keep the pixels that match op/value, set the others to NoData
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0, all pixels are 0)
-# Output: tile struct (returns the binary mask tile)
+# Output: tile struct (the source's type and NoData)
 # ---------------------------------------------------------------------------
 
 
-def rst_threshold_python_light_example(spark):
-    """Binarize a raster tile using a threshold condition using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+def rst_threshold_python_example(spark):
+    """Keep the pixels above a threshold and set the others to NoData."""
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -607,13 +628,13 @@ def rst_threshold_python_light_example(spark):
     return result["tile"]
 
 
-rst_threshold_python_light_example_output = """
+rst_threshold_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(binary mask tile; pixels > 0.0 → 1, others → 0; light tier returns a materialized v2 Tile)
+(pixels > 0.0 keep their value, others are NoData; returns a materialized v2 Tile)
 """
 
 
@@ -625,9 +646,9 @@ rst_threshold_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_transform_python_light_example(spark):
+def rst_transform_python_example(spark):
     """Reproject a raster tile to a target EPSG SRID using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -635,7 +656,7 @@ def rst_transform_python_light_example(spark):
     return result["tile"]
 
 
-rst_transform_python_light_example_output = """
+rst_transform_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -653,9 +674,9 @@ rst_transform_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_transformcrs_python_light_example(spark):
-    """Reproject a raster tile to a CRS string target using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+def rst_transformcrs_python_example(spark):
+    """Reproject a raster tile to a CRS string target."""
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -665,7 +686,7 @@ def rst_transformcrs_python_light_example(spark):
     return result["crs"]
 
 
-rst_transformcrs_python_light_example_output = """
+rst_transformcrs_python_example_output = """
 +----------+
 |crs       |
 +----------+
@@ -683,9 +704,9 @@ rst_transformcrs_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_updatetype_python_light_example(spark):
+def rst_updatetype_python_example(spark):
     """Convert a raster tile's data type using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -695,7 +716,7 @@ def rst_updatetype_python_light_example(spark):
     return result["tile"]
 
 
-rst_updatetype_python_light_example_output = """
+rst_updatetype_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -712,14 +733,14 @@ rst_updatetype_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_binpoints_python_light_example(spark):
+def rst_binpoints_python_example(spark):
     """Bin per-row ARRAY<DOUBLE> x/y/z columns into a Float32 raster tile using the light pyrx tier.
 
     Uses a tiny 3-point inline BNG (EPSG:27700) set covering a 1 km extent at 10×10 pixels
     (100 m ground resolution). Each output pixel carries the max z-value of points whose centre
     falls in that pixel; empty pixels carry NoData (-9999.0). No external raster file needed.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.range(1).select(
@@ -728,7 +749,7 @@ def rst_binpoints_python_light_example(spark):
         f.array(f.lit(42.5), f.lit(45.1), f.lit(38.7)).alias("z"),
     )
     result = df.select(
-        rx.rst_binpoints(
+        rx_api.rst_binpoints(
             "x", "y", "z",
             f.lit(550000.0), f.lit(180000.0),
             f.lit(551000.0), f.lit(181000.0),
@@ -739,7 +760,7 @@ def rst_binpoints_python_light_example(spark):
     return result["tile"]
 
 
-rst_binpoints_python_light_example_output = """
+rst_binpoints_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -756,7 +777,7 @@ rst_binpoints_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_align_to_python_light_example(spark):
+def rst_align_to_python_example(spark):
     """Warp a tile to match a reference tile's grid using the light pyrx tier.
 
     Loads the DEM fixture (64×64 Float32, EPSG:32618) and uses it as both the
@@ -764,20 +785,20 @@ def rst_align_to_python_light_example(spark):
     In production, pass two tiles on different grids; the output will have the
     reference tile's exact CRS, extent, and pixel dimensions.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
     from ._fixtures import dem_path  # noqa: PLC0415
 
     dem = str(dem_path())
     df = spark.read.format("binaryFile").load(dem).select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
     )
-    result = df.select(rx.rst_align_to("tile", "reference_tile").alias("tile")).first()
+    result = df.select(rx_api.rst_align_to("tile", "reference_tile").alias("tile")).first()
     return result["tile"]
 
 
-rst_align_to_python_light_example_output = """
+rst_align_to_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -794,7 +815,7 @@ rst_align_to_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_chm_python_light_example(spark):
+def rst_chm_python_example(spark):
     """Compute Canopy Height Model from DSM and DEM tiles using the light pyrx tier.
 
     Uses the DEM fixture (64×64 Float32, EPSG:32618) as both DSM and DEM — a
@@ -802,7 +823,7 @@ def rst_chm_python_light_example(spark):
     demonstrates the API. In production, pass a LiDAR-derived DSM (e.g. from
     ``rst_binpoints``) and a matching DEM tile to compute real canopy heights.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from ._fixtures import dem_tile_df  # noqa: PLC0415
 
     df = dem_tile_df(spark)
@@ -810,7 +831,7 @@ def rst_chm_python_light_example(spark):
     return result["chm"]
 
 
-rst_chm_python_light_example_output = """
+rst_chm_python_example_output = """
 +-----------------------------------------------------------+
 |chm                                                        |
 +-----------------------------------------------------------+
@@ -827,7 +848,7 @@ rst_chm_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_isoband_python_light_example(spark):
+def rst_isoband_python_example(spark):
     """Reclassify a DEM tile into elevation bands and return contour polygons (light pyrx tier).
 
     Uses the DEM fixture (64×64 Float32, EPSG:32618, 0–311 m elevation range).
@@ -835,7 +856,7 @@ def rst_isoband_python_light_example(spark):
     cover the full elevation range. Returns ARRAY<struct(geom_wkb, band, lower, upper)>
     — one struct per contiguous patch of pixels in the same elevation band.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
     from ._fixtures import dem_tile_df  # noqa: PLC0415
 
@@ -852,7 +873,7 @@ def rst_isoband_python_light_example(spark):
     return result["patches"]
 
 
-rst_isoband_python_light_example_output = """
+rst_isoband_python_example_output = """
 +-----------------------------------------------------------+
 |patches                                                    |
 +-----------------------------------------------------------+

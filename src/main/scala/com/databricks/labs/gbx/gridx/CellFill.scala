@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx
 
+import com.databricks.labs.gbx.expressions.GroupArgs
 import com.databricks.labs.gbx.gridx.grid.GridSystem
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -27,8 +28,13 @@ final class CellFillAcc(
         this
     }
 
+    /** The per-group arguments of an aggregate that reads them from its rows ([[GroupArgs]]); null when none were
+      * captured. They follow the cells when serialized, so the fill payload (no arguments) keeps its layout. */
+    var args: Array[Byte] = null
+
     def merge(other: CellFillAcc): CellFillAcc = {
         cells ++= other.cells
+        args = GroupArgs.prefer(args, other.args)
         CellFillAcc.guardSize(cells.length.toLong)
         this
     }
@@ -42,6 +48,7 @@ final class CellFillAcc(
             out.writeBoolean(v.isDefined)
             if (v.isDefined) out.writeDouble(v.get)
         }
+        GroupArgs.write(out, args)
         bos.toByteArray
     }
 }
@@ -65,7 +72,9 @@ object CellFillAcc {
             buf += ((cellId, v))
             i += 1
         }
-        new CellFillAcc(buf)
+        val acc = new CellFillAcc(buf)
+        acc.args = GroupArgs.read(in)
+        acc
     }
 
     private[gridx] def guardSize(currentRows: Long): Unit = {
@@ -98,7 +107,7 @@ object CellFill {
      * Fill NULL cells in `cells` from valid neighbours within `k` rings.
      *
      *  @param grid   grid system whose `kLoop` defines neighbour rings
-     *  @param cells  the group's cell -> optional value map (`None` = covered-but-missing)
+     *  @param rawCells the group's cell -> optional value map (`None` or NaN = covered-but-missing)
      *  @param k      neighbourhood radius in rings (>= 0); `k = 0` performs no fill
      *  @param method `"mean"` or `"idw"`
      *  @param power  IDW distance exponent (used by `idw` only)
@@ -106,7 +115,7 @@ object CellFill {
      */
     def fill(
         grid: GridSystem,
-        cells: Map[Long, Option[Double]],
+        rawCells: Map[Long, Option[Double]],
         k: Int,
         method: String,
         power: Double
@@ -115,6 +124,8 @@ object CellFill {
         val m = method.toLowerCase
         require(m == "mean" || m == "idw", s"cellfill: method must be 'mean' or 'idw'; got '$method'")
 
+        // A NaN is a missing value like a NULL: it is filled, and it never feeds a neighbour's mean or IDW.
+        val cells = rawCells.map { case (id, v) => id -> v.filterNot(_.isNaN) }
         // Deterministic output order: ascending unsigned cell id.
         val ordered = cells.keys.toSeq.sortWith((a, b) => java.lang.Long.compareUnsigned(a, b) < 0)
 
@@ -175,6 +186,24 @@ object CellFill {
         }.toArray[Any]
         ArrayData.toArrayData(rows)
     }
+
+    /** One value per distinct cell: a cell id that repeats keeps its LARGEST non-null, non-NaN value, whatever order
+     *  the rows arrive in (the lightweight rule); a NaN is a missing value like a NULL. `None` (covered but missing)
+     *  survives only for a cell whose every value is missing. */
+    def largestPerCell(pairs: scala.collection.Seq[(Long, Option[Double])]): Map[Long, Option[Double]] =
+        pairs.foldLeft(Map.empty[Long, Option[Double]]) { case (acc, (id, raw)) =>
+            val v = raw.filterNot(_.isNaN)
+            acc.get(id) match {
+                case None                                  => acc.updated(id, v)
+                case Some(cur) if v.isDefined && (cur.isEmpty || v.get > cur.get) => acc.updated(id, v)
+                case _                                     => acc
+            }
+        }
+
+    /** The fill as the BINARY payload of the session contract: `[count:Int]( cellId:Long, present:Boolean,
+     *  [value:Double] )*N`, big-endian, cell ids as the grid's internal Long (the lightweight tier's `encode`). */
+    def toBinary(filled: Seq[(Long, Option[Double])]): Array[Byte] =
+        new CellFillAcc(ArrayBuffer(filled: _*)).serialize
 
     /** Parse a numeric cell id (H3/Quadbin/Custom) to Long; null -> null (row skipped). */
     def parseCellIdLong(raw: Any, fnName: String): java.lang.Long = raw match {

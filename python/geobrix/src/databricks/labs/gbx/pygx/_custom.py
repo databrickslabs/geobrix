@@ -16,7 +16,7 @@ Geometry is emitted as plain WKB (NO SRID) / WKT, matching heavy ``JTS.toWKB``
 (line 159, the 2D no-SRID variant). The grid ``srid`` is metadata only and is
 NOT stamped into output geometry.
 
-Resolved decision 3 (spec 2026-06-14): heavy ``pointToCellID`` had a
+NaN guard: heavy ``pointToCellID`` had a
 ``require(!x.isNaN && !x.isNaN, ...)`` typo that left a NaN Y unguarded;
 ``point_to_cell_id`` here (and the heavy fix) guards BOTH x and y.
 """
@@ -31,7 +31,7 @@ from shapely.geometry import Point as _Point
 from shapely.geometry import box as _box
 
 from . import _dilate
-from ._geom import parse_geom
+from ._geom import jvm_rect, parse_geom
 
 ID_BITS = 56  # GridConf.idBits — low 56 bits hold the cell position
 RES_BITS = 8  # GridConf.resBits — top 8 bits hold the resolution
@@ -203,10 +203,10 @@ def point_to_cell_id(conf: CustomGridConf, x: float, y: float, resolution: int) 
     order as the heavy ``require``s: NaN, max-resolution, x-bounds, y-bounds.
     Heavy uses the geometry's FIRST coordinate (getCoordinate), not the centroid.
 
-    Resolved decision 3: guard BOTH x and y for NaN. The heavy Scala
+    Guard BOTH x and y for NaN. The heavy Scala
     (CustomGridSystem.scala:250) has a ``require(!x.isNaN && !x.isNaN, ...)``
     typo — the second clause repeats ``x``, leaving a NaN Y unguarded. This
-    port (and the heavy fix, CG-T8) guards both; cellPosX/Y truncate toward
+    port (and the heavy fix) guards both; cellPosX/Y truncate toward
     zero (Scala ``Double.toLong``), via ``_trunc_long`` (not ``math.floor``).
     """
     if math.isnan(x) or math.isnan(y):
@@ -251,8 +251,8 @@ def cell_id_to_polygon(conf: CustomGridConf, cell_id: int):
     """Closed custom-grid cell polygon (shapely), NO SRID.
 
     Port of CustomGridSystem.scala:213-235 — the closed ring
-    ``(x,y),(x+w,y),(x+w,y+h),(x,y+h),(x,y)``. shapely ``box`` produces the same
-    axis-aligned rectangle.
+    ``(x,y),(x+w,y),(x+w,y+h),(x,y+h),(x,y)``, built with ``jvm_rect`` so the WKB
+    and WKT carry the same vertex order.
     """
     resolution = get_cell_resolution(cell_id)
     cell_number = get_cell_position(cell_id)
@@ -262,7 +262,7 @@ def cell_id_to_polygon(conf: CustomGridConf, cell_id: int):
     h = cell_height(conf, resolution)
     x = cell_x * w + conf.bound_x_min
     y = cell_y * h + conf.bound_y_min
-    return _box(x, y, x + w, y + h)
+    return jvm_rect(x, y, x + w, y + h)
 
 
 def cell_id_to_centroid(conf: CustomGridConf, cell_id: int):
@@ -290,7 +290,7 @@ def polyfill(conf: CustomGridConf, geometry, resolution: int) -> List[int]:
     """Cell IDs whose CENTER is contained by the geometry (CustomGridSystem.polyfill).
 
     Port of CustomGridSystem.scala:145-178. Mirrors heavy EXACTLY incl. the
-    intentional ``first..last + 1`` bbox over-scan (Resolved decision 3: the
+    intentional ``first..last + 1`` bbox over-scan (the
     over-scan is by design, not a bug — the centroid-containment filter discards
     the extra ring of cells). The cell envelope corners (minX,minY)/(maxX,maxY)
     map to the first/last cell positions; the over-scan iterates one extra cell
@@ -375,18 +375,13 @@ def covering_candidate_cells(
 def k_ring(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
     """Chebyshev (square) k-ring of cell IDs around ``cell_id``.
 
-    Port of CustomGridSystem.scala:38-60. The neighborhood is the Chebyshev
+    Port of CustomGridSystem.kRing. The neighborhood is the Chebyshev
     (square / Moore) block of cells within ``k`` steps of the center cell in
-    both axes, INCLUDING the center cell itself (heavy iterates the full
-    ``[posX-k, posX+k] x [posY-k, posY+k]`` square with no center exclusion).
+    both axes, INCLUDING the center cell itself.
 
-    The block is CLAMPED to the grid bounds rather than wrapped: the lower
-    bound is ``max(pos-k, 0)`` so positions never go negative, and the upper
-    bound is ``min(pos+k, totalCellsX/Y(res))`` so off-edge cells are dropped.
-    A center cell at a grid corner therefore yields fewer cells than an interior
-    cell. The upper clamp uses ``totalCells`` ITSELF (not ``totalCells - 1``) and
-    iterates INCLUSIVELY (Scala ``a to b``) — ported verbatim so the cell set is
-    bit-identical to heavy; the parity test locks heavy's set.
+    The block is CLAMPED to the cells that exist, positions ``[0, totalCells - 1]`` on each axis: a ring at the east
+    edge does not wrap into the next row, and a ring at the north edge names no cell outside the grid. A center cell
+    at a grid edge or corner therefore yields fewer cells than an interior cell.
     """
     if k < 0:
         raise ValueError("gbx_custom: k must be at least 0")
@@ -396,9 +391,9 @@ def k_ring(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
     pos_y = get_cell_position_y(conf, cell_position, res)
 
     from_x = max(pos_x - k, 0)
-    to_x = min(pos_x + k, total_cells_x(conf, res))
+    to_x = min(pos_x + k, total_cells_x(conf, res) - 1)
     from_y = max(pos_y - k, 0)
-    to_y = min(pos_y + k, total_cells_y(conf, res))
+    to_y = min(pos_y + k, total_cells_y(conf, res) - 1)
 
     out: List[int] = []
     for x in range(from_x, to_x + 1):  # Scala `a to b` is INCLUSIVE

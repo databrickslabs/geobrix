@@ -12,8 +12,13 @@ inputs:
     description: 'Fail build on ScalaStyle errors? true or false. Typically true only for PRs targeting main.'
     default: 'false'
   suite_pattern:
-    description: 'Optional -Dsuites= value (e.g. com.databricks.labs.gbx.rasterx.*). If empty, uses com.databricks.labs.gbx.*'
+    description: 'Optional -Dsuites= value (e.g. com.databricks.labs.gbx.rasterx.*). If empty, the coverage-off test step runs the list in suites-heavy.txt and the coverage step runs com.databricks.labs.gbx.*'
     default: ''
+  native_root:
+    description: >-
+      The native payload the JVMs load GDAL from: the root output of .github/actions/native_payload (required; the
+      JAR's GDAL Java classes refuse any other JNI)
+    required: true
 runs:
   using: "composite"
   steps:
@@ -44,11 +49,27 @@ runs:
         # already configured by jfrog-pip-bootstrap above; this re-runs pip's
         # netrc/pip.conf write idempotently with a fresh token, and configures
         # Maven now that setup-java has put mvn + ~/.m2/settings.xml in place.
+        # (jfrog-auth writes the Maven settings only when `mvn` is on PATH, so the
+        # runner image's own Maven must stay installed even though builds use ./mvnw.)
         # Caller job must declare `permissions: id-token: write`.
         - name: Authenticate for JFrog (Maven + pip refresh via OIDC)
+          id: jfrog
           uses: ./.github/actions/jfrog-auth
+        # Every Maven call below is ./mvnw: the Maven pinned (version + SHA-256) in
+        # .mvn/wrapper/maven-wrapper.properties, the same version the dev image installs,
+        # instead of whatever the runner image ships. Installed here, through JFrog, so the
+        # PGP gate that follows already runs on it.
+        - name: Install the pinned Maven (wrapper)
+          uses: ./.github/actions/maven-wrapper
+          with:
+            jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
+        # GDAL's Java classes come from the GeoBrix native build (scripts/native/maven), in no repository: install
+        # them sha256-checked against their pin and with no Maven plugin, before the PGP gate resolves anything.
+        - name: Install GDAL's Java classes from the native build
+          shell: bash
+          run: python3 scripts/native/java_jar.py install
         # Verify the PGP signature of every Maven dependency / plugin against
-        # .maven-keys.list BEFORE any other mvn call resolves or compiles them.
+        # .maven-keys.list BEFORE any other ./mvnw call resolves or compiles them.
         # This is the "verify before use" gate — if Maven Central / the JFrog
         # mirror ever serves an artifact signed by a key not in the keysmap,
         # the build stops here, before the bytes touch any test or compile.
@@ -107,10 +128,22 @@ runs:
             echo "Matrix GDAL version: ${{ matrix.gdal }}"
             GDAL_VERSION_TO_INSTALL="${INSTALLED_GDAL_VERSION:-${{ matrix.gdal }}}"
             pip install --no-build-isolation --no-binary :all: gdal[numpy]==${GDAL_VERSION_TO_INSTALL}
-            # - add the so files
-            sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
+        # The JVMs (Maven's test JVMs here, python_build's Spark JVMs after it in the same job) load GDAL's JNI from
+        # /usr/lib/libgdalalljni.so: GDAL's Java classes load it by name from the library path, and it is
+        # GDALManager's fallback. The JAR's GDAL classes are the native build's and refuse another GDAL's JNI (the
+        # apt GDAL above stays for the Python bindings only), so the link goes to the native payload's JNI, with the
+        # script the dev container runs on every start; GDALManager then takes the payload's GDAL and PROJ data.
+        - name: Link the JVM's GDAL to the native payload's JNI
+          shell: bash
+          env:
+            GBX_NATIVE_ROOT: ${{ inputs.native_root }}
+          run: |
+            set -euo pipefail
+            [ -n "$GBX_NATIVE_ROOT" ] || { echo "::error::scala_build needs native_root (the root output of .github/actions/native_payload)"; exit 1; }
+            sudo GBX_NATIVE_ROOT="$GBX_NATIVE_ROOT" GBX_JNI_REQUIRE=1 bash scripts/docker/extras/docker_native_jni.sh
+            echo "the JVMs' GDAL JNI: $(readlink -f /usr/lib/libgdalalljni.so)"
         # With coverage: 3-step flow. When suite_pattern is set (e.g. parallel-by-package CI), skip report-only and package (caller will merge and upload).
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
@@ -119,10 +152,10 @@ runs:
             SUITES="${{ inputs.suite_pattern }}"
             [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
             # -C: strict-checksums — fail (not warn) on artifact checksum mismatch.
-            mvn -T 1C -C -q clean scoverage:test -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
+            ./mvnw -T 1C -C -q clean scoverage:test -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
             if [ -z "${{ inputs.suite_pattern }}" ]; then
-              mvn -C -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
-              mvn -C -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+              ./mvnw -C -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
+              ./mvnw -C -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
             fi
         - name: Print Scala coverage summary
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true' && inputs.suite_pattern == ''
@@ -145,20 +178,22 @@ runs:
           shell: bash
           run: |
             SUITES="${{ inputs.suite_pattern }}"
-            [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
-            mvn -T 1C -C -q clean install -Dscoverage.skip -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+            # No pattern: the heavy list (comments and blank lines dropped, joined with commas).
+            [ -z "$SUITES" ] && SUITES="$(grep -v -E '^[[:space:]]*(#|$)' "${{ github.action_path }}/suites-heavy.txt" | paste -s -d, -)"
+            [ -n "$SUITES" ] || { echo "::error::no Scala suites to run"; exit 1; }
+            echo "Scala suites: $SUITES"
+            ./mvnw -T 1C -C -q clean install -Dscoverage.skip -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'
           shell: bash
-          run: mvn -C -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+          run: ./mvnw -C -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Copy build artifacts to local staging
           if: inputs.suite_pattern == ''
           shell: bash
           run: |
-            # add .jar + .so
+            # the JAR (its GDAL JNI is the native payload's, which ships in the env wheels, not here)
             mkdir -p staging/build-artifacts
             cp target/geobrix*.jar staging/build-artifacts
-            cp scripts/gdal311/libgdalalljni.so staging/build-artifacts
         - name: Copy user artifacts local staging
           if: inputs.suite_pattern == ''
           shell: bash

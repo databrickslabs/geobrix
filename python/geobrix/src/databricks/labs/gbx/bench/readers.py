@@ -8,7 +8,7 @@ Spark-path: register the raster_gbx data source and time
 spark.read.format("raster_gbx").load(path).count() over a corpus directory.
 
 Cluster format-read: generic spark.read.format(...).load(path).count() wrapper
-for comparing light (raster_gbx) vs heavy (gdal) readers on the same cluster.
+for timing the light readers (raster_gbx and the others) on a cluster.
 """
 
 from __future__ import annotations
@@ -18,8 +18,112 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench.results import ResultRow
-from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
+from databricks.labs.gbx.bench.runner import (
+    WorkerRssSampler,
+    capture_env,
+    peak_rss_mb,
+    time_iters,
+)
+
+# --- tier resolution -----------------------------------------------------------------
+# Both tiers register the same gbx_* SQL names, and a query times whichever
+# implementation it resolves to. Scalar, array and aggregate functions of both tiers
+# share Spark's functionRegistry (the later registration replaces the earlier); the
+# lightweight explode functions are table functions in tableFunctionRegistry, beside
+# the heavyweight generators. So every two-tier leg reads the plan of the query it is
+# about to time and refuses to time the other tier's implementation.
+
+# Plan-node names that only a Python (lightweight) implementation produces.
+_PYTHON_PLAN_MARKERS = (
+    "PythonUDTF",  # BatchEvalPythonUDTF / ArrowEvalPythonUDTF: table functions
+    "EvalPython",  # BatchEvalPython / ArrowEvalPython: scalar and pandas UDFs
+    "PythonUDF",
+    "PythonUDAF",
+    "InPandas",  # AggregateInPandas / FlatMapGroupsInPandas / MapInPandas
+    "ArrowAggregatePython",  # grouped-aggregate pandas UDFs
+)
+
+
+class TierResolutionError(BaseException):
+    """A bench leg's query runs the other tier's implementation.
+
+    Derives from ``BaseException`` on purpose: every leg turns ``Exception`` into an
+    error row, and this one must stop the run instead, so a timing is never stored
+    under a tier that did not run it.
+    """
+
+
+def _impl_of_plan(plan: str, generator: bool = False) -> str:
+    """``"lightweight"`` for a plan with a Python node, else ``"heavyweight"``.
+
+    The bench inputs are plain DataFrames, so a Python node in the plan can only
+    come from a lightweight function. With ``generator=True`` a heavyweight plan
+    must also run a ``Generate``; otherwise the result is ``"unknown"``.
+
+    The test is PLAN-WIDE: a Python node anywhere in the plan, including the one that
+    builds the input, marks the whole plan lightweight. A heavyweight leg whose input is
+    made by a lightweight-only helper (``gbx_rst_fromfile`` is a Python UDF) therefore
+    reads as lightweight and is refused; build such an input before the timed plan, or
+    read it with the heavyweight reader. :func:`_python_node_in` names the node.
+    """
+    if any(m in plan for m in _PYTHON_PLAN_MARKERS):
+        return "lightweight"
+    if generator and "Generate" not in plan:
+        return "unknown"
+    return "heavyweight"
+
+
+def _python_node_in(plan: str) -> str:
+    """The first Python plan-node marker found in ``plan``, else ``""``."""
+    return next((m for m in _PYTHON_PLAN_MARKERS if m in plan), "")
+
+
+def _plan_text(df) -> str:
+    """The extended plan of ``df`` as text (``explain`` prints it; works over Connect)."""
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        df.explain(mode="extended")
+    return buf.getvalue()
+
+
+def _require_tier(
+    api: str, fn: str, resolved: str, query: str = "", node: str = ""
+) -> None:
+    """Raise :class:`TierResolutionError` unless the query resolved to ``api``.
+
+    ``query`` is the SQL that was planned and ``node`` the Python plan node that made it
+    read as lightweight; each is named in the message when known.
+    """
+    if resolved != api:
+        where = f" Query: {query}" if query else ""
+        why = f" (plan node: {node})" if node else ""
+        raise TierResolutionError(
+            f"{fn}: the {api} leg's query runs the {resolved} implementation{why}; "
+            f"refusing to time it.{where}"
+        )
+
+
+def _assert_tier(api: str, fn: str, df, generator: bool = False) -> None:
+    """Check the plan of the DataFrame a leg is about to time runs ``api``'s implementation."""
+    plan = _plan_text(df)
+    _require_tier(api, fn, _impl_of_plan(plan, generator), node=_python_node_in(plan))
+
+
+def _explode_impl(spark, sql: str) -> str:
+    """Which tier's explode implementation ``sql`` runs, read from its plan.
+
+    A lightweight table function plans as a Python UDTF (``BatchEvalPythonUDTF`` or
+    ``ArrowEvalPythonUDTF``); a heavyweight generator plans as a ``Generate`` with no
+    Python node. ``EXPLAIN`` is plain SQL, so this also works over Spark Connect.
+    Returns ``"lightweight"``, ``"heavyweight"`` or ``"unknown"``.
+    """
+    plan = str(spark.sql(f"EXPLAIN EXTENDED {sql}").collect()[0][0])
+    return _impl_of_plan(plan, generator=True)
 
 
 def measure_parallelism(spark, df):
@@ -41,12 +145,11 @@ def measure_parallelism(spark, df):
 
 def _read_one_file_light(file_path: str, size_mib: int) -> int:
     """Open a raster file, compute tiles, return tile count."""
-    import rasterio
 
     from databricks.labs.gbx.pyrx.core import tiling as core_tiling
 
     size_bytes = os.path.getsize(file_path)
-    with rasterio.open(file_path) as ds:
+    with open_data(file_path) as ds:
         tiles = core_tiling.make_tiles(ds, size_in_mb=size_mib, size_bytes=size_bytes)
         return len(tiles)
 
@@ -155,9 +258,9 @@ def run_spark_path_reader(
     emitted ``ResultRow``. The total ``.count()`` iteration time is unchanged.
     This isolates the listing/header-open planning cost from the executor read cost.
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     def _job():
@@ -307,19 +410,22 @@ def run_virtual_tile_pixel_read(
     """
     import os
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     if disable_file:
         os.environ["GBX_DISABLE_FILE"] = "1"
     else:
         os.environ.pop("GBX_DISABLE_FILE", None)
 
-    from databricks.labs.gbx.ds.register import register
-
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     import pyspark.sql.functions as _F
 
-    from databricks.labs.gbx.pyrx import functions as _pyrx
+    from databricks.labs.gbx.bench.spec import pin_light_level
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    pin_light_level(spark, ["gbx_rst_avg"])  # on THIS session, at the light level
 
     def _job():
         reader = spark.read.format("raster_gbx").option("virtualTiles", "true")
@@ -330,7 +436,7 @@ def run_virtual_tile_pixel_read(
             load_path = path
         return (
             reader.load(load_path)
-            .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+            .select(rx.rst_avg(_F.col("tile")).alias("avg"))
             .count()
         )
 
@@ -428,49 +534,30 @@ def run_format_read(
     """Time spark.read.format(fmt).load(path).count() on-cluster.
 
     For fmt=="raster_gbx": registers the light data source first.
-    For fmt=="gdal": ensures the heavyweight GDAL driver is initialised.
     When ``ingest_table`` is set, the timed job writes the read DataFrame to
     that Delta table (mode="overwrite") and returns its row count -- a real
     ingest that forces materialization.  When None the behavior is unchanged
     (plain .count()).
     Returns a single ResultRow (mode="spark-path", category="reader").
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     if fmt.endswith("_gbx"):
         # register() installs ALL light DataSources (raster_gbx, gtiff_gbx, pmtiles_gbx,
         # vector_gbx + the vector *_gbx). Registering only for fmt=="raster_gbx" left vector
         # formats (geojson_gbx, shapefile_gbx, ...) unregistered -> DATA_SOURCE_NOT_FOUND.
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
-    elif fmt in ("gdal", "gtiff_gdal", "netcdf_gdal"):
-        # Heavy raster readers need the GDAL drivers initialised (registered via the
-        # synchronized GDALManager guard inside rasterx.register). netcdf_gdal is the
-        # heavy leg of the NetCDF raster bench; gtiff_gdal/gdal are the GeoTIFF readers.
-        try:
-            from databricks.labs.gbx.rasterx import functions as _rx
-
-            _rx.register(spark)
-        except Exception:  # noqa: BLE001
-            pass  # best-effort GDAL init; failure surfaces in the timed call
+        gbx_manager.register_sources(spark)
 
     def _job():
         reader = spark.read.format(fmt)
         if options:
             for k, v in options.items():
                 reader = reader.option(k, str(v))
-        # sizeInMB is honored by the light raster reader (raster_gbx) AND the heavy
-        # raster readers (netcdf_gdal / gdal / gtiff_gdal). Broadened beyond raster_gbx
-        # so the netcdf raster leg can pass size_mib=-1 to BOTH tiers -- one tile per
-        # grid variable -- giving the heavy reader the same one-tile-per-var granularity
-        # as light (a fair heavy-vs-light comparison).
-        # NOTE (re-baseline): the existing GeoTIFF reader leg calls fmt="gdal" without an
-        # explicit size_mib, so it now inherits the default (16) and tiles at ~16 MB where
-        # it previously read whole-image. This aligns it with the light raster_gbx leg
-        # (already 16) -- fairer -- but GeoTIFF heavy reader-bench numbers are NOT
-        # comparable across this change.
-        if fmt in ("raster_gbx", "netcdf_gdal", "gdal", "gtiff_gdal"):
+        # sizeInMB is honored by the light raster reader (raster_gbx).
+        if fmt == "raster_gbx":
             reader = reader.option("sizeInMB", str(size_mib))
         df = reader.load(path)
         if ingest_table:
@@ -583,9 +670,7 @@ def run_format_write(
 ) -> "ResultRow":
     """Time spark.write.format(write_fmt).save(out_path) on a pre-read input DataFrame.
 
-    ``mode`` is the Spark write mode: the light gtiff_gbx writer supports
-    "overwrite"; the heavy gtiff_gdal writer is append-only ("overwrite" raises
-    UNSUPPORTED_FEATURE truncate), so pass mode="append" for it.
+    ``mode`` is the Spark write mode ("overwrite" by default).
 
     ``label`` (default "") distinguishes otherwise-identical legs in the store: when
     non-empty it is appended to the success ResultRow's ``note`` as " [<label>]" so a
@@ -606,6 +691,8 @@ def run_format_write(
     ``keepParts=true`` so the parts survive across warmup+measured iterations (a merge
     that deleted parts on iteration 1 would find an empty dir on iteration 2 and error).
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
     _note_suffix = f" [{label}]" if label else ""
     # Merge shape is inferred from the options dict (no new positional param, so all
@@ -614,19 +701,8 @@ def run_format_write(
     _merge_mode = bool(options) and str(options.get("merge", "")).lower() == "true"
 
     # Register light DS (always needed for raster_gbx reader/writer).
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
-
-    # Best-effort heavy init when either format is a heavyweight GDAL format.
-    _heavy_fmts = {"gdal", "gtiff_gdal"}
-    if read_fmt in _heavy_fmts or write_fmt in _heavy_fmts:
-        try:
-            from databricks.labs.gbx.rasterx import functions as _rx
-
-            _rx.register(spark)
-        except Exception:  # noqa: BLE001
-            pass
+    gbx_manager.register_sources(spark)
 
     # Read the input once and cache — isolates write cost from read cost.
     try:
@@ -829,17 +905,18 @@ def run_pmtiles_write(
 ) -> "ResultRow":
     """Time a PMTiles write of ``n_tiles`` synthetic PNG tiles.
 
-    ``write_fmt`` is ``'pmtiles_gbx'`` (light) or ``'pmtiles'`` (heavy).
+    ``write_fmt`` is ``'pmtiles_gbx'``, the one PMTiles writer.
     Generates distinct (z, x, y) tiles, caches the DataFrame, then times
     repeated ``write.format(write_fmt)`` calls. Returns a single ResultRow
     (mode="spark-path", category="writer").
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     if write_fmt == "pmtiles_gbx":
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
 
     # Build n_tiles distinct (z, x, y) synthetic PNG tiles.
     # z is chosen so that side*side >= n_tiles (no duplicate addresses).
@@ -954,12 +1031,16 @@ def run_vector_write(
     non-null geometry count equals the source count.
 
     Returns a single ResultRow with category="writer", mode="spark-path",
-    fn="write_<fmt>", api="lightweight".  On any error returns status="error"
+    fn="write_<fmt>", api="lightweight".  The commit runs in a Python worker on the
+    driver node, which this process's own peak never sees, so ``peak_rss_mb`` is the
+    summed peak RSS of the driver's ``pyspark.daemon`` workers sampled during the writes
+    (this process's peak where none could be sampled); ``note`` states it with its
+    anonymous part.  On any error returns status="error"
     with the exception in ``note`` (does not raise).
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     # Read source once and count to establish the feature count for parity.
@@ -1021,8 +1102,12 @@ def run_vector_write(
         _iter_idx[0] += 1
         df.write.format(fmt).mode("overwrite").save(target)
 
+    sampler = WorkerRssSampler()
     try:
-        stats = time_iters(_job, warmup, measured)
+        # The two-phase writer's commit runs in a Python worker on the driver node: sample
+        # its RSS (this process's peak_rss_mb never sees it) while the writes run.
+        with sampler:
+            stats = time_iters(_job, warmup, measured)
         ms = stats["iter_median_ms"]
 
         # Read-back parity: last written target (index measured-1, clamped to len).
@@ -1125,9 +1210,15 @@ def run_vector_write(
             per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
             throughput_mpix_s=0.0,
             throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
-            peak_rss_mb=peak_rss_mb(),
+            peak_rss_mb=sampler.peak_mb or peak_rss_mb(),
             status="ok",
-            note=f"{fmt} write+readback of {n} features",
+            note=f"{fmt} write+readback of {n} features"
+            + (
+                f"; driver python-worker peak RSS {sampler.peak_mb:.0f} MB "
+                f"({sampler.peak_anon_mb:.0f} MB anonymous)"
+                if sampler.peak_mb  # nothing sampled (no /proc): say nothing
+                else ""
+            ),
             output_fingerprint="",
             **env,
         )
@@ -1182,24 +1273,23 @@ def run_mvt_agg(
     DataFrame, then times a ``groupBy("z","x","y").agg(st_asmvt(...))`` job to
     completion. Returns a single ResultRow (mode="spark-path", category="mvt").
 
-    ``api`` controls which tier is registered and timed:
-        "lightweight"  → ``databricks.labs.gbx.pyvx.functions``
-        "heavyweight"  → ``databricks.labs.gbx.vectorx.functions``
+    ``api`` must be "lightweight" (``databricks.labs.gbx.pyvx.functions``): ``st_asmvt`` has no heavyweight
+    implementation, so any other value raises.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
+    if api != "lightweight":
+        raise ValueError(
+            f"st_asmvt has no heavyweight implementation (api={api!r}); time api='lightweight'."
+        )
     env = capture_env(where)
 
     # Register the tier.
     try:
-        if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
+        from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
-            asmvt_fn = vx.st_asmvt
-        else:
-            from databricks.labs.gbx.vectorx import functions as hx
-
-            hx.register(spark)
-            asmvt_fn = hx.st_asmvt
+        gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
+        asmvt_fn = vx._light_st_asmvt
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,
@@ -1325,20 +1415,18 @@ def run_mvt_agg(
             **env,
         )
 
-    def _job():
+    def _job_df():
         import pyspark.sql.functions as _F2
 
-        return (
-            df.groupBy("z", "x", "y")
-            .agg(
-                asmvt_fn(_F2.col("geom"), _F2.col("attrs"), _F2.lit("layer")).alias(
-                    "mvt"
-                )
-            )
-            .count()
+        return df.groupBy("z", "x", "y").agg(
+            asmvt_fn(_F2.col("geom"), _F2.col("attrs"), _F2.lit("layer")).alias("mvt")
         )
 
+    def _job():
+        return _job_df().count()
+
     try:
+        _assert_tier(api, "st_asmvt", _job_df())
         # Guard against a tier that "succeeds" (10 groups counted) but emits all-NULL or
         # all-empty MVT blobs -- e.g. the heavy OGR MVT driver dropping every feature to a
         # sub-pixel collapse. Counting groups alone masks that, so validate (once, untimed)
@@ -1458,6 +1546,8 @@ def run_pmtiles_agg(
         "lightweight"  -> ``register_pmtiles_agg`` (pure-Python grouped agg)
         "heavyweight"  -> ``functions.register`` (Scala UDAF via the JAR)
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     # Register the tier.
@@ -1467,9 +1557,8 @@ def run_pmtiles_agg(
 
             register_pmtiles_agg(spark)
         else:
-            from databricks.labs.gbx.pmtiles import functions as _pt_reg
 
-            _pt_reg.register(spark)
+            gbx_manager.register_family(spark, ("gbx_pmtiles_",), level="L1")
         from databricks.labs.gbx.pmtiles import functions as pt
 
         agg_fn = pt.pmtiles_agg
@@ -1571,20 +1660,20 @@ def run_pmtiles_agg(
             **env,
         )
 
-    def _job():
+    def _job_df():
         import pyspark.sql.functions as _F2
 
-        return (
-            df.groupBy("g")
-            .agg(
-                agg_fn(_F2.col("tile"), _F2.col("z"), _F2.col("x"), _F2.col("y")).alias(
-                    "arc"
-                )
+        return df.groupBy("g").agg(
+            agg_fn(_F2.col("tile"), _F2.col("z"), _F2.col("x"), _F2.col("y")).alias(
+                "arc"
             )
-            .count()
         )
 
+    def _job():
+        return _job_df().count()
+
     try:
+        _assert_tier(api, "pmtiles_agg", _job_df())
         # Guard against a tier that "succeeds" (groups counted) but emits all-NULL or
         # all-empty archives. Counting groups alone masks that, so validate (once,
         # untimed) that every group produced a non-empty PMTiles blob; an empty result
@@ -1727,10 +1816,10 @@ def run_gtiff_file_read(
 
     Returns a single ResultRow (mode="spark-path", category="reader").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.ds.file_gbx import gbx_file_read
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
     access = {"fuse": "auto", "external": "external", "managed": "managed"}[file_mode]
 
@@ -1857,10 +1946,10 @@ def run_gtiff_file_write(
 
     Returns a single ResultRow (mode="spark-path", category="writer").
     """
-    from databricks.labs.gbx.ds.register import register
-    from databricks.labs.gbx.pyrx.file_table import write_file_table
+    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs.gbx.rasterx.file_table import write_file_table
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
     parts, slots = measure_parallelism(spark, tile_df)
     n = int(tile_df.count())
@@ -1942,7 +2031,7 @@ def run_gtiff_file_write(
         if file_mode == "fuse":
             back_n = int(spark.read.format("gtiff_gbx").load(target).count())
         else:
-            from databricks.labs.gbx.pyrx.file_table import read_file_table
+            from databricks.labs.gbx.rasterx.file_table import read_file_table
 
             back_n = int(read_file_table(spark, target).count())
 
@@ -2036,9 +2125,9 @@ def run_gpkg_file_read(
 
     Returns a single ResultRow (mode="spark-path", category="reader").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     # --- build the input df and _job based on file_mode -------------------- #
@@ -2061,7 +2150,7 @@ def run_gpkg_file_read(
         # Probe once: on a FUSE-only tier, vector_file_read raises ValueError →
         # clean na_by_design skip (no FILE tier available locally).
         try:
-            from databricks.labs.gbx.pyvx.file_read import vector_file_read
+            from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
             df = vector_file_read(spark, source, driver="GPKG", access="external")
         except ValueError as ve:
@@ -2136,7 +2225,7 @@ def run_gpkg_file_read(
                 chunk_size=chunk_size,
                 **env,
             )
-        from databricks.labs.gbx.pyrx.file_table import read_file_table
+        from databricks.labs.gbx.rasterx.file_table import read_file_table
 
         df = read_file_table(spark, source)
 
@@ -2250,7 +2339,7 @@ def run_gpkg_chunksize_sweep(
     """Sweep ``chunkSize`` across GeoPackage FILE reads and confirm fanout-invariance.
 
     GeoPackage is one staged file per partition; ``chunkSize`` + the
-    per-partition ``_VEC_STAGED_FILES`` LRU amortize one open/stage across many
+    per-partition ``_VEC_STAGE`` cache amortize one open/stage across many
     chunk reads — the vector analog of raster multi-window amortization.
     Partition count is file-count bound; it does **not** grow with chunkSize
     (chunkSize is within-task amortization, not a fanout lever).
@@ -2352,8 +2441,8 @@ def _gpkg_file_readback(
     try:
         import pyspark.sql.functions as _F
 
-        from databricks.labs.gbx.pyrx.file_table import read_file_table
-        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+        from databricks.labs.gbx.rasterx.file_table import read_file_table
+        from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
         _tbl = read_file_table(spark, target).filter(_F.col("tile.path").isNotNull())
         _paths = [
@@ -2416,9 +2505,9 @@ def run_gpkg_file_write(
 
     Returns a single ResultRow (mode="spark-path", category="writer").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     if file_mode == "fuse":
@@ -2567,7 +2656,7 @@ def run_gpkg_file_write(
             )
 
     else:  # managed or external
-        from databricks.labs.gbx.pyvx.file_write import vector_file_write
+        from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
         # Read the source gpkg to get parallelism info.
         try:
@@ -2719,7 +2808,7 @@ def run_vector_table_read_sweep(
     """Time a vector FILE-column-table read via ``vector_file_read`` table mode.
 
     Reads the FILE-column Delta table written by the gpkg write leg (via
-    ``vector_file_write``) back through the Task-2 vector table-read entry:
+    ``vector_file_write``) back through the vector table-read entry:
     ``vector_file_read(spark, table, source_type='table')``.  Measures wall-clock
     read+decode time and feature-count parity.
 
@@ -2777,7 +2866,7 @@ def run_vector_table_read_sweep(
 
     # managed or external: read back via the new TABLE mode.
     try:
-        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+        from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
         # Probe once: on a FUSE-only tier, resolve_file_table raises ValueError
         # (FILE unavailable) → na_by_design.
@@ -2921,7 +3010,7 @@ def run_raster_decode_read_sweep(
 
     **Ordering-amortization comparison** (``skip_ordering=None``, the default, for
     managed/external):
-    Runs the decode job **twice** — once with the T8 auto-order (same-source tiles
+    Runs the decode job **twice** — once with the automatic order (same-source tiles
     grouped → ``open_windowed_via_fileref`` reuse across consecutive tiles in a source
     file, amortising the open cost) and once with ``skipOrdering=True`` (random order,
     no batching).  Returns **two** ``ResultRow`` objects so the ordering payoff is
@@ -2949,14 +3038,20 @@ def run_raster_decode_read_sweep(
     Returns:
         List of one or two ResultRow instances (mode="spark-path" / "spark-path-skip-order").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     import pyspark.sql.functions as _F
 
-    from databricks.labs.gbx.pyrx import functions as _pyrx
+    from databricks.labs.gbx.bench.spec import pin_light_level
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    if (
+        api == "lightweight"
+    ):  # the row says light: time the light level, not a JVM companion
+        pin_light_level(spark, ["gbx_rst_avg"])
 
     def _na_row(mode_label: str, note: str) -> "ResultRow":
         return ResultRow(
@@ -2995,7 +3090,7 @@ def run_raster_decode_read_sweep(
                 spark.read.format("raster_gbx")
                 .option("virtualTiles", "true")
                 .load(source)
-                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .select(rx.rst_avg(_F.col("tile")).alias("avg"))
                 .count()
             )
 
@@ -3084,12 +3179,12 @@ def run_raster_decode_read_sweep(
         _variants = [(False, "spark-path")]
 
     # Probe once (default ordering) to get tile count + check FILE availability.
-    from databricks.labs.gbx.pyrx.file_table import read_file_table
+    from databricks.labs.gbx.rasterx.file_table import read_file_table
 
     try:
         _probe_df = read_file_table(spark, source, skip_ordering=False)
         _n_probe = int(
-            _probe_df.select(_pyrx.rst_avg(_F.col("tile")).alias("avg")).count()
+            _probe_df.select(rx.rst_avg(_F.col("tile")).alias("avg")).count()
         )
     except ValueError as ve:
         note = f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}"
@@ -3123,7 +3218,7 @@ def run_raster_decode_read_sweep(
         def _table_job(skip_ord=_skip_ord):
             return int(
                 read_file_table(spark, source, skip_ordering=skip_ord)
-                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .select(rx.rst_avg(_F.col("tile")).alias("avg"))
                 .count()
             )
 
@@ -3296,14 +3391,15 @@ def run_legacy_aswkb(
 ) -> "ResultRow":
     """Time gbx_st_legacyaswkb decode over ``n_rows`` synthetic legacy structs.
 
-    Light (``api="lightweight"``) registers ``databricks.labs.gbx.pyvx`` and
+    Light (``api="lightweight"``) registers the legacy decode at L3 and
     times ``SELECT gbx_st_legacyaswkb(g) FROM v``. Heavy (``api="heavyweight"``)
-    registers ``databricks.labs.gbx.vectorx.jts.legacy`` -- the SAME SQL name --
+    registers it at the manager's choice (the JAR's decode) -- the SAME SQL name --
     and times the same query. (The shared name means a light+heavy parity cell
     must collect light BEFORE registering heavy; that ordering lives in the
     cluster cell, not here -- each call registers exactly one tier.)
     Returns a single ResultRow (mode="spark-path", category="legacy").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_legacy_structs
 
     env = capture_env(where)
@@ -3311,13 +3407,11 @@ def run_legacy_aswkb(
     cat = "legacy"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx.jts.legacy import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_legacy",), level="L1")
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3349,12 +3443,14 @@ def run_legacy_aswkb(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM _legacy_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_st_legacyaswkb(g) AS w FROM _legacy_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm the decode produces non-null WKB.
         _val = spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM _legacy_bench_v").head(
             1
@@ -3405,6 +3501,7 @@ def run_triangulate(
     occupy different catalog paths and coexist). Records ``rows`` = number of
     output triangles. Returns one ResultRow (mode="spark-path", category="tin").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
 
     env = capture_env(where)
@@ -3412,13 +3509,16 @@ def run_triangulate(
     cat = "tin"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3452,16 +3552,19 @@ def run_triangulate(
 
     if api == "lightweight":
 
-        def _job():
+        def _job_df():
             return spark.sql(
                 "SELECT t.triangle FROM _tin_bench_v, LATERAL "
                 "gbx_st_triangulate(pts, bl, mt, st, spf, 'constrained') t"
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     else:
         import pyspark.sql.functions as _f
 
-        def _job():
+        def _job_df():
             return df.select(
                 _f.call_function(
                     "gbx_st_triangulate",
@@ -3472,9 +3575,13 @@ def run_triangulate(
                     _f.col("spf"),
                     _f.lit("constrained"),
                 ).alias("triangle")
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         n_out = int(_job())
         if n_out <= 0:
             raise RuntimeError("st_triangulate produced no triangles")
@@ -3521,6 +3628,7 @@ def run_interp_bbox(
     ``rows`` = number of interpolated grid points. Returns one ResultRow
     (mode="spark-path", category="tin").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
 
     env = capture_env(where)
@@ -3528,13 +3636,16 @@ def run_interp_bbox(
     cat = "tin"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3568,17 +3679,20 @@ def run_interp_bbox(
 
     if api == "lightweight":
 
-        def _job():
+        def _job_df():
             return spark.sql(
                 "SELECT t.elevation_point AS p FROM _tin_bench_v, LATERAL "
                 "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, "
                 "xmin, ymin, xmax, ymax, w, h, srid, 'constrained') t"
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     else:
         import pyspark.sql.functions as _f
 
-        def _job():
+        def _job_df():
             return df.select(
                 _f.call_function(
                     "gbx_st_interpolateelevationbbox",
@@ -3596,9 +3710,13 @@ def run_interp_bbox(
                     _f.col("srid"),
                     _f.lit("constrained"),
                 ).alias("p")
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         n_out = int(_job())
         if n_out <= 0:
             raise RuntimeError("st_interpolateelevationbbox produced no points")
@@ -3642,24 +3760,40 @@ def run_interp_geom(
     """Time gbx_st_interpolateelevationgeom over ``n_rows`` synthetic point arrays.
 
     Light = SQL ``LATERAL`` UDTF (arg order: pts, bl, mt, st, spf, origin, cols,
-    rows, cell_x, cell_y, mode); heavy = JVM generator-Column (same arg order).
-    Records ``rows`` = number of interpolated grid points. Returns one ResultRow
-    (mode="spark-path", category="tin").
+    rows, cell_x, cell_y, mode). The function has no JVM form, so the heavyweight leg is a
+    ``na_by_design`` row. Records ``rows`` = number of interpolated grid points. Returns one
+    ResultRow (mode="spark-path", category="tin").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
 
     env = capture_env(where)
     fn = "st_interpolateelevationgeom"
     cat = "tin"
+    if api != "lightweight":
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=0,
+            status="na_by_design",
+            note="gbx_st_interpolateelevationgeom has no JVM form",
+            warmup=warmup,
+        )
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3693,17 +3827,20 @@ def run_interp_geom(
 
     if api == "lightweight":
 
-        def _job():
+        def _job_df():
             return spark.sql(
                 "SELECT t.elevation_point AS p FROM _tin_bench_v, LATERAL "
                 "gbx_st_interpolateelevationgeom(pts, bl, mt, st, spf, "
                 "origin, cols, rows_n, cell_x, cell_y, 'constrained') t"
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     else:
         import pyspark.sql.functions as _f
 
-        def _job():
+        def _job_df():
             return df.select(
                 _f.call_function(
                     "gbx_st_interpolateelevationgeom",
@@ -3719,9 +3856,13 @@ def run_interp_geom(
                     _f.col("cell_y"),
                     _f.lit("constrained"),
                 ).alias("p")
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         n_out = int(_job())
         if n_out <= 0:
             raise RuntimeError("st_interpolateelevationgeom produced no points")
@@ -3752,25 +3893,21 @@ def run_interp_geom(
 
 
 def _register_quadbin(spark, api: str) -> None:
-    """Register exactly one quadbin tier.
+    """Register the quadbin functions for a benchmark leg.
 
-    light  -> ``databricks.labs.gbx.pygx`` (gx.register: spark.udf only).
-    heavy  -> ``databricks.labs.gbx.gridx.quadbin`` (JVM Scala UDFs).
-
-    Both tiers expose the SAME ``gbx_quadbin_*`` SQL names, so registering one
-    overwrites the other in the session catalog.  Each ``run_quadbin_*`` call
-    therefore registers a single tier; the light-vs-heavy parity gate (which
-    must collect light BEFORE re-registering heavy) lives in the cluster cell,
-    not here.
+    Quadbin runs at the lightweight level only (``databricks.labs.gbx.pygx``, level L3): the heavyweight
+    form is gone, so a heavyweight leg is refused rather than timed against nothing.
     """
-    if api == "lightweight":
-        from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
-        gx.register(spark)
-    else:
-        from databricks.labs.gbx.gridx.quadbin import functions as hx
-
-        hx.register(spark)
+    if api != "lightweight":
+        raise ValueError(
+            f"quadbin has no {api} form: it runs at the lightweight level only. "
+            "Fix: pass api='lightweight'."
+        )
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
 
 
 def run_quadbin_pointascell(
@@ -3786,9 +3923,8 @@ def run_quadbin_pointascell(
 ) -> "ResultRow":
     """Time gbx_quadbin_pointascell (scalar lon/lat -> cell) over ``n_rows`` points.
 
-    Light registers pygx (``gbx_quadbin_pointascell`` via spark.udf); heavy
-    registers gridx.quadbin (the SAME SQL name, JVM). Records ``rows`` = number
-    of cells produced. Returns one ResultRow (mode="spark-path", category="grid").
+    Light registers pygx (``gbx_quadbin_pointascell`` via spark.udf), the only level
+    quadbin has. Records ``rows`` = number of cells produced. Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_points
 
@@ -3828,13 +3964,17 @@ def run_quadbin_pointascell(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_pointascell(lon, lat, {res}) AS cell "
             "FROM _quadbin_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm non-null cell ids are produced.
         _val = spark.sql(
             f"SELECT gbx_quadbin_pointascell(lon, lat, {res}) AS cell "
@@ -3881,7 +4021,7 @@ def run_quadbin_polyfill(
 ) -> "ResultRow":
     """Time gbx_quadbin_polyfill (geom -> ARRAY<cell>) over ``n_rows`` WKT polygons.
 
-    Light registers pygx; heavy registers gridx.quadbin (same SQL name). Records
+    Light registers pygx (the only level quadbin has). Records
     ``rows`` = number of input polygons (each producing a cell array). Returns one
     ResultRow (mode="spark-path", category="grid").
     """
@@ -3923,13 +4063,17 @@ def run_quadbin_polyfill(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_polyfill(geom, {res}) AS cells "
             "FROM _quadbin_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty cell array.
         _val = spark.sql(
             f"SELECT gbx_quadbin_polyfill(geom, {res}) AS cells "
@@ -3976,7 +4120,7 @@ def run_quadbin_tessellate(
 ) -> "ResultRow":
     """Time gbx_quadbin_tessellate (geom -> ARRAY<STRUCT<cell,geom>>) over polygons.
 
-    Light registers pygx; heavy registers gridx.quadbin (same SQL name). Records
+    Light registers pygx (the only level quadbin has). Records
     ``rows`` = number of input polygons. Returns one ResultRow (mode="spark-path",
     category="grid").
     """
@@ -4018,13 +4162,17 @@ def run_quadbin_tessellate(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_tessellate(geom, {res}) AS chips "
             "FROM _quadbin_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty chip array with bytes.
         _val = spark.sql(
             f"SELECT gbx_quadbin_tessellate(geom, {res}) AS chips "
@@ -4078,8 +4226,7 @@ def run_quadbin_cellunion_agg(
 
     Streams one cell id per row, grouped by a small key set, unioning each
     group's cell boundaries into one EWKB MultiPolygon.  Light registers pygx
-    (a GROUPED_AGG pandas UDF); heavy registers gridx.quadbin (the SAME SQL
-    name, a JVM TypedImperativeAggregate). Records ``rows`` = number of input
+    (a GROUPED_AGG pandas UDF), the only level quadbin has. Records ``rows`` = number of input
     cells. Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cellid_arrays
@@ -4120,13 +4267,17 @@ def run_quadbin_cellunion_agg(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT group, gbx_quadbin_cellunion_agg(cell) AS u "
             "FROM _quadbin_agg_v GROUP BY group"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm each group produced a non-empty union blob.
         _val = spark.sql(
             "SELECT gbx_quadbin_cellunion_agg(cell) AS u "
@@ -4174,9 +4325,9 @@ def run_quadbin_resolution(
 ) -> "ResultRow":
     """Time gbx_quadbin_resolution (scalar cell -> INT) over ``n_rows`` cell ids.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): exact INT equality.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4216,12 +4367,16 @@ def run_quadbin_resolution(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_quadbin_resolution(cell) AS r FROM _quadbin_cell_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm the resolution comes back as the input res.
         _val = spark.sql(
             "SELECT gbx_quadbin_resolution(cell) AS r FROM _quadbin_cell_v LIMIT 1"
@@ -4268,10 +4423,9 @@ def run_quadbin_kring(
 ) -> "ResultRow":
     """Time gbx_quadbin_kring (scalar cell -> ARRAY<LONG>) over ``n_rows`` cells.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): exact sorted
-    cell-set per row at a fixed ``k``.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4311,12 +4465,16 @@ def run_quadbin_kring(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_kring(cell, {k}) AS ring FROM _quadbin_cell_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring (k=1 -> up to 9 cells).
         _val = spark.sql(
             f"SELECT gbx_quadbin_kring(cell, {k}) AS ring FROM _quadbin_cell_v LIMIT 1"
@@ -4362,9 +4520,9 @@ def run_quadbin_distance(
 ) -> "ResultRow":
     """Time gbx_quadbin_distance (scalar (cell_a, cell_b) -> INT) over ``n_rows`` pairs.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input pairs. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): exact INT equality.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cell_pairs
 
@@ -4404,12 +4562,16 @@ def run_quadbin_distance(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _quadbin_pair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null integer distance comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _quadbin_pair_v LIMIT 1"
@@ -4455,10 +4617,9 @@ def run_quadbin_aswkb(
 ) -> "ResultRow":
     """Time gbx_quadbin_aswkb (scalar cell -> EWKB polygon) over ``n_rows`` cells.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): decoded geometry
-    within 1e-6 + SRID 4326.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4498,12 +4659,14 @@ def run_quadbin_aswkb(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_quadbin_aswkb(cell) AS g FROM _quadbin_cell_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_quadbin_aswkb(cell) AS g FROM _quadbin_cell_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty EWKB polygon comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_aswkb(cell) AS g FROM _quadbin_cell_v LIMIT 1"
@@ -4549,10 +4712,9 @@ def run_quadbin_centroid(
 ) -> "ResultRow":
     """Time gbx_quadbin_centroid (scalar cell -> EWKB point) over ``n_rows`` cells.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): decoded point
-    within 1e-6.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4592,12 +4754,14 @@ def run_quadbin_centroid(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_quadbin_centroid(cell) AS g FROM _quadbin_cell_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_quadbin_centroid(cell) AS g FROM _quadbin_cell_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty EWKB point comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_centroid(cell) AS g FROM _quadbin_cell_v LIMIT 1"
@@ -4645,11 +4809,9 @@ def run_quadbin_cellunion(
 
     Reuses the cellunion_agg corpus (``generate_quadbin_cellid_arrays``):
     collect each group's cells into an ARRAY<LONG>, then call the scalar
-    ``gbx_quadbin_cellunion`` on the array. Light registers pygx; heavy registers
-    gridx.quadbin (the SAME SQL name). Records ``rows`` = number of unioned arrays
-    (one per group). Returns one ResultRow (mode="spark-path", category="grid").
-    Parity (cluster cell): decoded union geometry via symmetric-difference-area
-    < 1e-6 (member-ordering-robust, like the cellunion_agg leg).
+    ``gbx_quadbin_cellunion`` on the array. Light registers pygx (the only level
+    quadbin has). Records ``rows`` = number of unioned arrays (one per group).
+    Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cellid_arrays
 
@@ -4696,12 +4858,16 @@ def run_quadbin_cellunion(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_quadbin_cellunion(cells) AS u FROM _quadbin_cellarr_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty union blob comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_cellunion(cells) AS u FROM _quadbin_cellarr_v LIMIT 1"
@@ -4735,25 +4901,35 @@ def run_quadbin_cellunion(
 
 
 def _register_bng(spark, api: str) -> None:
-    """Register exactly one BNG tier.
+    """Register one BNG tier.
 
     light  -> ``databricks.labs.gbx.pygx`` (gx.register: spark.udf/udtf only).
-    heavy  -> ``databricks.labs.gbx.gridx.bng`` (JVM Scala UDFs).
+    heavy  -> ``databricks.labs.gbx.gridx.bng`` (JVM expressions).
 
-    Both tiers expose the SAME ``gbx_bng_*`` SQL names, so registering one
-    overwrites the other in the session catalog.  Each ``run_bng_*`` call
-    therefore registers a single tier; the light-vs-heavy parity gate (which
-    must collect light BEFORE re-registering heavy) lives in the cluster cell,
-    not here.
+    Both tiers expose the SAME ``gbx_bng_*`` SQL names. The scalar, array and
+    aggregate functions of both tiers live in Spark's ``functionRegistry``, so the
+    later registration replaces the earlier one there, and each ``run_bng_*`` leg
+    registers its own tier first. The five ``*explode`` functions do NOT replace each
+    other: light registers table functions (``tableFunctionRegistry``) and heavy
+    registers generators (``functionRegistry``), so both stay registered and the SQL
+    form picks the tier (see :func:`_bng_explode_sql`). The light-vs-heavy parity gate
+    (which collects light BEFORE re-registering heavy) lives in the cluster cell.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     if api == "lightweight":
-        from databricks.labs.gbx.pygx import functions as gx
 
-        gx.register(spark)
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
     else:
-        from databricks.labs.gbx.gridx.bng import functions as hx
 
-        hx.register(spark)
+        gbx_manager.register_family(
+            spark,
+            ("gbx_bng_",),
+            only=gbx_manager.names_at_level(("gbx_bng_",), "L1"),
+            level="L1",
+        )
 
 
 def run_bng_pointascell(
@@ -4812,12 +4988,16 @@ def run_bng_pointascell(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_pointascell(geom, '{res}') AS cell FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm non-null cell ids are produced.
         _val = spark.sql(
             f"SELECT gbx_bng_pointascell(geom, '{res}') AS cell "
@@ -4906,12 +5086,16 @@ def run_bng_polyfill(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_polyfill(geom, '{res}') AS cells FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty cell array.
         _val = spark.sql(
             f"SELECT gbx_bng_polyfill(geom, '{res}') AS cells FROM _bng_bench_v LIMIT 1"
@@ -4999,12 +5183,16 @@ def run_bng_tessellate(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_tessellate(geom, '{res}') AS chips FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty chip array with cellids.
         _val = spark.sql(
             f"SELECT gbx_bng_tessellate(geom, '{res}') AS chips FROM _bng_bench_v LIMIT 1"
@@ -5094,12 +5282,16 @@ def run_bng_kring(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_kring(cell, {k}) AS ring FROM _bng_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_kring(cell, {k}) AS ring FROM _bng_cell_bench_v LIMIT 1"
@@ -5191,13 +5383,17 @@ def run_bng_cellunion_agg(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
             "FROM _bng_agg_v GROUP BY group"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm each group produced a non-null union.
         _val = spark.sql(
             "SELECT gbx_bng_cellunion_agg(chip) AS u " "FROM _bng_agg_v GROUP BY group"
@@ -5286,12 +5482,14 @@ def run_bng_aswkb(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB polygon comes back.
         _val = spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_bench_v LIMIT 1"
@@ -5379,12 +5577,14 @@ def run_bng_aswkt(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKT string comes back.
         _val = spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_bench_v LIMIT 1"
@@ -5472,12 +5672,14 @@ def run_bng_centroid(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB point comes back.
         _val = spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_bench_v LIMIT 1"
@@ -5565,12 +5767,14 @@ def run_bng_cellarea(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null area comes back.
         _val = spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_bench_v LIMIT 1"
@@ -5658,12 +5862,16 @@ def run_bng_distance(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d FROM _bng_pair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null distance comes back.
         _val = spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d FROM _bng_pair_v LIMIT 1"
@@ -5751,12 +5959,16 @@ def run_bng_euclideandistance(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d FROM _bng_pair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null distance comes back.
         _val = spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
@@ -5803,12 +6015,16 @@ def run_bng_eastnorthasbng(
 ) -> "ResultRow":
     """Time gbx_bng_eastnorthasbng ((e, n, res) -> STRING cell) over ``n_rows`` points.
 
-    Light registers pygx; heavy registers gridx.bng (the SAME SQL name). Inputs
-    are EPSG:27700 eastings/northings (DOUBLE, BNG, not WGS84). Records ``rows`` =
-    number of input points. Returns one ResultRow (mode="spark-path",
-    category="grid"). Parity (cluster cell): exact STRING cell-id equality.
+    ``api`` must be "lightweight" (pygx): the function has no heavyweight level, so any other value raises.
+    Inputs are EPSG:27700 eastings/northings (DOUBLE, BNG, not WGS84). Records ``rows`` =
+    number of input points. Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_eastnorth
+
+    if api != "lightweight":
+        raise ValueError(
+            f"gbx_bng_eastnorthasbng has no heavyweight implementation (api={api!r}); time api='lightweight'."
+        )
 
     env = capture_env(where)
     fn = "bng_eastnorthasbng"
@@ -5846,13 +6062,17 @@ def run_bng_eastnorthasbng(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_eastnorthasbng(e, n, '{res}') AS cell "
             "FROM _bng_eastnorth_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null cell id comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_eastnorthasbng(e, n, '{res}') AS cell "
@@ -5942,12 +6162,16 @@ def run_bng_kloop(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_kloop(cell, {k}) AS ring FROM _bng_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_kloop(cell, {k}) AS ring FROM _bng_cell_bench_v LIMIT 1"
@@ -6043,12 +6267,16 @@ def run_bng_geomkring(
 
     res_i = _bng.get_resolution(res)
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_geomkring(geom, {res_i}, {k}) AS ring FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_geomkring(geom, {res_i}, {k}) AS ring "
@@ -6145,12 +6373,16 @@ def run_bng_geomkloop(
 
     res_i = _bng.get_resolution(res)
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_geomkloop(geom, {res_i}, {k}) AS ring FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_geomkloop(geom, {res_i}, {k}) AS ring "
@@ -6241,14 +6473,18 @@ def run_bng_cellintersection(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_cellintersection("
             "struct(lid, lcore, lchip), struct(rid, rcore, rchip)) AS c "
             "FROM _bng_chippair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null chip struct comes back.
         _val = spark.sql(
             "SELECT gbx_bng_cellintersection("
@@ -6340,14 +6576,18 @@ def run_bng_cellunion(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_cellunion("
             "struct(lid, lcore, lchip), struct(rid, rcore, rchip)) AS c "
             "FROM _bng_chippair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null chip struct comes back.
         _val = spark.sql(
             "SELECT gbx_bng_cellunion("
@@ -6441,13 +6681,17 @@ def run_bng_cellintersection_agg(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_v GROUP BY group"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm each group produced a non-null intersection.
         _val = spark.sql(
             "SELECT gbx_bng_cellintersection_agg(chip) AS u "
@@ -6485,31 +6729,73 @@ def run_bng_cellintersection_agg(
         )
 
 
-def run_bng_kringexplode(
+def _bng_explode_sql(api: str, view: str, call: str, limit: bool = False) -> str:
+    """The timed query of a BNG explode leg, in the form that reaches ``api``'s implementation.
+
+    Both tiers register the same ``gbx_bng_*explode`` names, in different registries:
+    the lightweight tier registers Python table functions (``tableFunctionRegistry``),
+    the heavyweight tier Catalyst generators (``functionRegistry``). Registering one
+    does not replace the other. ``FROM v, LATERAL f(...)`` resolves table functions
+    only, so it reaches the lightweight UDTF even after the heavyweight tier registers;
+    a generator in the select list resolves through ``functionRegistry`` only, so it
+    reaches the heavyweight generator. Both forms yield one row per output cell.
+    """
+    if api == "lightweight":
+        sql = f"SELECT t.cellid FROM {view}, LATERAL {call} t"
+    else:
+        sql = f"SELECT {call} FROM {view}"
+    return f"{sql} LIMIT 1" if limit else sql
+
+
+def _explode_rows_match(
+    spark, api: str, fn: str, view: str, call: str, n_out: int
+) -> bool:
+    """Compare a leg's output row count with the other tier's form of the same call.
+
+    Returns False (nothing to compare) when the other tier's form does not resolve to
+    that tier in this session, e.g. in a single-tier run. Raises RuntimeError on a
+    mismatch, which the leg records as an error row.
+    """
+    other = "heavyweight" if api == "lightweight" else "lightweight"
+    other_sql = _bng_explode_sql(other, view, call)
+    try:
+        if _explode_impl(spark, other_sql) != other:
+            return False
+    except Exception:  # noqa: BLE001 -- the other tier is not registered here
+        return False
+    n_other = int(spark.sql(other_sql).count())
+    if n_other != n_out:
+        raise RuntimeError(
+            f"{fn}: the {api} form gives {n_out} rows, the {other} form {n_other}"
+        )
+    return True
+
+
+def _run_bng_explode(
     spark,
     run_id: str,
     warmup: int,
     measured: int,
     *,
     api: str,
-    n_rows: int = 1000,
-    res="1km",
-    k: int = 1,
-    where: str = "cluster",
+    fn: str,
+    view: str,
+    build,
+    call: str,
+    noun: str,
+    detail: str,
+    where: str,
 ) -> "ResultRow":
-    """Time gbx_bng_kringexplode (UDTF: STRING cell -> rows of cellid) over cells.
+    """Time one BNG explode generator for ``api``; shared body of the five explode legs.
 
-    A table-valued generator: timed via a SQL LATERAL query (NOT the Column API;
-    the Python wrapper raises NotImplementedError). Both tiers register the SAME
-    ``gbx_bng_kringexplode`` SQL name (light a pygx UDTF, heavy a JVM
-    CollectionGenerator), so the LATERAL ``_job`` is tier-agnostic. Records
-    ``rows`` = number of input cells. Returns one ResultRow (mode="spark-path",
-    category="grid"). Parity (cluster cell): exploded cellid set == kring's set.
+    ``build()`` returns the ``(rows, schema)`` input corpus, registered as ``view``;
+    ``call`` is the SQL call over that view's columns. Before timing, the leg reads
+    the plan of its query: a query that runs the OTHER tier's implementation raises
+    :class:`TierResolutionError`, and one that runs neither (the function is not
+    registered) gives an error row. Records ``rows`` = number of input rows. Returns
+    one ResultRow (mode="spark-path", category="grid").
     """
-    from databricks.labs.gbx.bench.corpus_vector import generate_bng_cells
-
     env = capture_env(where)
-    fn = "bng_kringexplode"
     cat = "grid"
     try:
         _register_bng(spark, api)
@@ -6527,10 +6813,10 @@ def run_bng_kringexplode(
         )
 
     try:
-        data, schema = generate_bng_cells(n_rows, res=res)
+        data, schema = build()
         df = spark.createDataFrame(data, schema=schema).cache()
         n = int(df.count())
-        df.createOrReplaceTempView("_bng_cell_bench_v")
+        df.createOrReplaceTempView(view)
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -6544,20 +6830,51 @@ def run_bng_kringexplode(
             warmup=warmup,
         )
 
+    sql = _bng_explode_sql(api, view, call)
+    try:
+        resolved = _explode_impl(spark, sql)
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 -- EXPLAIN itself failed (an unregistered function does not)
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=n,
+            status="error",
+            note=str(e),
+            warmup=warmup,
+        )
+    if resolved == "unknown":
+        # EXPLAIN does not raise for a function that is not registered: it prints the
+        # [UNRESOLVED_ROUTINE] error in the plan, which has no Python node and no Generate.
+        # Nothing was resolved, so nothing can be mis-timed: an error row, not an abort.
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=n,
+            status="error",
+            note=f"{fn} is not registered for the {api} tier (the plan runs no {api} function)",
+            warmup=warmup,
+        )
+    _require_tier(api, fn, resolved, sql)
+    form = "LATERAL table function" if api == "lightweight" else "select-list generator"
+
     def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kringexplode(cell, {k}) t"
-        ).count()
+        return spark.sql(sql).count()
 
     try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kringexplode(cell, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_kringexplode produced no rows")
+        # Untimed validation: the timed form yields rows, and as many as the other
+        # tier's form when that tier is registered in this session too.
+        n_out = int(_job())
+        if n_out <= 0:
+            raise RuntimeError(f"{fn} produced no rows")
+        checked = _explode_rows_match(spark, api, fn, view, call, n_out)
         stats = time_iters(_job, warmup, measured)
         return _tin_result_row(
             run_id=run_id,
@@ -6567,7 +6884,10 @@ def run_bng_kringexplode(
             env=env,
             rows=n,
             status="ok",
-            note=f"bng_kringexplode {api} exploded {n} cells (k={k})",
+            note=(
+                f"{fn} {api} exploded {n} {noun}{detail} into {n_out} rows via {form}"
+                + ("; same row count as the other tier's form" if checked else "")
+            ),
             stats=stats,
         )
     except Exception as e:  # noqa: BLE001
@@ -6582,6 +6902,42 @@ def run_bng_kringexplode(
             note=str(e),
             warmup=warmup,
         )
+
+
+def run_bng_kringexplode(
+    spark,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    api: str,
+    n_rows: int = 1000,
+    res="1km",
+    k: int = 1,
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time gbx_bng_kringexplode (STRING cell -> rows of cellid) over cells.
+
+    A generator, timed in SQL (the light Python wrapper raises NotImplementedError):
+    light as a ``LATERAL`` table function, heavy as a select-list generator (see
+    :func:`_bng_explode_sql`). Parity (cluster cell): exploded cellid set == kring's set.
+    """
+    from databricks.labs.gbx.bench.corpus_vector import generate_bng_cells
+
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_kringexplode",
+        view="_bng_cell_bench_v",
+        build=lambda: generate_bng_cells(n_rows, res=res),
+        call=f"gbx_bng_kringexplode(cell, {k})",
+        noun="cells",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_kloopexplode(
@@ -6596,89 +6952,27 @@ def run_bng_kloopexplode(
     k: int = 1,
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_kloopexplode (UDTF: STRING cell -> rows of cellid) over cells.
+    """Time gbx_bng_kloopexplode (STRING cell -> rows of cellid) over cells.
 
-    Mirror of kringexplode (k-loop / hollow ring). Timed via SQL LATERAL; both
-    tiers register the SAME ``gbx_bng_kloopexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input cells. Parity (cluster cell): exploded
-    cellid set == kloop's set.
+    Mirror of kringexplode (k-loop / hollow ring), in each tier's SQL form. Parity
+    (cluster cell): exploded cellid set == kloop's set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_cells
 
-    env = capture_env(where)
-    fn = "bng_kloopexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_cells(n_rows, res=res)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_cell_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kloopexplode(cell, {k}) t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kloopexplode(cell, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_kloopexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_kloopexplode {api} exploded {n} cells (k={k})",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_kloopexplode",
+        view="_bng_cell_bench_v",
+        build=lambda: generate_bng_cells(n_rows, res=res),
+        call=f"gbx_bng_kloopexplode(cell, {k})",
+        noun="cells",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_geomkringexplode(
@@ -6693,95 +6987,30 @@ def run_bng_geomkringexplode(
     k: int = 1,
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_geomkringexplode (UDTF: geom -> rows of cellid) over polygons.
+    """Time gbx_bng_geomkringexplode (geom -> rows of cellid) over WKT polygons.
 
-    A table-valued generator: timed via SQL LATERAL over WKT polygons. Both tiers
-    register the SAME ``gbx_bng_geomkringexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input polygons. Parity (cluster cell): exploded
-    cellid set == geomkring's set.
+    In each tier's SQL form (see :func:`_bng_explode_sql`). Records ``rows`` = number
+    of input polygons. Parity (cluster cell): exploded cellid set == geomkring's set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_polygons
-
-    env = capture_env(where)
-    fn = "bng_geomkringexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_polygons(n_rows)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    # Align resolution to the int index for parity with the canonical
-    # function-info form (heavy accepts Int or String here).
     from databricks.labs.gbx.pygx import _bng
 
+    # Resolution as the int index, the canonical function-info form (heavy accepts both).
     res_i = _bng.get_resolution(res)
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkringexplode(geom, {res_i}, {k}) t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkringexplode(geom, {res_i}, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_geomkringexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_geomkringexplode {api} exploded {n} polygons (k={k})",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_geomkringexplode",
+        view="_bng_bench_v",
+        build=lambda: generate_bng_polygons(n_rows),
+        call=f"gbx_bng_geomkringexplode(geom, {res_i}, {k})",
+        noun="polygons",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_geomkloopexplode(
@@ -6796,95 +7025,29 @@ def run_bng_geomkloopexplode(
     k: int = 1,
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_geomkloopexplode (UDTF: geom -> rows of cellid) over polygons.
+    """Time gbx_bng_geomkloopexplode (geom -> rows of cellid) over WKT polygons.
 
-    Mirror of geomkringexplode (k-loop). Timed via SQL LATERAL; both tiers
-    register the SAME ``gbx_bng_geomkloopexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input polygons. Parity (cluster cell): exploded
-    cellid set == geomkloop's set.
+    Mirror of geomkringexplode (k-loop), in each tier's SQL form. Parity (cluster
+    cell): exploded cellid set == geomkloop's set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_polygons
-
-    env = capture_env(where)
-    fn = "bng_geomkloopexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_polygons(n_rows)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    # Align resolution to the int index for parity with the canonical
-    # function-info form (heavy accepts Int or String here).
     from databricks.labs.gbx.pygx import _bng
 
     res_i = _bng.get_resolution(res)
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkloopexplode(geom, {res_i}, {k}) t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkloopexplode(geom, {res_i}, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_geomkloopexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_geomkloopexplode {api} exploded {n} polygons (k={k})",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_geomkloopexplode",
+        view="_bng_bench_v",
+        build=lambda: generate_bng_polygons(n_rows),
+        call=f"gbx_bng_geomkloopexplode(geom, {res_i}, {k})",
+        noun="polygons",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_tessellateexplode(
@@ -6898,89 +7061,28 @@ def run_bng_tessellateexplode(
     res="1km",
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_tessellateexplode (UDTF: geom -> rows of (cellid, core, chip)).
+    """Time gbx_bng_tessellateexplode (geom -> rows of (cellid, core, chip)).
 
-    A table-valued generator: timed via SQL LATERAL over WKT polygons. Both tiers
-    register the SAME ``gbx_bng_tessellateexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input polygons. Parity (cluster cell): exploded
-    cellid set == tessellate's chip cellid set.
+    In each tier's SQL form (see :func:`_bng_explode_sql`), with the two-argument
+    call both tiers accept. Records ``rows`` = number of input polygons. Parity
+    (cluster cell): exploded cellid set == tessellate's chip cellid set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_polygons
 
-    env = capture_env(where)
-    fn = "bng_tessellateexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_polygons(n_rows)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_tessellateexplode(geom, '{res}') t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_tessellateexplode(geom, '{res}') t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_tessellateexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_tessellateexplode {api} exploded {n} polygons",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_tessellateexplode",
+        view="_bng_bench_v",
+        build=lambda: generate_bng_polygons(n_rows),
+        call=f"gbx_bng_tessellateexplode(geom, '{res}')",
+        noun="polygons",
+        detail="",
+        where=where,
+    )
 
 
 def _make_synthetic_geotiff(
@@ -7062,11 +7164,8 @@ def _make_synthetic_geotiff(
 
 # Fan-out functions covered by run_fanout_udtf.  Order is stable for parity loops.
 FANOUT_FUNCTIONS = [
-    "rst_polygonize",
-    "rst_h3_rastertogridcount",
     "rst_xyzpyramid",
     "rst_h3_tessellate",
-    "rst_retile",
     "rst_tooverlappingtiles",
     "rst_maketiles",
     "rst_separatebands",
@@ -7079,9 +7178,7 @@ FANOUT_FUNCTIONS = [
 # Each entry returns (tile_kwargs, light_lateral, heavy_lateral) where the LATERAL
 # fragments are the part AFTER "LATERAL" in the SQL, and ``heavy_lateral`` already
 # flattens the heavy tier to the SAME granularity as the light flat UDTF rows:
-#   * polygonize  -> heavy ARRAY<struct>           -> explode  (single)
-#   * gridcount   -> heavy ARRAY<ARRAY<struct>>    -> explode∘explode (double)
-#   * 5 tilers    -> heavy CollectionGenerator     -> LATERAL VIEW gbx_.. (no explode)
+#   * 3 tilers    -> heavy CollectionGenerator     -> LATERAL VIEW gbx_.. (no explode)
 #   * xyzpyramid  -> heavy CollectionGenerator emits flat rows -> LATERAL VIEW (no explode)
 
 
@@ -7093,38 +7190,6 @@ def _fanout_spec(fn: str, scale: float):
     two row counts are directly comparable (the flatten-both parity gate).
     """
     s = max(0.1, float(scale))
-
-    if fn == "rst_polygonize":
-        # Many connected components -> large polygon fan-out.
-        cb = max(2, int(round(16 * (s**0.5))))
-        size = max(64, int(round(256 * (s**0.5))))
-        tile_kwargs = dict(size=size, checkerboard=cb)
-        light = "SELECT t.* FROM _fanout_bench_ras, LATERAL gbx_rst_polygonize(tile, 1, 4) t"
-        # Heavy returns ARRAY<struct> -> single explode.
-        heavy = (
-            "SELECT p.* FROM _fanout_bench_ras "
-            "LATERAL VIEW explode(gbx_rst_polygonize(tile, 1, 4)) e AS p"
-        )
-        return tile_kwargs, light, heavy
-
-    if fn == "rst_h3_rastertogridcount":
-        # Fine H3 resolution + wide extent -> many cells.
-        res = 9 if s <= 1.0 else 10
-        # Wider extent at higher scale -> more cells.
-        span = 0.5 * (s**0.5)
-        bounds = (-span, 51.5 - span, span, 51.5 + span)
-        tile_kwargs = dict(size=max(128, int(round(256 * (s**0.5)))), bounds=bounds)
-        light = (
-            "SELECT t.* FROM _fanout_bench_ras, "
-            f"LATERAL gbx_rst_h3_rastertogridcount(tile, {res}) t"
-        )
-        # Heavy returns ARRAY<ARRAY<struct>> (bands x cells) -> DOUBLE explode.
-        heavy = (
-            "SELECT c.* FROM _fanout_bench_ras "
-            f"LATERAL VIEW explode(gbx_rst_h3_rastertogridcount(tile, {res})) eb AS band_cells "
-            "LATERAL VIEW explode(band_cells) ec AS c"
-        )
-        return tile_kwargs, light, heavy
 
     if fn == "rst_xyzpyramid":
         # Deep zoom range over a multi-degree extent -> thousands of tiles.
@@ -7164,30 +7229,20 @@ def _fanout_spec(fn: str, scale: float):
         )
         return tile_kwargs, light, heavy
 
-    if fn in ("rst_retile", "rst_tooverlappingtiles"):
+    if fn == "rst_tooverlappingtiles":
         # Large raster with small tile size -> many tiles.
         size = max(512, int(round(1024 * (s**0.5))))
         tw = th = 64
         tile_kwargs = dict(size=size)
-        if fn == "rst_retile":
-            light = (
-                "SELECT t.* FROM _fanout_bench_ras, "
-                f"LATERAL gbx_rst_retile(tile, {tw}, {th}) t"
-            )
-            heavy = (
-                "SELECT t.* FROM _fanout_bench_ras "
-                f"LATERAL VIEW gbx_rst_retile(tile, {tw}, {th}) t AS tile"
-            )
-        else:
-            overlap = 8
-            light = (
-                "SELECT t.* FROM _fanout_bench_ras, "
-                f"LATERAL gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t"
-            )
-            heavy = (
-                "SELECT t.* FROM _fanout_bench_ras "
-                f"LATERAL VIEW gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t AS tile"
-            )
+        overlap = 8
+        light = (
+            "SELECT t.* FROM _fanout_bench_ras, "
+            f"LATERAL gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t"
+        )
+        heavy = (
+            "SELECT t.* FROM _fanout_bench_ras "
+            f"LATERAL VIEW gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t AS tile"
+        )
         return tile_kwargs, light, heavy
 
     if fn == "rst_maketiles":
@@ -7246,14 +7301,21 @@ def _register_custom(spark, api: str) -> None:
     therefore registers a single tier; the light-vs-heavy parity gate (which must
     collect light BEFORE re-registering heavy) lives in the cluster cell.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     if api == "lightweight":
-        from databricks.labs.gbx.pygx import functions as gx
 
-        gx.register(spark)
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
     else:
-        from databricks.labs.gbx.gridx.custom import functions as hx
 
-        hx.register(spark)
+        gbx_manager.register_family(
+            spark,
+            ("gbx_custom_",),
+            only=gbx_manager.names_at_level(("gbx_custom_",), "L1"),
+            level="L1",
+        )
 
 
 def run_custom_pointascell(
@@ -7315,13 +7377,17 @@ def run_custom_pointascell(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_pointascell(geom, {CUSTOM_GRID_SQL}, {res}) AS cell "
             "FROM _custom_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm non-null cell ids are produced.
         _val = spark.sql(
             f"SELECT gbx_custom_pointascell(geom, {CUSTOM_GRID_SQL}, {res}) AS cell "
@@ -7414,13 +7480,17 @@ def run_custom_polyfill(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_polyfill(geom, {CUSTOM_GRID_SQL}, {res}) AS cells "
             "FROM _custom_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty cell array.
         _val = spark.sql(
             f"SELECT gbx_custom_polyfill(geom, {CUSTOM_GRID_SQL}, {res}) AS cells "
@@ -7514,13 +7584,17 @@ def run_custom_kring(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_kring(cell, {CUSTOM_GRID_SQL}, {k}) AS ring "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_kring(cell, {CUSTOM_GRID_SQL}, {k}) AS ring "
@@ -7614,13 +7688,17 @@ def run_custom_cellaswkb(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_cellaswkb(cell, {CUSTOM_GRID_SQL}) AS g "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB polygon comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_cellaswkb(cell, {CUSTOM_GRID_SQL}) AS g "
@@ -7714,13 +7792,17 @@ def run_custom_cellaswkt(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_cellaswkt(cell, {CUSTOM_GRID_SQL}) AS g "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKT polygon string comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_cellaswkt(cell, {CUSTOM_GRID_SQL}) AS g "
@@ -7814,13 +7896,17 @@ def run_custom_centroid(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_centroid(cell, {CUSTOM_GRID_SQL}) AS g "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB point comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_centroid(cell, {CUSTOM_GRID_SQL}) AS g "
@@ -7918,12 +8004,14 @@ def run_custom_grid(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql(f"SELECT {CUSTOM_GRID_SQL} AS grid FROM _custom_bench_v")
+
     def _job():
-        return spark.sql(
-            f"SELECT {CUSTOM_GRID_SQL} AS grid FROM _custom_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null grid struct comes back.
         _val = spark.sql(
             f"SELECT {CUSTOM_GRID_SQL} AS grid FROM _custom_bench_v LIMIT 1"
@@ -7979,7 +8067,6 @@ def run_fanout_udtf(
     output row counts are directly comparable (flatten-both parity):
         * light = streaming UDTF via ``LATERAL gbx_<fn>(...)`` -> already flat.
         * heavy = its Scala counterpart, flattened to match:
-            - ARRAY<struct>        (polygonize)  -> single ``explode``
             - ARRAY<ARRAY<struct>> (gridcount)   -> double ``explode``
             - CollectionGenerator  (5 tilers)    -> ``LATERAL VIEW gbx_.. (no explode)``
             - CollectionGenerator emitting flat rows (xyzpyramid) -> ``LATERAL VIEW``
@@ -7990,6 +8077,8 @@ def run_fanout_udtf(
     ``fn`` is one of ``FANOUT_FUNCTIONS``.
     ``scale`` dials the synthetic fan-out up/down (default 1.0).
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     # Resolve the per-function synthetic-input + invocation spec up front so a bad
@@ -8030,13 +8119,16 @@ def run_fanout_udtf(
     # Register the tier.
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyrx import functions as prx
 
-            prx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
         else:
-            from databricks.labs.gbx.rasterx import functions as rx
 
-            rx.register(spark)
+            gbx_manager.register_family(
+                spark,
+                ("gbx_rst_",),
+                only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,
@@ -8149,9 +8241,13 @@ def run_fanout_udtf(
     try:
         sql = light_sql if api == "lightweight" else heavy_sql
 
-        def _job():
-            return spark.sql(sql).count()
+        def _job_df():
+            return spark.sql(sql)
 
+        def _job():
+            return _job_df().count()
+
+        _assert_tier(api, fn, _job_df())
         # Validate once (untimed): guard against 0-row / all-empty output.
         actual_rows = int(_job())
         if actual_rows == 0:
@@ -8263,9 +8359,8 @@ def list_corpus_files(
 
     The reader bench is format-parameterized: GeoTIFF pools filter on the default
     ``.*\\.tif$`` while a NetCDF pool passes ``.*\\.nc$``. Mirrors the
-    ``filterRegex`` option honored by both the light (netcdf_gbx) and heavy
-    (netcdf_gdal / gdal) directory readers so the host-side listing and the
-    on-cluster reader see the SAME set of files. Recurses into subdirectories.
+    ``filterRegex`` option honored by the light (netcdf_gbx, raster_gbx) directory readers so
+    the host-side listing and the on-cluster reader see the SAME set of files. Recurses into subdirectories.
 
     ``filter_regex`` is matched against the full absolute path (not basename only).
     For the standard patterns ``r".*\\.tif$"`` and ``r".*\\.nc$"`` the behaviour is
@@ -8363,8 +8458,7 @@ def stage_nasanex_corpus(
     invokes it once (interactively / from a staging notebook) to populate the
     ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench RASTER leg reads.
     NASA-NEX GDDP-CMIP6 granules are regular 0.25-degree lat/lon global grids, so
-    BOTH the heavy ``netcdf_gdal`` and the light ``netcdf_gbx`` (raster mode)
-    readers can enumerate them -- a fair heavy-vs-light comparison. (The S5P swath
+    the light ``netcdf_gbx`` reader (raster mode) enumerates them. (The S5P swath
     VECTOR leg is staged separately by ``stage_netcdf_corpus`` into
     ``{CORPUS}/netcdf-swath``.)
 
@@ -8567,6 +8661,127 @@ def stage_exif_corpus(
     return staged
 
 
+ZARR_COG_MANIFEST = "cog_hourly_manifest.json"
+
+
+def stage_zarr_cog_corpus(
+    spark, store: str, corpus_dir: str, variable: str = "t2m", block: int = 24
+) -> dict:
+    """Copy ``variable`` of the plain Zarr store ``store`` to one tiled GeoTIFF per time
+    step under ``corpus_dir``, for the Zarr bench's COG comparisons (R1-R3).
+
+    Bench-only helper. Idempotent: when ``corpus_dir`` already holds the manifest
+    (``cog_hourly_manifest.json``) nothing is written and the manifest is returned. Each
+    file is one hour, EPSG:4326, float32, 512 x 512 tiles, written with the canonical
+    ``write_gtiff`` (ZSTD and the float predictor). Longitudes go from the store's 0..360
+    to -180..180 (columns rolled), the usual layout of a global GeoTIFF; the manifest
+    records the roll, the files in time order and their times.
+
+    One Spark task copies ``block`` steps (one time chunk of the store, so each chunk is
+    decoded once), writing each file in one sequential write (a Volume rejects seeks).
+    """
+    import json
+
+    import pandas as pd
+
+    manifest = os.path.join(corpus_dir, ZARR_COG_MANIFEST)
+    if os.path.exists(manifest):
+        with open(manifest) as fh:
+            man = json.load(fh)
+        if man.get("store") != store or man.get("variable") != variable:
+            raise ValueError(
+                f"{corpus_dir} was staged from {man.get('variable')!r} of "
+                f"{man.get('store')!r}, not {variable!r} of {store!r}, so the GeoTIFF "
+                "baselines would compare unequal data. Fix: use another corpus_dir, or "
+                "delete this one to stage again"
+            )
+        print(
+            f"stage_zarr_cog_corpus: {len(man['files'])} file(s) already staged under "
+            f"{corpus_dir}; nothing written",
+            flush=True,
+        )
+        return man
+
+    import numpy as np
+    import xarray as xr
+
+    ds = xr.open_zarr(store, consolidated=None)
+    times = [str(t) for t in ds["time"].values.astype("datetime64[s]")]
+    lat = ds["latitude"].values.astype("float64")
+    lon = ds["longitude"].values.astype("float64")
+    packing = {"scale_factor", "add_offset"} & set(ds[variable].encoding)
+    if packing or lat[0] < lat[1]:
+        raise ValueError(
+            f"{variable!r} of {store} is "
+            + ("packed (scale_factor/add_offset)" if packing else "south-first")
+            + ": the copy writes the stored values with a north-first grid, so the "
+            "GeoTIFFs would not match what gbx_zarr_read returns. Fix: stage a store "
+            "with unpacked values and descending latitude"
+        )
+    roll = -int(np.argmax(lon >= 180.0)) if (lon >= 180.0).any() else 0
+    dx, dy = float(lon[1] - lon[0]), float(lat[0] - lat[1])
+    west = float(np.roll(np.where(lon >= 180.0, lon - 360.0, lon), roll)[0]) - dx / 2
+    north = float(lat[0]) + dy / 2
+    os.makedirs(corpus_dir, exist_ok=True)
+    names = [f"{variable}_{t.replace(':', '')}.tif" for t in times]
+    n_blocks = -(-len(times) // block)
+
+    def copy(batches):
+        import zarr
+        from rasterio.transform import from_origin
+
+        from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+        arr = zarr.open_array(os.path.join(store, variable), mode="r")
+        profile = {
+            "driver": "GTiff",
+            "dtype": "float32",
+            "count": 1,
+            "height": int(arr.shape[1]),
+            "width": int(arr.shape[2]),
+            "crs": "EPSG:4326",
+            "transform": from_origin(west, north, dx, dy),
+            "tiled": True,
+            "blockxsize": 512,
+            "blockysize": 512,
+        }
+        for pdf in batches:
+            done = []
+            for b in pdf["id"]:
+                lo, hi = int(b) * block, min((int(b) + 1) * block, arr.shape[0])
+                slab = np.asarray(arr[lo:hi], dtype="float32")
+                for i, step in enumerate(range(lo, hi)):
+                    data = np.roll(slab[i], roll, axis=1)[None]
+                    with open(os.path.join(corpus_dir, names[step]), "wb") as fh:
+                        fh.write(write_gtiff(profile, data))
+                    done.append(step)
+            yield pd.DataFrame({"step": done})
+
+    steps = (
+        spark.range(n_blocks)
+        .repartition(n_blocks, "id")
+        .mapInPandas(copy, "step long")
+        .count()
+    )
+    man = {
+        "store": store,
+        "variable": variable,
+        "files": [os.path.join(corpus_dir, n) for n in names],
+        "times": times,
+        "lon_roll": roll,
+        "transform": [west, dx, north, dy],
+        "crs": "EPSG:4326",
+        "tile": [512, 512],
+    }
+    with open(manifest, "w") as fh:
+        json.dump(man, fh)
+    print(
+        f"stage_zarr_cog_corpus: {steps} GeoTIFF(s) of {variable} staged under {corpus_dir}",
+        flush=True,
+    )
+    return man
+
+
 def _write_striped_gtiff(
     path: str, width: int, height: int, bands: int, dtype: str
 ) -> None:
@@ -8579,7 +8794,6 @@ def _write_striped_gtiff(
     while the cluster profile uses VIIRS/UK-scale sizes (> 1 GB).
     """
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     data = np.zeros((bands, height, width), dtype=dtype)
@@ -8599,8 +8813,21 @@ def _write_striped_gtiff(
         # Explicit STRIP layout — no tiling, no blockxsize/blockysize.
         tiled=False,
     )
-    with rasterio.open(path, "w", **profile) as ds:
-        ds.write(data)
+    # GDAL seeks back to write the first IFD offset on close; a Volume (FUSE) leaves it 0 and
+    # tears the file. Write locally, then publish sequentially (write-then-rename).
+    import shutil
+
+    from databricks.labs.gbx.bench.synth import publish_file
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+    scratch = new_local_temp_dir("gbx_striped_")
+    try:
+        local = os.path.join(scratch, os.path.basename(path))
+        with open_data(local, "w", **profile) as ds:
+            ds.write(data)
+        publish_file(local, path)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _write_tiled_cog(
@@ -8629,7 +8856,6 @@ def _write_tiled_cog(
     import tempfile
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert
@@ -8653,10 +8879,10 @@ def _write_tiled_cog(
             crs="EPSG:4326",
             transform=from_origin(0.0, 60.0, 0.01, 0.01),
         )
-        with rasterio.open(tmp_path, "w", **profile) as ds_tmp:
+        with open_data(tmp_path, "w", **profile) as ds_tmp:
             ds_tmp.write(data)
         # Convert to real COG (tiled + overviews) using the shared converter.
-        with rasterio.open(tmp_path) as ds_src:
+        with open_data(tmp_path) as ds_src:
             cog_bytes = cog_convert(ds_src, "DEFLATE", cog_blocksize, "AVERAGE")
     finally:
         os.unlink(tmp_path)
@@ -8775,9 +9001,9 @@ def _bench_large_raster_leg(
     it is stamped into the note so a 0-row fast read is visible. Throughput in
     MiB/s is computed from corpus_size_mib / iter_median_s (total file / one pass).
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
     def _job():
         return (
@@ -9257,7 +9483,7 @@ def run_layout_scan_comparison(
         ``"layout-shuffle-input"`` row per layout when
         ``include_shuffle_input=True``.
     """
-    from databricks.labs.gbx.pyrx.file_table import read_file_table
+    from databricks.labs.gbx.rasterx.file_table import read_file_table
 
     env = capture_env(where)
     out: List["ResultRow"] = []

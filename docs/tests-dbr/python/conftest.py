@@ -15,7 +15,7 @@ from pathlib import Path
 
 # Determine paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.5.0-jar-with-dependencies.jar"
+GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.6.0-jar-with-dependencies.jar"
 
 
 @pytest.fixture(scope="session")
@@ -32,44 +32,51 @@ def spark_with_geobrix():
     Returns:
         SparkSession with GeoBrix readers and functions available
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from pyspark.sql import SparkSession
     except ImportError:
         pytest.skip("PySpark not available")
         return None
     
-    # Check if JAR exists
-    if not GEOBRIX_JAR.exists():
-        pytest.skip(f"GeoBrix JAR not found at {GEOBRIX_JAR}. Run 'mvn package' first.")
-        return None
-    
-    # Unset JAVA_TOOL_OPTIONS to prevent debug port conflicts
-    if 'JAVA_TOOL_OPTIONS' in os.environ:
-        del os.environ['JAVA_TOOL_OPTIONS']
-        print("ℹ️  Unset JAVA_TOOL_OPTIONS to prevent Spark conflicts")
-    
-    # Create Spark session with GeoBrix JAR
-    spark = SparkSession.builder \
-        .appName("GeoBrix Databricks Runtime Tests") \
-        .master("local[*]") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.executor.memory", "2g") \
-        .config("spark.jars", str(GEOBRIX_JAR)) \
-        .config("spark.driver.extraClassPath", str(GEOBRIX_JAR)) \
-        .config("spark.executor.extraClassPath", str(GEOBRIX_JAR)) \
-        .config("spark.driver.extraJavaOptions", "-Djava.library.path=/usr/local/lib") \
-        .getOrCreate()
-    
-    print(f"✅ Spark session created with GeoBrix JAR: {GEOBRIX_JAR}")
-    print(f"   JAR exists: {GEOBRIX_JAR.exists()}")
-    print(f"   JAR size: {GEOBRIX_JAR.stat().st_size / 1024 / 1024:.1f} MB")
+    # On a Databricks cluster (gbx:test:python-dbr --cluster-id) the session is the cluster's own and the JAR is
+    # a cluster library: no local session, no local JAR.
+    on_cluster = os.environ.get("GBX_DBR_CLUSTER") == "1"
+    if on_cluster:
+        spark = SparkSession.builder.getOrCreate()
+        print("✅ Using the cluster's Spark session")
+    else:
+        # Check if JAR exists
+        if not GEOBRIX_JAR.exists():
+            pytest.skip(f"GeoBrix JAR not found at {GEOBRIX_JAR}. Run 'mvn package' first.")
+            return None
+
+        # Unset JAVA_TOOL_OPTIONS to prevent debug port conflicts
+        if 'JAVA_TOOL_OPTIONS' in os.environ:
+            del os.environ['JAVA_TOOL_OPTIONS']
+            print("ℹ️  Unset JAVA_TOOL_OPTIONS to prevent Spark conflicts")
+
+        # Create Spark session with GeoBrix JAR
+        spark = SparkSession.builder \
+            .appName("GeoBrix Databricks Runtime Tests") \
+            .master("local[*]") \
+            .config("spark.driver.memory", "2g") \
+            .config("spark.executor.memory", "2g") \
+            .config("spark.jars", str(GEOBRIX_JAR)) \
+            .config("spark.driver.extraClassPath", str(GEOBRIX_JAR)) \
+            .config("spark.executor.extraClassPath", str(GEOBRIX_JAR)) \
+            .config("spark.driver.extraJavaOptions", "-Djava.library.path=/usr/local/lib") \
+            .getOrCreate()
+
+        print(f"✅ Spark session created with GeoBrix JAR: {GEOBRIX_JAR}")
+        print(f"   JAR exists: {GEOBRIX_JAR.exists()}")
+        print(f"   JAR size: {GEOBRIX_JAR.stat().st_size / 1024 / 1024:.1f} MB")
     print("⚠️  Note: These tests require Databricks Runtime SQL functions (st_*)")
     print("   Tests will skip if functions are not available")
     
     # Try to register GeoBrix functions
     try:
-        from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         print(f"✅ GeoBrix rasterx functions registered")
     except ImportError:
         print("⚠️  GeoBrix rasterx not available (Python bindings may not be installed)")
@@ -77,8 +84,7 @@ def spark_with_geobrix():
         print(f"⚠️  Could not register rasterx functions: {e}")
     
     try:
-        from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-        vx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_st_legacy',))
         print(f"✅ GeoBrix vectorx functions registered")
     except ImportError:
         print("⚠️  GeoBrix vectorx not available")
@@ -87,8 +93,9 @@ def spark_with_geobrix():
     
     yield spark
     
-    # Cleanup
-    spark.stop()
+    # Cleanup (a cluster's session is not ours to stop)
+    if not on_cluster:
+        spark.stop()
 
 
 @pytest.fixture(scope="module")

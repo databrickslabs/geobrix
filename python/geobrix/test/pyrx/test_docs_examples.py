@@ -82,6 +82,12 @@ def test_land_cover_example(spark):
     assert isinstance(kept, list)
 
 
+def test_land_cover_python_example(spark):
+    """rst_land_cover_python_example gives the class ids of its four pixels."""
+    out = pyrx_doc_examples.rst_land_cover_python_example(spark)
+    assert out.reshape(-1).tolist() == [0, 1, 2, 3]
+
+
 def test_output_constants_present():
     """Each example has a matching _output string constant."""
     for name in [

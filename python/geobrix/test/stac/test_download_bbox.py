@@ -1,5 +1,6 @@
 import os
 import sys
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -11,7 +12,7 @@ from databricks.labs.gbx.stac._download import fetch_validate_publish
 
 def _write_gtiff(path, width=8, height=8):
     # extent: origin (0, 8), 1.0 px -> x[0,8], y[0,8]
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -79,7 +80,7 @@ def test_no_bbox_path_unchanged(tmp_path):
         return R()
 
     res = fetch_validate_publish(
-        lambda: "http://x/ok.tif", str(out_dir), "ok.tif", get=get
+        lambda: "http://93.184.216.34/ok.tif", str(out_dir), "ok.tif", get=get
     )
     assert res == os.path.join(str(out_dir), "ok.tif")
     assert os.path.getsize(res) == os.path.getsize(

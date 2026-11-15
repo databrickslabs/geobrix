@@ -1,5 +1,6 @@
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
@@ -7,7 +8,7 @@ from rasterio.transform import from_bounds
 def _write_tif(path, size=32, dtype="uint16", nodata=0, crs="EPSG:4326"):
     data = (np.random.rand(size, size) * 100).astype(dtype)
     transform = from_bounds(-104.0, 31.0, -103.9, 31.1, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

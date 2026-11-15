@@ -7,8 +7,8 @@ positional parameter.  This test guards the complete SQL surface:
   - rescale='auto' and rescale='none' produce different PNG bytes on a uint16
     narrow-range source (contrast mapping differs).
 
-Pattern: same fixture construction as test_sql_registration._rgb_tile_view, but
-using a uint16 narrow-range raster so that auto vs none meaningfully diverge.
+Pattern: a three-band raster on a small grid, but a uint16 narrow-range one so that auto vs none
+meaningfully diverge.
 """
 
 import numpy as np
@@ -16,11 +16,11 @@ import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) or [test] required)",
+    reason="rasterio not installed (the lightweight tier or [test] required)",
 )
 
 
@@ -45,14 +45,16 @@ def _uint16_tile_view(spark, name="t"):
     from pyspark.sql import functions as f
 
     df = spark.createDataFrame([(raw,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView(name)
 
 
 def test_xyzpyramid_accepts_rescale_and_alters_output(spark):
     """7-arg SQL call is accepted; auto and none produce different PNG bytes."""
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _uint16_tile_view(spark)
 
     auto_rows = spark.sql(

@@ -2,18 +2,23 @@
 
 Local Spark (local[2]) always returns file_supported()=False, so all tests
 exercise the fallback opener path over materialized tiles.  The FILE-stream
-fast path is validated on-cluster in Task 9.
+fast path is validated on-cluster.
 
-T9b fix: the worker no longer calls file_supported() to decide the FILE path;
+The worker no longer calls file_supported() to decide the FILE path;
 it keys off _file_ref column presence (has_fr_col) instead, avoiding the
 getActiveSession()==None pitfall on Spark-Connect worker threads.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
+import pytest
 from pyspark.sql.types import LongType, StructField, StructType
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
+from databricks.labs.gbx.rasterx import functions as rx
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 _FLOAT32_ITEMSIZE = 4  # bytes per sample in the test GeoTIFFs (float32)
 
@@ -86,7 +91,7 @@ def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# T9b: _make_opener no longer calls worker-side file_supported()
+# _make_opener no longer calls worker-side file_supported()
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +100,7 @@ def test_make_opener_returns_four_items_not_five():
 
     Under the OLD implementation _make_opener called file_supported() on the
     worker and returned a 5-tuple (file_ok, fr_holder, opener, closer, weigher).
-    The T9b fix removes the worker-side file_supported() call; the opener/closer/
+    The worker-side file_supported() call is gone; the opener/closer/
     weigher are now methods on _OpenerContext, and the FILE capability signal is
     the _file_ref column's presence (has_fr_col) set by the driver.
     """
@@ -104,14 +109,14 @@ def test_make_opener_returns_four_items_not_five():
     ctx = _OpenerContext()
     assert (
         isinstance(ctx.fr_holder, list) and len(ctx.fr_holder) == 1
-    ), "fr_holder must be a one-element list (T9b contract)"
+    ), "fr_holder must be a one-element list (the opener contract)"
     assert callable(ctx.open), "_OpenerContext.open must be callable"
     assert callable(ctx.close), "_OpenerContext.close must be callable"
     assert callable(ctx.weigh), "_OpenerContext.weigh must be callable"
 
 
 # ---------------------------------------------------------------------------
-# I2: grouped executor robustness
+# grouped executor robustness
 # ---------------------------------------------------------------------------
 
 
@@ -219,7 +224,7 @@ def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp
 
 
 # ---------------------------------------------------------------------------
-# Task 3: header-vs-pixel view contract (M2)
+# Header-vs-pixel view contract
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +390,7 @@ def test_grouped_tile_map_cellid_passed_to_core(spark, gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: _make_opener weigher uses real FileRef.size (not STREAM_NOMINAL_BYTES)
+# _make_opener weigher uses real FileRef.size (not STREAM_NOMINAL_BYTES)
 # ---------------------------------------------------------------------------
 
 
@@ -412,7 +417,7 @@ def test_make_opener_weigher_uses_fileref_size():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: byte-identical regression lock on the materialized grouped read path
+# Byte-identical regression lock on the materialized grouped read path
 # ---------------------------------------------------------------------------
 
 
@@ -443,3 +448,389 @@ def test_grouped_tile_map_materialized_is_byte_identical(spark, gtiff_bytes):
     assert all(
         bytes(r["pixels"]) == expected for r in out
     ), "grouped_tile_map materialized path is not byte-identical — composition changed"
+
+
+# ---------------------------------------------------------------------------
+# FILE fast path only reads the source for VIRTUAL tiles
+# ---------------------------------------------------------------------------
+
+
+class _SourceStubLRU:
+    """LRU stand-in whose ``get`` opens the tile's SOURCE path.
+
+    Mirrors what the real opener does with the FileRef on a cache miss: it
+    streams the file at ``uri``. Any call here means the tile's source file, not
+    its inline bytes, is about to be read.
+    """
+
+    def __init__(self):
+        self.gets = []
+        self._open = []
+
+    def get(self, uri):
+        import rasterio
+
+        self.gets.append(uri)
+        src = rasterio.open(uri)
+        self._open.append(src)
+        return src
+
+    def close(self):
+        for src in self._open:
+            src.close()
+
+
+def _dispatch_header(ds, cellid):
+    return (ds.crs.to_epsg(), ds.width, ds.height)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [{}, {"pending_srid": "not-a-number"}],
+    ids=["plain", "malformed-pending-key"],
+)
+def test_dispatch_materialized_tile_reads_its_bytes_not_its_path(tmp_path, metadata):
+    """A materialized tile that keeps ``path`` as provenance is read from its bytes.
+
+    Reader tiles, ``materialize=True`` outputs and whole-input retile outputs all
+    carry the source ``path`` next to computed bytes. The bytes here differ from
+    the path file (CRS and size), so a FILE fast path that followed the path would
+    return the source's values. Pending instructions only concern a virtual tile, so a
+    hand-built materialized tile with a malformed pending key is read, not nulled.
+    """
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    computed = make_geotiff_bytes(width=6, height=5, epsg=3857)
+    tile = VirtualTile(
+        cellid=1, raster=computed, path=str(src), metadata=metadata
+    ).to_row()
+
+    for view in ("header", "pixels"):
+        lru = _SourceStubLRU()
+        try:
+            got = _dispatch_tile(
+                tile, object(), _OpenerContext(), lru, view, _dispatch_header
+            )
+        finally:
+            lru.close()
+        assert got == (3857, 6, 5), f"view={view}: read the source file, got {got}"
+        assert lru.gets == [], f"view={view}: FILE open of the source: {lru.gets}"
+
+
+def test_dispatch_virtual_tile_takes_file_fast_path(tmp_path):
+    """Control: a virtual tile (no bytes) still reads its source via the LRU."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    tile = VirtualTile(cellid=1, path=str(src)).to_row()
+
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            tile, object(), _OpenerContext(), lru, "pixels", _dispatch_header
+        )
+    finally:
+        lru.close()
+    assert got == (4326, 4, 3)
+    assert lru.gets == [str(src)]
+
+
+# ---------------------------------------------------------------------------
+# A virtual tile's pending clip / CRS instructions are applied on the FILE path too
+# ---------------------------------------------------------------------------
+
+
+def _clip_wkb():
+    """A cutline over the upper-left 2x2 pixels of ``make_geotiff_bytes(4, 3)`` (x 10..11,
+    y 49..50 in EPSG:4326, half-degree pixels from the origin 10, 50)."""
+    import shapely
+    from shapely.geometry import box
+
+    return shapely.to_wkb(box(10.0, 49.0, 11.0, 50.0))
+
+
+def _dispatch_virtual(tmp_path, view, **tile_kw):
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    tile = VirtualTile(cellid=1, path=str(src), **tile_kw).to_row()
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            tile, object(), _OpenerContext(), lru, view, _dispatch_header
+        )
+    finally:
+        lru.close()
+    return got, lru.gets, str(src)
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+@pytest.mark.parametrize("window", [(0, 0, 4, 3), None], ids=["windowed", "windowless"])
+def test_dispatch_applies_a_pending_clip(tmp_path, view, window):
+    """A virtual tile with a ``clip_polygon`` reads as the clipped raster, as
+    ``open_tile`` reads it; the whole-window FILE fast path would skip the clip."""
+    got, gets, _ = _dispatch_virtual(
+        tmp_path,
+        view,
+        window=window,
+        clip_polygon=_clip_wkb(),
+        clip_crs="EPSG:4326",
+    )
+    assert got == (4326, 2, 2), f"view={view}: clip not applied, got {got}"
+    assert gets == [], f"view={view}: the FILE fast path read an unclipped source"
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+@pytest.mark.parametrize("window", [(0, 0, 4, 3), None], ids=["windowed", "windowless"])
+def test_dispatch_applies_a_pending_crs(tmp_path, view, window):
+    """A virtual tile whose ``crs`` differs from its source's reads reprojected."""
+    got, _, _ = _dispatch_virtual(tmp_path, view, window=window, crs="EPSG:3857")
+    assert got[0] == 3857, f"view={view}: the target CRS was skipped, got {got}"
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+def test_dispatch_keeps_the_fast_path_when_the_crs_is_the_source_crs(tmp_path, view):
+    """A target CRS the source already has asks for nothing: still the FILE fast path."""
+    got, gets, src = _dispatch_virtual(
+        tmp_path, view, window=(0, 0, 4, 3), crs="EPSG:4326"
+    )
+    assert got == (4326, 4, 3)
+    assert gets == [src], f"view={view}: left the fast path for a no-op CRS: {gets}"
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+def test_windowless_tile_with_the_source_crs_keeps_the_header_path(
+    tmp_path, monkeypatch, view
+):
+    """On the fallback, a windowless tile whose target ``crs`` is its source's reads the
+    header, not the whole raster; one whose ``crs`` differs is read and reprojected."""
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    full_reads = []
+    real_open = ot._open
+
+    def spy(tile, file_ref=None):
+        full_reads.append(tile)
+        return real_open(tile, file_ref=file_ref)
+
+    monkeypatch.setattr(ot, "_open", spy)
+
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    for crs, want_epsg, reads in (("EPSG:4326", 4326, 0), ("EPSG:3857", 3857, 1)):
+        del full_reads[:]
+        tile = VirtualTile(cellid=1, path=str(src), crs=crs).to_row()
+        got = _dispatch_tile(
+            tile, None, _OpenerContext(), _SourceStubLRU(), view, _dispatch_header
+        )
+        assert got[0] == want_epsg, f"crs={crs}: {got}"
+        assert len(full_reads) == reads, f"crs={crs}: {len(full_reads)} full reads"
+
+
+# ---------------------------------------------------------------------------
+# A windowless virtual tile's pending instructions are applied, in both views and on
+# both runtimes (raster_gbx emits exactly these tiles by default)
+# ---------------------------------------------------------------------------
+
+_PENDING_KINDS = {
+    "nodata": {"pending_nodata": "auto"},  # rst_initnodata
+    "bands": {"pending_bands": "2"},  # rst_band
+    "srid": {"pending_srid": "3857"},  # rst_setsrid
+    "crs": {"pending_crs": "EPSG:3857"},  # rst_setcrs
+}
+
+
+def _windowless_pending_tile(tmp_path, kind):
+    """(row, VirtualTile) for a two-band uint16 EPSG:4326 file with no NoData, no window
+    and the pending instruction ``kind``."""
+    from rasterio.transform import from_origin
+
+    src = tmp_path / "two_band.tif"
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=2,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+    )
+    with open_raster(src, "w", **prof) as dst:
+        dst.write(np.arange(24, dtype="uint16").reshape(2, 3, 4) + 1)
+    vt = VirtualTile(cellid=1, path=str(src), metadata=dict(_PENDING_KINDS[kind]))
+    assert vt.window is None and vt.raster is None
+    return vt.to_row(), vt
+
+
+def _view_signature(ds, cellid):
+    """What a header-only operation can see."""
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    return (ds.count, ds.nodata, authority_srid_of(ds.crs), ds.width, ds.height)
+
+
+def _pixel_signature(ds, cellid):
+    return _view_signature(ds, cellid) + (ds.read().tobytes(),)
+
+
+@pytest.mark.parametrize("kind", list(_PENDING_KINDS))
+@pytest.mark.parametrize("view", ["header", "pixels"])
+@pytest.mark.parametrize("runtime", ["plain", "file"])
+def test_dispatch_applies_a_windowless_tiles_pending_instructions(
+    tmp_path, runtime, view, kind
+):
+    """``rst_initnodata`` / ``rst_band`` / ``rst_setsrid`` / ``rst_setcrs`` on a
+    whole-file virtual tile record an instruction; a grouped operation must see what
+    ``open_tile`` shows, whichever way the tile is read. A pixel operation used to get
+    NULL on a runtime without the FILE type (the header view refuses ``read``) and the
+    source as it is, instruction ignored, on one with it."""
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    row, vt = _windowless_pending_tile(tmp_path, kind)
+    core = _pixel_signature if view == "pixels" else _view_signature
+    with ot.open_tile(vt) as ds:
+        want = core(ds, 1)
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            row,
+            object() if runtime == "file" else None,
+            _OpenerContext(),
+            lru,
+            view,
+            core,
+        )
+    finally:
+        lru.close()
+    assert got is not None, f"{runtime}/{view}/{kind}: NULL result"
+    assert got == want, f"{runtime}/{view}/{kind}: {got[:5]} != eager {want[:5]}"
+
+
+def test_rst_initnodata_then_a_pixel_grouped_function_on_a_whole_file_tile(
+    spark, tmp_path
+):
+    """The path of a ``raster_gbx`` tile (no window) through ``rst_initnodata`` and a pixel
+    ``_grouped`` function, on the local (no FILE type) runtime: a tile with the NoData
+    applied, not NULL."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    src = tmp_path / "whole.tif"
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+    )
+    with open_raster(src, "w", **prof) as dst:
+        dst.write(np.arange(12, dtype="uint16").reshape(1, 3, 4) + 1)
+    vt = VirtualTile(cellid=3, path=str(src))
+    assert vt.window is None
+    df = spark.createDataFrame(
+        [(vt.to_row(),)], StructType([StructField("tile", V2_TILE_SCHEMA)])
+    ).select(rx.rst_initnodata("tile").alias("tile"))
+    out = rx_helpers.rst_resample_grouped(df, 2.0, "nearest").collect()
+    assert len(out) == 1 and out[0]["tile"] is not None, "NULL tile"
+    with rasterio.MemoryFile(bytes(out[0]["tile"]["raster"])) as mf, mf.open() as ds:
+        assert ds.nodata == 65535.0
+        assert (ds.width, ds.height) == (8, 6)
+
+
+def test_a_windowless_tile_without_instructions_still_reads_the_source_directly(
+    tmp_path,
+):
+    """Control: nothing pending, nothing to apply; the FILE path hands over the cached
+    source itself."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    row, vt = _windowless_pending_tile(tmp_path, "nodata")
+    vt.metadata = {}
+    seen = []
+
+    def core(ds, cellid):
+        seen.append(ds)
+        return _pixel_signature(ds, cellid)
+
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            vt.to_row(), object(), _OpenerContext(), lru, "pixels", core
+        )
+    finally:
+        lru.close()
+    assert got is not None and seen[0] is lru._open[0]
+
+
+# ---------------------------------------------------------------------------
+# grouped_tile_map runs every tile through _dispatch_tile
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_tile_map_routes_every_tile_through_dispatch_tile(
+    spark, gtiff_bytes, monkeypatch
+):
+    """The per-tile decision (FILE fast path vs fallback) lives in ``_dispatch_tile``
+    alone: the executor must call it for each row, with the row's tile and FileRef, and
+    use what it returns. A second copy of the logic inline in the executor would be
+    tested by none of the ``_dispatch_tile`` tests above.
+
+    ``mapInPandas`` is captured and the partition function run here in the driver, where
+    the patched module attribute is visible (a Spark worker imports its own copy)."""
+    import pandas as pd
+    from pyspark.sql.types import StringType
+
+    from databricks.labs.gbx.pyrx import grouped_exec
+
+    calls = []
+
+    def fake_dispatch(tile, fr, ctx, lru, view_mode, core_fn):
+        calls.append((tile["cellid"], fr, view_mode, core_fn))
+        return f"routed-{tile['cellid']}"
+
+    monkeypatch.setattr(grouped_exec, "_dispatch_tile", fake_dispatch)
+
+    df = _tile_df(spark, gtiff_bytes)
+    captured = {}
+
+    def capture(self, func, schema):
+        captured["map"] = func
+        return self
+
+    monkeypatch.setattr(type(df), "mapInPandas", capture)
+
+    def core(ds, cellid):
+        raise AssertionError("core_fn must only run through _dispatch_tile")
+
+    grouped_exec.grouped_tile_map(
+        df, core, return_field=StructField("out", StringType()), view="pixels"
+    )
+    pdf = pd.DataFrame(
+        {
+            "tile": [
+                VirtualTile.from_v1(cellid=i, raster=gtiff_bytes).to_row()
+                for i in range(3)
+            ]
+        }
+    )
+    out = next(captured["map"](iter([pdf])))
+    assert list(out["out"]) == ["routed-0", "routed-1", "routed-2"]
+    assert [c[0] for c in calls] == [0, 1, 2]
+    assert {c[2] for c in calls} == {"pixels"} and {c[3] for c in calls} == {core}

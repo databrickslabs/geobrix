@@ -30,7 +30,7 @@ case class BNG_CellFill(
 
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = true
-    override lazy val dataType: DataType = CellFill.arrayType(StringType)
+    override lazy val dataType: DataType = BinaryType  // the fill payload: the one contract of this name
     override def prettyName: String = BNG_CellFill.name
 
     override def children: Seq[Expression] = Seq(cellidExpr, valueExpr, kExpr, methodExpr, powerExpr)
@@ -67,7 +67,7 @@ case class BNG_CellFill(
         val k      = CellFill.parseK(kExpr, row)
         val method = CellFill.parseMethod(methodExpr, row)
         val power  = CellFill.parsePower(powerExpr, row)
-        CellFill.toArrayData(BNG, CellFill.fill(BNG, buffer.cells.toSeq.toMap, k, method, power))
+        CellFill.toBinary(CellFill.fill(BNG, CellFill.largestPerCell(buffer.cells), k, method, power))
     }
 
     override def serialize(obj: CellFillAcc): Array[Byte] = obj.serialize

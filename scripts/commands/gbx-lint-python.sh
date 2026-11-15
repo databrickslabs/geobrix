@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:lint:python - Run isort, black, flake8 on Python package (same as CI)
+# gbx:lint:python - Run isort, black, flake8 on the Python package + Lakeflow connector (same as CI)
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -15,8 +15,17 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--check${NC}         Check only (no edits). Default when run in CI or without --fix."
     echo -e "  ${GREEN}--fix${NC}            Apply isort and black (in Docker, py3.12 — same as CI), then run flake8."
+    echo -e "  ${GREEN}--path <file|dir>${NC} Lint (or, with --fix, format) only this file or directory. Repeatable. It must be"
+    echo -e "                      under python/geobrix or connectors/lakeflow; relative paths are taken from the"
+    echo -e "                      current directory, else from the repo root. Without --path both scopes run in full."
+    echo -e "                      The manifest generator (scripts/manifest) and its generated doc examples"
+    echo -e "                      (docs/tests/python/api/generated_examples.py) lint with the package's settings."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
+    echo ""
+    echo -e "${CYAN}Scope:${NC}"
+    echo -e "  An unscoped ${YELLOW}--fix${NC} reformats the WHOLE tree, including files other people (or agents) are"
+    echo -e "  editing. Give ${YELLOW}--path${NC} for every file you changed, and run the unscoped form only deliberately."
     echo ""
     echo -e "${CYAN}Modes:${NC}"
     echo -e "  ${YELLOW}--check${NC}  Runs in Docker (same as CI). Fails if imports or format are not clean."
@@ -29,6 +38,43 @@ show_help() {
 
 MODE="check"
 LOG_PATH=""
+# Newline-separated paths per lint scope, relative to the scope's own directory (that is where
+# its tools run). Empty until a --path names one; then only the scopes that got a path run.
+PKG_PATHS=""
+LAKEFLOW_PATHS=""
+SCOPED=false
+
+# Add one --path: resolve it on the host, then file it under the lint scope that contains it.
+add_lint_path() {
+    local raw="$1" abs root rel
+    local pwd_rel="$PWD/$raw"
+    if [[ "$raw" == /* ]]; then abs="$raw"
+    elif [ -e "$pwd_rel" ]; then abs="$pwd_rel"
+    else abs="$PROJECT_ROOT/$raw"; fi
+    if [ ! -e "$abs" ]; then
+        echo -e "${RED}--path: no such file or directory: $raw${NC}" >&2
+        exit 2
+    fi
+    if [ -d "$abs" ]; then abs="$(cd "$abs" && pwd -P)"
+    else abs="$(cd "$(dirname "$abs")" && pwd -P)/$(basename "$abs")"; fi
+    root="$(cd "$PROJECT_ROOT" && pwd -P)"
+    rel="${abs#"$root"/}"
+    case "$rel" in
+        python/geobrix) PKG_PATHS+="src"$'\n'"test"$'\n' ;;
+        python/geobrix/*) PKG_PATHS+="${rel#python/geobrix/}"$'\n' ;;
+        connectors/lakeflow) LAKEFLOW_PATHS+="sources"$'\n' ;;
+        connectors/lakeflow/*) LAKEFLOW_PATHS+="${rel#connectors/lakeflow/}"$'\n' ;;
+        # The manifest generator and the file it writes for the docs: linted from the package scope
+        # (its settings), by a path relative to it.
+        scripts/manifest|scripts/manifest/*|docs/tests/python/api/generated_examples.py)
+            PKG_PATHS+="../../$rel"$'\n' ;;
+        *)
+            echo -e "${RED}--path: $raw is outside the lint scopes (python/geobrix, connectors/lakeflow)${NC}" >&2
+            exit 2 ;;
+    esac
+    SCOPED=true
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --check)
@@ -38,6 +84,11 @@ while [[ $# -gt 0 ]]; do
         --fix)
             MODE="fix"
             shift
+            ;;
+        --path)
+            [ $# -ge 2 ] || { echo -e "${RED}--path needs a file or directory${NC}" >&2; exit 2; }
+            add_lint_path "$2"
+            shift 2
             ;;
         --log)
             LOG_PATH=$(resolve_log_path "$2")
@@ -59,33 +110,57 @@ cd "$PROJECT_ROOT"
 show_banner "Lint: Python (isort, black, flake8)"
 setup_log_file "$LOG_PATH"
 
-run_check_docker() {
-    check_docker
-    echo -e "${CYAN}Running isort/black/flake8 in Docker (check only)...${NC}"
-    echo ""
-    show_separator
-    # flake8 does NOT read pyproject.toml [tool.flake8] natively — CI relies on the
-    # flake8-pyproject plugin (pinned in requirements-ci.txt) to honor its ignore list
-    # (E203,E266,E501,W503) and max-line-length=88. The dev container's lockfile omits it,
-    # so without this ensure-step flake8 falls back to defaults (79 cols, no ignores) and
-    # floods false E501s that DON'T match CI. Install the CI-pinned version idempotently so
-    # --check actually matches CI. (Pin in sync with python/geobrix/requirements-ci.txt.)
-    docker exec geobrix-dev /bin/bash -c "cd /root/geobrix/python/geobrix && \
-        { pip show flake8-pyproject >/dev/null 2>&1 || pip install -q 'flake8-pyproject==1.2.4' --break-system-packages; } && \
-        isort_exit=0; black_exit=0; flake8_exit=0; \
-        isort --check-only src test || isort_exit=\$?; \
-        black --check src test || black_exit=\$?; \
-        flake8 src test || flake8_exit=\$?; \
-        echo ''; echo 'Lint stage results:'; \
-        [ \$isort_exit -eq 0 ] && echo '  isort: PASS' || echo '  isort: FAIL (exit code: '\$isort_exit')'; \
-        [ \$black_exit -eq 0 ] && echo '  black: PASS' || echo '  black: FAIL (exit code: '\$black_exit')'; \
-        [ \$flake8_exit -eq 0 ] && echo '  flake8: PASS' || echo '  flake8: FAIL (exit code: '\$flake8_exit')'; \
-        [ \$isort_exit -eq 0 ] && [ \$black_exit -eq 0 ] && [ \$flake8_exit -eq 0 ] || exit 1"
+# One in-container driver for both modes. Each scope (a project dir + the paths in it) is
+# linted from its own cwd, so isort/black/flake8 read THAT project's pyproject.toml:
+#   - python/geobrix      src test   (the package; unchanged)
+#   - connectors/lakeflow sources    (the Lakeflow Connect connector; its own pyproject.toml)
+# Keep the default paths identical to the "Lint Python" step in .github/actions/python_build/action.yml.
+# --path replaces them: LINT_PKG_PATHS / LINT_LAKEFLOW_PATHS are newline-separated paths per scope.
+# ISORT_FLAGS/BLACK_FLAGS are "--check-only"/"--check" in check mode and empty in fix mode.
+# flake8 does NOT read pyproject.toml [tool.flake8] natively — CI relies on the
+# flake8-pyproject plugin (pinned in requirements-ci.txt) to honor its ignore list
+# (E203,E266,E501,E704,W503) and max-line-length=88. The dev container's lockfile omits it,
+# so without the ensure-step flake8 falls back to defaults (79 cols, no ignores) and
+# floods false E501s that DON'T match CI. Install the CI-pinned version idempotently so
+# the run actually matches CI. (Pin in sync with python/geobrix/requirements-ci.txt.)
+read -r -d '' LINT_SCRIPT <<'LINT_EOF'
+{ pip show flake8-pyproject >/dev/null 2>&1 || pip install -q 'flake8-pyproject==1.2.4' --break-system-packages; }
+overall=0
+lint_scope() {
+    scope_dir="$1"; shift
+    cd "/root/geobrix/$scope_dir" || { echo "missing lint scope: $scope_dir"; overall=1; return; }
+    echo ''; echo "=== Lint scope: $scope_dir ($*) ==="
+    isort_exit=0; black_exit=0; flake8_exit=0
+    isort $ISORT_FLAGS "$@" || isort_exit=$?
+    black $BLACK_FLAGS "$@" || black_exit=$?
+    flake8 "$@" || flake8_exit=$?
+    echo ''; echo "Lint stage results ($scope_dir):"
+    [ $isort_exit -eq 0 ] && echo '  isort: PASS' || echo "  isort: FAIL (exit code: $isort_exit)"
+    [ $black_exit -eq 0 ] && echo '  black: PASS' || echo "  black: FAIL (exit code: $black_exit)"
+    [ $flake8_exit -eq 0 ] && echo '  flake8: PASS' || echo "  flake8: FAIL (exit code: $flake8_exit)"
+    [ $isort_exit -eq 0 ] && [ $black_exit -eq 0 ] && [ $flake8_exit -eq 0 ] || overall=1
 }
+# $1 = scope dir, $2 = newline-separated paths in it (empty: this scope is not linted).
+run_scope() {
+    [ -n "$2" ] || return 0
+    local paths=() line
+    while IFS= read -r line; do [ -n "$line" ] && paths+=("$line"); done <<<"$2"
+    lint_scope "$1" "${paths[@]}"
+}
+run_scope python/geobrix "$LINT_PKG_PATHS"
+run_scope connectors/lakeflow "$LINT_LAKEFLOW_PATHS"
+exit $overall
+LINT_EOF
 
-run_fix_docker() {
+run_lint_docker() {
     check_docker
-    echo -e "${CYAN}Applying isort and black in Docker (py3.12, same as CI), then running flake8...${NC}"
+    if [ "$MODE" = "fix" ]; then
+        echo -e "${CYAN}Applying isort and black in Docker (py3.12, same as CI), then running flake8...${NC}"
+        ISORT_FLAGS=""; BLACK_FLAGS=""
+    else
+        echo -e "${CYAN}Running isort/black/flake8 in Docker (check only)...${NC}"
+        ISORT_FLAGS="--check-only"; BLACK_FLAGS="--check"
+    fi
     echo ""
     show_separator
     # --fix runs in the SAME container as --check (and therefore the same Python 3.12
@@ -95,27 +170,19 @@ run_fix_docker() {
     # dependent for e.g. multiline-string call args), which then fails the CI gate. That
     # host/CI drift is exactly what this command exists to prevent, so --fix is Docker-only.
     # Docker writes to the /root/geobrix bind mount preserve host file ownership.
-    # flake8-pyproject: see run_check_docker — installed idempotently so the container's
-    # flake8 honors [tool.flake8] (ignore=E203,E266,E501,W503; max-line-length=88) like CI.
-    docker exec geobrix-dev /bin/bash -c "cd /root/geobrix/python/geobrix && \
-        { pip show flake8-pyproject >/dev/null 2>&1 || pip install -q 'flake8-pyproject==1.2.4' --break-system-packages; } && \
-        isort_exit=0; black_exit=0; flake8_exit=0; \
-        isort src test || isort_exit=\$?; \
-        black src test || black_exit=\$?; \
-        flake8 src test || flake8_exit=\$?; \
-        echo ''; echo 'Lint stage results:'; \
-        [ \$isort_exit -eq 0 ] && echo '  isort: PASS' || echo '  isort: FAIL (exit code: '\$isort_exit')'; \
-        [ \$black_exit -eq 0 ] && echo '  black: PASS' || echo '  black: FAIL (exit code: '\$black_exit')'; \
-        [ \$flake8_exit -eq 0 ] && echo '  flake8: PASS' || echo '  flake8: FAIL (exit code: '\$flake8_exit')'; \
-        [ \$isort_exit -eq 0 ] && [ \$black_exit -eq 0 ] && [ \$flake8_exit -eq 0 ] || exit 1"
+    local pkg_paths="$PKG_PATHS" lakeflow_paths="$LAKEFLOW_PATHS"
+    if [ "$SCOPED" = false ]; then
+        pkg_paths=$'src\ntest\n'
+        lakeflow_paths=$'sources\n'
+    else
+        echo -e "${CYAN}Scoped to: $(printf '%s' "$pkg_paths$lakeflow_paths" | tr '\n' ' ')${NC}"
+    fi
+    docker exec -e ISORT_FLAGS="$ISORT_FLAGS" -e BLACK_FLAGS="$BLACK_FLAGS" \
+        -e LINT_PKG_PATHS="$pkg_paths" -e LINT_LAKEFLOW_PATHS="$lakeflow_paths" \
+        "$GBX_DEV_CONTAINER" /bin/bash -c "$LINT_SCRIPT"
 }
 
-if [ "$MODE" = "fix" ]; then
-    run_fix_docker
-else
-    run_check_docker
-fi
-
+run_lint_docker
 EXIT_CODE=$?
 show_separator
 if [ $EXIT_CODE -eq 0 ]; then

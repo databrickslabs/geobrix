@@ -7,6 +7,7 @@ import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
@@ -34,32 +35,103 @@ def tile_range(
     return (lo, hi)
 
 
-def _write(profile, data) -> bytes:
-    dtype = profile.get("dtype", str(np.asarray(data).dtype))
-    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
-    profile.update(
-        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data)
-        return mf.read()
+def iter_separate_bands_indexed(ds):
+    """Yield ``(band, gtiff_bytes)`` per band (streaming); *band* is 1-based."""
+    for i in range(1, ds.count + 1):
+        profile = ds.profile.copy()
+        profile.update(driver="GTiff", count=1)
+        yield i, _comp.write_gtiff(profile, ds.read(i)[np.newaxis, :, :])
 
 
 def iter_separate_bands(ds):
     """Yield one single-band GTiff byte string per band (streaming)."""
-    for i in range(1, ds.count + 1):
-        profile = ds.profile.copy()
-        profile.update(driver="GTiff", count=1)
-        yield _write(profile, ds.read(i)[np.newaxis, :, :])
+    for _, b in iter_separate_bands_indexed(ds):
+        yield b
 
 
 def separate_bands(ds) -> list:
     return list(iter_separate_bands(ds))
 
 
+def require_window(tile_width, tile_height, fn="gbx_rst_retile"):
+    """Raise unless the window size is 1 pixel or more in each direction (NULL, or NaN, is left to the caller).
+
+    A window of 0 or less never advances through the raster. It is a PARAMETER error, so it raises with a
+    Fix and is never an error tile; the JVM tier raises the same words.
+    """
+    for name, value in (("tile_width", tile_width), ("tile_height", tile_height)):
+        # NULL (an Arrow UDTF hands an INT NULL over as NaN) is data, for the caller's error tile
+        if value is None or value != value:
+            continue
+        if int(value) <= 0:
+            raise ValueError(
+                f"{fn}: {name} must be 1 or more pixels, got {int(value)}. "
+                "Fix: pass a window of at least 1 pixel."
+            )
+
+
+def require_overlap(overlap, fn="gbx_rst_tooverlappingtiles"):
+    """The overlap as a whole percentage from 0 to below 100 (NULL is left to the caller); anything else raises with a Fix.
+
+    The percentage of the tile size each edge overlaps its neighbour by: 100 would never advance, so it is a PARAMETER
+    error (it raises, never an error tile), on every level.
+    """
+    if overlap is None:
+        return None
+    try:
+        value = int(overlap)
+    except (TypeError, ValueError, OverflowError):  # NaN, infinity, text
+        raise ValueError(
+            f"{fn}: overlap must be a number from 0 to below 100 percent, got {overlap!r}. "
+            "Fix: pass the overlap as a percentage of the tile size."
+        ) from None
+    if not 0 <= value < 100:
+        raise ValueError(
+            f"{fn}: overlap must be from 0 to below 100 percent, got {value}. "
+            "Fix: pass the overlap as a percentage of the tile size."
+        )
+    return value
+
+
+def _axis_windows(size, window, step):
+    """``(count, total)`` of the 1-D windows that start at 0, step, 2 step ... below ``size``, each clamped at the edge:
+    how many there are and the sum of their lengths. Closed form, so a window of one pixel on a long axis costs no loop.
+    """
+    count = -(-size // step)
+    full = (
+        (size - window) // step + 1 if size >= window else 0
+    )  # windows that fit whole
+    full = min(full, count)
+    rest = (
+        count - full
+    )  # the clamped ones: lengths size - i step for i = full .. count - 1
+    clamped = rest * size - step * ((full + count - 1) * rest // 2)
+    return count, full * window + clamped
+
+
+def window_stats(width, height, tile_width, tile_height, overlap=0):
+    """``(tiles, pixels)`` of the window grid ``plan_grid_windows`` lays over ``width x height``: the number of windows and
+    the sum of their areas (a pixel inside two overlapping windows counts twice). Pure arithmetic in the window sizes, so a
+    caller can judge the size of the result before it cuts a window; equal to the enumeration for every grid.
+    """
+    tw, th, step_x, step_y = _overlap_steps(tile_width, tile_height, overlap)
+    nx, sum_w = _axis_windows(int(width), tw, step_x)
+    ny, sum_h = _axis_windows(int(height), th, step_y)
+    return nx * ny, sum_w * sum_h
+
+
 def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
     """Yield one GTiff byte string per window tile (streaming, never buffered)."""
+    for _, b in _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):
+        yield b
+
+
+def _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):
+    """Yield ``((col_off, row_off, width, height), gtiff_bytes)`` per window tile.
+
+    The window is the tile's pixel window inside *ds* (clamped at the raster
+    edge), i.e. the provenance a tile struct records for where it was cut from.
+    """
     tw, th = int(tile_width), int(tile_height)
     row = 0
     while row < ds.height:
@@ -68,18 +140,37 @@ def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
             w = min(tw, ds.width - col)
             h = min(th, ds.height - row)
             if w > 0 and h > 0:
-                win = Window(col, row, w, h)
-                data = ds.read(window=win)
-                profile = ds.profile.copy()
-                profile.update(
-                    driver="GTiff",
-                    width=w,
-                    height=h,
-                    transform=ds.window_transform(win),
-                )
-                yield _write(profile, data)
+                yield (col, row, w, h), cut_window(ds, (col, row, w, h))
             col += step_x
         row += step_y
+
+
+def cut_window(ds, win) -> bytes:
+    """GTiff bytes of one pixel window of *ds*; *win* is ``(col_off, row_off, width, height)``.
+
+    The window is the part of the raster that lies inside it (the caller clamps it to the raster
+    edge); the output keeps the source's CRS, nodata, own mask band and band layout, positioned by the
+    window's geotransform.
+
+    A ``ds`` that makes its own windows (a virtual tile cut as it is read: ``cut_window`` on its class) is asked for
+    the window; any other dataset is read.
+    """
+    if getattr(type(ds), "cut_window", None) is not None:
+        return ds.cut_window(win)
+    col, row, w, h = (int(v) for v in win)
+    window = Window(col, row, w, h)
+    profile = ds.profile.copy()
+    profile.update(
+        driver="GTiff",
+        width=w,
+        height=h,
+        transform=ds.window_transform(window),
+    )
+    # a source masked by its own mask band keeps it: the pixels alone do not carry it
+    mask = ds.read_masks(1, window=window) if _nd.has_own_mask(ds) else None
+    return _comp.write_gtiff(
+        profile, ds.read(window=window), alpha_like=ds.colorinterp, mask=mask
+    )
 
 
 def _window_tiles(ds, tile_width, tile_height, step_x, step_y) -> list:
@@ -91,14 +182,19 @@ def iter_retile(ds, tile_width, tile_height):
     return _iter_window_tiles(ds, tw, th, tw, th)
 
 
+def iter_retile_located(ds, tile_width, tile_height):
+    """Like :func:`iter_retile` but yields ``(window, gtiff_bytes)``."""
+    tw, th = int(tile_width), int(tile_height)
+    return _iter_window_tiles_located(ds, tw, th, tw, th)
+
+
 def retile(ds, tile_width, tile_height) -> list:
     return list(iter_retile(ds, tile_width, tile_height))
 
 
 def _overlap_steps(tile_width, tile_height, overlap):
-    # ``overlap`` is a percentage of tile size, matching heavy
-    # OverlappingTiles.generateWindows: overlap_px = ceil(tile_dim * overlap / 100),
-    # step = tile_dim - overlap_px. (Heavy is the v0.3.0-released contract.)
+    # ``overlap`` is a percentage of tile size: overlap_px = ceil(tile_dim * overlap / 100),
+    # step = tile_dim - overlap_px. (This is the contract released in v0.3.0.)
     tw, th, ov = int(tile_width), int(tile_height), int(overlap)
     overlap_w = math.ceil(tw * ov / 100.0)
     overlap_h = math.ceil(th * ov / 100.0)
@@ -126,9 +222,28 @@ def plan_grid_windows(width, height, tile_width, tile_height, overlap=0):
     return windows
 
 
+def covers_whole_input(ds, tile_width, tile_height, overlap=0) -> bool:
+    """True when a window grid over *ds* yields exactly ONE window and it is the
+    whole raster, so the single output tile is the input itself. Pure arithmetic on
+    the grid steps (no window list is built)."""
+    tw, th, step_x, step_y = _overlap_steps(tile_width, tile_height, overlap)
+    return (
+        tw >= ds.width
+        and th >= ds.height
+        and step_x >= ds.width
+        and step_y >= ds.height
+    )
+
+
 def iter_to_overlapping_tiles(ds, tile_width, tile_height, overlap):
     tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
     return _iter_window_tiles(ds, tw, th, sx, sy)
+
+
+def iter_to_overlapping_tiles_located(ds, tile_width, tile_height, overlap):
+    """Like :func:`iter_to_overlapping_tiles` but yields ``(window, gtiff_bytes)``."""
+    tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
+    return _iter_window_tiles_located(ds, tw, th, sx, sy)
 
 
 def to_overlapping_tiles(ds, tile_width, tile_height, overlap) -> list:
@@ -136,7 +251,7 @@ def to_overlapping_tiles(ds, tile_width, tile_height, overlap) -> list:
 
 
 def _get_tile_size(width, height, size_bytes, size_in_mb):
-    """Power-of-4 tile dimensions, ported from heavy BalancedSubdivision.getTileSize.
+    """Power-of-4 tile dimensions (the rule of the former JVM maketiles).
 
     Finds the smallest number of quad-split rounds ``k`` such that the per-tile
     byte size ``size_bytes >> (2*k)`` no longer exceeds the MB limit, capped so
@@ -175,7 +290,7 @@ def _encoded_size_bytes(ds) -> int:
     # or returned to callers. Compression here would only change the estimate
     # vs the uncompressed-size contract heavy uses.
     """
-    profile = ds.profile.copy()
+    profile = _comp.source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -183,21 +298,34 @@ def _encoded_size_bytes(ds) -> int:
         return len(mf.read())
 
 
-def iter_make_tiles(ds, size_in_mb, size_bytes=None):
-    """Streaming variant of :func:`make_tiles`; yields one GTiff byte string per tile."""
+def make_tiles_size(ds, size_in_mb, size_bytes=None):
+    """``(tile_width, tile_height)`` that :func:`make_tiles` cuts *ds* into."""
     size_in_mb = int(size_in_mb)  # heavy casts sizeInMB to Int (truncates)
     if size_in_mb <= 0:
-        return iter_retile(ds, ds.width, ds.height)
+        return ds.width, ds.height
     if size_bytes is None:
-        size_bytes = _encoded_size_bytes(ds)
-    tile_x, tile_y = _get_tile_size(ds.width, ds.height, size_bytes, size_in_mb)
-    return iter_retile(ds, tile_x, tile_y)
+        # a virtual tile read window by window estimates its own size (see ``open_tile._SizeEstimate``)
+        estimate = getattr(type(ds), "encoded_size_estimate", None)
+        size_bytes = ds.encoded_size_estimate() if estimate else _encoded_size_bytes(ds)
+    return _get_tile_size(ds.width, ds.height, size_bytes, size_in_mb)
+
+
+def iter_make_tiles_located(ds, size_in_mb, size_bytes=None):
+    """Streaming variant of :func:`make_tiles`; yields ``(window, gtiff_bytes)``."""
+    tile_x, tile_y = make_tiles_size(ds, size_in_mb, size_bytes)
+    return iter_retile_located(ds, tile_x, tile_y)
+
+
+def iter_make_tiles(ds, size_in_mb, size_bytes=None):
+    """Streaming variant of :func:`make_tiles`; yields one GTiff byte string per tile."""
+    for _, b in iter_make_tiles_located(ds, size_in_mb, size_bytes):
+        yield b
 
 
 def make_tiles(ds, size_in_mb, size_bytes=None) -> list:
     """Split a raster into a power-of-4 grid of tiles, matching heavy rst_maketiles.
 
-    Aligned to heavy BalancedSubdivision: keyed on the encoded raster byte size
+    Keyed on the encoded raster byte size
     versus the MB limit, the raster is quad-split ``k`` times into a
     ``2**k x 2**k`` grid (so 1, 4, 16, 64, ... tiles).  Returns one tile when the
     full raster already fits the budget.

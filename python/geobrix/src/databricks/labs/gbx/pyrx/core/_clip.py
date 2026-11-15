@@ -27,14 +27,24 @@ def _epsg_int(clip_crs: str) -> Optional[int]:
         return None  # WKT2/PROJ string not yet supported for stamping
 
 
-def clip_dataset(ds, clip_polygon: bytes, clip_crs: Optional[str]) -> Optional[bytes]:
+def clip_geom(clip_polygon: bytes, clip_crs: Optional[str]):
+    """The cutline of a tile's ``clip_polygon`` as a shapely geometry, or ``None`` when it does not parse.
+
+    ``clip_crs`` applies ONLY when the geometry carries no embedded SRID; the embedded SRID (> 0), then ``clip_crs``,
+    then the raster's CRS (``edit.clip_shape``'s own fallback) say which CRS it is in.
+    """
     geom = parse_geom(clip_polygon)
     if geom is None:
         return None
-    # clip_crs applies ONLY when the geometry carries no embedded SRID.
-    # embedded SRID (>0) -> clip_crs -> raster CRS (edit.clip_to_geom's own fallback).
     if clip_crs and shapely.get_srid(geom) <= 0:
         code = _epsg_int(clip_crs)
         if code is not None:
             geom = shapely.set_srid(geom, code)
+    return geom
+
+
+def clip_dataset(ds, clip_polygon: bytes, clip_crs: Optional[str]) -> Optional[bytes]:
+    geom = clip_geom(clip_polygon, clip_crs)
+    if geom is None:
+        return None
     return edit.clip_to_geom(ds, geom)

@@ -1,7 +1,7 @@
 """RasterX Python API.
 
 Thin wrappers around GeoBrix Scala functions (gbx_rst_*). Register with
-rx.register(spark) then use the functions on raster tile columns. For full
+``databricks.labs.gbx.register(spark)`` then use the functions on raster tile columns. For full
 descriptions and examples, see the API docs or SQL:
   DESCRIBE FUNCTION EXTENDED gbx_rst_<name>;
 
@@ -14,10 +14,17 @@ dataframe column reference (``f.col("name")``); wrap in ``f.lit(...)`` to pass
 a string literal.
 """
 
-from typing import Union
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
 
-from pyspark.sql import Column, SparkSession
+# isort: split
+
+from typing import Optional, Union  # noqa: F401
+
+from pyspark.sql import Column, DataFrame, SparkSession  # noqa: F401
 from pyspark.sql import functions as f
+
+from databricks.labs.gbx import _api  # noqa: F401
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -45,2893 +52,41 @@ def _crs_col(x: ColLike) -> Column:
     return _col(x)
 
 
-def register(_spark: SparkSession) -> None:
-    """Register RasterX functions with the Spark session.
-
-    Call once (e.g. after creating the session) so that gbx_rst_* SQL
-    functions are available. Uses the active Spark session if needed.
-
-    Args:
-        _spark: Spark session (optional; uses active session if not provided).
-    """
-    _spark = SparkSession.builder.getOrCreate()
-    _spark.read.format("register_ds").option("functions", "rasterx").load().collect()
-
-    # gbx_rst_fromfile reads a file on the executor. On Databricks the JVM (Scala) cannot read a
-    # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held
-    # only by Spark's managed Python worker -- so the canonical implementation is the pyrx Python
-    # UDF, which DOES read /Volumes (and /Workspace, DBFS, local). Override the Scala registration
-    # with it when pyrx (a light-tier extra) is importable. If it is NOT present, skip gracefully and leave the
-    # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
-    try:
-        from databricks.labs.gbx.pyrx.functions import (
-            _fromfile_sql_materialized_udf as _pyrx_fromfile_materialized_udf,
+def __getattr__(name):
+    """``register`` was removed: SQL functions register through the manager."""
+    if name == "register":
+        raise AttributeError(
+            f"{__name__}.register was removed in 0.6.0: SQL functions register through the manager. "
+            "Fix: databricks.labs.gbx.register(spark)"
         )
-
-        # Register the 2-arg (path, driver) SQL UDF, but the HEAVY variant that
-        # MATERIALIZES: heavy/JVM callers need bytes (a virtual path-only tile is
-        # useless to them). Same call text as the light registration
-        # (gbx_rst_fromfile(path, driver)); the tier decides virtual vs
-        # materialized, last register() wins. (_fromfile_udf is the 3-arg
-        # Python-binding variant and must NOT be registered here, or 2-arg SQL
-        # calls break on arity.)
-        _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
-    except (
-        Exception
-    ):  # noqa: BLE001 - pyrx/light-tier not installed: keep the Scala fallback
-        pass
-
-
-def rst_avg(tile: ColLike) -> Column:
-    """Return the average pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_avg", _col(tile))
-
-
-def rst_bandmetadata(tile: ColLike, band: ColLike) -> Column:
-    """Return metadata for the given band index (e.g. nodata, data type).
-
-    Args:
-        tile: Raster tile column.
-        band: 1-based band index column.
-
-    Returns:
-        Column of map (string -> string).
-    """
-    return f.call_function("gbx_rst_bandmetadata", _col(tile), _col(band))
-
-
-def rst_boundingbox(tile: ColLike) -> Column:
-    """Return the bounding box of the raster in world coordinates.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of WKB (binary).
-    """
-    return f.call_function("gbx_rst_boundingbox", _col(tile))
-
-
-def rst_format(tile: ColLike) -> Column:
-    """Return the GDAL format/driver name of the raster (e.g. GTiff).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of format string.
-    """
-    return f.call_function("gbx_rst_format", _col(tile))
-
-
-def rst_georeference(tile: ColLike) -> Column:
-    """Return the georeference (affine transform) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of map (string -> double).
-    """
-    return f.call_function("gbx_rst_georeference", _col(tile))
-
-
-def rst_getnodata(tile: ColLike) -> Column:
-    """Return the NoData value for the raster (or null if not set).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band), or null.
-    """
-    return f.call_function("gbx_rst_getnodata", _col(tile))
-
-
-def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
-    """Return a sub-dataset (e.g. HDF sublayer) by name.
-
-    Args:
-        tile: Raster tile column.
-        subset_name: Name of the sub-dataset.
-
-    Returns:
-        Column of raster tile (sub-dataset).
-    """
-    return f.call_function("gbx_rst_getsubdataset", _col(tile), _col(subset_name))
-
-
-def rst_height(tile: ColLike) -> Column:
-    """Return the pixel height (number of rows) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer height.
-    """
-    return f.call_function("gbx_rst_height", _col(tile))
-
-
-def rst_max(tile: ColLike) -> Column:
-    """Return the maximum pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_max", _col(tile))
-
-
-def rst_median(tile: ColLike) -> Column:
-    """Return the median pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_median", _col(tile))
-
-
-def rst_memsize(tile: ColLike) -> Column:
-    """Return the approximate memory size of the tile in bytes.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of long (bytes).
-    """
-    return f.call_function("gbx_rst_memsize", _col(tile))
-
-
-def rst_metadata(tile: ColLike) -> Column:
-    """Return full metadata of the raster (driver, dimensions, CRS, etc.).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of map (string -> string).
-    """
-    return f.call_function("gbx_rst_metadata", _col(tile))
-
-
-def rst_min(tile: ColLike) -> Column:
-    """Return the minimum pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_min", _col(tile))
-
-
-def rst_numbands(tile: ColLike) -> Column:
-    """Return the number of bands in the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer band count.
-    """
-    return f.call_function("gbx_rst_numbands", _col(tile))
-
-
-def rst_pixelcount(tile: ColLike) -> Column:
-    """Return the valid pixel count per band.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of long (one per band).
-    """
-    return f.call_function("gbx_rst_pixelcount", _col(tile))
-
-
-def rst_pixelheight(tile: ColLike) -> Column:
-    """Return the pixel height (ground size in Y) in CRS units.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double (may be negative).
-    """
-    return f.call_function("gbx_rst_pixelheight", _col(tile))
-
-
-def rst_pixelwidth(tile: ColLike) -> Column:
-    """Return the pixel width (ground size in X) in CRS units.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_pixelwidth", _col(tile))
-
-
-def rst_rotation(tile: ColLike) -> Column:
-    """Return the rotation component of the georeference (if any).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of rotation (double).
-    """
-    return f.call_function("gbx_rst_rotation", _col(tile))
-
-
-def rst_scalex(tile: ColLike) -> Column:
-    """Return the X scale (pixel size in X) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_scalex", _col(tile))
-
-
-def rst_scaley(tile: ColLike) -> Column:
-    """Return the Y scale (pixel size in Y) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double (often negative).
-    """
-    return f.call_function("gbx_rst_scaley", _col(tile))
-
-
-def rst_skewx(tile: ColLike) -> Column:
-    """Return the X skew component of the georeference.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_skewx", _col(tile))
-
-
-def rst_skewy(tile: ColLike) -> Column:
-    """Return the Y skew component of the georeference.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_skewy", _col(tile))
-
-
-def rst_srid(tile: ColLike) -> Column:
-    """Return the spatial reference ID (EPSG code) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer SRID.
-    """
-    return f.call_function("gbx_rst_srid", _col(tile))
-
-
-def rst_subdatasets(tile: ColLike) -> Column:
-    """Return the sub-dataset names and descriptions (e.g. for HDF/NetCDF).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of map (string -> string, name to description).
-    """
-    return f.call_function("gbx_rst_subdatasets", _col(tile))
-
-
-def rst_summary(tile: ColLike) -> Column:
-    """Return a short text summary of the raster (dimensions, CRS, bands).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of string summary.
-    """
-    return f.call_function("gbx_rst_summary", _col(tile))
-
-
-def rst_type(tile: ColLike) -> Column:
-    """Return the raster data type (e.g. Byte, Int16, Float32) per band.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of strings (one per band).
-    """
-    return f.call_function("gbx_rst_type", _col(tile))
-
-
-def rst_upperleftx(tile: ColLike) -> Column:
-    """Return the X coordinate of the upper-left corner in world coordinates.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_upperleftx", _col(tile))
-
-
-def rst_upperlefty(tile: ColLike) -> Column:
-    """Return the Y coordinate of the upper-left corner in world coordinates.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_upperlefty", _col(tile))
-
-
-def rst_width(tile: ColLike) -> Column:
-    """Return the pixel width (number of columns) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer width.
-    """
-    return f.call_function("gbx_rst_width", _col(tile))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # Aggregators
 
 
-def rst_combineavg_agg(tile: ColLike) -> Column:
-    """Aggregate multiple raster tiles by averaging (use with groupBy).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of combined raster tile.
-    """
-    return f.call_function("gbx_rst_combineavg_agg", _col(tile))
-
-
-def rst_derivedband_agg(
-    tile: ColLike, python_func: ColLike, func_name: ColLike
-) -> Column:
-    """Aggregate tiles and apply a Python UDF per band (use with groupBy).
-
-    Args:
-        tile: Raster tile column.
-        python_func: Python source code of the UDF (string).
-        func_name: Name of the callable in python_func.
-
-    Returns:
-        Column of derived raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_derivedband_agg", _col(tile), _col(python_func), _col(func_name)
-    )
-
-
-def rst_merge_agg(tile: ColLike) -> Column:
-    """Aggregate multiple raster tiles by merging (use with groupBy).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of merged raster tile.
-    """
-    return f.call_function("gbx_rst_merge_agg", _col(tile))
-
-
-def rst_rasterize_agg(
-    geom: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-) -> Column:
-    """Rasterize streaming (geom, value) rows into a single raster tile (use with groupBy).
-
-    Streams one geometry/value pair per row; the extent and pixel-size arguments
-    are per-group constants.  Overlap is last-wins (nondeterministic across the group).
-
-    Args:
-        geom: Geometry (WKB, EWKB, WKT, or EWKT) column (Polygon, MultiPolygon, etc.).
-        value: DOUBLE burn value column.
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-
-    Returns:
-        Column of raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_rasterize_agg",
-        _col(geom),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-    )
-
-
-def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
-    """Stack single-band tiles into a multi-band tile by explicit band index (use with groupBy).
-
-    Streams one (tile, band_index) pair per row.  On evaluation the tiles are sorted
-    by ``band_index`` ascending and stacked via ``gbx_rst_frombands``.  Unlike the
-    non-aggregator :func:`rst_frombands` (which reads ARRAY position as band order),
-    this aggregator accepts an explicit integer ``band_index`` to guarantee ordering
-    independent of row arrival order.
-
-    ``band_index`` accepts both ``IntegerType`` and ``LongType`` columns; PySpark
-    infers Python ``int`` literals as ``LongType``, which is handled transparently.
-
-    Args:
-        tile: Single-band raster tile column.
-        band_index: Integer (or long) column (1-based) indicating the output band position.
-
-    Returns:
-        Column of multi-band raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_frombands_agg",
-        _col(tile),
-        _col(band_index),
-    )
-
-
-def rst_h3_rasterize_agg(
-    cellid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = None,
-) -> Column:
-    """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
-
-    Use with ``groupBy``; each row contributes one H3 ``cellid`` (and optionally
-    a ``value``). When ``value`` is omitted (or ``None``), pixels covered by any
-    cell are burned with ``1.0`` (presence mask).  Supply an explicit canvas
-    (``xmin`` … ``height``) from ``rst_h3_gridspec`` for aligned multi-band
-    stacking; otherwise the grid is auto-derived from the cell set.
-
-    Every argument except ``cellid`` is optional and defaults to the same value
-    the lightweight tier uses, so the common call is simply
-    ``rx.rst_h3_rasterize_agg("cellid", "value")``. Because SQL binds
-    positionally, an omitted keyword is filled here with a correctly-typed SQL
-    literal (a typed ``NULL`` for the extent/size fields).
-
-    Args:
-        cellid:     LONG column of H3 cell ids.
-        value:      DOUBLE burn-value column; omit for a presence mask.
-        out_srid:   EPSG SRID of the output raster (default ``4326``).
-        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
-        xmin:       Minimum X of the output canvas (CRS units).
-        ymin:       Minimum Y of the output canvas (CRS units).
-        xmax:       Maximum X of the output canvas (CRS units).
-        ymax:       Maximum Y of the output canvas (CRS units).
-        width:      Canvas width in pixels (INTEGER).
-        height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (default ``"centroids"``).
-        kring_pad:  K-ring expansion around each cell before rasterizing
-                    (default ``1``; ``0`` = no expansion).
-
-    Returns:
-        Column of raster tile — the v2 tile struct with fields
-        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
-    """
-
-    def _c(x, default):
-        return _col(x) if x is not None else default
-
-    return f.call_function(
-        "gbx_rst_h3_rasterize_agg",
-        _col(cellid),
-        _c(value, f.lit(None).cast("double")),
-        _c(out_srid, f.lit(4326)),
-        _c(pixel_size, f.lit(None).cast("double")),
-        _c(xmin, f.lit(None).cast("double")),
-        _c(ymin, f.lit(None).cast("double")),
-        _c(xmax, f.lit(None).cast("double")),
-        _c(ymax, f.lit(None).cast("double")),
-        _c(width, f.lit(None).cast("int")),
-        _c(height, f.lit(None).cast("int")),
-        _c(mode, f.lit("centroids")),
-        _c(kring_pad, f.lit(1)),
-    )
-
-
-def gbx_h3_cell_bbox(
-    cellid: ColLike,
-    srid: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = 0,
-) -> Column:
-    """Bounding box of one H3 cell in *srid* (centroid point or hexagon envelope).
-
-    Returns a ``STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>``.
-
-    Args:
-        cellid:    Column holding the H3 cell id (integer / long).
-        srid:      Output CRS EPSG code.  Defaults to ``4326``.
-        mode:      ``"centroids"`` (default) or ``"spatial_envelope"``.
-        kring_pad: K-ring expansion before computing the bbox (default ``0``).
-                   When > 0 the returned bbox covers the full padded neighbourhood.
-
-    Returns:
-        Column of STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>.
-    """
-    srid_col = _col(srid) if srid is not None else f.lit(4326)
-    mode_col = _col(mode) if mode is not None else f.lit("centroids")
-    return f.call_function(
-        "gbx_h3_cell_bbox",
-        _col(cellid),
-        srid_col,
-        mode_col,
-        _col(kring_pad),
-    )
-
-
 # Constructors
-
-
-def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
-    """Build a raster tile from binary content and GDAL driver name.
-
-    Args:
-        content: Column of binary content (e.g. from binaryFile reader).
-        driver: GDAL driver name (e.g. GTiff, COG).
-
-    Returns:
-        Column of raster tile.
-    """
-    return f.call_function("gbx_rst_fromcontent", _col(content), _col(driver))
-
-
-def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
-    """Build a raster tile from a file path and GDAL driver name.
-
-    Args:
-        path: Column of SOURCE FILE path (string) — a filesystem or Volume path read to
-            produce a materialized bytes-tile.  This is a raster-constructor argument,
-            not a "path-tile" field; the returned tile always carries raster bytes.
-        driver: GDAL driver name (e.g. GTiff).
-
-    Returns:
-        Column of raster tile (materialized — raster bytes present).
-
-    Note:
-        ``gbx_rst_fromfile`` is **lightweight-only**: it is implemented by the ``pyrx`` Python loader
-        (a ``pandas_udf``) and has no JVM/Scala implementation. On Databricks the executor JVM cannot
-        read a UC Volume (``/Volumes/...``) FUSE path — the UC credential is held only by Spark's
-        managed Python worker — so this delegates to ``pyrx.rst_fromfile`` and **requires
-        a light-tier extra (e.g. ``geobrix[light_env6]``)**. If no light-tier extra is installed,
-        this raises with guidance. The portable alternative (works on every tier) is
-        ``spark.read.format("binaryFile").load(path)`` + ``gbx_rst_fromcontent(content, driver)``.
-    """
-    try:
-        from databricks.labs.gbx.pyrx import functions as _pyrx
-    except ImportError as e:  # pragma: no cover
-        raise ImportError(
-            "gbx_rst_fromfile is lightweight-only and requires a light-tier extra, e.g. geobrix[light_env6] "
-            "(implemented by the pyrx Python reader; the JVM cannot read UC Volumes). "
-            "Install a light-tier extra, or use "
-            "spark.read.format('binaryFile').load(path) + gbx_rst_fromcontent(content, driver)."
-        ) from e
-    # The heavyweight surface always yields a MATERIALIZED tile (raster bytes
-    # present): a virtual tile carries only a path, which JVM expressions cannot
-    # read. pyrx.rst_fromfile now defaults to a virtual tile, so force
-    # materialize=True here to preserve this shim's bytes-present contract.
-    return _pyrx.rst_fromfile(path, driver, materialize=True)
-
-
-def rst_frombands(bands: ColLike) -> Column:
-    """Build a raster tile from a list of band tiles (same dimensions).
-
-    Args:
-        bands: Column of array of raster tiles (one per band).
-
-    Returns:
-        Column of multi-band raster tile.
-    """
-    return f.call_function("gbx_rst_frombands", _col(bands))
 
 
 # Generators
 
 
-def rst_h3_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into H3 cells at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            the one cell whose hexagon contains its centroid (chips partition the
-            valid pixels); ``"covering"`` keeps every cell whose hexagon overlaps
-            the raster bbox (chips may share pixels). String literals are
-            auto-wrapped in ``f.lit``; pass a ``Column`` to defer.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell,
-            including synthetic all-NoData chips for covered cells with no
-            assigned pixels (centroid) or all-NoData clipped chips (covering);
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of array of (H3 index, tile) or similar.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_h3_tessellate",
-        _col(tile),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_maketiles(tile: ColLike, size_in_mb: ColLike) -> Column:
-    """Split the raster into smaller tiles by approximate size in MB.
-
-    Args:
-        tile: Raster tile column.
-        size_in_mb: Target tile size in megabytes (column).
-
-    Returns:
-        Column of array of raster tiles.
-    """
-    return f.call_function("gbx_rst_maketiles", _col(tile), _col(size_in_mb))
-
-
-def rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike) -> Column:
-    """Retile the raster into tiles of the given pixel dimensions.
-
-    Args:
-        tile: Raster tile column.
-        tile_width: Width of output tiles (pixels).
-        tile_height: Height of output tiles (pixels).
-
-    Returns:
-        Column of array of raster tiles.
-    """
-    return f.call_function(
-        "gbx_rst_retile", _col(tile), _col(tile_width), _col(tile_height)
-    )
-
-
-def rst_separatebands(tile: ColLike) -> Column:
-    """Split the raster into one tile per band.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of single-band raster tiles.
-    """
-    return f.call_function("gbx_rst_separatebands", _col(tile))
-
-
-def rst_tooverlappingtiles(
-    tile: ColLike, tile_width: ColLike, tile_height: ColLike, overlap: ColLike
-) -> Column:
-    """Produce overlapping tiles with the given dimensions and overlap.
-
-    Args:
-        tile: Raster tile column.
-        tile_width: Width of each tile (pixels).
-        tile_height: Height of each tile (pixels).
-        overlap: Overlap in pixels (e.g. for stitching).
-
-    Returns:
-        Column of array of raster tiles.
-    """
-    return f.call_function(
-        "gbx_rst_tooverlappingtiles",
-        _col(tile),
-        _col(tile_width),
-        _col(tile_height),
-        _col(overlap),
-    )
-
-
 # Grid
-
-
-def rst_h3_rastertogridavg(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"`` — whether to emit
-            cells with no valid pixels.
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            one cell; ``"covering"`` distributes pixels to all overlapping cells.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and avg).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridavg",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridcount(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridcount",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridmax(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and max).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridmax",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridmin(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and min).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridmin",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridmedian(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and median).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridmedian",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridsum(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and sum).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridsum",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridvariance(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and variance).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridvariance",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridstddev(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and stddev).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridstddev",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridavg(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridavg",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridcount(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridcount",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridmax(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridmax",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridmin(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridmin",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridmedian(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridmedian",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridsum(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridsum",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridvariance(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridvariance",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridstddev(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridstddev",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridavg(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridavg",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridcount(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridcount",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridmax(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridmax",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridmin(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridmin",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridmedian(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridmedian",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridsum(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridsum",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridvariance(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridvariance",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridstddev(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridstddev",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridavg(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridavg",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridcount(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridcount",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridmax(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridmax",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridmin(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridmin",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridmedian(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridmedian",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridsum(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridsum",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridvariance(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per custom-grid cell.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridvariance",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridstddev(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per custom-grid cell.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridstddev",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into CARTO quadbin v0 cells at the given zoom level.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            the one cell containing its centroid (chips partition the valid
-            pixels); ``"covering"`` keeps every cell whose tile overlaps the
-            raster bbox. String literals are auto-wrapped in ``f.lit``; pass a
-            ``Column`` to defer.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of array of (quadbin cell id BIGINT, tile) pairs.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_quadbin_tessellate",
-        _col(tile),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_bng_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into BNG grid cells at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            the one cell containing its centroid; ``"covering"`` keeps every cell
-            whose grid square overlaps the raster bbox. String literals are
-            auto-wrapped in ``f.lit``; pass a ``Column`` to defer.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of array of (BNG cell id STRING, tile) pairs.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_bng_tessellate",
-        _col(tile),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_custom_tessellate(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into user-defined custom-grid cells.
-
-    One chip per overlapping cell, each clipped to that cell's extent. The
-    raster must already be in the custom grid's native CRS — no automatic
-    reprojection is performed (use ``rst_transform`` upstream if needed). Cell
-    IDs are BIGINT encoded by the custom-grid layout.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        assignment: ``"centroid"`` (default) — each pixel assigned to one cell
-            by its centroid; ``"covering"`` — every cell overlapping the raster
-            bbox receives a chip. String literals are auto-wrapped in ``f.lit``.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of (cellid BIGINT, raster TILE_STRUCT) pairs — one row per chip.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_custom_tessellate",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_quadbin_rasterize_agg(
-    cellid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = None,
-) -> Column:
-    """Rasterize a group's CARTO quadbin v0 cells into one tile (pixel-centroid burn).
-
-    Use with ``groupBy``; each row contributes one quadbin ``cellid`` (BIGINT) and
-    optionally a ``value``. When ``value`` is omitted (or ``None``), pixels covered
-    by any cell are burned with ``1.0`` (presence mask). Supply an explicit canvas
-    (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the grid is
-    auto-derived from the cell set.
-
-    Every argument except ``cellid`` is optional and defaults to the same value
-    the lightweight tier uses, so the common call is simply
-    ``rx.rst_quadbin_rasterize_agg("cellid", "value")``. Because SQL binds
-    positionally, an omitted keyword is filled here with a correctly-typed SQL
-    literal (a typed ``NULL`` for the extent/size fields).
-
-    Args:
-        cellid:     BIGINT column of quadbin cell ids.
-        value:      DOUBLE burn-value column; omit for a presence mask.
-        out_srid:   EPSG SRID of the output raster (default ``4326``).
-        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
-        xmin:       Minimum X of the output canvas (CRS units).
-        ymin:       Minimum Y of the output canvas (CRS units).
-        xmax:       Maximum X of the output canvas (CRS units).
-        ymax:       Maximum Y of the output canvas (CRS units).
-        width:      Canvas width in pixels (INTEGER).
-        height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (default ``"centroids"``).
-        kring_pad:  K-ring expansion around each cell before rasterizing
-                    (default ``1``; ``0`` = no expansion).
-
-    Returns:
-        Column of raster tile — the v2 tile struct with fields
-        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
-    """
-
-    def _c(x, default):
-        return _col(x) if x is not None else default
-
-    return f.call_function(
-        "gbx_rst_quadbin_rasterize_agg",
-        _col(cellid),
-        _c(value, f.lit(None).cast("double")),
-        _c(out_srid, f.lit(4326)),
-        _c(pixel_size, f.lit(None).cast("double")),
-        _c(xmin, f.lit(None).cast("double")),
-        _c(ymin, f.lit(None).cast("double")),
-        _c(xmax, f.lit(None).cast("double")),
-        _c(ymax, f.lit(None).cast("double")),
-        _c(width, f.lit(None).cast("int")),
-        _c(height, f.lit(None).cast("int")),
-        _c(mode, f.lit("centroids")),
-        _c(kring_pad, f.lit(1)),
-    )
-
-
-def rst_bng_rasterize_agg(
-    cellid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = None,
-) -> Column:
-    """Rasterize a group's BNG grid cells into one tile (pixel-centroid burn).
-
-    Use with ``groupBy``; each row contributes one BNG ``cellid`` (STRING, e.g.
-    ``"TQ3080"``) and optionally a ``value``. When ``value`` is omitted (or
-    ``None``), pixels covered by any cell are burned with ``1.0`` (presence
-    mask). Supply an explicit canvas (``xmin`` … ``height``) for aligned
-    multi-band stacking; otherwise the grid is auto-derived from the cell set.
-
-    Every argument except ``cellid`` is optional and defaults to the same value
-    the lightweight tier uses, so the common call is simply
-    ``rx.rst_bng_rasterize_agg("cellid", "value")``. Because SQL binds
-    positionally, an omitted keyword is filled here with a correctly-typed SQL
-    literal (a typed ``NULL`` for the extent/size fields).
-
-    Note on ``out_srid``: BNG always operates in EPSG:27700 (British National Grid).
-    The ``out_srid`` argument is accepted for API consistency with the H3 and
-    quadbin variants but is a no-op — the function forces EPSG:27700 regardless
-    of the value passed.
-
-    Args:
-        cellid:     STRING column of BNG cell ids (e.g. ``"TQ3080"``).
-        value:      DOUBLE burn-value column; omit for a presence mask.
-        out_srid:   Ignored — BNG forces EPSG:27700 (default). Accepted for
-                    parity with the H3/quadbin variants; the value has no effect.
-        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
-        xmin:       Minimum X of the output canvas (BNG eastings).
-        ymin:       Minimum Y of the output canvas (BNG northings).
-        xmax:       Maximum X of the output canvas (BNG eastings).
-        ymax:       Maximum Y of the output canvas (BNG northings).
-        width:      Canvas width in pixels (INTEGER).
-        height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (default ``"centroids"``).
-        kring_pad:  K-ring expansion around each cell before rasterizing
-                    (default ``1``; ``0`` = no expansion).
-
-    Returns:
-        Column of raster tile — the v2 tile struct with fields
-        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
-    """
-
-    def _c(x, default):
-        return _col(x) if x is not None else default
-
-    return f.call_function(
-        "gbx_rst_bng_rasterize_agg",
-        _col(cellid),
-        _c(value, f.lit(None).cast("double")),
-        _c(out_srid, f.lit(27700)),
-        _c(pixel_size, f.lit(None).cast("double")),
-        _c(xmin, f.lit(None).cast("double")),
-        _c(ymin, f.lit(None).cast("double")),
-        _c(xmax, f.lit(None).cast("double")),
-        _c(ymax, f.lit(None).cast("double")),
-        _c(width, f.lit(None).cast("int")),
-        _c(height, f.lit(None).cast("int")),
-        _c(mode, f.lit("centroids")),
-        _c(kring_pad, f.lit(1)),
-    )
 
 
 # Operations
 
 
-def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
-    """Convert the raster to a different GDAL format (e.g. COG, Zarr).
-
-    Args:
-        tile: Raster tile column.
-        new_format: Target format/driver name.
-
-    Returns:
-        Column of raster tile in the new format.
-    """
-    return f.call_function("gbx_rst_asformat", _col(tile), _col(new_format))
-
-
-def rst_clip(
-    tile: ColLike, geom: ColLike, cutline_all_touched: ColLike, clip_crs: ColLike = None
-) -> Column:
-    """Clip the raster to a geometry (or mask).
-
-    Args:
-        tile: Raster tile column.
-        geom: Clipping geometry column (WKT/WKB/EWKT/EWKB).
-        cutline_all_touched: If True, include pixels touched by the boundary.
-        clip_crs: Optional source CRS of a plain WKB/WKT cutline (int SRID or
-            CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
-            assumed already in the raster CRS.
-
-    Returns:
-        Column of clipped raster tile.
-    """
-    if clip_crs is None:
-        return f.call_function(
-            "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched)
-        )
-    return f.call_function(
-        "gbx_rst_clip",
-        _col(tile),
-        _col(geom),
-        _col(cutline_all_touched),
-        _crs_col(clip_crs),
-    )
-
-
-def rst_combineavg(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by averaging (same extent/cellsize).
-
-    Args:
-        tiles: Column of array of raster tiles.
-
-    Returns:
-        Column of combined raster tile.
-    """
-    return f.call_function("gbx_rst_combineavg", _col(tiles))
-
-
-def rst_combinecount(tiles: ColLike) -> Column:
-    """Count valid (non-NoData) inputs per pixel across aligned tiles.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the count of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinecount", _col(tiles))
-
-
-def rst_combinemax(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by taking the per-pixel maximum.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the maximum of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinemax", _col(tiles))
-
-
-def rst_combinemedian(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by taking the per-pixel median.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the median of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinemedian", _col(tiles))
-
-
-def rst_combinemin(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by taking the per-pixel minimum.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the minimum of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinemin", _col(tiles))
-
-
-def rst_combinestddev(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by computing per-pixel population std-dev.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the population std-dev of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinestddev", _col(tiles))
-
-
-def rst_combinesum(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by summing per pixel.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the sum of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinesum", _col(tiles))
-
-
-def rst_align_to(tile: ColLike, reference_tile: ColLike) -> Column:
-    """Warp a tile to match the grid of a reference tile.
-
-    Output has exactly the same CRS, extent, width, height, and geotransform as
-    the reference tile. Uses nearest-neighbour resampling.
-
-    Args:
-        tile: The raster tile to warp.
-        reference_tile: Reference tile whose grid defines the output grid.
-
-    Returns:
-        Column of warped raster tile aligned to the reference grid.
-    """
-    return f.call_function("gbx_rst_align_to", _col(tile), _col(reference_tile))
-
-
-def rst_chm(dsm_tile: ColLike, dem_tile: ColLike) -> Column:
-    """Compute Canopy Height Model from DSM and DEM tiles.
-
-    Returns ``clamp(align(DSM→DEM) - DEM, min=0)``. The DSM is warped onto the
-    DEM's grid (CRS, extent, width, height) via nearest-neighbour resampling
-    before subtraction. Negative differences are clamped to 0. NoData in either
-    input propagates to the output.
-
-    Args:
-        dsm_tile: Digital Surface Model tile (surface heights).
-        dem_tile: Digital Elevation Model tile (bare-earth reference; also defines
-            the output grid).
-
-    Returns:
-        Column of Float32 CHM tile (NoData -9999).
-    """
-    return f.call_function("gbx_rst_chm", _col(dsm_tile), _col(dem_tile))
-
-
-def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
-    """Reclassify a raster band into value bins and return contour polygons.
-
-    Returns ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>`` —
-    one entry per contiguous region in the same break interval. NoData pixels are
-    excluded. Bins are half-open ``[breaks[i], breaks[i+1])``.
-
-    Args:
-        tile: Raster tile column.
-        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
-            defining N bands.
-
-    Returns:
-        Column of ``ARRAY<struct>`` — one polygon per contiguous patch.
-    """
-    return f.call_function("gbx_rst_isoband", _col(tile), _col(breaks))
-
-
-def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
-    """Apply a convolution kernel to the raster.
-
-    Args:
-        tile: Raster tile column.
-        kernel: Kernel matrix (e.g. 3x3) as column.
-
-    Returns:
-        Column of convolved raster tile.
-    """
-    return f.call_function("gbx_rst_convolve", _col(tile), _col(kernel))
-
-
-def rst_crs(tile: ColLike) -> Column:
-    """Return the canonical CRS string for the raster tile.
-
-    Returns an authority string (``'EPSG:4326'``, ``'ESRI:54008'``) when the
-    CRS has a recognised authority code, or a WKT string for authority-less
-    projections. Returns NULL for a tile with no CRS.
-
-    Distinct from ``rst_srid`` (int / NULL): ``rst_crs`` preserves non-EPSG
-    authority codes (ESRI, IAU, etc.) and falls back to WKT rather than NULL.
-
-    Args:
-        tile: Tile struct column.
-
-    Returns:
-        STRING column — canonical CRS string, or NULL if CRS is absent.
-    """
-    return f.call_function("gbx_rst_crs", _col(tile))
-
-
-def rst_derivedband(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
-    """Apply a Python UDF to each pixel (or band) to produce a derived band.
-
-    Args:
-        tile: Raster tile column.
-        python_func: Python source code of the UDF (string).
-        func_name: Name of the callable in python_func.
-
-    Returns:
-        Column of raster tile with derived band(s).
-    """
-    return f.call_function(
-        "gbx_rst_derivedband", _col(tile), _col(python_func), _col(func_name)
-    )
-
-
-def rst_filter(tile: ColLike, kernel_size: ColLike, operation: ColLike) -> Column:
-    """Apply a filter (e.g. min, max, mean) over a kernel window.
-
-    Args:
-        tile: Raster tile column.
-        kernel_size: Size of the kernel (e.g. 3 for 3x3).
-        operation: Filter operation name (e.g. min, max, mean).
-
-    Returns:
-        Column of filtered raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_filter", _col(tile), _col(kernel_size), _col(operation)
-    )
-
-
-def rst_initnodata(tile: ColLike) -> Column:
-    """Initialise or fix NoData values in the raster (e.g. from metadata).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of raster tile with NoData set.
-    """
-    return f.call_function("gbx_rst_initnodata", _col(tile))
-
-
-def rst_isempty(tile: ColLike) -> Column:
-    """Return true if the raster tile is empty or invalid.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of boolean.
-    """
-    return f.call_function("gbx_rst_isempty", _col(tile))
-
-
-def rst_mapalgebra(tiles: ColLike, json_spec: ColLike) -> Column:
-    """Apply a map algebra expression to one or more tiles.
-
-    Args:
-        tiles: Column of array of raster tiles (or single tile).
-        json_spec: Expression string (e.g. A + B, A * 2).
-
-    Returns:
-        Column of result raster tile.
-    """
-    return f.call_function("gbx_rst_mapalgebra", _col(tiles), _col(json_spec))
-
-
-def rst_merge(tiles: ColLike) -> Column:
-    """Merge multiple raster tiles into one (e.g. mosaic).
-
-    Args:
-        tiles: Column of array of raster tiles.
-
-    Returns:
-        Column of merged raster tile.
-    """
-    return f.call_function("gbx_rst_merge", _col(tiles))
-
-
-def rst_ndvi(tile: ColLike, red_idx: ColLike, nir_idx: ColLike) -> Column:
-    """Compute NDVI from red and NIR band indices.
-
-    Args:
-        tile: Raster tile column.
-        red_idx: 1-based red band index.
-        nir_idx: 1-based NIR band index.
-
-    Returns:
-        Column of raster tile (single-band NDVI).
-    """
-    return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_idx), _col(nir_idx))
-
-
-def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert pixel (x, y) to world (x, y) in the CRS of the raster.
-
-    Args:
-        tile: Raster tile column.
-        x: Pixel column index.
-        y: Pixel row index.
-
-    Returns:
-        Column of struct (x, y as double) in world coordinates.
-    """
-    return f.call_function("gbx_rst_rastertoworldcoord", _col(tile), _col(x), _col(y))
-
-
-def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert pixel (x, y) to world X coordinate.
-
-    Args:
-        tile: Raster tile column.
-        x: Pixel column index.
-        y: Pixel row index.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_rastertoworldcoordx", _col(tile), _col(x), _col(y))
-
-
-def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert pixel (x, y) to world Y coordinate.
-
-    Args:
-        tile: Raster tile column.
-        x: Pixel column index.
-        y: Pixel row index.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_rastertoworldcoordy", _col(tile), _col(x), _col(y))
-
-
-def rst_transform(tile: ColLike, srid: ColLike) -> Column:
-    """Reproject the raster to the target SRID (EPSG code).
-
-    Args:
-        tile: Raster tile column.
-        srid: Target spatial reference ID (e.g. 4326 for WGS84).
-
-    Returns:
-        Column of reprojected raster tile.
-    """
-    return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
-
-
-def rst_transformcrs(tile: ColLike, crs: ColLike) -> Column:
-    """Reproject the raster to a string-given target CRS.
-
-    Accepts any CRS descriptor accepted by rasterio's CRS parser: int EPSG,
-    int-castable string, authority string (``"EPSG:3857"``, ``"ESRI:54008"``),
-    WKT, or PROJ4. Unlike ``rst_transform`` (int EPSG only) this supports
-    non-EPSG targets such as ESRI codes or custom projections.
-
-    Pixel-producing: always materializes (a new reprojected tile is emitted).
-
-    Args:
-        tile: Tile struct column.
-        crs:  Target CRS descriptor — int EPSG, int-castable string, authority
-              string, WKT, or PROJ4.
-
-    Returns:
-        Tile reprojected to the target CRS.
-    """
-    return f.call_function("gbx_rst_transformcrs", _col(tile), _crs_col(crs))
-
-
-def rst_tryopen(tile: ColLike) -> Column:
-    """Attempt to open/validate the raster; return true if successful.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of boolean.
-    """
-    return f.call_function("gbx_rst_tryopen", _col(tile))
-
-
-def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
-    """Update the declared data type of the raster (e.g. after conversion).
-
-    Args:
-        tile: Raster tile column.
-        new_type: New GDAL data type name (e.g. Byte, Float32).
-
-    Returns:
-        Column of raster tile with updated type metadata.
-    """
-    return f.call_function("gbx_rst_updatetype", _col(tile), _col(new_type))
-
-
-def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert world (x, y) to pixel (x, y) in the raster.
-
-    Args:
-        tile: Raster tile column.
-        x: World X coordinate.
-        y: World Y coordinate.
-
-    Returns:
-        Column of struct (x, y as integer) in pixel coordinates.
-    """
-    return f.call_function("gbx_rst_worldtorastercoord", _col(tile), _col(x), _col(y))
-
-
-def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert world (x, y) to pixel column index.
-
-    Args:
-        tile: Raster tile column.
-        x: World X coordinate.
-        y: World Y coordinate.
-
-    Returns:
-        Column of integer (pixel column index).
-    """
-    return f.call_function("gbx_rst_worldtorastercoordx", _col(tile), _col(x), _col(y))
-
-
-def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert world (x, y) to pixel row index.
-
-    Args:
-        tile: Raster tile column.
-        x: World X coordinate.
-        y: World Y coordinate.
-
-    Returns:
-        Column of integer (pixel row index).
-    """
-    return f.call_function("gbx_rst_worldtorastercoordy", _col(tile), _col(x), _col(y))
-
-
-def rst_to_webmercator(
-    tile: ColLike, resampling: Union[ColLike, None] = None
-) -> Column:
-    """Reproject the tile to EPSG:3857 (web mercator).
-
-    Most slippy-map workflows start here because rasters typically arrive
-    in EPSG:4326 or a UTM zone — neither renders directly in tile servers.
-
-    Args:
-        tile: Raster tile column.
-        resampling: gdalwarp -r algorithm (default ``"bilinear"``). Use
-            ``"near"`` for categorical rasters. String literals are auto
-            wrapped in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Tile column reprojected to EPSG:3857.
-    """
-    resampling_col = (
-        f.lit("bilinear")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    return f.call_function("gbx_rst_to_webmercator", _col(tile), resampling_col)
-
-
-def rst_tilexyz(
-    tile: ColLike,
-    z: ColLike,
-    x: ColLike,
-    y: ColLike,
-    format: Union[ColLike, None] = None,
-    size: ColLike = 256,
-    resampling: Union[ColLike, None] = None,
-    rescale: Union[ColLike, None] = None,
-) -> Column:
-    """Render a single web-mercator XYZ tile to PNG / JPEG / WEBP bytes.
-
-    Returns ``BinaryType`` with the encoded tile bytes for ``(z, x, y)``.
-    Out-of-extent tiles return a transparent PNG (alpha=0) of the requested
-    size -- NOT null. Slippy-map tile servers expect a 200-status non-zero
-    body even outside source coverage.
-
-    Args:
-        tile: Raster tile column.
-        z: Zoom level (0 <= z <= 20).
-        x: Tile X coordinate (0 <= x < 2^z).
-        y: Tile Y coordinate (0 <= y < 2^z, Y north-down).
-        format: Output image format -- ``"PNG"`` (default), ``"JPEG"``, or ``"WEBP"``.
-            String literals are auto-wrapped in ``f.lit``.
-        size: Output edge length in pixels (default 256).
-        resampling: gdalwarp -r algorithm (default ``"bilinear"``). String literals
-            are auto-wrapped in ``f.lit``.
-        rescale: 8-bit encoding contrast -- ``"auto"`` (default) rescales non-8-bit
-            imagery by whole-dataset per-band min/max for display contrast; ``"none"``
-            keeps the raw full-dtype-range mapping; a ``"min,max"`` string (e.g.
-            ``"8000,12000"``) sets explicit bounds applied to every band. An explicit
-            ``(min, max)`` tuple is NOT supported through the Column API -- pass a
-            ``"min,max"`` string literal or use ``f.lit("min,max")``. String literals
-            are auto-wrapped in ``f.lit``. Note: rescale currently affects PNG output
-            only; JPEG/WEBP rescale support is a future follow-up.
-
-    Returns:
-        Binary column with the encoded image bytes.
-    """
-    format_col = (
-        f.lit("PNG")
-        if format is None
-        else (f.lit(format) if isinstance(format, str) else _col(format))
-    )
-    resampling_col = (
-        f.lit("bilinear")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    rescale_col = (
-        f.lit("auto")
-        if rescale is None
-        else (f.lit(rescale) if isinstance(rescale, str) else _col(rescale))
-    )
-    return f.call_function(
-        "gbx_rst_tilexyz",
-        _col(tile),
-        _col(z),
-        _col(x),
-        _col(y),
-        format_col,
-        _col(size),
-        resampling_col,
-        rescale_col,
-    )
-
-
-def rst_xyzpyramid(
-    tile: ColLike,
-    min_z: ColLike,
-    max_z: ColLike,
-    format: Union[ColLike, None] = None,
-    size: ColLike = 256,
-    resampling: Union[ColLike, None] = None,
-    rescale: Union[ColLike, None] = None,
-) -> Column:
-    """Generator: emit one row per intersecting (z, x, y) tile across [min_z, max_z].
-
-    Per-row output column is a struct ``tile: STRUCT<z INT, x INT, y INT, bytes BINARY>``.
-    Invoke directly in ``select(...)`` (top-level generator, do not wrap in ``F.explode``).
-    Cell-count is capped at 10^6 candidate tiles across the requested zoom range;
-    ``max_z`` is capped at 20.
-
-    The scale mapping is resolved ONCE from the source raster before the tile loop so
-    that every tile in the pyramid shares one 8-bit mapping -- no tile-to-tile seams.
-
-    Args:
-        tile: Raster tile column.
-        min_z: Inclusive minimum zoom level.
-        max_z: Inclusive maximum zoom level (<= 20).
-        format: Output image format -- ``"PNG"`` (default), ``"JPEG"``, or ``"WEBP"``.
-            String literals are auto-wrapped in ``f.lit``.
-        size: Output edge length in pixels (default 256).
-        resampling: gdalwarp -r algorithm (default ``"bilinear"``). String literals
-            are auto-wrapped in ``f.lit``.
-        rescale: 8-bit encoding contrast -- ``"auto"`` (default) rescales non-8-bit
-            imagery by whole-dataset per-band min/max; ``"none"`` keeps the raw
-            full-dtype-range mapping; a ``"min,max"`` string sets explicit bounds.
-            String literals are auto-wrapped in ``f.lit``. Note: rescale currently
-            affects PNG output only; JPEG/WEBP rescale support is a future follow-up.
-
-    Returns:
-        Array column of structs (use ``F.explode`` to get one row per tile).
-    """
-    format_col = (
-        f.lit("PNG")
-        if format is None
-        else (f.lit(format) if isinstance(format, str) else _col(format))
-    )
-    resampling_col = (
-        f.lit("bilinear")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    rescale_col = (
-        f.lit("auto")
-        if rescale is None
-        else (f.lit(rescale) if isinstance(rescale, str) else _col(rescale))
-    )
-    return f.call_function(
-        "gbx_rst_xyzpyramid",
-        _col(tile),
-        _col(min_z),
-        _col(max_z),
-        format_col,
-        _col(size),
-        resampling_col,
-        rescale_col,
-    )
-
-
-def rst_rasterize(
-    geom: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-) -> Column:
-    """Burn a vector geometry into a raster tile at the given extent and resolution.
-
-    Returns a GTiff-backed tile of shape ``width_px x height_px`` covering the
-    bounding box ``(xmin, ymin) -> (xmax, ymax)`` in the given SRID. Pixels
-    inside the geometry receive ``value``; pixels outside receive NoData
-    (-9999.0, Float64).
-
-    Args:
-        geom: Geometry (WKB, EWKB, WKT, or EWKT) column.
-        value: Burn value (``float``).
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-
-    Returns:
-        Raster tile column.
-    """
-    return f.call_function(
-        "gbx_rst_rasterize",
-        _col(geom),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-    )
-
-
-def rst_polygonize(
-    tile: ColLike,
-    band: ColLike = None,
-    connectedness: ColLike = None,
-) -> Column:
-    """Extract vector polygons from a raster tile's contiguous value regions.
-
-    Returns ``ARRAY<struct(geom_wkb BINARY, value DOUBLE)>``, one entry per
-    connected component of equal pixel values. NoData pixels are excluded.
-
-    Args:
-        tile: Raster tile column.
-        band: 1-based band index to polygonize (default 1).
-        connectedness: 4 or 8; passed as GDAL ``8CONNECTED`` option (default 4).
-
-    Returns:
-        Array column of structs (use ``F.explode`` to get one row per polygon).
-    """
-    band_col = f.lit(1) if band is None else _col(band)
-    conn_col = f.lit(4) if connectedness is None else _col(connectedness)
-    return f.call_function("gbx_rst_polygonize", _col(tile), band_col, conn_col)
-
-
 # ---------------------------------------------------------------------------
-# Terrain analysis (DEM processing) - Wave 8a
+# Terrain analysis (DEM processing)
 #
 # Seven thin wrappers around gdal.DEMProcessing. All take a single source tile
 # and return a derived tile. Defaults match the GDAL conventions.
 # ---------------------------------------------------------------------------
 
 
-def rst_slope(
-    tile: ColLike,
-    unit: ColLike = None,
-    xscale: ColLike = None,
-    yscale: ColLike = None,
-) -> Column:
-    """Compute slope from a DEM tile via ``gdal.DEMProcessing("slope")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        unit: ``"degrees"`` (default) or ``"percent"``.
-        xscale: Explicit horizontal scale override (vertical/horizontal ratio)
-            along the x axis. Must be supplied together with ``yscale``.
-            By default the scale is auto-derived from the raster CRS (GDAL 3.11
-            behavior), so projected CRS in metres and geographic CRS in degrees
-            both work without an explicit value.
-        yscale: Explicit horizontal scale override along the y axis. Must be
-            supplied together with ``xscale``.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    unit_col = (
-        f.lit("degrees")
-        if unit is None
-        else (f.lit(unit) if isinstance(unit, str) else _col(unit))
-    )
-    if xscale is None and yscale is None:
-        return f.call_function("gbx_rst_slope", _col(tile), unit_col)
-    if xscale is None or yscale is None:
-        raise ValueError(
-            "rst_slope: xscale and yscale must be supplied together (both or neither)"
-        )
-    return f.call_function(
-        "gbx_rst_slope", _col(tile), unit_col, _col(xscale), _col(yscale)
-    )
-
-
-def rst_aspect(
-    tile: ColLike,
-    trigonometric: ColLike = None,
-    zero_for_flat: ColLike = None,
-) -> Column:
-    """Compute aspect (slope direction) from a DEM tile via ``gdal.DEMProcessing("aspect")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        trigonometric: If true, output trigonometric angles measured
-            counterclockwise from east; if false (default), output compass
-            angles measured clockwise from north.
-        zero_for_flat: If true, flat areas get value 0; if false (default),
-            flat areas get -9999.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    trig_col = f.lit(False) if trigonometric is None else _col(trigonometric)
-    zff_col = f.lit(False) if zero_for_flat is None else _col(zero_for_flat)
-    return f.call_function("gbx_rst_aspect", _col(tile), trig_col, zff_col)
-
-
-def rst_hillshade(
-    tile: ColLike,
-    azimuth: ColLike = None,
-    altitude: ColLike = None,
-    z_factor: ColLike = None,
-) -> Column:
-    """Compute hillshade (shaded relief) from a DEM tile via ``gdal.DEMProcessing("hillshade")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        azimuth: Light-source azimuth in degrees (default 315.0;
-            0=N, 90=E, 180=S, 270=W).
-        altitude: Light-source altitude above horizon in degrees
-            (default 45.0).
-        z_factor: Vertical exaggeration (default 1.0).
-
-    Returns:
-        Single-band Byte GTiff tile column with values 0..255.
-    """
-    az_col = f.lit(315.0) if azimuth is None else _col(azimuth)
-    alt_col = f.lit(45.0) if altitude is None else _col(altitude)
-    z_col = f.lit(1.0) if z_factor is None else _col(z_factor)
-    return f.call_function("gbx_rst_hillshade", _col(tile), az_col, alt_col, z_col)
-
-
-def rst_tri(tile: ColLike) -> Column:
-    """Compute Terrain Ruggedness Index (TRI) via ``gdal.DEMProcessing("TRI")``.
-
-    TRI is the mean absolute difference between a pixel and its 8 neighbours;
-    used in landscape ecology and habitat analysis.
-
-    Args:
-        tile: Single-band DEM tile column.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function("gbx_rst_tri", _col(tile))
-
-
-def rst_tpi(tile: ColLike) -> Column:
-    """Compute Topographic Position Index (TPI) via ``gdal.DEMProcessing("TPI")``.
-
-    TPI is the difference between a pixel's elevation and the mean of its 8
-    neighbours; positive values indicate ridges/peaks, negative values
-    valleys.
-
-    Args:
-        tile: Single-band DEM tile column.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function("gbx_rst_tpi", _col(tile))
-
-
-def rst_roughness(tile: ColLike) -> Column:
-    """Compute Roughness via ``gdal.DEMProcessing("Roughness")``.
-
-    Roughness is the largest inter-cell difference of a central pixel and
-    its 8 neighbours.
-
-    Args:
-        tile: Single-band DEM tile column.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function("gbx_rst_roughness", _col(tile))
-
-
-def rst_color_relief(
-    tile: ColLike,
-    color_table_path: ColLike,
-) -> Column:
-    """Apply a color relief mapping to a DEM tile via ``gdal.DEMProcessing("color-relief")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        color_table_path: Path (FUSE-mounted Volume or local) to a gdaldem
-            color file. Each line is ``elevation R G B [A]``; special values
-            ``nv``, ``default``, ``0%``, ``100%`` are accepted.
-
-    Returns:
-        3- or 4-band Byte GTiff tile column (RGB or RGBA).
-    """
-    ctp_col = (
-        f.lit(color_table_path)
-        if isinstance(color_table_path, str)
-        else _col(color_table_path)
-    )
-    return f.call_function("gbx_rst_color_relief", _col(tile), ctp_col)
-
-
 # ---------------------------------------------------------------------------
-# Spectral indices (Wave 8b)
+# Spectral indices
 #
 # Five thin wrappers that build a per-pixel formula string from user-supplied
 # band indices and delegate to ``gbx_rst_mapalgebra`` internally. All return a
@@ -2939,340 +94,235 @@ def rst_color_relief(
 # ---------------------------------------------------------------------------
 
 
-def rst_evi(
-    tile: ColLike,
-    red_idx: ColLike,
-    nir_idx: ColLike,
-    blue_idx: ColLike,
-    l: ColLike = None,
-    c1: ColLike = None,
-    c2: ColLike = None,
-    g: ColLike = None,
-) -> Column:
-    """Enhanced Vegetation Index (EVI).
-
-    Formula: ``G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L)``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        red_idx: 1-based red band index.
-        nir_idx: 1-based NIR band index.
-        blue_idx: 1-based blue band index.
-        l: Canopy background adjustment (default 1.0).
-        c1: Aerosol resistance coefficient for red (default 6.0).
-        c2: Aerosol resistance coefficient for blue (default 7.5).
-        g: Gain factor (default 2.5).
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    l_col = f.lit(1.0) if l is None else _col(l)
-    c1_col = f.lit(6.0) if c1 is None else _col(c1)
-    c2_col = f.lit(7.5) if c2 is None else _col(c2)
-    g_col = f.lit(2.5) if g is None else _col(g)
-    return f.call_function(
-        "gbx_rst_evi",
-        _col(tile),
-        _col(red_idx),
-        _col(nir_idx),
-        _col(blue_idx),
-        l_col,
-        c1_col,
-        c2_col,
-        g_col,
-    )
-
-
-def rst_savi(
-    tile: ColLike,
-    red_idx: ColLike,
-    nir_idx: ColLike,
-    l: ColLike = None,
-) -> Column:
-    """Soil-Adjusted Vegetation Index (SAVI).
-
-    Formula: ``(NIR - Red) / (NIR + Red + L) * (1 + L)``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        red_idx: 1-based red band index.
-        nir_idx: 1-based NIR band index.
-        l: Soil-brightness correction factor (default 0.5; ``L=0`` reduces to
-            NDVI; ``L=1`` is appropriate for very low vegetation cover).
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    l_col = f.lit(0.5) if l is None else _col(l)
-    return f.call_function(
-        "gbx_rst_savi",
-        _col(tile),
-        _col(red_idx),
-        _col(nir_idx),
-        l_col,
-    )
-
-
-def rst_ndwi(
-    tile: ColLike,
-    green_idx: ColLike,
-    nir_idx: ColLike,
-) -> Column:
-    """Normalized Difference Water Index (NDWI, McFeeters 1996).
-
-    Formula: ``(Green - NIR) / (Green + NIR)``. Positive values typically
-    indicate open water, negative values indicate land/vegetation.
-
-    Args:
-        tile: Multi-band raster tile column.
-        green_idx: 1-based green band index.
-        nir_idx: 1-based NIR band index.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function(
-        "gbx_rst_ndwi",
-        _col(tile),
-        _col(green_idx),
-        _col(nir_idx),
-    )
-
-
-def rst_nbr(
-    tile: ColLike,
-    nir_idx: ColLike,
-    swir_idx: ColLike,
-) -> Column:
-    """Normalized Burn Ratio (NBR).
-
-    Formula: ``(NIR - SWIR) / (NIR + SWIR)``. The difference between pre-fire
-    and post-fire NBR (``dNBR``) is the canonical burn-severity index.
-
-    Args:
-        tile: Multi-band raster tile column.
-        nir_idx: 1-based NIR band index.
-        swir_idx: 1-based SWIR band index.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function(
-        "gbx_rst_nbr",
-        _col(tile),
-        _col(nir_idx),
-        _col(swir_idx),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Resample family and IDW interpolation
 #
-# Three resample wrappers delegate to gdal.Warp with -tr / -ts; IDW pair
-# (`rst_gridfrompoints` non-aggregator + `rst_gridfrompoints_agg` aggregator)
-# delegates to gdal.Grid with the invdist algorithm.
+# Three resample wrappers delegate to gdal.Warp with -tr / -ts; the IDW aggregator
+# (`rst_gridfrompoints_agg`) delegates to gdal.Grid with the invdist algorithm.
 # ---------------------------------------------------------------------------
 
 
-def rst_resample(
+# ---------------------------------------------------------------------------
+# Delaunay-TIN Digital Terrain Model (DTM) interpolation
+#
+# `rst_dtmfromgeoms_agg` (aggregator, one Z-valued point per row) delegates to
+# gbx_rst_dtmfromgeoms_agg. The non-aggregator form is generated from the manifest.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Pixel ops + extraction
+#
+# Seven thin wrappers over GDAL per-pixel / per-tile primitives that the
+# rest of the RasterX surface assumed were "always available" but weren't
+# actually exposed: FillNodata, ReadRaster-at-point sampling, SetProjection,
+# GetHistogram, threshold (via MapAlgebra), BuildOverviews, single-band
+# extraction.
+# ---------------------------------------------------------------------------
+
+
+# BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
+
+
+def rst_align_to(
     tile: ColLike,
-    factor: ColLike,
-    algorithm: Union[ColLike, None] = None,
+    reference_tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Resample a raster tile by a multiplicative ``factor``.
-
-    ``factor > 1`` upsamples, ``0 < factor < 1`` downsamples. CRS and extent
-    are preserved; output dimensions are ``round(srcW * factor) x round(srcH * factor)``.
+    """Warp a tile onto the grid of a reference tile, with nearest-neighbour resampling.
 
     Args:
-        tile: Raster tile column.
-        factor: Multiplicative scale factor (``float``).
-        algorithm: gdalwarp ``-r`` algorithm (default ``"bilinear"``). One of
-            ``near``, ``bilinear``, ``cubic``, ``cubicspline``, ``lanczos``,
-            ``average``, ``mode``, ``max``, ``min``, ``med``, ``q1``, ``q3``.
-            String literals are auto-wrapped via ``f.lit``.
+        tile: The tile to warp.
+        reference_tile: The tile whose grid (CRS, extent, width, height) the result
+            takes.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Resampled raster tile column.
+        The tile on the reference tile's grid: its CRS, width, height and geotransform,
+        nearest-neighbour values; NoData where the tile does not cover the grid. NULL
+        when either tile is NULL; an error tile in either comes out as itself.
+
+    SQL: ``gbx_rst_align_to(tile, reference_tile)``
     """
-    alg_col = (
-        f.lit("bilinear")
-        if algorithm is None
-        else (f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm))
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_align_to",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            reference_tile,
+        )
+    return _api.call(
+        "gbx_rst_align_to",
+        tile,
+        reference_tile,
     )
-    return f.call_function("gbx_rst_resample", _col(tile), _col(factor), alg_col)
 
 
-def rst_resample_to_size(
+def rst_asformat(
     tile: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    algorithm: Union[ColLike, None] = None,
+    new_format: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Resample a raster tile to an explicit output size ``width_px x height_px``.
+    """Re-encode the raster to another GDAL driver (for example PNG, GTiff or COG).
 
     Args:
-        tile: Raster tile column.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        algorithm: gdalwarp ``-r`` algorithm (default ``"bilinear"``).
+        tile: The tile to re-encode.
+        new_format: A GDAL driver short name that can write a raster, in any case:
+            `'GTiff'`, `'PNG'`, `'COG'`. A name that names none raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Resampled raster tile column.
+        The tile with its raster bytes encoded in `new_format` and its `driver` metadata
+        set to the driver the bytes open as (`'COG'` is a layout of a GeoTIFF and opens
+        as `'GTiff'`).
+
+    SQL: ``gbx_rst_asformat(tile, new_format)``
     """
-    alg_col = (
-        f.lit("bilinear")
-        if algorithm is None
-        else (f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm))
-    )
-    return f.call_function(
-        "gbx_rst_resample_to_size",
-        _col(tile),
-        _col(width_px),
-        _col(height_px),
-        alg_col,
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_asformat",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            new_format,
+        )
+    return _api.call(
+        "gbx_rst_asformat",
+        tile,
+        new_format,
     )
 
 
-def rst_resample_to_res(
+def rst_aspect(
     tile: ColLike,
-    x_res: ColLike,
-    y_res: ColLike,
-    algorithm: Union[ColLike, None] = None,
+    trigonometric: ColLike = None,
+    zero_for_flat: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Resample a raster tile to an explicit ground resolution.
-
-    ``x_res`` / ``y_res`` are in source CRS units (metres for UTM, degrees for
-    EPSG:4326). Output extent matches the source bounding box adjusted to the
-    new pixel size.
+    """Compute the direction of steepest descent from a single-band DEM tile (Horn's 3x3 method).
 
     Args:
-        tile: Raster tile column.
-        x_res: Target X resolution (``float``, CRS units / pixel).
-        y_res: Target Y resolution (``float``).
-        algorithm: gdalwarp ``-r`` algorithm (default ``"bilinear"``).
+        tile: The single-band DEM tile.
+        trigonometric: `true` gives counter-clockwise degrees from east; `false` gives
+            compass degrees clockwise from north. SQL default: ``false``.
+        zero_for_flat: `true` gives 0 for flat cells; `false` leaves them NoData. The
+            border and the cells next to NoData stay NoData. SQL default: ``false``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Resampled raster tile column.
+        A single-band Float32 tile in degrees from 0 to 360; NoData is -9999.
+
+    SQL: ``gbx_rst_aspect(tile, [trigonometric], [zero_for_flat])``
     """
-    alg_col = (
-        f.lit("bilinear")
-        if algorithm is None
-        else (f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm))
-    )
-    return f.call_function(
-        "gbx_rst_resample_to_res",
-        _col(tile),
-        _col(x_res),
-        _col(y_res),
-        alg_col,
-    )
-
-
-def rst_gridfrompoints(
-    points_array: ColLike,
-    values_array: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-    power: ColLike = None,
-    max_pts: ColLike = None,
-) -> Column:
-    """Inverse-Distance-Weighted (IDW) interpolation - non-aggregator form.
-
-    Points (``ARRAY<BINARY>`` WKB or ``ARRAY<STRING>`` WKT) and ``values_array``
-    (``ARRAY<DOUBLE>``) are passed in a single row. The output is a Float64
-    GTiff tile of shape ``width_px x height_px`` covering
-    ``(xmin, ymin) -> (xmax, ymax)`` in the given SRID.
-
-    Args:
-        points_array: Column of array of point geometries (WKB or WKT).
-        values_array: Column of array of double values (same length as ``points_array``).
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-        power: IDW exponent (default 2.0).
-        max_pts: Maximum neighbour points per cell (default 12).
-
-    Returns:
-        Raster tile column.
-    """
-    power_col = f.lit(2.0) if power is None else _col(power)
-    max_pts_col = f.lit(12) if max_pts is None else _col(max_pts)
-    return f.call_function(
-        "gbx_rst_gridfrompoints",
-        _col(points_array),
-        _col(values_array),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        power_col,
-        max_pts_col,
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_aspect",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            trigonometric,
+            zero_for_flat,
+        )
+    return _api.call(
+        "gbx_rst_aspect",
+        tile,
+        trigonometric,
+        zero_for_flat,
     )
 
 
-def rst_gridfrompoints_agg(
-    point: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-    power: ColLike = None,
-    max_pts: ColLike = None,
+def rst_avg(
+    tile: ColLike,
 ) -> Column:
-    """IDW interpolation aggregator - one point/value per row.
-
-    Aggregator counterpart of :func:`rst_gridfrompoints`. Group rows by an
-    extent key and pass per-row ``point`` / ``value`` columns plus per-group
-    literal extent parameters.
+    """Return the mean of the valid pixels of each band.
 
     Args:
-        point: Point geometry column (WKB binary or WKT string).
-        value: Double value column.
-        xmin: Minimum X of the output raster extent (per-group literal).
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-        power: IDW exponent (default 2.0).
-        max_pts: Maximum neighbour points per cell (default 12).
+        tile: The raster tile.
 
     Returns:
-        Raster tile column.
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_avg(tile)``
     """
-    power_col = f.lit(2.0) if power is None else _col(power)
-    max_pts_col = f.lit(12) if max_pts is None else _col(max_pts)
-    return f.call_function(
-        "gbx_rst_gridfrompoints_agg",
-        _col(point),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        power_col,
-        max_pts_col,
+    return _api.call(
+        "gbx_rst_avg",
+        tile,
+    )
+
+
+def rst_band(
+    tile: ColLike,
+    band_index: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Extract one band as a new single-band tile.
+
+    Args:
+        tile: The tile to take a band from.
+        band_index: The 1-based band to extract, in `[1 .. numbands]`.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band tile with the band's pixels, NoData, data type and georeferencing.
+        A band outside the tile raises.
+
+    SQL: ``gbx_rst_band(tile, band_index)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_band",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            band_index,
+        )
+    return _api.call(
+        "gbx_rst_band",
+        tile,
+        band_index,
+    )
+
+
+def rst_bandmetadata(
+    tile: ColLike,
+    band: ColLike,
+) -> Column:
+    """Return the metadata of one band as a map.
+
+    Args:
+        tile: The raster tile.
+        band: The 1-based band number.
+
+    Returns:
+        The band's tags (empty when it has none), or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_bandmetadata(tile, band)``
+    """
+    return _api.call(
+        "gbx_rst_bandmetadata",
+        tile,
+        band,
     )
 
 
@@ -3287,49 +337,44 @@ def rst_binpoints(
     width_px: ColLike,
     height_px: ColLike,
     srid: ColLike,
-    statistic: ColLike = "max",
+    statistic: ColLike = None,
 ) -> Column:
-    """Bin parallel x/y/z ``ARRAY<DOUBLE>`` columns into a Float32 raster tile.
-
-    Non-aggregator (scalar) form — all three arrays live in a single row.
-    For the grouped-agg form use :func:`rst_binpoints_agg`.
-
-    Output is a single-band Float32 GTiff tile of shape
-    ``width_px x height_px`` covering ``(xmin, ymin) -> (xmax, ymax)`` in the
-    given SRID. Empty cells (no points) carry NoData (``-9999.0``).
+    """Bin scattered points into a raster by a statistic of their values.
 
     Args:
-        x_array: Column of ``ARRAY<DOUBLE>`` x-coordinates.
-        y_array: Column of ``ARRAY<DOUBLE>`` y-coordinates.
-        z_array: Column of ``ARRAY<DOUBLE>`` z-values to reduce per cell.
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        srid: EPSG SRID of the output raster.
-        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
-            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
-            (e.g. ``"percentile:90"``).
+        x_array: The x coordinate of each point.
+        y_array: The y coordinate of each point, in the same order.
+        z_array: The value of each point, in the same order.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        srid: The EPSG or ESRI code of the output CRS.
+        statistic: How the points in a pixel combine: `max`, `min`, `mean`, `median`,
+            `count` or `percentile:<p>` (for example `percentile:90`), in any case. Another
+            word raises. SQL default: ``'max'``.
 
     Returns:
-        Raster tile column (single-band Float32 GTiff).
+        A single-band Float32 tile over the extent; a point on the east or south edge is
+        left out, and a pixel with no point is NoData (-9999).
+
+    SQL: ``gbx_rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])``
     """
-    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
-    return f.call_function(
+    return _api.call(
         "gbx_rst_binpoints",
-        _col(x_array),
-        _col(y_array),
-        _col(z_array),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(srid),
-        stat_col,
+        x_array,
+        y_array,
+        z_array,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        srid,
+        statistic,
     )
 
 
@@ -3344,120 +389,1952 @@ def rst_binpoints_agg(
     width_px: ColLike,
     height_px: ColLike,
     srid: ColLike,
-    statistic: ColLike = "max",
+    statistic: ColLike = None,
 ) -> Column:
-    """Bin one ``(x, y, z)`` point per row into a Float32 raster tile (aggregator).
-
-    Aggregator counterpart of :func:`rst_binpoints`. Group rows by an extent
-    key and pass one scalar ``x`` / ``y`` / ``z`` per row together with
-    per-group literal extent parameters.
+    """Bin a group's points into one single-band tile.
 
     Args:
-        x: Column of X-coordinates (DOUBLE).
-        y: Column of Y-coordinates (DOUBLE).
-        z: Column of Z-values to bin (DOUBLE).
-        xmin: Minimum X of the output raster extent (per-group literal).
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        srid: EPSG SRID of the output raster.
-        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
-            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
-            (e.g. ``"percentile:90"``).
+        x: The point's x.
+        y: The point's y.
+        z: The point's value.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        srid: The EPSG code of the output CRS.
+        statistic: `'max'`, `'min'`, `'mean'`, `'median'`, `'count'` or
+            `'percentile:<p>'`. SQL default: ``'max'``.
 
     Returns:
-        Raster tile column (single-band Float32 GTiff).
+        GeoTIFF bytes, Float32; a pixel with no point is NoData; NULL for a group with
+        no point.
+
+    SQL: ``gbx_rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])``
     """
-    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
-    return f.call_function(
+    return _api.call(
         "gbx_rst_binpoints_agg",
-        _col(x),
-        _col(y),
-        _col(z),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(srid),
-        stat_col,
+        x,
+        y,
+        z,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        srid,
+        statistic,
+    )
+
+
+def rst_binpoints_finalize(
+    cells: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+) -> Column:
+    """Write the per-pixel values of a points group into one single-band tile.
+
+    Args:
+        cells: The reduced pixels as an array of structs `(col, row, value)`, for
+            example `collect_list(struct(col, row, value))` over a `GROUP BY` of the
+            `gbx_rst_binpoints_partial` keys. A NULL element or a NULL or NaN value leaves
+            the pixel NoData; a pixel given twice keeps its largest value; a `col` or `row`
+            outside the canvas raises.
+        xmin: The west edge of the output in its CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        srid: The EPSG or ESRI code of the output CRS.
+
+    Returns:
+        A single-band Float32 tile over the extent, the tile `gbx_rst_binpoints_agg`
+        makes for the same points: a pixel in no struct is NoData (-9999). An array with
+        no pixel gives an all-NoData tile.
+
+    SQL: ``gbx_rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, srid)``
+    """
+    return _api.call(
+        "gbx_rst_binpoints_finalize",
+        cells,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        srid,
+    )
+
+
+def rst_binpoints_partial(
+    x: ColLike,
+    y: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+) -> Column:
+    """Give the canvas pixel a point falls in, as the key to group points by.
+
+    Args:
+        x: The point's x in the canvas CRS.
+        y: The point's y in the canvas CRS.
+        xmin: The west edge of the canvas in its CRS.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas, above `xmin`.
+        ymax: The north edge of the canvas, above `ymin`.
+        width_px: The canvas width in pixels, above 0.
+        height_px: The canvas height in pixels, above 0.
+
+    Returns:
+        A struct `(col, row)`, counted from the top-left pixel. NULL for a point outside
+        the canvas, on its east or south edge, or with a NULL or NaN coordinate. It is a
+        SQL expression, so it runs in the query with no Python.
+
+    SQL: ``gbx_rst_binpoints_partial(x, y, xmin, ymin, xmax, ymax, width_px, height_px)``
+    """
+    return _api.call(
+        "gbx_rst_binpoints_partial",
+        x,
+        y,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+    )
+
+
+def rst_bng_rasterize(
+    cells: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize an array of BNG cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        out_srid: Not read: the output is always EPSG:27700.
+        pixel_size: The pixel size in metres.
+        xmin: The west edge of the canvas in EPSG:27700 metres.
+        ymin: The south edge of the canvas in EPSG:27700 metres.
+        xmax: The east edge of the canvas in EPSG:27700 metres.
+        ymax: The north edge of the canvas in EPSG:27700 metres.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given, for example
+            `'centroids'`.
+        kring_pad: Cells of padding around the derived canvas.
+        out_crs: Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead.
+            SQL default: ``NULL``.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_bng_rasterize_agg` over the same cells:
+        GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_bng_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_bng_rasterize",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_bng_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize a group's BNG cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
+        out_srid: Not read: the output is always EPSG:27700.
+        pixel_size: The pixel size in metres.
+        xmin: The west edge of the canvas in EPSG:27700 metres.
+        ymin: The south edge of the canvas in EPSG:27700 metres.
+        xmax: The east edge of the canvas in EPSG:27700 metres.
+        ymax: The north edge of the canvas in EPSG:27700 metres.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given, for example
+            `'centroids'`.
+        kring_pad: Cells of padding around the derived canvas.
+        out_crs: Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead.
+            SQL default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, in EPSG:27700 over the canvas; NULL
+        for a group with no cell. The same on every compute.
+
+    SQL: ``gbx_rst_bng_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_bng_rasterize_agg",
+        cellid,
+        value,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_bng_rasterize_tvf(
+    df: DataFrame,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    width: int,
+    height: int,
+) -> DataFrame:
+    """Rasterize each partition's BNG cells onto an explicit EPSG:27700 canvas, as a table function over `TABLE(...) PARTITION BY`.
+
+    Args:
+        df: The input DataFrame, with the columns ``key``, ``cellid``, ``value`` (others
+            are left out); it is partitioned by ``key``.
+        xmin: The west edge of the canvas in EPSG:27700 metres.
+        ymin: The south edge of the canvas in EPSG:27700 metres.
+        xmax: The east edge of the canvas in EPSG:27700 metres.
+        ymax: The north edge of the canvas in EPSG:27700 metres.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+
+    Returns:
+        One row per partition: its `key` and the `raster` (GeoTIFF bytes, Float64 with
+        NoData -9999, in EPSG:27700 over the canvas). A partition with no cell gives no
+        row.
+
+    SQL: ``gbx_rst_bng_rasterize_tvf(rows, xmin, ymin, xmax, ymax, width, height)``
+    """
+    return _api.table_by(
+        df,
+        "gbx_rst_bng_rasterize_tvf",
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+    )
+
+
+def rst_bng_rastertogrid_partial(
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> Column:
+    """Give the mergeable state of every BNG cell the raster covers, so one pass serves every statistic.
+
+    Args:
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        An array of structs, one per band and cell: `band` (from 1), `cellid`, `count`,
+        `sum`, `m2`, `min` and `max`. `m2` is the sum of the squared deviations from the
+        cell's mean. A cell that holds no valid pixel (with `'complete'` coverage) has a
+        `count` of 0 and NULL for the rest. The average of a cell is `sum / count`, its
+        variance `m2 / count`, and its standard deviation the square root of that. Tiles
+        of one table merge by summing `count` and `sum`, taking the least `min` and the
+        greatest `max`, and combining `m2` as the recipe on the Unity Catalog page
+        shows. NULL for a NULL tile, a NULL resolution, an error tile or a tile that
+        cannot be read.
+
+    SQL: ``gbx_rst_bng_rastertogrid_partial(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.call(
+        "gbx_rst_bng_rastertogrid_partial",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values are
+        never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridavg(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridavg",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
+        error tile and a tile that cannot be read give no rows. A raster in another CRS
+        is reprojected to EPSG:27700 (nearest neighbour, so values are never
+        interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridcount(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridcount",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values
+        are never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridmax(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridmax",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values are
+        never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridmedian(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridmedian",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values
+        are never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridmin(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridmin",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
+        tile that cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:27700 (nearest neighbour, so values are never interpolated); pixels outside
+        Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridstddev(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridstddev",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values are
+        never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridsum(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridsum",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
+        cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:27700 (nearest neighbour, so values are never interpolated); pixels outside
+        Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridvariance(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridvariance",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile in EPSG:27700 into BNG cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_tessellate",
+        tile,
+        resolution,
+        assignment,
+        coverage,
+    )
+
+
+def rst_boundingbox(
+    tile: ColLike,
+) -> Column:
+    """Return the raster's bounding box as a polygon.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        A WKB polygon in the raster CRS, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_boundingbox(tile)``
+    """
+    return _api.call(
+        "gbx_rst_boundingbox",
+        tile,
+    )
+
+
+def rst_buildoverviews(
+    tile: ColLike,
+    levels: ColLike,
+    resampling: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Build internal pyramid overviews at the given decimation levels.
+
+    Args:
+        tile: The tile to add overviews to.
+        levels: The decimation factors, such as `array(2, 4, 8)`: each at least 2.
+        resampling: The overview resampling: `nearest`, `average`, `gauss`, `cubic`,
+            `cubicspline`, `lanczos`, `bilinear` or `mode`. Any other word raises. SQL
+            default: ``'average'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile with the same pixels and one overview per level. A NULL tile or
+        NULL levels gives NULL; an error tile comes out as itself; a tile that cannot be
+        read gives an error tile.
+
+    SQL: ``gbx_rst_buildoverviews(tile, levels, [resampling])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_buildoverviews",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            levels,
+            resampling,
+        )
+    return _api.call(
+        "gbx_rst_buildoverviews",
+        tile,
+        levels,
+        resampling,
+    )
+
+
+def rst_chm(
+    dsm_tile: ColLike,
+    dem_tile: ColLike,
+) -> Column:
+    """Compute the canopy height model: the surface aligned to the terrain, minus the terrain, no lower than 0.
+
+    Args:
+        dsm_tile: The Digital Surface Model tile.
+        dem_tile: The Digital Elevation Model tile; it defines the output grid.
+
+    Returns:
+        A single-band Float32 tile on the grid of `dem_tile`; NoData is -9999.
+
+    SQL: ``gbx_rst_chm(dsm_tile, dem_tile)``
+    """
+    return _api.call(
+        "gbx_rst_chm",
+        dsm_tile,
+        dem_tile,
+    )
+
+
+def rst_clip(
+    tile: ColLike,
+    geom: ColLike,
+    cutline_all_touched: ColLike,
+    clip_crs: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Clip the raster to a polygon.
+
+    Args:
+        tile: The tile to clip.
+        geom: The cutline: a polygon as WKB, EWKB, WKT or EWKT.
+        cutline_all_touched: `true` keeps every pixel the cutline touches; `false` keeps
+            the pixels whose centre it holds. A cutline smaller than a pixel keeps the pixel
+            it touches either way.
+        clip_crs: The CRS of a cutline that carries no SRID: `EPSG:<code>`,
+            `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or
+            EWKT SRID wins. SQL default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile cropped to the polygon's envelope on the tile's grid. The pixels
+        outside the polygon, and the ones the tile masks, are NoData: the tile's own,
+        else the type's fallback. A tile with an alpha band gets alpha 0 there. NULL
+        when the polygon misses the tile.
+
+    SQL: ``gbx_rst_clip(tile, geom, cutline_all_touched, [clip_crs])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_clip",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            geom,
+            cutline_all_touched,
+            clip_crs,
+        )
+    return _api.call(
+        "gbx_rst_clip",
+        tile,
+        geom,
+        cutline_all_touched,
+        clip_crs,
+    )
+
+
+def rst_cog_convert(
+    tile: ColLike,
+    compression: ColLike = None,
+    blocksize: ColLike = None,
+    overview_resampling: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Convert a tile to a Cloud Optimized GeoTIFF (COG).
+
+    Args:
+        tile: The tile to convert.
+        compression: `'AUTO'` (a size-adaptive ZSTD with the predictor for the data
+            type) or a codec: `ZSTD`, `DEFLATE`, `LZW`, `LERC`, `JPEG`, `WEBP` or `NONE`.
+            Any other word raises. SQL default: ``'AUTO'``.
+        blocksize: The internal block size in pixels, square: a multiple of 16. Any
+            other value raises. SQL default: ``512``.
+        overview_resampling: The resampling of the overview pyramid, such as `AVERAGE`.
+            SQL default: ``'AVERAGE'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile in COG layout with the same pixels. A NULL tile gives NULL; an
+        error tile comes out as itself; a tile that cannot be read gives an error tile.
+
+    SQL: ``gbx_rst_cog_convert(tile, [compression], [blocksize], [overview_resampling])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_cog_convert",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            compression,
+            blocksize,
+            overview_resampling,
+        )
+    return _api.call(
+        "gbx_rst_cog_convert",
+        tile,
+        compression,
+        blocksize,
+        overview_resampling,
+    )
+
+
+def rst_color_relief(
+    tile: ColLike,
+    color_table: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Colour a DEM through a `gdaldem` colour table.
+
+    Args:
+        tile: The single-band DEM tile.
+        color_table: The color table as text, in the `gdaldem` color-file format: one
+            `value R G B [A]` line per entry, a color name such as `red` in place of `R G
+            B`, `nv` for NoData, and `N%` for a share of the value range. Pass the text, not
+            a file path.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A Byte tile of 3 bands (RGB), or 4 (RGBA) when an entry has an alpha column.
+        NoData pixels take the `nv` color; without an `nv` line they are transparent
+        (RGBA) or black (RGB). A NULL tile or table gives NULL; an error tile comes out
+        as itself; a table that is not a color table raises; a tile that cannot be read
+        gives an error tile.
+
+    SQL: ``gbx_rst_color_relief(tile, color_table)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_color_relief",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            color_table,
+        )
+    return _api.call(
+        "gbx_rst_color_relief",
+        tile,
+        color_table,
+    )
+
+
+def rst_combineavg(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel mean across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Mean of the valid values at each pixel; a pixel that is NoData in every tile
+        stays NoData. The output cellid is the tiles' shared cellid, or -1 when they
+        differ. A NULL or empty array gives NULL; an array of only error tiles gives the
+        first one; a tile that cannot be read is skipped. Tiles of different shapes
+        raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combineavg(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combineavg",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combineavg",
+        tiles,
+    )
+
+
+def rst_combineavg_agg(
+    tile: ColLike,
+) -> Column:
+    """Per-pixel mean across a group's aligned tiles, ignoring NoData.
+
+    Args:
+        tile: The tile of one member. An error tile or a tile that cannot be read is
+            skipped.
+
+    Returns:
+        GeoTIFF bytes of the mean, on the grid of the first tile; NULL for a group with
+        no usable tile. Tiles of different shapes raise.
+
+    SQL: ``gbx_rst_combineavg_agg(tile)``
+    """
+    return _api.call(
+        "gbx_rst_combineavg_agg",
+        tile,
+    )
+
+
+def rst_combinecount(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel count of valid values across an array of aligned tiles.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Number of valid values at each pixel; a pixel that is NoData in every tile is
+        NoData, never 0. A NULL or empty array gives NULL; an array of only error tiles
+        gives the first one; a tile that cannot be read is skipped. Tiles of different
+        shapes raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinecount(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinecount",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinecount",
+        tiles,
+    )
+
+
+def rst_combinemax(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel maximum across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Largest valid value at each pixel; a pixel that is NoData in every tile stays
+        NoData. A NULL or empty array gives NULL; an array of only error tiles gives the
+        first one; a tile that cannot be read is skipped. Tiles of different shapes
+        raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinemax(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinemax",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinemax",
+        tiles,
+    )
+
+
+def rst_combinemedian(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel median across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Median of the valid values at each pixel (the mean of the two middle values for
+        an even count); a pixel that is NoData in every tile stays NoData. A NULL or
+        empty array gives NULL; an array of only error tiles gives the first one; a tile
+        that cannot be read is skipped. Tiles of different shapes raise; an array over
+        the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinemedian(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinemedian",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinemedian",
+        tiles,
+    )
+
+
+def rst_combinemin(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel minimum across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Smallest valid value at each pixel; a pixel that is NoData in every tile stays
+        NoData. A NULL or empty array gives NULL; an array of only error tiles gives the
+        first one; a tile that cannot be read is skipped. Tiles of different shapes
+        raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinemin(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinemin",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinemin",
+        tiles,
+    )
+
+
+def rst_combinestddev(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel population standard deviation across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Population standard deviation (divisor n) of the valid values at each pixel; a
+        pixel that is NoData in every tile stays NoData. A NULL or empty array gives
+        NULL; an array of only error tiles gives the first one; a tile that cannot be
+        read is skipped. Tiles of different shapes raise; an array over the memory
+        budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinestddev(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinestddev",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinestddev",
+        tiles,
+    )
+
+
+def rst_combinesum(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel sum across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Sum of the valid values at each pixel; a pixel that is NoData in every tile
+        stays NoData. A NULL or empty array gives NULL; an array of only error tiles
+        gives the first one; a tile that cannot be read is skipped. Tiles of different
+        shapes raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinesum(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinesum",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinesum",
+        tiles,
+    )
+
+
+def rst_contour(
+    tile: ColLike,
+    levels: ColLike,
+    interval: ColLike = None,
+    base: ColLike = None,
+    attr_field: ColLike = None,
+) -> Column:
+    """Trace contour lines of the first band at given values or at a regular interval.
+
+    Args:
+        tile: The tile to trace.
+        levels: The values to trace; NULL or empty to use `interval` and `base`.
+        interval: The spacing of the lines, used when `levels` is empty; above 0. SQL
+            default: ``0.0``.
+        base: The value one line is drawn at, used with `interval`. SQL default:
+            ``0.0``.
+        attr_field: Accepted for compatibility; the value is always the struct field
+            `value`. SQL default: ``'elev'``.
+
+    Returns:
+        An array of structs, one per line: `geom_wkb` (a WKB line in the tile's CRS) and
+        `value`. A NoData pixel, or a pixel equal to -9999 in a tile that declares no
+        NoData, is never traced. NULL for a NULL tile, an error tile or a tile that
+        cannot be read; an empty array when no line crosses. Raises when `levels` is
+        empty and `interval` is not above 0 and finite, or when `attr_field` is blank.
+
+    SQL: ``gbx_rst_contour(tile, levels, [interval], [base], [attr_field])``
+    """
+    return _api.call(
+        "gbx_rst_contour",
+        tile,
+        levels,
+        interval,
+        base,
+        attr_field,
+    )
+
+
+def rst_convolve(
+    tile: ColLike,
+    kernel: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Convolve each band with a 2-D kernel.
+
+    Args:
+        tile: The tile to convolve.
+        kernel: A 2-D array of weights with an odd number of rows and columns, applied
+            unflipped (correlation).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A Float64 tile: each band is the weighted sum of its neighbourhood, zero-padded
+        at the edges. A NoData or masked neighbour adds 0; the result is never NoData.
+
+    SQL: ``gbx_rst_convolve(tile, kernel)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_convolve",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            kernel,
+        )
+    return _api.call(
+        "gbx_rst_convolve",
+        tile,
+        kernel,
+    )
+
+
+def rst_crs(
+    tile: ColLike,
+) -> Column:
+    """Return the canonical CRS of the raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        `EPSG:<code>` or `ESRI:<code>` when the CRS has an authority code, its WKT when
+        it has none, or NULL when the raster has no CRS.
+
+    SQL: ``gbx_rst_crs(tile)``
+    """
+    return _api.call(
+        "gbx_rst_crs",
+        tile,
+    )
+
+
+def rst_custom_rasterize(
+    cells: ColLike,
+    grid: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+) -> Column:
+    """Rasterize an array of custom cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        grid: The grid, from `gbx_custom_grid`. The same for every row of the group.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_custom_rasterize_agg` over the same
+        cells: GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_custom_rasterize(cells, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)``
+    """
+    return _api.call(
+        "gbx_rst_custom_rasterize",
+        cells,
+        grid,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
     )
 
 
 def rst_custom_rasterize_agg(
     cellid: ColLike,
+    value: ColLike,
     grid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = "centroids",
-    kring_pad: ColLike = 1,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
 ) -> Column:
-    """Rasterize a group's custom-grid cells into one tile (pixel-centroid burn, heavy tier).
-
-    Aggregator counterpart of :func:`rst_custom_rastertogrid*`: where those functions
-    reduce raster pixels to per-cell statistics, this function reconstructs a raster
-    from per-cell values.
-
-    ``grid`` is a custom-grid STRUCT column produced by ``gbx_custom_grid(...)``.
-    ``value`` omitted or null -> presence mask (1.0). Supply an explicit extent
-    (``xmin`` .. ``height``) for aligned band stacking; else the grid is auto-derived
-    from the cell set per ``mode``/``kring_pad``.
-
-    Output CRS: ``out_srid`` wins; falls back to the grid's own SRID when not supplied.
-    Use inside ``.agg()``::
-
-        df.groupBy(k).agg(rx.rst_custom_rasterize_agg("cellid", "grid").alias("tile"))
+    """Rasterize a group's custom-grid cells into one tile (pixel-centroid burn).
 
     Args:
-        cellid: Column of BIGINT custom-grid cell IDs.
-        grid: Custom-grid STRUCT column from ``gbx_custom_grid(...)``.
-        value: Numeric burn value column (null -> 1.0 presence mask).
-        out_srid: EPSG SRID of the output CRS (null -> grid's SRID).
-        pixel_size: Output pixel size in target CRS units (null -> auto).
-        xmin, ymin, xmax, ymax: Output extent (null -> auto from cell set).
-        width, height: Output dimensions in pixels (null -> auto).
-        mode: ``"centroids"`` (default) or ``"spatial_envelope"``.
-        kring_pad: Neighbourhood expansion for auto-extent (default 1).
+        cellid: The custom-grid cell id.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
+        grid: The grid, from `gbx_custom_grid`. The same for every row of the group.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
 
     Returns:
-        Raster tile column (single-band GTiff).
-    """
+        GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
+        no cell. The same on every compute.
 
-    return f.call_function(
+    SQL: ``gbx_rst_custom_rasterize_agg(cellid, value, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)``
+    """
+    return _api.call(
         "gbx_rst_custom_rasterize_agg",
-        _col(cellid),
-        f.lit(None).cast("double") if value is None else _col(value),
-        _col(grid),
-        f.lit(None).cast("int") if out_srid is None else _col(out_srid),
-        f.lit(None).cast("double") if pixel_size is None else _col(pixel_size),
-        f.lit(None).cast("double") if xmin is None else _col(xmin),
-        f.lit(None).cast("double") if ymin is None else _col(ymin),
-        f.lit(None).cast("double") if xmax is None else _col(xmax),
-        f.lit(None).cast("double") if ymax is None else _col(ymax),
-        f.lit(None).cast("int") if width is None else _col(width),
-        f.lit(None).cast("int") if height is None else _col(height),
-        f.lit(mode) if isinstance(mode, str) else _col(mode),
-        f.lit(kring_pad) if isinstance(kring_pad, int) else _col(kring_pad),
+        cellid,
+        value,
+        grid,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
     )
 
 
-# ---------------------------------------------------------------------------
-# Delaunay-TIN Digital Terrain Model (DTM) interpolation
-#
-# Two wrappers: `rst_dtmfromgeoms` (non-aggregator, Z-valued points as an
-# array column) + `rst_dtmfromgeoms_agg` (aggregator, one Z-valued point
-# per row). Both delegate to gbx_rst_dtmfromgeoms / gbx_rst_dtmfromgeoms_agg.
-# ---------------------------------------------------------------------------
+def rst_custom_rastertogrid_partial(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> Column:
+    """Give the mergeable state of every custom-grid cell the raster covers, so one pass serves every statistic.
+
+    Args:
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        An array of structs, one per band and cell: `band` (from 1), `cellid`, `count`,
+        `sum`, `m2`, `min` and `max`. `m2` is the sum of the squared deviations from the
+        cell's mean. A cell that holds no valid pixel (with `'complete'` coverage) has a
+        `count` of 0 and NULL for the rest. The average of a cell is `sum / count`, its
+        variance `m2 / count`, and its standard deviation the square root of that. Tiles
+        of one table merge by summing `count` and `sum`, taking the least `min` and the
+        greatest `max`, and combining `m2` as the recipe on the Unity Catalog page
+        shows. NULL for a NULL tile, a NULL resolution, an error tile or a tile that
+        cannot be read.
+
+    SQL: ``gbx_rst_custom_rastertogrid_partial(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.call(
+        "gbx_rst_custom_rastertogrid_partial",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution or grid, an error tile and a tile that cannot be read give no rows.
+        The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridavg(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridavg",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution or
+        grid, an error tile and a tile that cannot be read give no rows. The raster is
+        not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridcount(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridcount",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution or grid, an error tile and a tile that cannot be read give no
+        rows. The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridmax(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridmax",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution or grid, an error tile and a tile that cannot be read give no rows.
+        The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridmedian(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridmedian",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution or grid, an error tile and a tile that cannot be read give no
+        rows. The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridmin(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridmin",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution or grid, an error
+        tile and a tile that cannot be read give no rows. The raster is not reprojected:
+        it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridstddev(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridstddev",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution or grid, an error tile and a tile that cannot be read give no rows.
+        The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridsum(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridsum",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution or grid, an error tile and a tile
+        that cannot be read give no rows. The raster is not reprojected: it must already
+        be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridvariance(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridvariance",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile into custom-grid cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_tessellate",
+        tile,
+        grid,
+        resolution,
+        assignment,
+        coverage,
+    )
+
+
+def rst_derivedband(
+    tile: ColLike,
+    python_func: ColLike,
+    func_name: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Apply a Python pixel function to the bands of the raster.
+
+    Args:
+        tile: The tile whose bands are the pixel function's input.
+        python_func: Python source that defines the pixel function, with GDAL's VRT
+            pixel-function signature `func(in_ar, out_ar, xoff, yoff, xsize, ysize,
+            raster_xsize, raster_ysize, buf_radius, gt, **kwargs)`: `in_ar` is the list of
+            band arrays and `out_ar` the output array the function fills in place.
+        func_name: The name of the function in `python_func`. A source that does not
+            parse, or that defines no such name, raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float64 tile of the function's output, with the tile's
+        georeferencing; where the tile is transparent or masked the result is masked.
+
+    SQL: ``gbx_rst_derivedband(tile, python_func, func_name)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_derivedband",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            python_func,
+            func_name,
+        )
+    return _api.call(
+        "gbx_rst_derivedband",
+        tile,
+        python_func,
+        func_name,
+    )
+
+
+def rst_derivedband_agg(
+    tile: ColLike,
+    python_func: ColLike,
+    func_name: ColLike,
+) -> Column:
+    """Apply a GDAL VRT pixel function across a group's tiles.
+
+    Args:
+        tile: One input band per tile.
+        python_func: The source of a GDAL VRT pixel function. It runs in the process:
+            pass only trusted code.
+        func_name: The name of the function in `python_func`.
+
+    Returns:
+        GeoTIFF bytes of the single-band result; NULL for a group with no usable tile.
+
+    SQL: ``gbx_rst_derivedband_agg(tile, python_func, func_name)``
+    """
+    return _api.call(
+        "gbx_rst_derivedband_agg",
+        tile,
+        python_func,
+        func_name,
+    )
 
 
 def rst_dtmfromgeoms(
@@ -3471,43 +2348,54 @@ def rst_dtmfromgeoms(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    out_srid: ColLike,
+    out_srid: ColLike = None,
     no_data: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
-    """DTM from Z-valued points + optional breaklines via Delaunay-TIN interpolation.
-
-    Output is a single-band Float64 GTiff of ``width_px x height_px`` over the bbox.
-    For N-unit cells set ``width_px = round((xmax-xmin)/N)``,
-    ``height_px = round((ymax-ymin)/N)`` (e.g. a 1000 m extent at 10 m cells -> 100 px).
+    """Build a terrain model from Z-valued points by Delaunay triangulation.
 
     Args:
-        points_array: Array column of Z-valued point geometries (WKB binary or WKT string).
-        breaklines_array: Array column of breakline LineString geometries; pass an empty array for none.
-        merge_tolerance: Delaunay segment-merge tolerance.
-        snap_tolerance: Vertex-to-breakline snap tolerance.
-        xmin, ymin, xmax, ymax: Output raster extent.
-        width_px, height_px: Output raster size in pixels.
-        out_srid: EPSG SRID of the output raster.
-        no_data: No-data sentinel (default -9999.0).
+        points_array: The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an
+            array.
+        breaklines_array: Break lines, as an array; NULL or empty for none. The Python
+            level uses their vertices as extra points and does not enforce them as edges.
+        merge_tolerance: Accepted for signature compatibility; not applied.
+        snap_tolerance: Accepted for signature compatibility; not applied.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
+            default: ``NULL``.
+        no_data: The value of a pixel outside the points' hull. SQL default:
+            ``-9999.0``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
-        Raster tile column.
+        A single-band Float64 tile over the extent; each pixel holds the height
+        interpolated in its triangle, and `no_data` outside the hull of the points.
+
+    SQL: ``gbx_rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])``
     """
-    nd = f.lit(-9999.0) if no_data is None else _col(no_data)
-    return f.call_function(
+    return _api.call(
         "gbx_rst_dtmfromgeoms",
-        _col(points_array),
-        _col(breaklines_array),
-        _col(merge_tolerance),
-        _col(snap_tolerance),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        nd,
+        points_array,
+        breaklines_array,
+        merge_tolerance,
+        snap_tolerance,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        no_data,
+        out_crs,
     )
 
 
@@ -3522,165 +2410,1169 @@ def rst_dtmfromgeoms_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    out_srid: ColLike,
+    out_srid: ColLike = None,
     no_data: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
-    """DTM aggregator - one Z-valued ``point`` per row, grouped by extent key.
-
-    Aggregator counterpart of :func:`rst_dtmfromgeoms`. ``point`` is the only
-    aggregated (per-row) input; ``breaklines`` and all extent/tolerance args are
-    per-group constants. Produces the same DTM as the non-agg form over the same grid.
-
-    Returns:
-        Raster tile column.
-    """
-    nd = f.lit(-9999.0) if no_data is None else _col(no_data)
-    return f.call_function(
-        "gbx_rst_dtmfromgeoms_agg",
-        _col(point),
-        _col(breaklines),
-        _col(merge_tolerance),
-        _col(snap_tolerance),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        nd,
-    )
-
-
-def rst_index(
-    tile: ColLike,
-    formula_name: ColLike,
-    band_map: ColLike,
-) -> Column:
-    """Generic dispatcher for named spectral indices.
-
-    Built-in formulae (case-insensitive ``formula_name``):
-
-    * ``ndvi``: ``(NIR-Red)/(NIR+Red)`` - bands ``red``, ``nir``.
-    * ``gndvi``: ``(NIR-Green)/(NIR+Green)`` - bands ``green``, ``nir``.
-    * ``msavi``: modified SAVI - bands ``red``, ``nir``.
-    * ``ndvi_re``: red-edge NDVI - bands ``red_edge``, ``nir``.
-    * ``ndmi``: ``(NIR-SWIR)/(NIR+SWIR)`` - bands ``nir``, ``swir``.
-    * ``ndsi``: snow-index ``(Green-SWIR)/(Green+SWIR)`` - bands ``green``, ``swir``.
-
-    For arbitrary user-supplied formulae, drop down to ``rst_mapalgebra``.
+    """Build a digital terrain model from a group of Z points (Delaunay TIN).
 
     Args:
-        tile: Multi-band raster tile column.
-        formula_name: Built-in formula name (e.g. ``"ndvi"``). Passed as a
-            string literal; wrap in ``f.lit(...)`` if you want a column
-            reference instead.
-        band_map: ``MAP<STRING, INT>`` column wiring the formula's band names
-            to 1-based band indices in ``tile`` (e.g.
-            ``F.create_map(F.lit("red"), F.lit(1), F.lit("nir"), F.lit(2))``).
+        point: A point with a Z coordinate: WKB, EWKB, WKT or EWKT. An empty one is
+            skipped.
+        breaklines: Breaklines, the same for the whole group. Accepted but not enforced.
+        merge_tolerance: Accepted, not applied.
+        snap_tolerance: Accepted, not applied.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS. SQL default: ``NULL``.
+        no_data: The NoData value. SQL default: ``-9999.0``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
-        Single-band Float32 GTiff tile column.
+        GeoTIFF bytes, Float64: the points' Z interpolated over an unconstrained
+        Delaunay triangulation, NoData outside their hull; NULL for a group with no
+        point.
+
+    SQL: ``gbx_rst_dtmfromgeoms_agg(point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])``
     """
-    formula_col = (
-        f.lit(formula_name) if isinstance(formula_name, str) else _col(formula_name)
-    )
-    return f.call_function(
-        "gbx_rst_index",
-        _col(tile),
-        formula_col,
-        _col(band_map),
+    return _api.call(
+        "gbx_rst_dtmfromgeoms_agg",
+        point,
+        breaklines,
+        merge_tolerance,
+        snap_tolerance,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        no_data,
+        out_crs,
     )
 
 
-# ---------------------------------------------------------------------------
-# Pixel ops + extraction
-#
-# Seven thin wrappers over GDAL per-pixel / per-tile primitives that the
-# rest of the RasterX surface assumed were "always available" but weren't
-# actually exposed: FillNodata, ReadRaster-at-point sampling, SetProjection,
-# GetHistogram, threshold (via MapAlgebra), BuildOverviews, single-band
-# extraction.
-# ---------------------------------------------------------------------------
+def rst_evi(
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    blue_idx: ColLike,
+    l: ColLike = None,
+    c1: ColLike = None,
+    c2: ColLike = None,
+    g: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute EVI = G * (NIR - Red) / (NIR + C1 * Red - C2 * Blue + L).
+
+    Args:
+        tile: The multi-band tile.
+        red_idx: The 1-based band of red.
+        nir_idx: The 1-based band of near infrared.
+        blue_idx: The 1-based band of blue.
+        l: The canopy background adjustment. SQL default: ``1.0``.
+        c1: The aerosol coefficient for red. SQL default: ``6.0``.
+        c2: The aerosol coefficient for blue. SQL default: ``7.5``.
+        g: The gain factor. SQL default: ``2.5``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_evi(tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_evi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            red_idx,
+            nir_idx,
+            blue_idx,
+            l,
+            c1,
+            c2,
+            g,
+        )
+    return _api.call(
+        "gbx_rst_evi",
+        tile,
+        red_idx,
+        nir_idx,
+        blue_idx,
+        l,
+        c1,
+        c2,
+        g,
+    )
 
 
 def rst_fillnodata(
     tile: ColLike,
     max_search_dist: ColLike = None,
     smoothing_iter: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Interpolate NoData pixels from valid neighbours via ``gdal.FillNodata``.
+    """Interpolate across NoData gaps in the raster.
 
     Args:
-        tile: Raster tile column.
-        max_search_dist: Maximum pixel distance to search for a valid value
-            to fill from (default 100.0).
-        smoothing_iter: Number of 3x3 smoothing iterations after fill
-            (default 0).
+        tile: The tile to fill.
+        max_search_dist: How far, in pixels, to search for valid pixels to interpolate
+            from. A whole number. SQL default: ``100.0``.
+        smoothing_iter: The number of 3x3 smoothing passes over the filled pixels. A
+            whole number. SQL default: ``0``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Raster tile column with NoData holes filled.
+        The tile with the NoData pixels that have a valid pixel within `max_search_dist`
+        filled, in every band. The rest stay NoData. Both numbers must be whole, from 0
+        to 2147483647, else the call raises. NULL for a NULL tile or a NULL number; an
+        error tile comes back as it is.
+
+    SQL: ``gbx_rst_fillnodata(tile, [max_search_dist], [smoothing_iter])``
     """
-    msd_col = f.lit(100.0) if max_search_dist is None else _col(max_search_dist)
-    si_col = f.lit(0) if smoothing_iter is None else _col(smoothing_iter)
-    return f.call_function("gbx_rst_fillnodata", _col(tile), msd_col, si_col)
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_fillnodata",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            max_search_dist,
+            smoothing_iter,
+        )
+    return _api.call(
+        "gbx_rst_fillnodata",
+        tile,
+        max_search_dist,
+        smoothing_iter,
+    )
 
 
-def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
-    """Sample raster pixel values at a POINT geometry — returns one Double per band.
-
-    The point coordinates must be in the raster's CRS. Out-of-extent points
-    return ``null`` (not a partial array).
+def rst_filter(
+    tile: ColLike,
+    kernel_size: ColLike,
+    operation: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Apply a focal minimum, maximum, mean or median over a square window.
 
     Args:
-        tile: Raster tile column.
-        geom: POINT geometry — WKB ``bytes`` or WKT ``string`` column.
-        crs: Optional source CRS of a plain WKB/WKT point (int SRID or CRS
-            string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
-            assumed already in the raster CRS.
+        tile: The tile to filter.
+        kernel_size: The side of the square window, a positive odd integer.
+        operation: `'min'`, `'max'`, `'mean'` or `'median'`, in any case. Another word
+            raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Column of ``ARRAY<DOUBLE>`` (one value per band) or ``null`` outside extent.
+        The tile with each band filtered over the valid pixels of the window, which
+        shrinks at the edges; a window with no valid pixel is NoData. `'mean'` is
+        Float32, the others keep the data type.
+
+    SQL: ``gbx_rst_filter(tile, kernel_size, operation)``
     """
-    if crs is None:
-        return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
-    return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _crs_col(crs))
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_filter",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            kernel_size,
+            operation,
+        )
+    return _api.call(
+        "gbx_rst_filter",
+        tile,
+        kernel_size,
+        operation,
+    )
 
 
-def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
-    """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
-
-    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
-    string accepted by rasterio's CRS parser such as ``"ESRI:54008"``, WKT, or
-    PROJ4 strings. Pixel values and the GeoTransform are unchanged; only the
-    CRS metadata is rewritten. Use ``rst_transformcrs`` for a reprojecting warp.
+def rst_format(
+    tile: ColLike,
+) -> Column:
+    """Return the GDAL driver short name of the raster.
 
     Args:
-        tile: Tile struct column.
-        crs:  CRS descriptor — int EPSG code, int-castable string, authority
-              string (``"EPSG:4326"``, ``"ESRI:54008"``), WKT, or PROJ4.
+        tile: The raster tile.
 
     Returns:
-        Tile with the same pixels/transform but the new CRS.
+        The driver the raster was read with, for example `GTiff` or `HFA`, or NULL for a
+        NULL or error tile.
+
+    SQL: ``gbx_rst_format(tile)``
     """
-    return f.call_function("gbx_rst_setcrs", _col(tile), _crs_col(crs))
+    return _api.call(
+        "gbx_rst_format",
+        tile,
+    )
 
 
-def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
-    """Stamp an EPSG code on the raster's spatial-reference header (no warp).
-
-    Use when the source raster lost or has incorrect CRS metadata but the
-    actual pixel grid is already aligned with the target CRS. For real
-    reprojection (with pixel-grid warp) use :func:`rst_transform`.
+def rst_frombands(
+    bands: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Stack an array of single-band tiles into one multi-band tile.
 
     Args:
-        tile: Raster tile column.
-        srid: EPSG code (positive integer).
+        bands: The single-band tiles, in an array: element 0 becomes band 1, element 1
+            band 2, and so on. The georeference, data type and NoData come from the first.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Raster tile column with rewritten SR header.
+        A tile with one band per readable input tile, in array order. A NULL or empty
+        array gives NULL; an array of only error tiles gives the first one; a tile that
+        cannot be read is skipped.
+
+    SQL: ``gbx_rst_frombands(bands)``
     """
-    return f.call_function("gbx_rst_setsrid", _col(tile), _col(srid))
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_frombands",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            bands,
+        )
+    return _api.call(
+        "gbx_rst_frombands",
+        bands,
+    )
+
+
+def rst_frombands_agg(
+    tile: ColLike,
+    band_index: ColLike,
+) -> Column:
+    """Stack a group's single-band tiles into one multi-band tile.
+
+    Args:
+        tile: A single-band tile. An error tile or a tile that cannot be read is
+            skipped.
+        band_index: The band the tile becomes, counted up from 1. A NULL index skips the
+            row.
+
+    Returns:
+        GeoTIFF bytes with the tiles' first bands in ascending `band_index` order; NULL
+        for a group with no usable tile.
+
+    SQL: ``gbx_rst_frombands_agg(tile, band_index)``
+    """
+    return _api.call(
+        "gbx_rst_frombands_agg",
+        tile,
+        band_index,
+    )
+
+
+def rst_fromcontent(
+    content: ColLike,
+    driver: ColLike,
+) -> Column:
+    """Build a tile from the bytes of a raster file.
+
+    Args:
+        content: The raster file's bytes, for example the `content` column of the
+            `binaryFile` reader.
+        driver: The GDAL driver short name the bytes are in, for example `'GTiff'`, in
+            any case. It goes into the tile's `driver` metadata; a name that is no raster
+            driver (no driver of that name, or a vector-only one such as `'GeoJSON'`)
+            raises.
+
+    Returns:
+        A tile that holds the bytes, with the driver, width, height and band count in
+        its metadata. Bytes GDAL cannot open give an error tile; a NULL content or
+        driver gives NULL.
+
+    SQL: ``gbx_rst_fromcontent(content, driver)``
+    """
+    return _api.call(
+        "gbx_rst_fromcontent",
+        content,
+        driver,
+    )
+
+
+def rst_fromfile(
+    path: ColLike,
+    driver: ColLike = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Read the raster file at a path into a tile.
+
+    Args:
+        path: The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A
+            remote URL is refused unless the driver's remote-read switch is on.
+        driver: The GDAL driver short name hint, in any case. It goes into the tile's
+            `driver` metadata; a name that is no raster driver (no driver of that name, or a
+            vector-only one such as `'GeoJSON'`) raises. SQL default: ``'GTiff'``.
+        materialize: Python only: unset or ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.
+
+    Returns:
+        A tile that holds the file's bytes, re-encoded as a GeoTIFF. NULL for a NULL
+        path or a file that cannot be opened; an error tile with a `Fix:` for a format
+        GeoBrix refuses. A file whose decoded size is over the materialize cap fails the
+        call with an error that says how to fix it.
+
+    SQL: ``gbx_rst_fromfile(path, [driver])``
+    """
+    return _api.extra_call(
+        "gbx_rst_fromfile",
+        (materialize,),
+        path,
+        driver,
+    )
+
+
+def rst_gdal(
+    tile: ColLike,
+    command: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Run an allowlisted GDAL raster step or pipeline on a tile.
+
+    Args:
+        tile: The tile to process.
+        command: What follows `gdal raster` on the command line: one step or steps
+            joined by `!`, such as `'slope --unit=percent'` or `'reproject
+            --output-crs=EPSG:3857 ! slope'`. Every step and argument must be on the
+            allowlist; a file, URL or option outside it raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile with what GDAL writes: its size, bands, type and NoData come from
+        the last step. A NULL tile or command gives NULL; an error tile comes out as
+        itself; a tile that cannot be read, or a step GDAL fails on, gives an error
+        tile. A step, argument or value outside the allowlist raises.
+
+    SQL: ``gbx_rst_gdal(tile, command)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_gdal",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            command,
+        )
+    return _api.call(
+        "gbx_rst_gdal",
+        tile,
+        command,
+    )
+
+
+def rst_georeference(
+    tile: ColLike,
+) -> Column:
+    """Return the geotransform as a map.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The keys `upperLeftX`, `upperLeftY`, `scaleX`, `scaleY`, `skewX` and `skewY`, or
+        NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_georeference(tile)``
+    """
+    return _api.call(
+        "gbx_rst_georeference",
+        tile,
+    )
+
+
+def rst_getnodata(
+    tile: ColLike,
+) -> Column:
+    """Return the NoData value of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band, or NULL when the raster declares no NoData.
+
+    SQL: ``gbx_rst_getnodata(tile)``
+    """
+    return _api.call(
+        "gbx_rst_getnodata",
+        tile,
+    )
+
+
+def rst_getsubdataset(
+    tile: ColLike,
+    subset_name: ColLike,
+) -> Column:
+    """Extract the named subdataset of a container raster as a tile.
+
+    Args:
+        tile: A tile whose raster is a container with subdatasets, such as a NetCDF
+            file.
+        subset_name: The name of the subdataset (the last part of its GDAL name, such as
+            `'prAdjust'`). A name that matches none raises.
+
+    Returns:
+        The subdataset as a GeoTIFF tile.
+
+    SQL: ``gbx_rst_getsubdataset(tile, subset_name)``
+    """
+    return _api.call(
+        "gbx_rst_getsubdataset",
+        tile,
+        subset_name,
+    )
+
+
+def rst_gridfrompoints(
+    points_array: ColLike,
+    values_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    power: ColLike = None,
+    max_pts: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Interpolate scattered point values to a grid by inverse-distance weighting.
+
+    Args:
+        points_array: The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL
+            element is dropped with its value.
+        values_array: The value of each point, in the same order.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
+            default: ``NULL``.
+        power: The inverse-distance exponent, above 0. SQL default: ``2.0``.
+        max_pts: The number of nearest points used per pixel, above 0. SQL default:
+            ``12``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        A single-band Float64 tile over the extent; each pixel holds the
+        inverse-distance-weighted mean of its nearest points, NoData (-9999) where there
+        are none. The points are taken to be in the output CRS.
+
+    SQL: ``gbx_rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_gridfrompoints",
+        points_array,
+        values_array,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        power,
+        max_pts,
+        out_crs,
+    )
+
+
+def rst_gridfrompoints_agg(
+    point: ColLike,
+    value: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    power: ColLike = None,
+    max_pts: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Interpolate a group's points to a grid by inverse-distance weighting.
+
+    Args:
+        point: The point: WKB, EWKB, WKT or EWKT. A row with a NULL value or an empty
+            point is dropped.
+        value: The point's value.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS. SQL default: ``NULL``.
+        power: The inverse-distance exponent, above 0. SQL default: ``2.0``.
+        max_pts: The number of nearest points used per pixel, above 0. SQL default:
+            ``12``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999 where a pixel has no point; NULL for a
+        group with no point.
+
+    SQL: ``gbx_rst_gridfrompoints_agg(point, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_gridfrompoints_agg",
+        point,
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        power,
+        max_pts,
+        out_crs,
+    )
+
+
+def rst_h3_rasterize(
+    cells: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize an array of H3 cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_h3_rasterize_agg` over the same cells:
+        GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_h3_rasterize",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_h3_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The H3 cell id.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
+        no cell. The same on every compute.
+
+    SQL: ``gbx_rst_h3_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_h3_rasterize_agg",
+        cellid,
+        value,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_h3_rastertogrid_partial(
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> Column:
+    """Give the mergeable state of every H3 cell the raster covers, so one pass serves every statistic.
+
+    Args:
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        An array of structs, one per band and cell: `band` (from 1), `cellid`, `count`,
+        `sum`, `m2`, `min` and `max`. `m2` is the sum of the squared deviations from the
+        cell's mean. A cell that holds no valid pixel (with `'complete'` coverage) has a
+        `count` of 0 and NULL for the rest. The average of a cell is `sum / count`, its
+        variance `m2 / count`, and its standard deviation the square root of that. Tiles
+        of one table merge by summing `count` and `sum`, taking the least `min` and the
+        greatest `max`, and combining `m2` as the recipe on the Unity Catalog page
+        shows. NULL for a NULL tile, a NULL resolution, an error tile or a tile that
+        cannot be read.
+
+    SQL: ``gbx_rst_h3_rastertogrid_partial(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.call(
+        "gbx_rst_h3_rastertogrid_partial",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridavg(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridavg",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
+        error tile and a tile that cannot be read give no rows. A raster in another CRS
+        is reprojected to EPSG:4326 (nearest neighbour, so values are never
+        interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridcount(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridcount",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridmax(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridmax",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridmedian(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridmedian",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridmin(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridmin",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
+        tile that cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with
+        no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridstddev(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridstddev",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridsum(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridsum",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
+        cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326
+        (nearest neighbour, so values are never interpolated); a raster with no CRS is
+        taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridvariance(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridvariance",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile into H3 cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_tessellate",
+        tile,
+        resolution,
+        assignment,
+        coverage,
+    )
+
+
+def rst_height(
+    tile: ColLike,
+) -> Column:
+    """Return the height of the raster in pixels.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The pixel count along y, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_height(tile)``
+    """
+    return _api.call(
+        "gbx_rst_height",
+        tile,
+    )
+
+
+def rst_hillshade(
+    tile: ColLike,
+    azimuth: ColLike = None,
+    altitude: ColLike = None,
+    z_factor: ColLike = None,
+    xscale: ColLike = None,
+    yscale: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute shaded relief from a single-band DEM tile (Horn's 3x3 method).
+
+    Args:
+        tile: The single-band DEM tile.
+        azimuth: Sun azimuth in degrees clockwise from north. SQL default: ``315.0``.
+        altitude: Sun elevation above the horizon in degrees. SQL default: ``45.0``.
+        z_factor: Vertical exaggeration applied to the gradients. SQL default: ``1.0``.
+        xscale: Vertical units per horizontal unit along x; set it with `yscale`. When
+            both are NULL, the scale comes from the raster CRS. SQL default: ``NULL``.
+        yscale: Vertical units per horizontal unit along y; set it with `xscale`. SQL
+            default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Byte tile with values from 1 to 255; 0 is NoData.
+
+    SQL: ``gbx_rst_hillshade(tile, [azimuth], [altitude], [z_factor], [xscale], [yscale])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_hillshade",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            azimuth,
+            altitude,
+            z_factor,
+            xscale,
+            yscale,
+        )
+    return _api.call(
+        "gbx_rst_hillshade",
+        tile,
+        azimuth,
+        altitude,
+        z_factor,
+        xscale,
+        yscale,
+    )
 
 
 def rst_histogram(
@@ -3690,288 +3582,2705 @@ def rst_histogram(
     max_val: ColLike = None,
     include_nodata: ColLike = None,
 ) -> Column:
-    """Per-band pixel histogram via ``band.GetHistogram``.
-
-    Returns ``MAP<STRING, ARRAY<LONG>>`` keyed by ``"band_<i>"`` (1-based) with
-    a length-``n_buckets`` array of bucket counts per band. Pixels outside
-    ``[min_val, max_val]`` are excluded.
+    """Return the histogram of each band.
 
     Args:
-        tile: Raster tile column.
-        n_buckets: Number of equal-width buckets across ``[min_val, max_val]``
-            (default 256).
-        min_val: Histogram lower bound (default: derived from band statistics).
-        max_val: Histogram upper bound (default: derived from band statistics).
-        include_nodata: Reserved — GDAL excludes NoData regardless. Default False.
+        tile: The raster tile.
+        n_buckets: The number of equal-width buckets across the range. SQL default:
+            ``256``.
+        min_val: The lower bound of the range; the band's smallest valid value when
+            NULL. SQL default: ``NULL``.
+        max_val: The upper bound of the range; the band's largest valid value when NULL.
+            SQL default: ``NULL``.
+        include_nodata: Whether NoData pixels are binned too; the default leaves them
+            out. SQL default: ``false``.
 
     Returns:
-        Column of ``MAP<STRING, ARRAY<LONG>>``.
+        A map from `band_<i>` to the bucket counts; values outside the range are
+        dropped.
+
+    SQL: ``gbx_rst_histogram(tile, [n_buckets], [min_val], [max_val], [include_nodata])``
     """
-    nb_col = f.lit(256) if n_buckets is None else _col(n_buckets)
-    min_col = f.lit(None).cast("double") if min_val is None else _col(min_val)
-    max_col = f.lit(None).cast("double") if max_val is None else _col(max_val)
-    inc_col = f.lit(False) if include_nodata is None else _col(include_nodata)
-    return f.call_function(
-        "gbx_rst_histogram", _col(tile), nb_col, min_col, max_col, inc_col
+    return _api.call(
+        "gbx_rst_histogram",
+        tile,
+        n_buckets,
+        min_val,
+        max_val,
+        include_nodata,
+    )
+
+
+def rst_index(
+    tile: ColLike,
+    formula_name: ColLike,
+    band_map: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute a named spectral index from a map of band names to band numbers.
+
+    Args:
+        tile: The multi-band tile.
+        formula_name: The index: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi` or `ndsi`
+            (any case).
+        band_map: The 1-based band of each name the index needs, such as `map('red', 1,
+            'nir', 2)`.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999.
+
+    SQL: ``gbx_rst_index(tile, formula_name, band_map)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_index",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            formula_name,
+            band_map,
+        )
+    return _api.call(
+        "gbx_rst_index",
+        tile,
+        formula_name,
+        band_map,
+    )
+
+
+def rst_initnodata(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Ensure a NoData value is set on the raster; an existing value is kept.
+
+    Args:
+        tile: The tile to give a NoData value.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with a NoData value: the one it declares, or the data type's fallback
+        (for example 65535 for UInt16) when it declares none.
+
+    SQL: ``gbx_rst_initnodata(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_initnodata",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_initnodata",
+        tile,
+    )
+
+
+def rst_isempty(
+    tile: ColLike,
+) -> Column:
+    """Test whether a raster holds no valid pixel.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        True when the raster has no size, no band or only NoData; an error tile is
+        empty.
+
+    SQL: ``gbx_rst_isempty(tile)``
+    """
+    return _api.call(
+        "gbx_rst_isempty",
+        tile,
+    )
+
+
+def rst_isoband(
+    tile: ColLike,
+    breaks: ColLike,
+) -> Column:
+    """Group the pixels of the first band into value bands and return one polygon per connected patch.
+
+    Args:
+        tile: The tile to classify.
+        breaks: The N+1 boundaries of N bands, strictly ascending. Band i holds the
+            pixels from `breaks[i]` up to, not including, `breaks[i+1]`.
+
+    Returns:
+        An array of structs, one per patch: `geom_wkb` (a WKB polygon in the tile's
+        CRS), `band` (the zero-based band), `lower` and `upper`. NoData pixels and
+        pixels outside the breaks are left out. NULL for a NULL tile or NULL breaks.
+
+    SQL: ``gbx_rst_isoband(tile, breaks)``
+    """
+    return _api.call(
+        "gbx_rst_isoband",
+        tile,
+        breaks,
+    )
+
+
+def rst_land_cover(
+    tile: ColLike,
+    method: ColLike = None,
+    n_clusters: ColLike = None,
+    smooth: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Classify an RGB tile into land-cover class ids.
+
+    Args:
+        tile: A tile of 3 or more bands: red, green, blue (and optionally
+            near-infrared).
+        method: `'spectral'` (thresholds on excess green and brightness), `'kmeans'` or
+            `'hybrid'` (a k-means partition labelled by the same thresholds), in any case.
+            Another word raises. SQL default: ``'hybrid'``.
+        n_clusters: The k-means cluster count (`'kmeans'` and `'hybrid'`), 1 or more.
+            SQL default: ``6``.
+        smooth: The de-speckle window in pixels: isolated specks of a class are dropped;
+            0 turns it off. SQL default: ``3``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Int32 tile of class ids: 0 vegetation, 1 bare, 2 impervious, 3
+        dark; -1 (the tile's NoData) for near-black pixels and dropped specks. A tile of
+        fewer than 3 bands is an error tile.
+
+    SQL: ``gbx_rst_land_cover(tile, [method], [n_clusters], [smooth])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_land_cover",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            method,
+            n_clusters,
+            smooth,
+        )
+    return _api.call(
+        "gbx_rst_land_cover",
+        tile,
+        method,
+        n_clusters,
+        smooth,
+    )
+
+
+def rst_maketiles(
+    df: DataFrame,
+    tile: ColLike,
+    size_in_mb: ColLike,
+) -> DataFrame:
+    """Split a tile into tiles of about the given size in megabytes.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        size_in_mb: The most megabytes one tile may hold. The tile is cut into a 2^k by
+            2^k grid (1, 4, 16 ... at most 256 tiles) until each part fits; 0 or less does
+            not cut. A fraction is cut to a whole number.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+
+    SQL: ``gbx_rst_maketiles(tile, size_in_mb)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_maketiles",
+        tile,
+        size_in_mb,
+    )
+
+
+def rst_mapalgebra(
+    tiles: ColLike,
+    expression: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Apply a map-algebra expression across an array of tiles.
+
+    Args:
+        tiles: The input tiles. Band 1 of each tile binds to `A`, `B`, `C` and so on, in
+            array order.
+        expression: The expression: a JSON envelope with a `calc` key, or a bare
+            expression such as `'(A - B) / (A + B)'`.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile on the georeference of the first tile.
+
+    SQL: ``gbx_rst_mapalgebra(tiles, expression)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_mapalgebra",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+            expression,
+        )
+    return _api.call(
+        "gbx_rst_mapalgebra",
+        tiles,
+        expression,
+    )
+
+
+def rst_max(
+    tile: ColLike,
+) -> Column:
+    """Return the maximum of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_max(tile)``
+    """
+    return _api.call(
+        "gbx_rst_max",
+        tile,
+    )
+
+
+def rst_median(
+    tile: ColLike,
+) -> Column:
+    """Return the median of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_median(tile)``
+    """
+    return _api.call(
+        "gbx_rst_median",
+        tile,
+    )
+
+
+def rst_memsize(
+    tile: ColLike,
+) -> Column:
+    """Return the in-memory size of a tile in bytes.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The raster buffer length for a materialized tile, or the decoded footprint of
+        the window for a virtual one.
+
+    SQL: ``gbx_rst_memsize(tile)``
+    """
+    return _api.call(
+        "gbx_rst_memsize",
+        tile,
+    )
+
+
+def rst_merge(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Mosaic an array of tiles into one tile that spans their union extent.
+
+    Args:
+        tiles: The tiles to mosaic, in an array. Tiles in another CRS are reprojected
+            onto the grid of a tile in the reference CRS.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        One tile over the union extent. A NULL or empty array gives NULL; an array of
+        only error tiles gives the first one; a tile that cannot be read is skipped. An
+        array over the memory budget gives an error tile with a `Fix:`. A member over
+        the read cap names `merge_by_key(..., method='vrt')`; a mosaic or result over
+        the cap names `mint_vrt`. Where tiles overlap, the last in a fixed order wins:
+        tiles with bytes sorted by their bytes, then virtual tiles sorted by path and
+        window.
+
+    SQL: ``gbx_rst_merge(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_merge",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_merge",
+        tiles,
+    )
+
+
+def rst_merge_agg(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Merge a group's tile rasters into one mosaic tile.
+
+    Args:
+        tile: The tiles of the group.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The merged raster over the union extent, or NULL for an empty group. Where tiles
+        overlap, the last in a fixed order wins: tiles with bytes sorted by their bytes,
+        then virtual tiles sorted by path and window.
+
+    SQL: ``gbx_rst_merge_agg(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_merge_agg",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_merge_agg",
+        tile,
+    )
+
+
+def rst_merge_tvf(
+    df: DataFrame,
+) -> DataFrame:
+    """Merge each partition's tiles into one mosaic, as a table function over `TABLE(...) PARTITION BY`.
+
+    Args:
+        df: The input DataFrame, with the columns ``key``, ``tile`` (others are left
+            out); it is partitioned by ``key``.
+
+    Returns:
+        One row per partition: its `key` and the merged `raster` (GeoTIFF bytes over the
+        union extent). A partition with no readable tile gives no row; one past what a
+        merge can build raises with a `Fix:`. A member over the read cap names
+        `merge_by_key(..., method='vrt')`; a mosaic or result over the cap names
+        `mint_vrt`.
+
+    SQL: ``gbx_rst_merge_tvf(rows)``
+    """
+    return _api.table_by(
+        df,
+        "gbx_rst_merge_tvf",
+    )
+
+
+def rst_metadata(
+    tile: ColLike,
+) -> Column:
+    """Return the raster's metadata as a map.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The metadata entries, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_metadata(tile)``
+    """
+    return _api.call(
+        "gbx_rst_metadata",
+        tile,
+    )
+
+
+def rst_min(
+    tile: ColLike,
+) -> Column:
+    """Return the minimum of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_min(tile)``
+    """
+    return _api.call(
+        "gbx_rst_min",
+        tile,
+    )
+
+
+def rst_nbr(
+    tile: ColLike,
+    nir_idx: ColLike,
+    swir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NBR = (NIR - SWIR) / (NIR + SWIR).
+
+    Args:
+        tile: The multi-band tile.
+        nir_idx: The 1-based band of near infrared.
+        swir_idx: The 1-based band of shortwave infrared.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_nbr(tile, nir_idx, swir_idx)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_nbr",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            nir_idx,
+            swir_idx,
+        )
+    return _api.call(
+        "gbx_rst_nbr",
+        tile,
+        nir_idx,
+        swir_idx,
+    )
+
+
+def rst_ndvi(
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NDVI = (NIR - Red) / (NIR + Red).
+
+    Args:
+        tile: The multi-band tile.
+        red_idx: The 1-based band of red.
+        nir_idx: The 1-based band of near infrared.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_ndvi(tile, red_idx, nir_idx)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_ndvi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            red_idx,
+            nir_idx,
+        )
+    return _api.call(
+        "gbx_rst_ndvi",
+        tile,
+        red_idx,
+        nir_idx,
+    )
+
+
+def rst_ndwi(
+    tile: ColLike,
+    green_idx: ColLike,
+    nir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NDWI = (Green - NIR) / (Green + NIR).
+
+    Args:
+        tile: The multi-band tile.
+        green_idx: The 1-based band of green.
+        nir_idx: The 1-based band of near infrared.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_ndwi(tile, green_idx, nir_idx)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_ndwi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            green_idx,
+            nir_idx,
+        )
+    return _api.call(
+        "gbx_rst_ndwi",
+        tile,
+        green_idx,
+        nir_idx,
+    )
+
+
+def rst_numbands(
+    tile: ColLike,
+) -> Column:
+    """Return the number of bands of the raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The band count (0 for a container with only subdatasets), or NULL for a NULL or
+        error tile.
+
+    SQL: ``gbx_rst_numbands(tile)``
+    """
+    return _api.call(
+        "gbx_rst_numbands",
+        tile,
+    )
+
+
+def rst_percentile_stretch(
+    tile: ColLike,
+    lo_pct: ColLike,
+    hi_pct: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Stretch the contrast of each band between two percentiles, to 8 bits.
+
+    Args:
+        tile: The tile to stretch.
+        lo_pct: The lower percentile, in `[0, 100]` and below `hi_pct`: the value at it
+            becomes 0.
+        hi_pct: The upper percentile, in `[0, 100]`: the value at it becomes 255.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A UInt8 tile with the bands of the input, each stretched on its own valid pixels
+        between its two percentiles; a NoData, masked or transparent pixel is 0, which
+        is the NoData value.
+
+    SQL: ``gbx_rst_percentile_stretch(tile, lo_pct, hi_pct)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_percentile_stretch",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            lo_pct,
+            hi_pct,
+        )
+    return _api.call(
+        "gbx_rst_percentile_stretch",
+        tile,
+        lo_pct,
+        hi_pct,
+    )
+
+
+def rst_pixelcount(
+    tile: ColLike,
+) -> Column:
+    """Return the number of valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One count per band; a band with no valid pixel gives 0.
+
+    SQL: ``gbx_rst_pixelcount(tile)``
+    """
+    return _api.call(
+        "gbx_rst_pixelcount",
+        tile,
+    )
+
+
+def rst_pixelheight(
+    tile: ColLike,
+) -> Column:
+    """Return the ground size of a pixel along y.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The non-negative pixel height, including any skew, or NULL for a NULL or error
+        tile.
+
+    SQL: ``gbx_rst_pixelheight(tile)``
+    """
+    return _api.call(
+        "gbx_rst_pixelheight",
+        tile,
+    )
+
+
+def rst_pixelwidth(
+    tile: ColLike,
+) -> Column:
+    """Return the ground size of a pixel along x.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The non-negative pixel width, including any skew, or NULL for a NULL or error
+        tile.
+
+    SQL: ``gbx_rst_pixelwidth(tile)``
+    """
+    return _api.call(
+        "gbx_rst_pixelwidth",
+        tile,
+    )
+
+
+def rst_polygonize(
+    df: DataFrame,
+    tile: ColLike,
+    band: ColLike = None,
+    connectedness: ColLike = None,
+) -> DataFrame:
+    """Extract a polygon for each connected region of equal pixel values.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to polygonize.
+        band: The band to read, from 1. SQL default: ``1``.
+        connectedness: `4` joins pixels that share an edge; `8` also joins pixels that
+            touch at a corner. SQL default: ``4``.
+
+    Returns:
+        One row per region: `geom_wkb` (a WKB polygon in the tile's CRS) and `value`.
+        NoData pixels give no polygon. A NULL tile gives no rows.
+
+    SQL: ``gbx_rst_polygonize(tile, [band], [connectedness])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_polygonize",
+        tile,
+        band,
+        connectedness,
+    )
+
+
+def rst_proximity(
+    tile: ColLike,
+    target_values: ColLike = None,
+    dist_units: ColLike = None,
+    max_distance: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute a proximity raster: each pixel's distance to the nearest source pixel.
+
+    Args:
+        tile: The tile to measure: its first band.
+        target_values: The source pixel values as a comma-separated list, such as
+            `'1,2'`. NULL makes every pixel that is not 0 a source. SQL default: ``NULL``.
+        dist_units: `'GEO'` measures in the units of the tile's CRS; `'PIXEL'` counts
+            pixels. NULL is `'GEO'`. SQL default: ``'GEO'``.
+        max_distance: The largest distance to compute, above 0: farther pixels are
+            NoData. NULL for no limit. SQL default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile on the grid of the input: 0 on a source pixel, NoData
+        (-1) beyond `max_distance`.
+
+    SQL: ``gbx_rst_proximity(tile, [target_values], [dist_units], [max_distance])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_proximity",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            target_values,
+            dist_units,
+            max_distance,
+        )
+    return _api.call(
+        "gbx_rst_proximity",
+        tile,
+        target_values,
+        dist_units,
+        max_distance,
+    )
+
+
+def rst_quadbin_rasterize(
+    cells: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize an array of quadbin cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_quadbin_rasterize_agg` over the same
+        cells: GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_quadbin_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_quadbin_rasterize",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_quadbin_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize a group's quadbin cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The quadbin cell id.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
+        no cell. The same on every compute.
+
+    SQL: ``gbx_rst_quadbin_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_quadbin_rasterize_agg",
+        cellid,
+        value,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_quadbin_rastertogrid_partial(
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> Column:
+    """Give the mergeable state of every quadbin cell the raster covers, so one pass serves every statistic.
+
+    Args:
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        An array of structs, one per band and cell: `band` (from 1), `cellid`, `count`,
+        `sum`, `m2`, `min` and `max`. `m2` is the sum of the squared deviations from the
+        cell's mean. A cell that holds no valid pixel (with `'complete'` coverage) has a
+        `count` of 0 and NULL for the rest. The average of a cell is `sum / count`, its
+        variance `m2 / count`, and its standard deviation the square root of that. Tiles
+        of one table merge by summing `count` and `sum`, taking the least `min` and the
+        greatest `max`, and combining `m2` as the recipe on the Unity Catalog page
+        shows. NULL for a NULL tile, a NULL resolution, an error tile or a tile that
+        cannot be read.
+
+    SQL: ``gbx_rst_quadbin_rastertogrid_partial(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.call(
+        "gbx_rst_quadbin_rastertogrid_partial",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridavg(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridavg",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
+        error tile and a tile that cannot be read give no rows. A raster in another CRS
+        is reprojected to EPSG:4326 (nearest neighbour, so values are never
+        interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridcount(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridcount",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridmax(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridmax",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridmedian(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridmedian",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridmin(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridmin",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
+        tile that cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with
+        no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridstddev(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridstddev",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridsum(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridsum",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
+        cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326
+        (nearest neighbour, so values are never interpolated); a raster with no CRS is
+        taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridvariance(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridvariance",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile into quadbin cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_tessellate",
+        tile,
+        resolution,
+        assignment,
+        coverage,
+    )
+
+
+def rst_rasterize(
+    geom: ColLike,
+    value: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Burn a geometry into a new raster tile.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT. A geometry with an SRID is
+            reprojected into the output CRS first.
+        value: The value burned into the pixels the geometry covers.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
+            default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        A single-band Float64 tile over the extent; the pixels whose centre the geometry
+        covers hold `value`, the others NoData (-9999).
+
+    SQL: ``gbx_rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_rasterize",
+        geom,
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        out_crs,
+    )
+
+
+def rst_rasterize_agg(
+    geom: ColLike,
+    value: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike,
+) -> Column:
+    """Burn a group's `(geom, value)` features into one tile.
+
+    Args:
+        geom: The feature geometry: WKB, EWKB, WKT or EWKT. A NULL or unparseable one is
+            skipped.
+        value: The value burned where the geometry covers a pixel centre. A NULL value
+            skips the row.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        out_srid: The EPSG code of the output CRS.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, with each feature burned where it
+        covers a pixel centre. Where features overlap, the one whose WKB bytes sort last
+        wins, whatever order the rows arrive in. NULL for a group with no feature.
+
+    SQL: ``gbx_rst_rasterize_agg(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid)``
+    """
+    return _api.call(
+        "gbx_rst_rasterize_agg",
+        geom,
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+    )
+
+
+def rst_rastertoworldcoord(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a pixel to the world coordinate of its centre.
+
+    Args:
+        tile: The raster tile.
+        x: The pixel column, counted from 0.
+        y: The pixel row, counted from 0.
+
+    Returns:
+        A struct with the x and y of the pixel centre in the raster CRS.
+
+    SQL: ``gbx_rst_rastertoworldcoord(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_rastertoworldcoord",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_rastertoworldcoordx(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a pixel to the x of its centre.
+
+    Args:
+        tile: The raster tile.
+        x: The pixel column, counted from 0.
+        y: The pixel row, counted from 0.
+
+    Returns:
+        The x of the pixel centre in the raster CRS.
+
+    SQL: ``gbx_rst_rastertoworldcoordx(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_rastertoworldcoordx",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_rastertoworldcoordy(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a pixel to the y of its centre.
+
+    Args:
+        tile: The raster tile.
+        x: The pixel column, counted from 0.
+        y: The pixel row, counted from 0.
+
+    Returns:
+        The y of the pixel centre in the raster CRS.
+
+    SQL: ``gbx_rst_rastertoworldcoordy(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_rastertoworldcoordy",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_resample(
+    tile: ColLike,
+    factor: ColLike,
+    algorithm: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Resample a raster tile by a multiplicative factor.
+
+    Args:
+        tile: The tile to resample.
+        factor: The multiplicative factor, above 0: above 1 upsamples, below 1
+            downsamples.
+        algorithm: The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`,
+            `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case;
+            `nearest` is accepted as `near`). A word that names none raises. SQL default:
+            ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on a grid `factor` times as large in each direction; the CRS and the
+        extent stay.
+
+    SQL: ``gbx_rst_resample(tile, factor, [algorithm])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_resample",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            factor,
+            algorithm,
+        )
+    return _api.call(
+        "gbx_rst_resample",
+        tile,
+        factor,
+        algorithm,
+    )
+
+
+def rst_resample_to_res(
+    tile: ColLike,
+    x_res: ColLike,
+    y_res: ColLike,
+    algorithm: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Resample a raster tile to a target ground resolution.
+
+    Args:
+        tile: The tile to resample.
+        x_res: The size of a pixel along x in the units of the tile's CRS, above 0.
+        y_res: The size of a pixel along y in the units of the tile's CRS, above 0.
+        algorithm: The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`,
+            `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case;
+            `nearest` is accepted as `near`). A word that names none raises. SQL default:
+            ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on a grid of `x_res` by `y_res` pixels; the CRS stays and the extent
+        changes by less than one pixel.
+
+    SQL: ``gbx_rst_resample_to_res(tile, x_res, y_res, [algorithm])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_resample_to_res",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            x_res,
+            y_res,
+            algorithm,
+        )
+    return _api.call(
+        "gbx_rst_resample_to_res",
+        tile,
+        x_res,
+        y_res,
+        algorithm,
+    )
+
+
+def rst_resample_to_size(
+    tile: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    algorithm: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Resample a raster tile to exact pixel dimensions.
+
+    Args:
+        tile: The tile to resample.
+        width_px: The width of the result in pixels, above 0.
+        height_px: The height of the result in pixels, above 0.
+        algorithm: The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`,
+            `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case;
+            `nearest` is accepted as `near`). A word that names none raises. SQL default:
+            ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on a `width_px` by `height_px` grid; the CRS and the extent stay.
+
+    SQL: ``gbx_rst_resample_to_size(tile, width_px, height_px, [algorithm])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_resample_to_size",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            width_px,
+            height_px,
+            algorithm,
+        )
+    return _api.call(
+        "gbx_rst_resample_to_size",
+        tile,
+        width_px,
+        height_px,
+        algorithm,
+    )
+
+
+def rst_retile(
+    df: DataFrame,
+    tile: ColLike,
+    tile_width: ColLike,
+    tile_height: ColLike,
+) -> DataFrame:
+    """Partition a tile into non-overlapping sub-tiles of the given pixel size.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        tile_width: The sub-tile width in pixels.
+        tile_height: The sub-tile height in pixels.
+
+    Returns:
+        One row per sub-tile; the edge tiles are smaller when the size does not divide
+        the raster.
+
+    SQL: ``gbx_rst_retile(tile, tile_width, tile_height)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_retile",
+        tile,
+        tile_width,
+        tile_height,
+    )
+
+
+def rst_rotation(
+    tile: ColLike,
+) -> Column:
+    """Return the rotation of the raster grid in radians.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The angle atan(skew y / scale x), or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_rotation(tile)``
+    """
+    return _api.call(
+        "gbx_rst_rotation",
+        tile,
+    )
+
+
+def rst_roughness(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute terrain roughness from a single-band DEM tile.
+
+    Args:
+        tile: The single-band DEM tile.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile holding the largest minus the smallest value of each
+        3x3 window; NoData is -9999.
+
+    SQL: ``gbx_rst_roughness(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_roughness",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_roughness",
+        tile,
+    )
+
+
+def rst_sample(
+    tile: ColLike,
+    geom: ColLike,
+    crs: ColLike = None,
+) -> Column:
+    """Return the pixel value of each band at a point.
+
+    Args:
+        tile: The raster tile.
+        geom: A POINT as WKB, EWKB, WKT or EWKT.
+        crs: The CRS of a point with no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an
+            integer code. The raster CRS when NULL. SQL default: ``NULL``.
+
+    Returns:
+        One value per band, or NULL when the point lies outside the raster.
+
+    SQL: ``gbx_rst_sample(tile, geom, [crs])``
+    """
+    return _api.call(
+        "gbx_rst_sample",
+        tile,
+        geom,
+        crs,
+    )
+
+
+def rst_savi(
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    l: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L).
+
+    Args:
+        tile: The multi-band tile.
+        red_idx: The 1-based band of red.
+        nir_idx: The 1-based band of near infrared.
+        l: The soil-brightness correction; 0 reduces SAVI to NDVI. SQL default: ``0.5``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_savi(tile, red_idx, nir_idx, [l])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_savi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            red_idx,
+            nir_idx,
+            l,
+        )
+    return _api.call(
+        "gbx_rst_savi",
+        tile,
+        red_idx,
+        nir_idx,
+        l,
+    )
+
+
+def rst_scalex(
+    tile: ColLike,
+) -> Column:
+    """Return the signed x scale of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's pixel width, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_scalex(tile)``
+    """
+    return _api.call(
+        "gbx_rst_scalex",
+        tile,
+    )
+
+
+def rst_scaley(
+    tile: ColLike,
+) -> Column:
+    """Return the signed y scale of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's pixel height, negative for a north-up raster, or NULL for a
+        NULL or error tile.
+
+    SQL: ``gbx_rst_scaley(tile)``
+    """
+    return _api.call(
+        "gbx_rst_scaley",
+        tile,
+    )
+
+
+def rst_separatebands(
+    df: DataFrame,
+    tile: ColLike,
+) -> DataFrame:
+    """Split a multi-band tile into single-band tiles, one row per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile records its band number in its metadata.
+
+    SQL: ``gbx_rst_separatebands(tile)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_separatebands",
+        tile,
+    )
+
+
+def rst_setcrs(
+    tile: ColLike,
+    crs: ColLike,
+) -> Column:
+    """Stamp a CRS on the raster without reprojecting it, from a CRS string.
+
+    Args:
+        tile: The tile to relabel.
+        crs: The CRS to stamp: an authority code such as `'EPSG:3857'` or
+            `'ESRI:54008'`, WKT, PROJ4, PROJJSON, or an integer string (an EPSG code). A
+            value that is no CRS raises.
+
+    Returns:
+        The tile with the same pixels and geotransform and the CRS stamped; nothing is
+        reprojected.
+
+    SQL: ``gbx_rst_setcrs(tile, crs)``
+    """
+    return _api.call(
+        "gbx_rst_setcrs",
+        tile,
+        crs,
+    )
+
+
+def rst_setsrid(
+    tile: ColLike,
+    srid: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Stamp the CRS of a raster from an integer SRID without reprojecting it.
+
+    Args:
+        tile: The tile to relabel.
+        srid: The code to stamp, an EPSG or ESRI code; `0` clears the CRS. A negative
+            number, or a positive code that is neither, raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with the same pixels and geotransform and the CRS `EPSG:<srid>`;
+        nothing is reprojected.
+
+    SQL: ``gbx_rst_setsrid(tile, srid)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_setsrid",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            srid,
+        )
+    return _api.call(
+        "gbx_rst_setsrid",
+        tile,
+        srid,
+    )
+
+
+def rst_skewx(
+    tile: ColLike,
+) -> Column:
+    """Return the x skew of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's third term, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_skewx(tile)``
+    """
+    return _api.call(
+        "gbx_rst_skewx",
+        tile,
+    )
+
+
+def rst_skewy(
+    tile: ColLike,
+) -> Column:
+    """Return the y skew of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's fifth term, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_skewy(tile)``
+    """
+    return _api.call(
+        "gbx_rst_skewy",
+        tile,
+    )
+
+
+def rst_slope(
+    tile: ColLike,
+    unit: ColLike = None,
+    xscale: ColLike = None,
+    yscale: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).
+
+    Args:
+        tile: The single-band DEM tile.
+        unit: `'degrees'` or `'percent'`. SQL default: ``'degrees'``.
+        xscale: Vertical units per horizontal unit along x; set it with `yscale`. When
+            both are NULL, the scale comes from the raster CRS. SQL default: ``NULL``.
+        yscale: Vertical units per horizontal unit along y; set it with `xscale`. SQL
+            default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999.
+
+    SQL: ``gbx_rst_slope(tile, [unit], [xscale], [yscale])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_slope",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            unit,
+            xscale,
+            yscale,
+        )
+    return _api.call(
+        "gbx_rst_slope",
+        tile,
+        unit,
+        xscale,
+        yscale,
+    )
+
+
+def rst_srid(
+    tile: ColLike,
+) -> Column:
+    """Return the integer SRID of the raster CRS.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The authority code, or NULL when the raster has no CRS or its CRS has no code.
+
+    SQL: ``gbx_rst_srid(tile)``
+    """
+    return _api.call(
+        "gbx_rst_srid",
+        tile,
+    )
+
+
+def rst_stats_partial(
+    tile: ColLike,
+) -> Column:
+    """Give the mergeable state of each band of a tile, so a statistic over many tiles needs no pixel.
+
+    Args:
+        tile: The tile to summarize.
+
+    Returns:
+        An array of structs, one per band: `band` (from 1), `count`, `sum`, `m2`, `min`
+        and `max`. `m2` is the sum of the squared deviations from the band's mean. A
+        band with no valid pixel has a `count` of 0 and NULL for the rest. The average
+        of a band is `sum / count` and its variance `m2 / count`. Tiles of one table
+        merge by summing `count` and `sum`, taking the least `min` and the greatest
+        `max`, and combining `m2` as the recipe on the Unity Catalog page shows. NULL
+        for a NULL tile, an error tile or a tile that cannot be read.
+
+    SQL: ``gbx_rst_stats_partial(tile)``
+    """
+    return _api.call(
+        "gbx_rst_stats_partial",
+        tile,
+    )
+
+
+def rst_subdatasets(
+    tile: ColLike,
+) -> Column:
+    """Return the subdatasets of a container raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The `SUBDATASET_<n>_NAME` and `SUBDATASET_<n>_DESC` entries, empty for a raster
+        with no subdatasets, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_subdatasets(tile)``
+    """
+    return _api.call(
+        "gbx_rst_subdatasets",
+        tile,
+    )
+
+
+def rst_summary(
+    tile: ColLike,
+) -> Column:
+    """Return a JSON summary of the raster with per-band statistics.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        GDAL's description of the raster as JSON: the output of `gdalinfo -json` with
+        statistics. It holds the driver, size, coordinate system and geotransform. Each
+        band lists its type, NoData value and `minimum`, `maximum`, `mean` and `stdDev`.
+        GDAL rounds those four statistics to three decimals. The `metadata` of the band
+        holds `STATISTICS_*` values with more digits. NULL for a NULL tile, an error
+        tile or a tile that cannot be read.
+
+    SQL: ``gbx_rst_summary(tile)``
+    """
+    return _api.call(
+        "gbx_rst_summary",
+        tile,
     )
 
 
 def rst_threshold(
     tile: ColLike,
-    op: Union[ColLike, None] = None,
+    op: ColLike = None,
     value: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Binarise a raster: ``(pixel <op> value)`` -> 0/1.
+    """Keep the pixels that satisfy the comparison and set the others to NoData.
 
     Args:
-        tile: Raster tile column.
-        op: Comparison operator — one of ``">"``, ``">="``, ``"<"``, ``"<="``,
-            ``"=="``, ``"!="``. String literals auto-wrapped via ``f.lit``.
-        value: Threshold value (``float``).
+        tile: The tile to threshold.
+        op: The comparison: `>`, `<`, `>=`, `<=`, `==` or `!=`. SQL default: ``'>'``.
+        value: The value to compare each pixel with. SQL default: ``0.0``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Single-band Float32 GTiff tile column with values 0 or 1.
+        A tile with the type and band count of the input. The pixels that fail the
+        comparison are NoData: the source's NoData value, or its type's fallback when it
+        has none.
+
+    SQL: ``gbx_rst_threshold(tile, [op], [value])``
     """
-    op_col = (
-        f.lit(op)
-        if isinstance(op, str)
-        else _col(op) if op is not None else f.lit(None)
-    )
-    return f.call_function("gbx_rst_threshold", _col(tile), op_col, _col(value))
-
-
-def rst_percentile_stretch(tile: ColLike, lo_pct: ColLike, hi_pct: ColLike) -> Column:
-    """Per-band percentile contrast stretch to uint8 [0,255].
-
-    For each band, computes lo_pct and hi_pct percentiles over valid (non-NoData)
-    pixels, clips to that range, and linearly rescales to [0,255]. Output is uint8.
-    NoData pixels are preserved as 0.
-
-    Args:
-        tile: Raster tile column (any number of bands).
-        lo_pct: Lower percentile threshold (0-100), e.g., 2.0 for 2nd percentile.
-        hi_pct: Upper percentile threshold (0-100), e.g., 98.0 for 98th percentile.
-
-    Returns:
-        Multi-band uint8 GTiff tile column (same number of bands as input).
-    """
-    return f.call_function(
-        "gbx_rst_percentile_stretch", _col(tile), _col(lo_pct), _col(hi_pct)
-    )
-
-
-def rst_buildoverviews(
-    tile: ColLike,
-    levels: ColLike,
-    resampling: Union[ColLike, None] = None,
-) -> Column:
-    """Build internal overviews on a raster via ``Dataset.BuildOverviews``.
-
-    Args:
-        tile: Raster tile column.
-        levels: ``ARRAY<INT>`` of downsampling factors (e.g. ``[2, 4, 8, 16]``).
-            Each factor produces one overview level at ``1 / factor`` resolution.
-        resampling: Overview resampling algorithm — one of ``nearest``,
-            ``average``, ``rms``, ``gauss``, ``cubic``, ``cubicspline``,
-            ``lanczos``, ``bilinear``, ``mode``, ``none``. Defaults to
-            ``"average"``. String literals auto-wrapped via ``f.lit``.
-
-    Returns:
-        Raster tile column with embedded overview pyramid.
-    """
-    res_col = (
-        f.lit("average")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    return f.call_function("gbx_rst_buildoverviews", _col(tile), _col(levels), res_col)
-
-
-def rst_band(tile: ColLike, band_index: ColLike) -> Column:
-    """Extract a single band as a new single-band tile via ``gdal.Translate -b <i>``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        band_index: 1-based band index to extract.
-
-    Returns:
-        Single-band raster tile column.
-    """
-    return f.call_function("gbx_rst_band", _col(tile), _col(band_index))
-
-
-def rst_cog_convert(
-    tile: ColLike,
-    compression: Union[ColLike, None] = None,
-    blocksize: ColLike = None,
-    overview_resampling: Union[ColLike, None] = None,
-) -> Column:
-    """Convert a raster tile to Cloud Optimized GeoTIFF (COG) layout.
-
-    Wraps ``gdal.Translate -of COG`` with the requested compression, internal
-    block size, and overview resampling. The result is still a GTiff on disk
-    (downstream ``metadata.driver`` reads ``GTiff``) but laid out so HTTP range
-    reads can extract regions or overview levels cheaply.
-
-    Args:
-        tile: Raster tile column.
-        compression: Pixel compression — one of ``NONE``, ``DEFLATE``, ``LZW``,
-            ``ZSTD``, ``LERC``, ``JPEG``, ``WEBP``. Default ``"DEFLATE"``.
-            String literals auto-wrapped via ``f.lit``.
-        blocksize: Internal tile size in pixels (square). Default ``512``.
-        overview_resampling: Downsampling algorithm for the overview pyramid —
-            one of ``NEAREST``, ``AVERAGE``, ``GAUSS``, ``CUBIC``, ``CUBICSPLINE``,
-            ``LANCZOS``, ``BILINEAR``, ``MODE``. Default ``"AVERAGE"``.
-
-    Returns:
-        COG-laid-out raster tile column.
-    """
-    comp_col = (
-        f.lit("DEFLATE")
-        if compression is None
-        else (f.lit(compression) if isinstance(compression, str) else _col(compression))
-    )
-    bs_col = f.lit(512) if blocksize is None else _col(blocksize)
-    or_col = (
-        f.lit("AVERAGE")
-        if overview_resampling is None
-        else (
-            f.lit(overview_resampling)
-            if isinstance(overview_resampling, str)
-            else _col(overview_resampling)
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_threshold",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            op,
+            value,
         )
+    return _api.call(
+        "gbx_rst_threshold",
+        tile,
+        op,
+        value,
     )
-    return f.call_function("gbx_rst_cog_convert", _col(tile), comp_col, bs_col, or_col)
 
 
-def rst_proximity(
+def rst_tilexyz(
     tile: ColLike,
-    target_values: Union[ColLike, None] = None,
-    dist_units: Union[ColLike, None] = None,
-    max_distance: ColLike = None,
+    z: ColLike,
+    x: ColLike,
+    y: ColLike,
+    format: ColLike = None,
+    size: ColLike = None,
+    resampling: ColLike = None,
+    rescale: ColLike = None,
 ) -> Column:
-    """Compute a proximity raster: each pixel = distance to nearest source pixel.
-
-    Wraps ``gdal.ComputeProximity``. The output preserves the source extent /
-    CRS / GeoTransform; pixel dtype is Float32. Pixels beyond ``max_distance``
-    or with no source in range get the output's NoData value (``-1.0``).
+    """Render one web-mercator XYZ slippy-map tile of the raster as image bytes.
 
     Args:
-        tile: Raster tile column.
-        target_values: Optional comma-separated list of source-pixel values to
-            measure distance to (e.g. ``"1,2,3"``). ``None`` = any non-NoData
-            pixel is a target.
-        dist_units: ``"GEO"`` (CRS ground units, default) or ``"PIXEL"``.
-        max_distance: Optional cap on output distance (in the same units as
-            ``dist_units``). ``None`` = unlimited.
+        tile: The tile to render.
+        z: The zoom level of the web tile, from 0.
+        x: The tile column, from 0 to 2^z - 1.
+        y: The tile row (north-down slippy-map order), from 0 to 2^z - 1.
+        format: `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. SQL
+            default: ``'PNG'``.
+        size: The side of the output tile in pixels, in (0, 4096]. Any other value
+            raises. SQL default: ``256``.
+        resampling: The GDAL warp resampling: `near`, `bilinear`, `cubic`,
+            `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`.
+            Any other word raises. SQL default: ``'bilinear'``.
+        rescale: The 8-bit contrast: `'auto'` rescales a tile that is not 8-bit by its
+            band minimum and maximum and passes an 8-bit one through, `'none'` keeps the
+            full range of the data type, and `'min,max'` rescales between two numbers. Any
+            other text raises. SQL default: ``'auto'``.
 
     Returns:
-        Float32 proximity raster tile column.
+        The image bytes: PNG and WebP are RGBA, JPEG is RGB. A pixel that is NoData, or
+        outside the raster, is transparent; a tile outside the raster, a NULL tile and a
+        tile that cannot be read give a fully transparent image of the requested size. A
+        NULL z, x or y gives NULL.
+
+    SQL: ``gbx_rst_tilexyz(tile, z, x, y, [format], [size], [resampling], [rescale])``
     """
-    tv_col = (
-        f.lit(None).cast("string")
-        if target_values is None
-        else (
-            f.lit(target_values)
-            if isinstance(target_values, str)
-            else _col(target_values)
+    return _api.call(
+        "gbx_rst_tilexyz",
+        tile,
+        z,
+        x,
+        y,
+        format,
+        size,
+        resampling,
+        rescale,
+    )
+
+
+def rst_to_webmercator(
+    tile: ColLike,
+    resampling: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Reproject the tile to EPSG:3857 (web mercator).
+
+    Args:
+        tile: The tile to reproject.
+        resampling: The resampling algorithm: `near`, `bilinear`, `cubic`,
+            `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`
+            (any case; `nearest` is accepted as `near`). A word that names none raises. SQL
+            default: ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile in EPSG:3857; an error tile with the reason when the tile has no CRS.
+
+    SQL: ``gbx_rst_to_webmercator(tile, [resampling])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_to_webmercator",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            resampling,
         )
+    return _api.call(
+        "gbx_rst_to_webmercator",
+        tile,
+        resampling,
     )
-    du_col = (
-        f.lit("GEO")
-        if dist_units is None
-        else (f.lit(dist_units) if isinstance(dist_units, str) else _col(dist_units))
-    )
-    md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
-    return f.call_function("gbx_rst_proximity", _col(tile), tv_col, du_col, md_col)
 
 
-def rst_contour(
+def rst_tooverlappingtiles(
+    df: DataFrame,
     tile: ColLike,
-    levels: ColLike,
-    interval: ColLike = None,
-    base: ColLike = None,
-    attr_field: Union[ColLike, None] = None,
-) -> Column:
-    """Generate contour LineStrings from a raster as ``ARRAY<struct(geom_wkb, value)>``.
-
-    Wraps ``gdal.ContourGenerateEx``. Supply EITHER a non-empty ``levels`` array
-    (explicit contour values) OR ``interval`` (equal-step contours at
-    ``base + n*interval``). Pass ``levels=array()`` to use interval mode.
+    tile_width: ColLike,
+    tile_height: ColLike,
+    overlap: ColLike,
+) -> DataFrame:
+    """Partition a tile into overlapping tiles of the given pixel size.
 
     Args:
-        tile: Raster tile column.
-        levels: ``ARRAY<DOUBLE>`` of explicit contour values; empty -> use
-            ``interval``.
-        interval: Step between contours; ignored if ``levels`` is non-empty.
-        base: Contour base value; only meaningful with ``interval``. Default 0.
-        attr_field: Internal OGR field name carrying the contour value
-            (default ``"elev"``). Read back via the ``value`` member of each
-            output struct.
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        tile_width: The width of each tile in pixels, above 0.
+        tile_height: The height of each tile in pixels, above 0.
+        overlap: The overlap as a percentage of the tile size, from 0 to below 100. Each
+            edge overlaps by the tile size times this, rounded up.
 
     Returns:
-        Column of ``ARRAY<struct(geom_wkb BINARY, value DOUBLE)>``.
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        The tiles at the right and bottom edges are smaller. Every window is a row, also
+        one that holds only NoData.
+
+    SQL: ``gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap)``
     """
-    int_col = f.lit(0.0) if interval is None else _col(interval)
-    base_col = f.lit(0.0) if base is None else _col(base)
-    af_col = (
-        f.lit("elev")
-        if attr_field is None
-        else (f.lit(attr_field) if isinstance(attr_field, str) else _col(attr_field))
+    return _api.table(
+        df,
+        "gbx_rst_tooverlappingtiles",
+        tile,
+        tile_width,
+        tile_height,
+        overlap,
     )
-    return f.call_function(
-        "gbx_rst_contour", _col(tile), _col(levels), int_col, base_col, af_col
+
+
+def rst_tpi(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute the Topographic Position Index from a single-band DEM tile.
+
+    Args:
+        tile: The single-band DEM tile.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; positive on ridges, negative in valleys; NoData is
+        -9999.
+
+    SQL: ``gbx_rst_tpi(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_tpi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_tpi",
+        tile,
+    )
+
+
+def rst_transform(
+    tile: ColLike,
+    srid: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Reproject the raster to the target SRID (an EPSG code).
+
+    Args:
+        tile: The tile to reproject.
+        srid: The EPSG (or ESRI) code of the target CRS, a positive integer.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile in the target CRS; the tile as it is when it already has that CRS. An
+        error tile with the reason when the tile has no CRS or the SRID names none.
+
+    SQL: ``gbx_rst_transform(tile, srid)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_transform",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            srid,
+        )
+    return _api.call(
+        "gbx_rst_transform",
+        tile,
+        srid,
+    )
+
+
+def rst_transformcrs(
+    tile: ColLike,
+    target_crs: ColLike,
+) -> Column:
+    """Reproject the raster to a target CRS given as a string.
+
+    Args:
+        tile: The tile to reproject.
+        target_crs: The target CRS: an authority code such as `'EPSG:3857'` or
+            `'ESRI:54008'`, WKT, PROJJSON or PROJ4. An integer string is an EPSG code.
+
+    Returns:
+        The tile reprojected to the target CRS.
+
+    SQL: ``gbx_rst_transformcrs(tile, target_crs)``
+    """
+    return _api.call(
+        "gbx_rst_transformcrs",
+        tile,
+        target_crs,
+    )
+
+
+def rst_tri(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute the Terrain Ruggedness Index (Riley) from a single-band DEM tile.
+
+    Args:
+        tile: The single-band DEM tile.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999.
+
+    SQL: ``gbx_rst_tri(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_tri",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_tri",
+        tile,
+    )
+
+
+def rst_tryopen(
+    tile: ColLike,
+) -> Column:
+    """Test whether tile bytes open as a raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        True when the tile opens; false for corrupt, empty or error tiles.
+
+    SQL: ``gbx_rst_tryopen(tile)``
+    """
+    return _api.call(
+        "gbx_rst_tryopen",
+        tile,
+    )
+
+
+def rst_type(
+    tile: ColLike,
+) -> Column:
+    """Return the GDAL data type of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One type name per band, for example `Float32`, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_type(tile)``
+    """
+    return _api.call(
+        "gbx_rst_type",
+        tile,
+    )
+
+
+def rst_updatetype(
+    tile: ColLike,
+    new_type: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Cast all bands of the raster to another data type.
+
+    Args:
+        tile: The tile to cast.
+        new_type: A GDAL data type name, in any case: `Byte`, `Int8`, `UInt16`, `Int16`,
+            `UInt32`, `Int32`, `Float32` or `Float64`. Another word raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile with every band cast to the type: a floating-point value cast to
+        an integer type is rounded and clamped to the type's range; a NoData value the
+        type cannot hold is dropped.
+
+    SQL: ``gbx_rst_updatetype(tile, new_type)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_updatetype",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            new_type,
+        )
+    return _api.call(
+        "gbx_rst_updatetype",
+        tile,
+        new_type,
+    )
+
+
+def rst_upperleftx(
+    tile: ColLike,
+) -> Column:
+    """Return the x coordinate of the raster's upper-left corner.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The corner's x in the raster CRS, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_upperleftx(tile)``
+    """
+    return _api.call(
+        "gbx_rst_upperleftx",
+        tile,
+    )
+
+
+def rst_upperlefty(
+    tile: ColLike,
+) -> Column:
+    """Return the y coordinate of the raster's upper-left corner.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The corner's y in the raster CRS, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_upperlefty(tile)``
+    """
+    return _api.call(
+        "gbx_rst_upperlefty",
+        tile,
     )
 
 
 def rst_viewshed(
     tile: ColLike,
     observer_geom: ColLike,
-    observer_height: ColLike,
+    observer_height: ColLike = None,
     target_height: ColLike = None,
     max_distance: ColLike = None,
     crs: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Compute a binary viewshed raster from a DEM and an observer POINT.
-
-    Wraps ``gdal.ViewshedGenerate``. Output is a Byte raster matching the
-    source extent / CRS: visible pixels = ``255``, invisible / out-of-range
-    pixels = ``0``. Non-POINT ``observer_geom`` is rejected at runtime.
+    """Compute a binary viewshed from a DEM tile and an observer point.
 
     Args:
-        tile: Single-band DEM raster tile column.
-        observer_geom: Observer POINT — WKB ``bytes`` or WKT ``string`` column.
-            Coordinates must be in the raster's CRS.
-        observer_height: Observer height above DEM at the observer pixel
-            (e.g. eye height + tower height).
-        target_height: Target height above DEM at each tested pixel.
-            Default ``1.6`` (~average eye height).
-        max_distance: Optional clipping distance in CRS units; ``None`` =
-            unlimited (only bounded by raster extent).
-        crs: Optional source CRS of a plain WKB/WKT observer point (int SRID
-            or CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID
-            -> assumed already in the raster CRS.
+        tile: The DEM tile.
+        observer_geom: The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS
+            (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises.
+        observer_height: The observer's height above the DEM, 0 or more. NULL is 0. SQL
+            default: ``0.0``.
+        target_height: The height of the target above the DEM at each cell, 0 or more.
+            SQL default: ``1.6``.
+        max_distance: The largest distance to analyse in the DEM's CRS units, above 0.
+            NULL for no limit: the whole DEM. A limit gives the window around the observer.
+            SQL default: ``NULL``.
+        crs: The CRS of the observer when it has no SRID (`EPSG:n`, `ESRI:n` or WKT).
+            NULL means the DEM's CRS. SQL default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        Byte raster tile column (0 / 255).
+        A Byte tile: 255 where the cell is visible, 0 where it is not. A NULL tile or
+        observer gives NULL; an error tile comes out as itself; a tile that cannot be
+        read gives an error tile.
+
+    SQL: ``gbx_rst_viewshed(tile, observer_geom, [observer_height], [target_height], [max_distance], [crs])``
     """
-    th_col = f.lit(1.6) if target_height is None else _col(target_height)
-    md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
-    if crs is None:
-        return f.call_function(
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
             "gbx_rst_viewshed",
-            _col(tile),
-            _col(observer_geom),
-            _col(observer_height),
-            th_col,
-            md_col,
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            observer_geom,
+            observer_height,
+            target_height,
+            max_distance,
+            crs,
         )
-    return f.call_function(
+    return _api.call(
         "gbx_rst_viewshed",
-        _col(tile),
-        _col(observer_geom),
-        _col(observer_height),
-        th_col,
-        md_col,
-        _crs_col(crs),
+        tile,
+        observer_geom,
+        observer_height,
+        target_height,
+        max_distance,
+        crs,
     )
+
+
+def rst_width(
+    tile: ColLike,
+) -> Column:
+    """Return the width of the raster in pixels.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The pixel count along x, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_width(tile)``
+    """
+    return _api.call(
+        "gbx_rst_width",
+        tile,
+    )
+
+
+def rst_worldtorastercoord(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a world coordinate to the pixel that contains it.
+
+    Args:
+        tile: The raster tile.
+        x: The x coordinate in the raster CRS.
+        y: The y coordinate in the raster CRS.
+
+    Returns:
+        A struct with the pixel column x and row y; a point outside the raster gives a
+        pixel outside its size.
+
+    SQL: ``gbx_rst_worldtorastercoord(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_worldtorastercoord",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_worldtorastercoordx(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a world coordinate to a pixel column.
+
+    Args:
+        tile: The raster tile.
+        x: The x coordinate in the raster CRS.
+        y: The y coordinate in the raster CRS.
+
+    Returns:
+        The column of the pixel that contains the point.
+
+    SQL: ``gbx_rst_worldtorastercoordx(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_worldtorastercoordx",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_worldtorastercoordy(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a world coordinate to a pixel row.
+
+    Args:
+        tile: The raster tile.
+        x: The x coordinate in the raster CRS.
+        y: The y coordinate in the raster CRS.
+
+    Returns:
+        The row of the pixel that contains the point.
+
+    SQL: ``gbx_rst_worldtorastercoordy(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_worldtorastercoordy",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_xyzpyramid(
+    df: DataFrame,
+    tile: ColLike,
+    min_z: ColLike,
+    max_z: ColLike,
+    format: ColLike = None,
+    size: ColLike = None,
+    resampling: ColLike = None,
+    rescale: ColLike = None,
+) -> DataFrame:
+    """Render every web-mercator XYZ tile that the raster touches, across a range of zoom levels.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to render.
+        min_z: The first zoom level, from 0.
+        max_z: The last zoom level, at least `min_z` and at most 20.
+        format: `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. SQL
+            default: ``'PNG'``.
+        size: The side of each output tile in pixels, in (0, 4096]. Any other value
+            raises. SQL default: ``256``.
+        resampling: The GDAL warp resampling, as for `gbx_rst_tilexyz`. Any other word
+            raises. SQL default: ``'bilinear'``.
+        rescale: The 8-bit contrast, as for `gbx_rst_tilexyz`. SQL default: ``'auto'``.
+
+    Returns:
+        One row per tile: `z`, `x`, `y` and the image `bytes`. A NULL tile, an error
+        tile and a tile that cannot be read give no rows. A pyramid of more than
+        1,000,000 candidate tiles raises.
+
+    SQL: ``gbx_rst_xyzpyramid(tile, min_z, max_z, [format], [size], [resampling], [rescale])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_xyzpyramid",
+        tile,
+        min_z,
+        max_z,
+        format,
+        size,
+        resampling,
+        rescale,
+    )
+
+
+# END GENERATED

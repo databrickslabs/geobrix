@@ -21,7 +21,7 @@ bash scripts/commands/gbx-app-dev.sh
 
 ## Notes
 
-- Requires `apps/genie_map/databricks.env` (copy from `databricks.env.example` and fill it in).
+- Requires `examples/apps/genie_map/databricks.env` (copy from `databricks.env.example` and fill it in).
 - The env file is sourced into the shell so Vite's `loadEnv('')` and the server pick up the vars.
 - Runs `pnpm install` automatically if `node_modules` is missing.
 - Ctrl+C to stop.

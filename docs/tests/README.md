@@ -60,7 +60,7 @@ bash scripts/commands/gbx-test-python-docs.sh --suite integration --skip-build
 pytest docs/tests/python/ -v -m integration
 ```
 
-Integration tests live in **`docs/tests/python/integration/`** (physical split). See `.superpowers/prompts/testing/2026-01-26-skipped-tests-inventory.md` for which tests are integration and why.
+Integration tests live in **`docs/tests/python/integration/`** (physical split). A test lives there when it needs a service or data the default doc-test environment does not have (a Databricks workspace, a built JAR, mounted sample data).
 
 ## Running Tests
 
@@ -140,7 +140,7 @@ import sqlExamples from '!!raw-loader!../../tests/python/api/module_sql.py';
 test("example_name") {
   // Example code from docs
   import com.databricks.labs.gbx.rasterx.{functions => rx}
-  rx.register(spark)
+  spark.sql("SELECT gbx_rst_width(tile) FROM t") // registered from Python or SQL, not from Scala
   // ... rest of example
 }
 ```

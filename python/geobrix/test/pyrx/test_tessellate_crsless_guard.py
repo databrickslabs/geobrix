@@ -8,7 +8,8 @@ when ds.crs is None.
 Sites fixed:
   - _centroid_complete  (~L344): centroid+complete path
   - iter_tessellate covering (~L441): covering+complete path
-  - _centroid_chips_inner: warp_transform(None,...) guard (centroid+sparse/complete)
+  - _assign_pixels: pixel centres are reprojected (``to_lonlat``) only when the
+    raster has a CRS that is not EPSG:4326 (centroid+sparse/complete)
 """
 
 import numpy as np
@@ -81,7 +82,7 @@ def test_covering_complete_crsless_does_not_raise(tmp_path, crsless_ds):
 
 
 def test_centroid_sparse_crsless_does_not_raise(crsless_ds):
-    """centroid+sparse on CRS-less tile must not raise (_centroid_chips_inner guard)."""
+    """centroid+sparse on CRS-less tile must not raise (_assign_pixels guard)."""
     chips = list(
         iter_tessellate(
             crsless_ds, resolution=5, grid="quadbin", mode="centroid", coverage="sparse"

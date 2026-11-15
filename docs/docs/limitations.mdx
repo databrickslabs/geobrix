@@ -42,12 +42,11 @@ Spatial K-Nearest Neighbors is not yet ported:
 ## Coordinate Reference Systems (PROJ version skew)
 
 GeoBrix's GDAL stack and DBR's built-in spatial functions each carry
-their own PROJ runtime — they coexist on the cluster but are not the
+their own PROJ runtime. They coexist on the cluster but are not the
 same library, and the two PROJ versions can diverge slightly:
 
-- **GeoBrix's GDAL** links to the PROJ shipped in the cluster init
-  bundle (currently PROJ 9.4.1, from the UbuntuGIS PPA build of
-  `libgdal37`). Installed at `/usr/lib/x86_64-linux-gnu/libproj.so.25`.
+- **GeoBrix's GDAL** comes from the env wheel: GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0, in the
+  wheel's own directory. The Python and JVM levels both use that PROJ and its data.
 - **DBR 17.3 LTS's built-in `ST_*` functions** link to PROJ 9.7.1,
   bundled with the runtime under `/databricks/native/` (with
   `PROJ_DATA=/databricks/native/proj-data`). Not registered with
@@ -56,32 +55,33 @@ same library, and the two PROJ versions can diverge slightly:
 
 The two run side-by-side in the same JVM/Python process without
 conflict, because they're loaded from distinct paths. The cost is
-**CRS-catalog skew at the edges**: any EPSG code added or refined
-between PROJ 9.4.1 and 9.7.1 (newly-added projections, updated
-grid-shift definitions, transformation pipeline changes) may be
-interpreted slightly differently by a GeoBrix function vs. a DBR
+**CRS-catalog skew at the edges**. Any EPSG code added or refined
+between PROJ 9.7.1 and 9.9.0 may be interpreted slightly differently.
+The difference shows between a GeoBrix function and a DBR
 built-in operating on the same geometry.
+It covers newly-added projections, updated
+grid-shift definitions, and transformation pipeline changes.
 
 For the common EPSG codes you're most likely to use day-to-day —
 `EPSG:4326`, `EPSG:3857`, `EPSG:27700`, the UTM zones — this is
 invisible. For freshly-added projections or very precise datum
 transformations, it may surface.
 
-If you run into a CRS-related discrepancy between a GeoBrix function
+If you find a CRS-related discrepancy between a GeoBrix function
 and a DBR `ST_*` built-in on the same input, please
-[file an issue](https://github.com/databrickslabs/geobrix/issues) with
-the EPSG code and a minimal repro — that's the signal we'd use to
-prioritize rebuilding the GeoBrix GDAL stack from source against DBR's
-PROJ in a future release.
+[file an issue](https://github.com/databrickslabs/geobrix/issues).
+Include the EPSG code and a minimal repro. That is the signal we would use to
+decide whether GeoBrix should follow DBR's PROJ version.
 
 ## Compute Requirements
 
-The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (light-tier extras, e.g. `geobrix[light_env6]`; pure-Python on rasterio's bundled GDAL) has none of them — it runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
+The compute requirements below apply to the **JVM level** (heavyweight: the GeoBrix JAR + native GDAL). The **Python level** (lightweight: the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them. It runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Surfaces & Levels](./api/execution-tiers#the-levels).
 
-The heavyweight tier requires Databricks Classic Clusters:
-- **Not** compatible with Serverless compute (use the lightweight tier there)
-- Requires GDAL native libraries via init script, which are currently only supported on classic clusters
-- **Non-ARM instance types only (Intel or AMD x86_64).** The GDAL bundle ships `amd64` `.deb`s from the UbuntuGIS PPA — `amd64` and `x86_64` are the same architecture, and Intel and AMD CPUs are interchangeable. ARM-based instance types — AWS Graviton, Ampere, Apple Silicon — are not supported. The init script fails fast on `aarch64`.
+The JVM level runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path).
+- **Not** compatible with Serverless compute (GeoBrix uses the Python level there)
+- Not available on standard (shared) access mode, with or without a DCS image (GeoBrix uses the Python level there)
+- Requires native GDAL libraries, which the env wheel carries (and the DCS image, from the same wheel)
+- Runs on x86 for DBR 17.3 / 18 / 19, and on Graviton (arm64) for DBR 19
 
 Databricks Runtime:
 - **Minimum**: DBR 17.1 (recommended/tested: DBR 17.3 LTS or 18 LTS)
@@ -91,12 +91,40 @@ Databricks Runtime:
 
 On Serverless compute most Spark properties are locked to platform defaults and cannot be
 overridden (for example, adaptive-query-execution toggles are ignored). Serverless does, however,
-accept a **limited set** of Spark configs — including **`spark.sql.files.maxPartitionBytes`**, which
+accept a **limited set** of Spark configs. These include **`spark.sql.files.maxPartitionBytes`**, which
 you can tune down (e.g. `"32m"`) to reduce the rows/bytes per partition on file and Delta scans. This
 is a useful lever for controlling memory per task in decode-heavy pipelines (each partition holds
 fewer files/rows, so each task decodes less at once). See the Databricks docs on
 [configuring Spark properties for Serverless](https://docs.databricks.com/aws/en/spark/conf) for the
 full allowlist.
+
+## Zarr Stores
+
+GeoBrix reads, registers and writes [Zarr stores](./api/zarr-stores) within these limits. The
+[Zarr performance and limits](./api/zarr-performance#limits) page repeats them beside the measured read and write times.
+
+- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), at the Python level only.
+  Databricks Runtime 17.3 and 18 and Serverless environment 5 are not supported. The JVM level reads
+  Zarr data only as materialized GeoBrix tiles.
+- **Data types.** Numeric types and CF times. Strings and objects are not supported. An array GeoBrix cannot
+  decode is left out of reads. A complex array cannot be read as a table, because a table has no column for
+  complex numbers. Read it as blocks.
+- **Tiles.** `output="tiles"` needs the coordinates to form a regular grid. Read an irregular or curvilinear
+  grid as blocks or a table.
+- **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
+  unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec list
+  (a transpose before it, a compressor after it) is not supported. Registering the store records the array as
+  one GeoBrix cannot decode. A default read leaves it out with a warning, and naming it in `variables` raises
+  `ZarrUnsupported`. Rewrite the array so that `sharding_indexed` is its only outer codec, with compression and
+  other codecs inside it. zarr-python does not write that layout.
+- **Reading with GDAL.** A GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the `crc32c`
+  codec, which `gbx_zarr_write` writes by default. See [Zarr in the Raster Reader](./readers/raster).
+- **File modes.** `file_mode="external"` is a preview that needs a workspace with the File type preview and
+  compute that supports `FILE` values; the default, `"fuse"`, keeps path strings and works everywhere.
+  `file_mode="managed"` is not available.
+- **Cloud storage.** Direct storage access (`access="direct"`) has been measured on AWS only. Azure and
+  Google Cloud storage are not measured yet: pass `access="fuse"` to read and write through the Volume mount,
+  which sends no credentials.
 
 ## Format Support
 

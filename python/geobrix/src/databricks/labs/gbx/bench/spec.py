@@ -13,7 +13,8 @@ own adapters in a later task and are added with the appropriate `modes`.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -35,19 +36,79 @@ from databricks.labs.gbx.pyrx.core import (
     features,
     focal,
     gridagg,
-    indices,
-    mapalgebra,
     ops,
-    resample,
     stretch,
-    terrain,
     tessellate,
     tiling,
     tin,
     warp,
     xyz,
 )
+from databricks.labs.gbx.pyrx.core.compression import source_profile
 from databricks.labs.gbx.pyvx import functions as pyvx
+from databricks.labs.gbx.rasterx import functions as rx
+from databricks.labs.gbx.vectorx import functions as vx
+
+
+def _engine_core(sql_name: str, values) -> Callable:
+    """The pure-core body of an engine-only row: the GDAL spec engine on the open dataset's GeoTIFF bytes,
+    returning the result raster's bytes (what ``col_fn`` runs, minus Spark). Raises the engine's reason when
+    it has no raster. `values` is a dict, or a function of the open dataset that gives one (an argument that
+    depends on the tile, such as a point at its centre)."""
+
+    def _core(ds):
+        from databricks.labs.gbx import manifest
+        from databricks.labs.gbx.engine import run
+
+        res = run.run(
+            manifest.load().functions[sql_name],
+            [prx._dataset_to_gtiff_bytes(ds)],
+            dict(values(ds) if callable(values) else values),
+        )
+        if res.raster is None:
+            raise RuntimeError(res.error)
+        return res.raster
+
+    return _core
+
+
+def _engine_features(sql_name: str, values: dict) -> Callable:
+    """The pure-core body of an engine row that returns features: the GDAL spec engine on the open dataset's GeoTIFF
+    bytes, returning ``[{"geom_wkb": ..., <field>: ...}]``. Raises the engine's reason when GDAL fails.
+    """
+
+    def _core(ds):
+        from databricks.labs.gbx import manifest
+        from databricks.labs.gbx.engine import l3, run
+
+        fn = manifest.load().functions[sql_name]
+        res = run.run(fn, [prx._dataset_to_gtiff_bytes(ds)], dict(values))
+        if res.error is not None:
+            raise RuntimeError(res.error)
+        return l3._value(fn, res)
+
+    return _core
+
+
+def _engine_json(sql_name: str, values: dict) -> Callable:
+    """The pure-core body of an engine row that returns JSON: the GDAL spec engine on the open dataset's GeoTIFF bytes,
+    returning GDAL's text. Raises the engine's reason when GDAL fails."""
+
+    def _core(ds):
+        from databricks.labs.gbx import manifest
+        from databricks.labs.gbx.engine import run
+
+        res = run.run(
+            manifest.load().functions[sql_name],
+            [prx._dataset_to_gtiff_bytes(ds)],
+            dict(values),
+        )
+        if res.error is not None:
+            raise RuntimeError(res.error)
+        return res.text
+
+    return _core
+
 
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
 # (Python core_fn + col_fn) and in the Scala BenchDispatch case so the two engines
@@ -55,7 +116,7 @@ from databricks.labs.gbx.pyvx import functions as pyvx
 # documentation (a 2-D kernel cannot ride the stringly-typed Scala args map).
 _CONVOLVE_KERNEL = [[1.0 / 9.0] * 3 for _ in range(3)]
 
-# --- Task 6: complex-arg constants (geometry / expression / band-map / func) -
+# --- Complex-arg constants (geometry / expression / band-map / func) -
 # Each of these rides identically through the pyrx core_fn, the pyrx col_fn, AND
 # the Scala BenchDispatch case (same as the convolve kernel) — a stringly-typed
 # bench args map cannot carry a band-map, an expression's variable bindings, or a
@@ -68,7 +129,7 @@ _INDEX_NAME = "ndvi"
 _INDEX_BAND_MAP = {"red": 1, "nir": 2}
 
 # rst_mapalgebra: band 1 of the (single) input binds to A; "A*2" is CRS- and
-# band-count-independent. Same expression on both engines.
+# band-count-independent. The GDAL engine's muparser reads it.
 _MAPALGEBRA_EXPR = "A*2"
 
 # rst_derivedband: a GDAL VRT Python pixel-function body. Both engines exec this
@@ -120,24 +181,15 @@ _SAMPLE_POINT_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 
 # rst_viewshed (timing-only): needs an observer point; like sample, no single
 # world point is in-extent across the multi-CRS corpus, and a fixed (0, 0)
-# observer falls outside the UTM/3857 tile x/y ranges (xrspatial raises
-# "observer (0,0) outside raster x_range"). The core_fn derives the observer
-# from the tile center (``ds.bounds``) so it is in-extent on every CRS.
-# Additionally the pyrx binding documents a parity divergence (xrspatial CPU
-# line-of-sight scan vs GDAL's GVM_Edge sweep with curvature), so the binary
-# masks are not byte-equal even at a shared observer — timing-only on both
-# counts. The col_fn is mode-filtered out (viewshed is pure-core-only), so the
-# static WKB below is unused at runtime and kept only for the col_fn signature.
+# observer falls outside the UTM/3857 tile x/y ranges. The core_fn derives the
+# observer from the tile center (``ds.bounds``) so it is in-extent on every CRS.
+# (The observer is what keeps it timing-only.) The col_fn is
+# mode-filtered out (viewshed is pure-core-only), so the static WKB below is
+# unused at runtime and kept only for the col_fn signature.
 _VIEWSHED_OBSERVER_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 
-# rst_color_relief (timing-only): heavy reads a gdaldem color-table FILE and runs
-# GDAL DEMProcessing color-relief (its own interpolation), while pyrx parses the
-# same file and interpolates with np.interp — different interpolation engines, so
-# the RGB(A) bytes are not value-identical. It also needs a real file path on the
-# executor, which the static args map cannot synthesize per-engine. Timing-only.
-# The runner does not invoke color_relief's core_fn for fingerprinting (it is
-# fingerprint=False); the path below is a documented placeholder for the args dict
-# and is created on demand by the core_fn.
+# rst_color_relief (timing-only): the color table is a text argument, a gdaldem ramp. It has no heavyweight level. The
+# runner does not invoke color_relief's core_fn for fingerprinting (it is fingerprint=False).
 _COLOR_RAMP_TEXT = "nv 0 0 0\n0% 0 0 255\n50% 0 255 0\n100% 255 0 0\n"
 
 
@@ -159,7 +211,7 @@ def _synthetic_rgb_tile(ds) -> bytes:
     rgb = (rng.rand(h, w, 3) * 255).astype(np.uint8)
 
     # Build a 3-band GTiff with the input tile's geotransform and CRS
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff", count=3, dtype="uint8")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -187,14 +239,14 @@ def _land_cover_classify_bytes(ds, method, n_clusters, smooth) -> bytes:
 def _ds_to_gtiff_bytes(ds) -> bytes:
     """Re-serialize an open rasterio DatasetReader to GTiff bytes.
 
-    ``mapalgebra`` (and rst_mapalgebra) consume raster *bytes*, but the bench
-    runner hands core_fn an already-open ``DatasetReader``. Round-trip the open
-    dataset through an in-memory GTiff so the single-input map-algebra call gets
-    the bytes it expects, byte-for-byte the same grid the column path sees.
+    The core functions that take raster *bytes* (``frombands``, ``merge``, ...) get them here, but the
+    bench runner hands core_fn an already-open ``DatasetReader``. Round-trip the open
+    dataset through an in-memory GTiff so the call gets the bytes it expects,
+    byte-for-byte the same grid the column path sees.
     """
     from rasterio.io import MemoryFile
 
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -225,22 +277,6 @@ def _tile_extent_size_srid(ds) -> tuple:
         int(ds.height),
         int(epsg) if epsg is not None else 0,
     )
-
-
-def _color_table_path() -> str:
-    """Write the synthetic gdaldem color ramp to a temp file and return its path.
-
-    color_relief is timing-only (see ``_COLOR_RAMP_TEXT``); this only needs to
-    exist so the timing call succeeds.
-    """
-    import tempfile
-
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", prefix="bench_color_", delete=False
-    )
-    f.write(_COLOR_RAMP_TEXT)
-    f.close()
-    return f.name
 
 
 @dataclass(frozen=True)
@@ -328,13 +364,7 @@ class FnSpec:
     # never calls it. The scalar args ride from ``args`` in signature order (all the
     # grid-family UDTFs take numeric scalars only: resolution / width / height /
     # overlap / min_z / max_z), passed as SQL literals after ``t.tile``.
-    # HEAVY-TIER SYMMETRY NOTE: the heavyweight grid expressions (RST_H3_RasterToGrid*
-    # etc.) are ARRAY-returning SCALAR expressions -- their production form IS a
-    # scalar column, so the heavy tier keeps its ``.select(column(...))`` path
-    # (BenchDispatch.column). The two tiers therefore time each engine's REAL
-    # production invocation shape for the same logical op (light: LATERAL UDTF row
-    # stream; heavy: array-returning scalar), which is the honest comparison -- there
-    # is no light scalar form to force, and no heavy UDTF form to force.
+    # The raster-to-grid reducers have no JVM form any more: the light UDTF is the only one.
     udtf: bool = False
     # Optional explicit disposition for a scalar accessor on a virtual input:
     # "deferred" (header-only) or "materialized" (reads pixels). None => derive
@@ -347,6 +377,16 @@ class FnSpec:
     # matching behavior (so raster geometry aggregators that reuse srid_4326/srid_27700
     # are UNAFFECTED).
     geometry_set: Optional[str] = None
+    # A second bench case of a registered function, run with non-default args (e.g.
+    # rst_h3_tessellate_centroid times rst_h3_tessellate in centroid mode). ``name``
+    # is then a case id, not a function: ``variant_of`` names the registered
+    # function, and coverage checks count the case under it. None for the
+    # function's own entry.
+    variant_of: Optional[str] = None
+    # False when the function has no JVM form left (its heavyweight companion is deleted and
+    # BenchDispatch no longer knows the name): the heavyweight run skips it and only the
+    # lightweight run times it.
+    heavy: bool = True
 
 
 _BOTH = ("pure-core", "spark-path")
@@ -391,22 +431,21 @@ _NODATA = _PYRX + "_nodata.py"
 # tile (de)serialization — the reader/constructor fns (fromcontent/fromfile)
 # have no dedicated core module; their behavior is the _serde tile round-trip.
 _PYRX_SERDE = "python/geobrix/src/databricks/labs/gbx/pyrx/_serde.py"
-_DEM_HELPER = _HEAVY + "dem/RST_DEMProcessingHelper.scala"
-_PIXEL_COMBINE = _OPS + "PixelCombineRasters.scala"
-_GDAL_BLOCK = _GDAL + "GDALBlock.scala"
 
 # pyrx core module + shared _nodata, by module (added to per-function sources
 # together with that function's heavy Scala expression / helpers).
 _ACCESSORS_LIGHT = (_PYRX + "accessors.py", _NODATA)
-_TERRAIN_LIGHT = (_PYRX + "terrain.py", _NODATA)
-_INDICES_LIGHT = (_PYRX + "indices.py", _NODATA)
+# the GDAL spec engine: the light form of every function with a `gdal` block (terrain, band math, warps)
+_ENGINE_LIGHT = (
+    "python/geobrix/src/databricks/labs/gbx/engine/run.py",
+    "python/geobrix/src/databricks/labs/gbx/engine/argv.py",
+)
 _EDIT_LIGHT = (_PYRX + "edit.py", _NODATA)
 _FOCAL_LIGHT = (_PYRX + "focal.py", _NODATA)
 _FEATURES_LIGHT = (_PYRX + "features.py", _NODATA)
 # TIN / IDW constructors (gridfrompoints -> idw_grid, dtmfromgeoms ->
 # delaunay_dtm) live in core/tin.py; it does NOT import _nodata (grep-confirmed).
 _TIN_LIGHT = (_PYRX + "tin.py",)
-_MAPALGEBRA_LIGHT = (_PYRX + "mapalgebra.py", _NODATA)
 # these core modules do NOT import _nodata (grep-confirmed)
 _WARP_LIGHT = (_PYRX + "warp.py",)
 _COORDS_LIGHT = (_PYRX + "coords.py",)
@@ -414,7 +453,6 @@ _TILING_LIGHT = (_PYRX + "tiling.py",)
 _XYZ_LIGHT = (_PYRX + "xyz.py",)
 _OPS_LIGHT = (_PYRX + "ops.py",)
 _ANALYSIS_LIGHT = (_PYRX + "analysis.py",)
-_RESAMPLE_LIGHT = (_PYRX + "resample.py",)
 _STRETCH_LIGHT = (_PYRX + "stretch.py", _NODATA)
 _DERIVEDBAND_LIGHT = (_PYRX + "derivedband.py",)
 # multi-tile reducers (bucket C, group C3) live in core/agg.py; it does NOT
@@ -422,10 +460,9 @@ _DERIVEDBAND_LIGHT = (_PYRX + "derivedband.py",)
 _AGG_LIGHT = (_PYRX + "agg.py",)
 # bucket B, group B-grid (DGGS). raster->grid lives in core/gridagg.py; H3
 # tessellation in core/tessellate.py (which delegates the per-cell clip to
-# core/edit.py). The shared GridX index helpers the heavy expressions call are
-# gridx/grid/{H3,Quadbin}.scala (RST_H3_RasterToGrid -> H3.pointToCellID;
-# RST_Quadbin_RasterToGrid -> Quadbin; RST_H3_Tessellate -> RasterTessellate ->
-# H3). Neither light module imports _nodata (grep-confirmed).
+# core/edit.py). The GridX index helpers of the H3 and quadbin cells are
+# gridx/grid/{H3,Quadbin}.scala.
+# Neither light module imports _nodata (grep-confirmed).
 _GRIDX = "src/main/scala/com/databricks/labs/gbx/gridx/grid/"
 _GRIDAGG_LIGHT = (_PYRX + "gridagg.py",)
 # BNG raster->grid / rasterize / tessellate additionally route cell math through
@@ -448,8 +485,8 @@ _CHM_LIGHT = (_PYRX + "chm.py",)
 #             too; quadbin/bng/custom route through their per-grid k_loop libs).
 #   heavy  -> gridx/CellFill.scala (grid-generic fill + array<struct> builder) +
 #             gridx/grid/GridSystem.scala (the kLoop contract) + the per-grid
-#             {H3,Quadbin,BNG,Custom}_CellFill.scala expression + the per-grid
-#             GridSystem impl (grid/{H3,Quadbin,BNG,CustomGridSystem}.scala).
+#             {H3,BNG,Custom}_CellFill.scala expression (quadbin has none: light only) + the
+#             per-grid GridSystem impl (grid/{H3,Quadbin,BNG,CustomGridSystem}.scala).
 _GRIDX_ROOT = "src/main/scala/com/databricks/labs/gbx/gridx/"
 _PYGX_FUNCTIONS = _PYGX + "functions.py"
 _CELLFILL_CORE_LIGHT = (_PYGX + "_cellfill.py", _PYGX_FUNCTIONS)
@@ -466,6 +503,16 @@ _PYVX_VALIDITY_LIGHT = (_PYVX + "_validity.py",)
 _PYVX_CLEANING_LIGHT = (_PYVX + "_cleaning.py",)
 _PYVX_COVERAGE_LIGHT = (_PYVX + "_coverage.py",)
 _PYVX_MVT_LIGHT = (_PYVX + "_mvt.py", _PYVX + "_serde.py")
+# The TIN functions' conforming mode and shared snap, on both levels.
+_TIN_CONFORMING = (
+    _PYVX + "_conforming.py",
+    _PYVX + "_quadedge.py",
+    _PYVX + "_jmath.py",
+    "rust/gbxrs/src/tin.rs",  # the same steps in Rust, run where the wheel carries the module
+    "rust/gbxrs/src/jmath.rs",
+    "src/main/scala/com/databricks/labs/gbx/vectorx/jts/InterpolateElevation.scala",
+    "src/main/scala/com/databricks/labs/gbx/vectorx/jts/JTSConformingDelaunayTriangulationBuilder.scala",
+)
 
 # --- rst_h3_rasterize_agg: fixed deterministic cell set + EXPLICIT grid --------
 # PARITY CONTRACT (must stay byte-for-byte in sync with the Scala BenchDispatch
@@ -598,6 +645,61 @@ def bng_rasterize_cells() -> List[str]:
     return sorted(_bng.format(c) for c in _bng.k_ring(center, _BNGRAGG_K))
 
 
+# --- rst_custom_rasterize_agg: fixed custom grid + cell set (LIGHTWEIGHT ONLY) -
+# The heavyweight BenchDispatch has no custom-grid branch (the grid is a STRUCT
+# argument), so this spec times the lightweight tier only (fingerprint=False).
+#   GRID: a BNG-shaped 27700 grid -- bounds 0..700000 x 0..1300000, root cells of
+#   100 km split 10 ways per resolution, so resolution 2 is 1 km cells.
+#   CELL SET RECIPE: the res-2 cell at (530000, 180000) (central London), kRing'd to
+#   k=3 -> 49 cells (the same shape as the quadbin and BNG sets). The aggregator
+#   auto-derives its raster grid from the cell set, as quadbin and BNG do.
+_CUSTOMRAGG_GRID = dict(
+    bound_x_min=0,
+    bound_x_max=700000,
+    bound_y_min=0,
+    bound_y_max=1300000,
+    cell_splits=10,
+    root_cell_size_x=100000,
+    root_cell_size_y=100000,
+    srid=27700,
+)
+_CUSTOMRAGG_RES = 2
+_CUSTOMRAGG_EASTING = 530000.0
+_CUSTOMRAGG_NORTHING = 180000.0
+_CUSTOMRAGG_K = 3
+_CUSTOMRAGG_N_CELLS = (2 * _CUSTOMRAGG_K + 1) * (2 * _CUSTOMRAGG_K + 1)  # 49
+
+
+def custom_rasterize_cells() -> List[int]:
+    """The fixed deterministic custom-grid cell-id set the bench rasterizes.
+
+    The res-2 central-London cell of ``_CUSTOMRAGG_GRID``, kRing'd to k=3. Cell ids
+    are BIGINTs (``pygx._custom``); deterministic + order-stable (sorted).
+    """
+    from databricks.labs.gbx.pygx import _custom
+
+    conf = _custom.CustomGridConf(**_CUSTOMRAGG_GRID)
+    center = _custom.point_to_cell_id(
+        conf, _CUSTOMRAGG_EASTING, _CUSTOMRAGG_NORTHING, _CUSTOMRAGG_RES
+    )
+    return sorted(_custom.k_ring(conf, center, _CUSTOMRAGG_K))
+
+
+def custom_grid_column():
+    """The ``_CUSTOMRAGG_GRID`` grid spec as a struct literal Column (CUSTOM_GRID_SCHEMA).
+
+    A literal, not ``gbx_custom_grid(...)``, so the leg needs no registered UDF.
+    """
+    g = _CUSTOMRAGG_GRID
+    longs = ("bound_x_min", "bound_x_max", "bound_y_min", "bound_y_max")
+    return F.struct(
+        *[
+            (F.lit(v).cast("long") if k in longs else F.lit(v)).alias(k)
+            for k, v in g.items()
+        ]
+    )
+
+
 # --- cellfill grouped aggregators: fixed deterministic (cellid, value) corpus --
 # PARITY CONTRACT (must stay byte-for-byte in sync with the Scala BenchDispatch
 # cellfill block -- search "cellfill: fixed (cellid, value) corpus"):
@@ -646,6 +748,37 @@ def bng_cellfill_cells() -> "List[tuple]":
     return list(zip(cells, _cellfill_values(len(cells))))
 
 
+def pin_light_level(spark, sql_names) -> None:
+    """Register ``sql_names`` in ``spark`` at the light level (L3), whatever the session offers.
+
+    The functions the benchmark times as the light tier (``col_fn``, the readers' ``rst_avg``) are called through
+    the generated ``rasterx`` API, which registers a name at the level the manager picks on first use: on a session
+    with the JAR that can be a JVM companion, and a light-versus-heavy comparison would time heavy against heavy.
+    Registering the name here, forced to L3, on the session that runs the timing, makes the API call a set lookup
+    that keeps this level. A name with no manifest row or no L3 level is left to the API.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx import register as _register
+
+    fns = manifest.load().functions
+    forced = {
+        n: ("L3", "-")
+        for n in dict.fromkeys(sql_names)
+        if n in fns and "L3" in fns[n].levels
+    }
+    if forced:
+        _register(spark, only=list(forced), _levels=forced)
+
+
+def _lateral_only(*_args, **_kwargs):
+    """The ``col_fn`` of a table function (a UDTF): it has no scalar Column form, so a runner path that builds one
+    fails here, naming the cause, instead of on ``None.alias``. The spark-path runner routes ``udtf=True`` specs
+    through SQL ``FROM t, LATERAL gbx_<fn>(...)`` and never calls it."""
+    raise NotImplementedError(
+        "this function is a table function: call it as FROM t, LATERAL gbx_<fn>(...), not as a Column"
+    )
+
+
 REGISTRY: Dict[str, FnSpec] = {
     "rst_width": FnSpec(
         "rst_width",
@@ -655,8 +788,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core=True,
         core_fn=lambda ds, a: accessors.width(ds),
-        col_fn=lambda t, a: prx.rst_width(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Width.scala",),
+        col_fn=lambda t, a: rx.rst_width(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_avg": FnSpec(
         "rst_avg",
@@ -664,10 +798,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Avg.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=True,
         core_fn=lambda ds, a: accessors.avg(ds),
-        col_fn=lambda t, a: prx.rst_avg(t),
+        col_fn=lambda t, a: rx.rst_avg(t),
     ),
     "rst_slope": FnSpec(
         "rst_slope",
@@ -675,10 +810,30 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"unit": "degrees"},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Slope.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the GDAL spec engine's JVM form measured no faster than light
         core=True,
-        core_fn=lambda ds, a: terrain.slope(ds, a["unit"]),
-        col_fn=lambda t, a: prx.rst_slope(t, a["unit"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_slope", {"unit": a["unit"], "xscale": None, "yscale": None}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_slope(t, a["unit"]),
+    ),
+    # gbx_rst_gdal: the cost is the command's. One step (slope) is timed; the engine, not the step, is what this row
+    # measures, so it is timing-only.
+    "rst_gdal": FnSpec(
+        "rst_gdal",
+        "gbx_rst_gdal",
+        "terrain",
+        ("pure-core",),
+        {"command": "slope --unit=degree"},
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the light level only
+        core=False,
+        fingerprint=False,
+        core_fn=lambda ds, a: _engine_core("gbx_rst_gdal", {"command": a["command"]})(
+            ds
+        ),
+        col_fn=lambda t, a: rx.rst_gdal(t, F.lit(a["command"])),
     ),
     "rst_ndvi": FnSpec(
         "rst_ndvi",
@@ -687,10 +842,13 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"red_band": 1, "nir_band": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT + (_HEAVY + "RST_NDVI.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: indices.ndvi(ds, a["red_band"], a["nir_band"]),
-        col_fn=lambda t, a: prx.rst_ndvi(t, a["red_band"], a["nir_band"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_ndvi", {"red_idx": a["red_band"], "nir_idx": a["nir_band"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_ndvi(t, a["red_band"], a["nir_band"]),
     ),
     "rst_transform": FnSpec(
         "rst_transform",
@@ -698,10 +856,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "warp",
         _BOTH,
         {"target_srid": 3857},
-        sources=_WARP_LIGHT + (_HEAVY + "RST_Transform.scala",),
+        sources=_WARP_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: warp.reproject_to_srid(ds, a["target_srid"]),
-        col_fn=lambda t, a: prx.rst_transform(t, a["target_srid"]),
+        col_fn=lambda t, a: rx.rst_transform(t, a["target_srid"]),
     ),
     # --- accessors (scalar; accessors.py; empty args) ---
     "rst_height": FnSpec(
@@ -710,10 +869,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Height.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: accessors.height(ds),
-        col_fn=lambda t, a: prx.rst_height(t),
+        col_fn=lambda t, a: rx.rst_height(t),
     ),
     "rst_numbands": FnSpec(
         "rst_numbands",
@@ -721,10 +881,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_NumBands.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: accessors.numbands(ds),
-        col_fn=lambda t, a: prx.rst_numbands(t),
+        col_fn=lambda t, a: rx.rst_numbands(t),
     ),
     "rst_min": FnSpec(
         "rst_min",
@@ -732,10 +893,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Min.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=True,
         core_fn=lambda ds, a: accessors.minimum(ds),
-        col_fn=lambda t, a: prx.rst_min(t),
+        col_fn=lambda t, a: rx.rst_min(t),
     ),
     "rst_max": FnSpec(
         "rst_max",
@@ -743,10 +905,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Max.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=True,
         core_fn=lambda ds, a: accessors.maximum(ds),
-        col_fn=lambda t, a: prx.rst_max(t),
+        col_fn=lambda t, a: rx.rst_max(t),
     ),
     "rst_median": FnSpec(
         "rst_median",
@@ -754,10 +917,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Median.scala",),
+        sources=_ACCESSORS_LIGHT,
         core=True,
         core_fn=lambda ds, a: accessors.median(ds),
-        col_fn=lambda t, a: prx.rst_median(t),
+        col_fn=lambda t, a: rx.rst_median(t),
+        heavy=False,
     ),
     "rst_pixelcount": FnSpec(
         "rst_pixelcount",
@@ -765,24 +929,30 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_PixelCount.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=True,
         core_fn=lambda ds, a: accessors.pixelcount(ds),
-        col_fn=lambda t, a: prx.rst_pixelcount(t),
+        col_fn=lambda t, a: rx.rst_pixelcount(t),
     ),
-    # --- terrain (bytes; terrain.py) ---
+    # --- terrain (bytes; the GDAL spec engine) ---
     "rst_aspect": FnSpec(
         "rst_aspect",
         "gbx_rst_aspect",
         "terrain",
         _BOTH,
         {"trigonometric": False, "zero_for_flat": False},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Aspect.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.aspect(
-            ds, a["trigonometric"], a["zero_for_flat"]
-        ),
-        col_fn=lambda t, a: prx.rst_aspect(t, a["trigonometric"], a["zero_for_flat"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_aspect",
+            {
+                "trigonometric": a["trigonometric"],
+                "zero_for_flat": a["zero_for_flat"],
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_aspect(t, a["trigonometric"], a["zero_for_flat"]),
     ),
     "rst_hillshade": FnSpec(
         "rst_hillshade",
@@ -790,12 +960,20 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"azimuth": 315.0, "altitude": 45.0, "z_factor": 1.0},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Hillshade.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.hillshade(
-            ds, a["azimuth"], a["altitude"], a["z_factor"]
-        ),
-        col_fn=lambda t, a: prx.rst_hillshade(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_hillshade",
+            {
+                "azimuth": a["azimuth"],
+                "altitude": a["altitude"],
+                "z_factor": a["z_factor"],
+                "xscale": None,
+                "yscale": None,
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_hillshade(
             t, a["azimuth"], a["altitude"], a["z_factor"]
         ),
     ),
@@ -805,10 +983,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_TRI.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.tri(ds),
-        col_fn=lambda t, a: prx.rst_tri(t),
+        core_fn=lambda ds, a: _engine_core("gbx_rst_tri", {})(ds),
+        col_fn=lambda t, a: rx.rst_tri(t),
     ),
     "rst_tpi": FnSpec(
         "rst_tpi",
@@ -816,10 +995,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_TPI.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.tpi(ds),
-        col_fn=lambda t, a: prx.rst_tpi(t),
+        core_fn=lambda ds, a: _engine_core("gbx_rst_tpi", {})(ds),
+        col_fn=lambda t, a: rx.rst_tpi(t),
     ),
     "rst_roughness": FnSpec(
         "rst_roughness",
@@ -827,12 +1007,13 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Roughness.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.roughness(ds),
-        col_fn=lambda t, a: prx.rst_roughness(t),
+        core_fn=lambda ds, a: _engine_core("gbx_rst_roughness", {})(ds),
+        col_fn=lambda t, a: rx.rst_roughness(t),
     ),
-    # --- band-math (bytes; indices.py) ---
+    # --- band-math (bytes; the GDAL spec engine) ---
     "rst_ndwi": FnSpec(
         "rst_ndwi",
         "gbx_rst_ndwi",
@@ -840,10 +1021,13 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"green_idx": 1, "nir_idx": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NDWI.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: indices.ndwi(ds, a["green_idx"], a["nir_idx"]),
-        col_fn=lambda t, a: prx.rst_ndwi(t, a["green_idx"], a["nir_idx"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_ndwi", {"green_idx": a["green_idx"], "nir_idx": a["nir_idx"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_ndwi(t, a["green_idx"], a["nir_idx"]),
     ),
     "rst_nbr": FnSpec(
         "rst_nbr",
@@ -852,10 +1036,13 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"nir_idx": 1, "swir_idx": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NBR.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: indices.nbr(ds, a["nir_idx"], a["swir_idx"]),
-        col_fn=lambda t, a: prx.rst_nbr(t, a["nir_idx"], a["swir_idx"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_nbr", {"nir_idx": a["nir_idx"], "swir_idx": a["swir_idx"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_nbr(t, a["nir_idx"], a["swir_idx"]),
     ),
     # --- warp (bytes; warp.py) ---
     "rst_to_webmercator": FnSpec(
@@ -864,12 +1051,13 @@ REGISTRY: Dict[str, FnSpec] = {
         "warp",
         _BOTH,
         {"resampling": "bilinear"},
-        sources=_WARP_LIGHT + (_HEAVY + "web/RST_ToWebMercator.scala",),
+        sources=_WARP_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: warp.reproject_to_srid(
             ds, 3857, resampling=a["resampling"]
         ),
-        col_fn=lambda t, a: prx.rst_to_webmercator(t, a["resampling"]),
+        col_fn=lambda t, a: rx.rst_to_webmercator(t, a["resampling"]),
     ),
     # --- scalar accessors (no args; accessors.py) -------------------------------
     # All core=False. Most produce a cross-engine-identical scalar/array
@@ -892,8 +1080,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.srid(ds),
-        col_fn=lambda t, a: prx.rst_srid(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_SRID.scala",),
+        col_fn=lambda t, a: rx.rst_srid(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_pixelwidth": FnSpec(
@@ -903,8 +1092,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.pixelwidth(ds),
-        col_fn=lambda t, a: prx.rst_pixelwidth(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_PixelWidth.scala",),
+        col_fn=lambda t, a: rx.rst_pixelwidth(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_pixelheight": FnSpec(
@@ -914,8 +1104,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.pixelheight(ds),
-        col_fn=lambda t, a: prx.rst_pixelheight(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_PixelHeight.scala",),
+        col_fn=lambda t, a: rx.rst_pixelheight(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_upperleftx": FnSpec(
@@ -925,8 +1116,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.upperleftx(ds),
-        col_fn=lambda t, a: prx.rst_upperleftx(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_UpperLeftX.scala",),
+        col_fn=lambda t, a: rx.rst_upperleftx(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_upperlefty": FnSpec(
@@ -936,8 +1128,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.upperlefty(ds),
-        col_fn=lambda t, a: prx.rst_upperlefty(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_UpperLeftY.scala",),
+        col_fn=lambda t, a: rx.rst_upperlefty(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_scalex": FnSpec(
@@ -947,8 +1140,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.scalex(ds),
-        col_fn=lambda t, a: prx.rst_scalex(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_ScaleX.scala",),
+        col_fn=lambda t, a: rx.rst_scalex(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_scaley": FnSpec(
@@ -958,8 +1152,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.scaley(ds),
-        col_fn=lambda t, a: prx.rst_scaley(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_ScaleY.scala",),
+        col_fn=lambda t, a: rx.rst_scaley(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_skewx": FnSpec(
@@ -969,8 +1164,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.skewx(ds),
-        col_fn=lambda t, a: prx.rst_skewx(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_SkewX.scala",),
+        col_fn=lambda t, a: rx.rst_skewx(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_skewy": FnSpec(
@@ -980,8 +1176,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.skewy(ds),
-        col_fn=lambda t, a: prx.rst_skewy(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_SkewY.scala",),
+        col_fn=lambda t, a: rx.rst_skewy(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_rotation": FnSpec(
@@ -991,8 +1188,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.rotation(ds),
-        col_fn=lambda t, a: prx.rst_rotation(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Rotation.scala",),
+        col_fn=lambda t, a: rx.rst_rotation(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_isempty": FnSpec(
@@ -1001,12 +1199,12 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        # Coerce the bool to 1.0/0.0 so the scalar fingerprint matches the heavy
-        # side, which serializes RST_IsEmpty as ofScalar(1.0/0.0).
+        # Coerce the bool to 1.0/0.0 so the scalar fingerprint is numeric.
         core_fn=lambda ds, a: 1.0 if accessors.isempty(ds) else 0.0,
-        col_fn=lambda t, a: prx.rst_isempty(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "RST_IsEmpty.scala",),
+        col_fn=lambda t, a: rx.rst_isempty(t),
+        sources=_ACCESSORS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_getnodata": FnSpec(
         "rst_getnodata",
@@ -1015,8 +1213,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.getnodata(ds),
-        col_fn=lambda t, a: prx.rst_getnodata(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_GetNoData.scala",),
+        col_fn=lambda t, a: rx.rst_getnodata(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=False,
     ),
     "rst_format": FnSpec(
@@ -1026,8 +1225,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.format(ds),
-        col_fn=lambda t, a: prx.rst_format(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Format.scala",),
+        col_fn=lambda t, a: rx.rst_format(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_type": FnSpec(
@@ -1037,8 +1237,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: accessors.type(ds),
-        col_fn=lambda t, a: prx.rst_type(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Type.scala",),
+        col_fn=lambda t, a: rx.rst_type(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=False,
         fingerprint=False,
     ),
@@ -1051,12 +1252,13 @@ REGISTRY: Dict[str, FnSpec] = {
         # No accessors.memsize: use the in-memory raster buffer length from the
         # open dataset (deterministic; timing-only, fingerprint suppressed).
         core_fn=lambda ds, a: int(ds.read().nbytes),
-        col_fn=lambda t, a: prx.rst_memsize(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_MemSize.scala",),
+        col_fn=lambda t, a: rx.rst_memsize(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
-    # --- coordinate / index accessors (Task 3) ----------------------------------
+    # --- coordinate / index accessors ----------------------------------
     # raster->world is the forward geotransform (pure affine): rasterio.xy and
     # GDAL.toWorldCoord agree for any pixel index in any CRS, so these compare in
     # both modes. The pixel index {x:64, y:64} is inside every corpus tile (256px
@@ -1069,8 +1271,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"x": 64, "y": 64},
         core_fn=lambda ds, a: coords.raster_to_world_x(ds, a["x"], a["y"]),
-        col_fn=lambda t, a: prx.rst_rastertoworldcoordx(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_RasterToWorldCoordX.scala",),
+        col_fn=lambda t, a: rx.rst_rastertoworldcoordx(t, a["x"], a["y"]),
+        sources=_COORDS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_rastertoworldcoordy": FnSpec(
@@ -1080,8 +1283,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"x": 64, "y": 64},
         core_fn=lambda ds, a: coords.raster_to_world_y(ds, a["x"], a["y"]),
-        col_fn=lambda t, a: prx.rst_rastertoworldcoordy(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_RasterToWorldCoordY.scala",),
+        col_fn=lambda t, a: rx.rst_rastertoworldcoordy(t, a["x"], a["y"]),
+        sources=_COORDS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_rastertoworldcoord": FnSpec(
@@ -1097,8 +1301,9 @@ REGISTRY: Dict[str, FnSpec] = {
             coords.raster_to_world_x(ds, a["x"], a["y"]),
             coords.raster_to_world_y(ds, a["x"], a["y"]),
         ],
-        col_fn=lambda t, a: prx.rst_rastertoworldcoord(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_RasterToWorldCoord.scala",),
+        col_fn=lambda t, a: rx.rst_rastertoworldcoord(t, a["x"], a["y"]),
+        sources=_COORDS_LIGHT,
+        heavy=False,
         core=False,
     ),
     # world->raster is the INVERSE geotransform. It is exact per-CRS, but a single
@@ -1115,8 +1320,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {"x": -73.985, "y": 40.745},
         core_fn=lambda ds, a: coords.world_to_raster_x(ds, a["x"], a["y"]),
-        col_fn=lambda t, a: prx.rst_worldtorastercoordx(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_WorldToRasterCoordX.scala",),
+        col_fn=lambda t, a: rx.rst_worldtorastercoordx(t, a["x"], a["y"]),
+        sources=_COORDS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1127,7 +1333,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {"x": -73.985, "y": 40.745},
         core_fn=lambda ds, a: coords.world_to_raster_y(ds, a["x"], a["y"]),
-        col_fn=lambda t, a: prx.rst_worldtorastercoordy(t, a["x"], a["y"]),
+        col_fn=lambda t, a: rx.rst_worldtorastercoordy(t, a["x"], a["y"]),
         sources=_COORDS_LIGHT + (_HEAVY + "RST_WorldToRasterCoordY.scala",),
         core=False,
         fingerprint=False,
@@ -1143,8 +1349,9 @@ REGISTRY: Dict[str, FnSpec] = {
             coords.world_to_raster_x(ds, a["x"], a["y"]),
             coords.world_to_raster_y(ds, a["x"], a["y"]),
         ],
-        col_fn=lambda t, a: prx.rst_worldtorastercoord(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_WorldToRasterCoord.scala",),
+        col_fn=lambda t, a: rx.rst_worldtorastercoord(t, a["x"], a["y"]),
+        sources=_COORDS_LIGHT,
+        heavy=False,
         core=False,
         fingerprint=False,
     ),
@@ -1161,12 +1368,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: xyz.render_tile(
             ds, a["z"], a["x"], a["y"], "PNG", 256, "bilinear"
         ),
-        col_fn=lambda t, a: prx.rst_tilexyz(t, a["z"], a["x"], a["y"]),
+        col_fn=lambda t, a: rx.rst_tilexyz(t, a["z"], a["x"], a["y"]),
         sources=_XYZ_LIGHT + (_HEAVY + "web/RST_TileXYZ.scala",),
         core=False,
         fingerprint=False,
     ),
-    # --- map / struct accessors (Task 4): timing-only ---------------------------
+    # --- map / struct accessors: timing-only ---------------------------
     # These return maps (metadata, bandmetadata, histogram), structs/dicts
     # (georeference), CRS/encoding-dependent bytes (boundingbox WKB) or
     # gdalinfo-style JSON (summary). None can be made byte- or value-identical
@@ -1186,10 +1393,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: accessors.metadata(ds),
-        col_fn=lambda t, a: prx.rst_metadata(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_MetaData.scala",),
+        col_fn=lambda t, a: rx.rst_metadata(t),
+        sources=_ACCESSORS_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,
     ),
     "rst_bandmetadata": FnSpec(
         "rst_bandmetadata",
@@ -1199,8 +1407,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # bandmetadata needs a 1-based band index; band 1 exists in every tile.
         core_fn=lambda ds, a: accessors.bandmetadata(ds, 1),
-        col_fn=lambda t, a: prx.rst_bandmetadata(t, 1),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_BandMetaData.scala",),
+        col_fn=lambda t, a: rx.rst_bandmetadata(t, 1),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=False,
         fingerprint=False,
     ),
@@ -1211,8 +1420,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: accessors.georeference(ds),
-        col_fn=lambda t, a: prx.rst_georeference(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_GeoReference.scala",),
+        col_fn=lambda t, a: rx.rst_georeference(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=False,
         fingerprint=False,
     ),
@@ -1223,7 +1433,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: accessors.boundingbox(ds),
-        col_fn=lambda t, a: prx.rst_boundingbox(t),
+        col_fn=lambda t, a: rx.rst_boundingbox(t),
         sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_BoundingBox.scala",),
         core=False,
         fingerprint=False,
@@ -1234,9 +1444,10 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         ("pure-core",),
         {},
-        core_fn=lambda ds, a: accessors.summary(ds),
-        col_fn=lambda t, a: prx.rst_summary(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Summary.scala",),
+        core_fn=lambda ds, a: _engine_json("gbx_rst_summary", {})(ds),
+        col_fn=lambda t, a: rx.rst_summary(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1247,12 +1458,13 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: accessors.histogram(ds),
-        col_fn=lambda t, a: prx.rst_histogram(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "pixel/RST_Histogram.scala",),
+        col_fn=lambda t, a: rx.rst_histogram(t),
+        sources=_ACCESSORS_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,
     ),
-    # --- Task 5: tile-out transforms with scalar / fixed args (13) -----------
+    # --- Tile-out transforms with scalar / fixed args (13) -----------
     # Each returns a raster tile, so the runner fingerprints the output as a
     # raster (same path as terrain). All run both modes and are compared, EXCEPT
     # rst_resample_to_res (see below). Fixed scalar args are identical across the
@@ -1266,27 +1478,24 @@ REGISTRY: Dict[str, FnSpec] = {
         {"band_index": 2},
         min_bands=2,
         core_fn=lambda ds, a: edit.band(ds, a["band_index"]),
-        col_fn=lambda t, a: prx.rst_band(t, a["band_index"]),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Band.scala",),
+        col_fn=lambda t, a: rx.rst_band(t, a["band_index"]),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
-    # rst_threshold (timing-only): the two tiers implement DIFFERENT, documented
-    # output contracts (see the lightweight-tier note in raster-functions.mdx).
-    # The heavyweight binarises via gdal_calc — a SINGLE-band 0/1 mask over band 1.
-    # The lightweight KEEPS each passing pixel's original value and sets failing
-    # pixels to NoData, preserving every input band. On a multi-band tile that
-    # surfaces as a band-count divergence (heavy 1 vs light N) on top of the
-    # value-semantics difference. This is a by-design contract difference, not a
-    # bug, so the cell is TIMED but never fingerprint-compared.
+    # rst_threshold (timing-only): the function has no heavyweight level; the engine runs it on GDAL raster calc.
     "rst_threshold": FnSpec(
         "rst_threshold",
         "gbx_rst_threshold",
         "edit",
         _BOTH,
         {"op": ">", "value": 0.5},
-        core_fn=lambda ds, a: edit.threshold(ds, a["op"], a["value"]),
-        col_fn=lambda t, a: prx.rst_threshold(t, a["op"], a["value"]),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Threshold.scala",),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_threshold", {"op": a["op"], "value": a["value"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_threshold(t, a["op"], a["value"]),
+        sources=_EDIT_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1297,9 +1506,10 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: edit.init_nodata(ds),
-        col_fn=lambda t, a: prx.rst_initnodata(t),
-        sources=_EDIT_LIGHT + (_HEAVY + "RST_InitNoData.scala",),
+        col_fn=lambda t, a: rx.rst_initnodata(t),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_setsrid": FnSpec(
         "rst_setsrid",
@@ -1308,9 +1518,10 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"srid": 4326},
         core_fn=lambda ds, a: edit.set_srid(ds, a["srid"]),
-        col_fn=lambda t, a: prx.rst_setsrid(t, a["srid"]),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetSrid.scala",),
+        col_fn=lambda t, a: rx.rst_setsrid(t, a["srid"]),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- CRS-string ops (Sub-spec R): string companions to the srid ops ---
     "rst_crs": FnSpec(
@@ -1320,8 +1531,9 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: accessors.crs(ds),
-        col_fn=lambda t, a: prx.rst_crs(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Crs.scala",),
+        col_fn=lambda t, a: rx.rst_crs(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_setcrs": FnSpec(
@@ -1332,9 +1544,10 @@ REGISTRY: Dict[str, FnSpec] = {
         {"crs": "EPSG:4326"},
         core_fn=lambda ds, a: edit.set_crs(ds, a["crs"]),
         # F.lit the STRING crs arg (bare str would resolve as a column name).
-        col_fn=lambda t, a: prx.rst_setcrs(t, F.lit(a["crs"])),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetCrs.scala",),
+        col_fn=lambda t, a: rx.rst_setcrs(t, F.lit(a["crs"])),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_transformcrs": FnSpec(
         "rst_transformcrs",
@@ -1347,8 +1560,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         core_fn=lambda ds, a: warp.reproject_to_crs(ds, a["target_crs"]),
         # F.lit the STRING crs arg (bare str would resolve as a column name).
-        col_fn=lambda t, a: prx.rst_transformcrs(t, F.lit(a["target_crs"])),
-        sources=_WARP_LIGHT + (_HEAVY + "RST_TransformCrs.scala",),
+        col_fn=lambda t, a: prx._light_rst_transformcrs(t, F.lit(a["target_crs"])),
+        sources=_WARP_LIGHT,
+        heavy=False,
     ),
     "rst_updatetype": FnSpec(
         "rst_updatetype",
@@ -1360,9 +1574,10 @@ REGISTRY: Dict[str, FnSpec] = {
         # F.lit the STRING arg: prx _col passes bare str through as a column NAME
         # (auto-lit covers only numeric scalars), so an unwrapped "Float64" resolves
         # as a column in spark-path. Numeric args may stay raw.
-        col_fn=lambda t, a: prx.rst_updatetype(t, F.lit(a["new_type"])),
-        sources=_EDIT_LIGHT + (_HEAVY + "RST_UpdateType.scala",),
+        col_fn=lambda t, a: rx.rst_updatetype(t, F.lit(a["new_type"])),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- stretch (stretch.py) ---
     "rst_percentile_stretch": FnSpec(
@@ -1372,9 +1587,10 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"lo_pct": 2.0, "hi_pct": 98.0},
         core_fn=lambda ds, a: stretch.percentile_stretch(ds, a["lo_pct"], a["hi_pct"]),
-        col_fn=lambda t, a: prx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
-        sources=_STRETCH_LIGHT + (_HEAVY + "pixel/RST_PercentileStretch.scala",),
+        col_fn=lambda t, a: rx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
+        sources=_STRETCH_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: its percentile rule and rescale differed from light's
     ),
     # --- features (features.py) ---
     "rst_fillnodata": FnSpec(
@@ -1383,20 +1599,23 @@ REGISTRY: Dict[str, FnSpec] = {
         "features",
         _BOTH,
         {"max_search_dist": 10.0, "smoothing_iter": 0},
-        core_fn=lambda ds, a: features.fill_nodata(
-            ds, a["max_search_dist"], a["smoothing_iter"]
-        ),
-        col_fn=lambda t, a: prx.rst_fillnodata(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_fillnodata",
+            {
+                "max_search_dist": a["max_search_dist"],
+                "smoothing_iter": a["smoothing_iter"],
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_fillnodata(
             t, a["max_search_dist"], a["smoothing_iter"]
         ),
-        sources=_FEATURES_LIGHT + (_HEAVY + "pixel/RST_FillNodata.scala",),
+        sources=_FEATURES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- focal (focal.py) ---
-    # operation="median" is valid on BOTH engines: the heavy KernelFilter accepts
-    # {avg, min, max, median, mode} (NOT "mean" -> "Invalid operation"), and the
-    # light focal.filt accepts {min, max, median, mean}. "median" is the common
-    # value, so the bench args carry it for both. (Timing-only, not compared.)
+    # The light focal.filt accepts {min, max, median, mean}. There is no heavyweight level (its JVM form left a different
+    # NoData mask than light, and was never measured).
     "rst_filter": FnSpec(
         "rst_filter",
         "gbx_rst_filter",
@@ -1405,10 +1624,10 @@ REGISTRY: Dict[str, FnSpec] = {
         {"kernel_size": 3, "operation": "median"},
         core_fn=lambda ds, a: focal.filt(ds, a["kernel_size"], a["operation"]),
         # F.lit the STRING operation arg (kernel_size is numeric -> auto-lit).
-        col_fn=lambda t, a: prx.rst_filter(t, a["kernel_size"], F.lit(a["operation"])),
-        sources=_FOCAL_LIGHT
-        + (_HEAVY + "RST_Filter.scala", _OPS + "KernelFilter.scala", _GDAL_BLOCK),
+        col_fn=lambda t, a: rx.rst_filter(t, a["kernel_size"], F.lit(a["operation"])),
+        sources=_FOCAL_LIGHT,
         core=False,
+        heavy=False,
     ),
     "rst_convolve": FnSpec(
         "rst_convolve",
@@ -1419,12 +1638,12 @@ REGISTRY: Dict[str, FnSpec] = {
         # actual coefficients are hardcoded identically on both engines.
         {"kernel_size": 3},
         core_fn=lambda ds, a: focal.convolve(ds, _CONVOLVE_KERNEL),
-        col_fn=lambda t, a: prx.rst_convolve(
+        col_fn=lambda t, a: rx.rst_convolve(
             t, F.array(*[F.array(*[F.lit(c) for c in row]) for row in _CONVOLVE_KERNEL])
         ),
-        sources=_FOCAL_LIGHT
-        + (_HEAVY + "RST_Convolve.scala", _OPS + "Convolve.scala", _GDAL_BLOCK),
+        sources=_FOCAL_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- format (ops.py / analysis.py) ---
     "rst_asformat": FnSpec(
@@ -1434,9 +1653,10 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"new_format": "GTiff"},
         core_fn=lambda ds, a: ops.as_format(ds, a["new_format"]),
-        col_fn=lambda t, a: prx.rst_asformat(t, a["new_format"]),
-        sources=_OPS_LIGHT + (_HEAVY + "RST_AsFormat.scala",),
+        col_fn=lambda t, a: rx.rst_asformat(t, a["new_format"]),
+        sources=_OPS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_cog_convert": FnSpec(
         "rst_cog_convert",
@@ -1451,24 +1671,26 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: analysis_core.cog_convert(
             ds, a["compression"], a["blocksize"], a["overview_resampling"]
         ),
-        col_fn=lambda t, a: prx.rst_cog_convert(
+        col_fn=lambda t, a: rx.rst_cog_convert(
             t, a["compression"], a["blocksize"], a["overview_resampling"]
         ),
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_CogConvert.scala",),
+        sources=_ANALYSIS_LIGHT,
         core=False,
+        heavy=False,
     ),
-    # --- resample (resample.py) ---
+    # --- resample (the GDAL spec engine) ---
     "rst_resample": FnSpec(
         "rst_resample",
         "gbx_rst_resample",
         "resample",
         _BOTH,
         {"factor": 2.0, "algorithm": "bilinear"},
-        core_fn=lambda ds, a: resample.resample_by_factor(
-            ds, a["factor"], a["algorithm"]
-        ),
-        col_fn=lambda t, a: prx.rst_resample(t, a["factor"], a["algorithm"]),
-        sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_Resample.scala",),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_resample", {"factor": a["factor"], "algorithm": a["algorithm"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_resample(t, a["factor"], a["algorithm"]),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_resample_to_size": FnSpec(
@@ -1477,13 +1699,19 @@ REGISTRY: Dict[str, FnSpec] = {
         "resample",
         _BOTH,
         {"width_px": 128, "height_px": 128, "algorithm": "bilinear"},
-        core_fn=lambda ds, a: resample.resample_to_size(
-            ds, a["width_px"], a["height_px"], a["algorithm"]
-        ),
-        col_fn=lambda t, a: prx.rst_resample_to_size(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_resample_to_size",
+            {
+                "width_px": a["width_px"],
+                "height_px": a["height_px"],
+                "algorithm": a["algorithm"],
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_resample_to_size(
             t, a["width_px"], a["height_px"], a["algorithm"]
         ),
-        sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_ResampleToSize.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # rst_resample_to_res takes an absolute ground resolution in CRS units. A
@@ -1498,33 +1726,33 @@ REGISTRY: Dict[str, FnSpec] = {
         "resample",
         ("pure-core",),
         {"x_res": 5.0, "y_res": 5.0, "algorithm": "bilinear"},
-        core_fn=lambda ds, a: resample.resample_to_res(
-            ds, a["x_res"], a["y_res"], a["algorithm"]
-        ),
-        col_fn=lambda t, a: prx.rst_resample_to_res(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_resample_to_res",
+            {"x_res": a["x_res"], "y_res": a["y_res"], "algorithm": a["algorithm"]},
+        )(ds),
+        col_fn=lambda t, a: rx.rst_resample_to_res(
             t, a["x_res"], a["y_res"], a["algorithm"]
         ),
-        sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_ResampleToRes.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
-    # --- Task 6: tile-out transforms with geometry / expression / band-map /
+    # --- Tile-out transforms with geometry / expression / band-map /
     # function args (10) --------------------------------------------------------
     # SIX are full raster comparisons (both modes): the arguments are CRS- and
     # band-count-independent and the two engines run the *same* algorithm.
-    #   evi, savi      -- band indices + coefficients (same numexpr formula)
+    #   evi, savi      -- band indices + coefficients (same formula)
     #   index          -- formula name + band-map (hardcoded identically; "ndvi")
-    #   mapalgebra     -- single-input expression "A*2" (same numexpr/gdal_calc)
+    #   mapalgebra     -- single-input expression "A*2" (the GDAL engine's muparser)
     #   derivedband    -- same Python VRT pixel-function body, exec'd in-process
     #   proximity      -- value-set + distunits (no geometry; CRS-independent)
     # FOUR are timing-only (pure-core-only, fingerprint suppressed). Reason per
     # function in the constant's comment above:
     #   clip, sample, viewshed -- need an in-extent geometry; no single literal
     #                             is in-extent across the multi-CRS corpus
-    #   viewshed (also)        -- documented xrspatial-vs-GDAL parity divergence
-    #   color_relief           -- needs a color-table file; GDAL DEMProcessing
-    #                             interpolation vs pyrx np.interp diverge
-    # --- band-index (indices.py): full comparison ---
+    #   color_relief           -- the engine's GDAL color-map rounds each channel to a Byte; no JVM form to compare
+    # --- band-index (the GDAL spec engine): full comparison ---
     "rst_evi": FnSpec(
         "rst_evi",
         "gbx_rst_evi",
@@ -1542,17 +1770,19 @@ REGISTRY: Dict[str, FnSpec] = {
             "g": 2.5,
         },
         min_bands=2,
-        core_fn=lambda ds, a: indices.evi(
-            ds,
-            a["red_idx"],
-            a["nir_idx"],
-            a["blue_idx"],
-            l=a["l"],
-            c1=a["c1"],
-            c2=a["c2"],
-            g=a["g"],
-        ),
-        col_fn=lambda t, a: prx.rst_evi(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_evi",
+            {
+                "red_idx": a["red_idx"],
+                "nir_idx": a["nir_idx"],
+                "blue_idx": a["blue_idx"],
+                "l": a["l"],
+                "c1": a["c1"],
+                "c2": a["c2"],
+                "g": a["g"],
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_evi(
             t,
             a["red_idx"],
             a["nir_idx"],
@@ -1562,7 +1792,8 @@ REGISTRY: Dict[str, FnSpec] = {
             a["c2"],
             a["g"],
         ),
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_EVI.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_savi": FnSpec(
@@ -1572,12 +1803,16 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"red_idx": 1, "nir_idx": 2, "l": 0.5},
         min_bands=2,
-        core_fn=lambda ds, a: indices.savi(ds, a["red_idx"], a["nir_idx"], l=a["l"]),
-        col_fn=lambda t, a: prx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_SAVI.scala",),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_savi",
+            {"red_idx": a["red_idx"], "nir_idx": a["nir_idx"], "l": a["l"]},
+        )(ds),
+        col_fn=lambda t, a: rx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
-    # --- generic named-index dispatcher (indices.py): full comparison ---
+    # --- generic named-index dispatcher (the GDAL spec engine): full comparison ---
     # The band-map cannot ride the stringly args map, so index_name + band_map are
     # hardcoded identically here and in the Scala BenchDispatch case (the args
     # dict carries them only for documentation / the language-neutral dump).
@@ -1588,36 +1823,38 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"index_name": _INDEX_NAME, "band_map": _INDEX_BAND_MAP},
         min_bands=2,
-        core_fn=lambda ds, a: indices.index(ds, _INDEX_NAME, _INDEX_BAND_MAP),
-        col_fn=lambda t, a: prx.rst_index(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_index",
+            {"formula_name": _INDEX_NAME, "band_map": _INDEX_BAND_MAP},
+        )(ds),
+        col_fn=lambda t, a: rx.rst_index(
             t,
             _INDEX_NAME,
             F.create_map(
                 *[x for k, v in _INDEX_BAND_MAP.items() for x in (F.lit(k), F.lit(v))]
             ),
         ),
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_Index.scala",),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
-    # --- map algebra (mapalgebra.py): full comparison ---
-    # Single-input "A*2": CRS- and band-count-independent. core consumes bytes
-    # (round-trip the open ds); the column form wraps the single tile in an array.
+    # --- map algebra (the GDAL spec engine, muparser): full comparison ---
+    # Single-input "A*2": CRS- and band-count-independent; the column form wraps the single tile in an array.
     "rst_mapalgebra": FnSpec(
         "rst_mapalgebra",
         "gbx_rst_mapalgebra",
         "format",
         _BOTH,
         {"expr": _MAPALGEBRA_EXPR},
-        core_fn=lambda ds, a: mapalgebra.mapalgebra(
-            [_ds_to_gtiff_bytes(ds)], a["expr"]
-        ),
-        col_fn=lambda t, a: prx.rst_mapalgebra(F.array(t), a["expr"]),
-        sources=_MAPALGEBRA_LIGHT + (_HEAVY + "RST_MapAlgebra.scala",),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_mapalgebra", {"expression": a["expr"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_mapalgebra(F.array(t), a["expr"]),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
-    # --- derived band (derivedband.py): full comparison ---
-    # Both engines exec the SAME Python VRT pixel-function source in-process and
-    # fill out_ar identically, so this is a genuine algorithmic match.
+    # --- derived band (derivedband.py) ---
     "rst_derivedband": FnSpec(
         "rst_derivedband",
         "gbx_rst_derivedband",
@@ -1627,11 +1864,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: derivedband.derivedband(
             ds, _DERIVEDBAND_PYFUNC, _DERIVEDBAND_FUNC_NAME
         ),
-        col_fn=lambda t, a: prx.rst_derivedband(
+        col_fn=lambda t, a: rx.rst_derivedband(
             t, _DERIVEDBAND_PYFUNC, _DERIVEDBAND_FUNC_NAME
         ),
-        sources=_DERIVEDBAND_LIGHT + (_HEAVY + "RST_DerivedBand.scala", _PIXEL_COMBINE),
+        sources=_DERIVEDBAND_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- proximity (analysis.py): full comparison ---
     # No geometry; value-set + distunits are CRS-independent. GDAL ComputeProximity
@@ -1647,8 +1885,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: analysis_core.proximity(
             ds, a["target_values"], a["distunits"], None
         ),
-        col_fn=lambda t, a: prx.rst_proximity(t, a["target_values"], a["distunits"]),
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Proximity.scala",),
+        col_fn=lambda t, a: rx.rst_proximity(t, a["target_values"], a["distunits"]),
+        sources=_ANALYSIS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- clip (edit.py): timing-only ---
@@ -1666,32 +1905,34 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: edit.clip_to_geom(
             ds, _shrunk_bounds_box_wkb(ds), a["cutline_all_touched"]
         ),
-        col_fn=lambda t, a: prx.rst_clip(
+        col_fn=lambda t, a: rx.rst_clip(
             t, F.lit(_CLIP_GEOM_WKB), F.lit(a["cutline_all_touched"])
         ),
-        sources=_EDIT_LIGHT + (_HEAVY + "RST_Clip.scala",),
+        sources=_EDIT_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
-    # --- color relief (terrain.py): timing-only ---
-    # Needs a color-table file path (synthesized on demand) and the heavy GDAL
-    # DEMProcessing interpolation diverges from pyrx np.interp, so not compared.
+    # --- color relief (the GDAL spec engine): timing-only ---
+    # Takes the color table as text; the ramp is a timing placeholder, so it is not compared.
     "rst_color_relief": FnSpec(
         "rst_color_relief",
         "gbx_rst_color_relief",
         "terrain",
         ("pure-core",),
         {},
-        core_fn=lambda ds, a: terrain.color_relief(ds, _color_table_path()),
-        col_fn=lambda t, a: prx.rst_color_relief(t, _color_table_path()),
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_ColorRelief.scala", _DEM_HELPER),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_color_relief", {"color_table": _COLOR_RAMP_TEXT}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_color_relief(t, _COLOR_RAMP_TEXT),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
     # --- viewshed (analysis.py): timing-only ---
-    # Needs an in-extent observer point (none works across the multi-CRS corpus)
-    # AND the binding documents an xrspatial-vs-GDAL parity divergence in the
-    # binary visibility mask. Timing-only on both counts.
+    # Needs an in-extent observer point (none works across the multi-CRS corpus),
+    # so it is timing-only.
     "rst_viewshed": FnSpec(
         "rst_viewshed",
         "gbx_rst_viewshed",
@@ -1700,13 +1941,19 @@ REGISTRY: Dict[str, FnSpec] = {
         {"observer_height": 2.0, "target_height": 1.6},
         # Observer = tile center (in the tile's own CRS) so it is in-extent on
         # every CRS; a fixed (0,0) falls outside the UTM/3857 tile ranges.
-        core_fn=lambda ds, a: analysis_core.viewshed(
-            ds, *_tile_center_xy(ds), a["observer_height"], a["target_height"], None
-        ),
-        col_fn=lambda t, a: prx.rst_viewshed(
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_viewshed",
+            lambda d: {
+                "observer_geom": shapely.geometry.Point(*_tile_center_xy(d)).wkt,
+                "observer_height": a["observer_height"],
+                "target_height": a["target_height"],
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_viewshed(
             t, F.lit(_VIEWSHED_OBSERVER_WKB), a["observer_height"], a["target_height"]
         ),
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Viewshed.scala",),
+        sources=_ANALYSIS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1720,8 +1967,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: ops.sample(ds, _SAMPLE_POINT_WKB),
-        col_fn=lambda t, a: prx.rst_sample(t, F.lit(_SAMPLE_POINT_WKB)),
-        sources=_OPS_LIGHT + (_HEAVY + "pixel/RST_Sample.scala",),
+        col_fn=lambda t, a: rx.rst_sample(t, F.lit(_SAMPLE_POINT_WKB)),
+        sources=_OPS_LIGHT,
+        heavy=False,
         core=False,
         fingerprint=False,
     ),
@@ -1741,10 +1989,11 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda b, a: 1.0 if ops.try_open(b) else 0.0,
-        col_fn=lambda t, a: prx.rst_tryopen(t),
-        sources=_OPS_LIGHT + (_HEAVY + "RST_TryOpen.scala",),
+        col_fn=lambda t, a: rx.rst_tryopen(t),
+        sources=_OPS_LIGHT,
         core=False,
         input_kind="bytes",
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # rst_fromcontent (bytes): build a tile from raster bytes + driver. The
     # comparable output is the decoded raster grid, so core_fn returns the bytes
@@ -1760,7 +2009,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"driver": "GTiff"},
         core_fn=lambda b, a: bytes(b),
         # F.lit the STRING driver arg (else prx _col reads "GTiff" as a column name).
-        col_fn=lambda t, a: prx.rst_fromcontent(t["raster"], F.lit(a["driver"])),
+        col_fn=lambda t, a: rx.rst_fromcontent(t["raster"], F.lit(a["driver"])),
         sources=(_PYRX_SERDE, _HEAVY + "constructor/RST_FromContent.scala"),
         core=False,
         input_kind="bytes",
@@ -1779,7 +2028,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda p, a: Path(p).read_bytes(),
         # pure-core only: the spark-path runner filters this out by modes, so the
         # column form is unused at runtime and kept only for a callable col_fn.
-        col_fn=lambda t, a: prx.rst_fromfile(F.lit("__unused__"), a["driver"]),
+        col_fn=lambda t, a: rx.rst_fromfile(F.lit("__unused__"), a["driver"]),
         # rst_fromfile is LIGHTWEIGHT-ONLY (issue #34): the heavy JVM tier cannot
         # read a FUSE/UC path from an executor, so there is NO heavy RST_FromFile
         # expression (the old constructor/RST_FromFile.scala was removed in
@@ -1802,11 +2051,12 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"levels": [2, 4], "resampling": "average"},
         core_fn=lambda ds, a: ops.build_overviews(ds, a["levels"], a["resampling"]),
-        col_fn=lambda t, a: prx.rst_buildoverviews(
+        col_fn=lambda t, a: rx.rst_buildoverviews(
             t, F.array(*[F.lit(int(x)) for x in a["levels"]]), a["resampling"]
         ),
-        sources=_OPS_LIGHT + (_HEAVY + "pixel/RST_BuildOverviews.scala",),
+        sources=_OPS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: it measured slower than light
         input_kind="tile",
     ),
     # --- bucket C, group C2: subdataset fns (timing-only) ---------------------
@@ -1825,8 +2075,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: accessors.subdatasets(ds),
-        col_fn=lambda t, a: prx.rst_subdatasets(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Subdatasets.scala",),
+        col_fn=lambda t, a: rx.rst_subdatasets(t),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,
         core=False,
         fingerprint=False,
     ),
@@ -1834,9 +2085,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # core RAISES ValueError ("no subdataset named '0'"). That would surface as a
     # status=error row from the runner's per-fn try/catch. To time it WITHOUT a
     # noisy error, the bench core_fn swallows the expected "no subdataset" raise
-    # and returns the empty map (timing-only, fingerprint suppressed). The heavy
-    # RST_GetSubdataset.execute likewise returns null on GTiff; the dispatch
-    # guards the null and emits an empty fingerprint.
+    # and returns the empty map (timing-only, fingerprint suppressed).
     "rst_getsubdataset": FnSpec(
         "rst_getsubdataset",
         "gbx_rst_getsubdataset",
@@ -1844,9 +2093,10 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {"name": "0"},
         core_fn=lambda ds, a: _getsubdataset_timing(ds, a["name"]),
-        col_fn=lambda t, a: prx.rst_getsubdataset(t, a["name"]),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_GetSubdataset.scala",),
+        col_fn=lambda t, a: rx.rst_getsubdataset(t, a["name"]),
+        sources=_ACCESSORS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         fingerprint=False,
     ),
     # --- bucket C, group C3: multi-tile-input functions (3) -------------------
@@ -1876,14 +2126,11 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.frombands_tiles(
             [(i, _ds_to_gtiff_bytes(ds)) for i, ds in enumerate(dss)]
         ),
-        col_fn=lambda arr, a: prx.rst_frombands(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "constructor/RST_FromBands.scala",
-            _OPS + "MergeBands.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_frombands(arr),
+        sources=_AGG_LIGHT,
         core=False,
         input_kind="tile_array",
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_combineavg": FnSpec(
         "rst_combineavg",
@@ -1894,18 +2141,14 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combineavg_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combineavg(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineAvg.scala",
-            _OPS + "CombineAVG.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combineavg(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     # combine family: 6 stats (min/max/median/sum/stddev/count) — same structure as
-    # rst_combineavg; input_kind="tile_array"; sources point at the per-stat
-    # Scala expression + the shared CombineStats ops object.
+    # rst_combineavg; input_kind="tile_array". None has a heavyweight level (it measured slower than light).
     "rst_combinemin": FnSpec(
         "rst_combinemin",
         "gbx_rst_combinemin",
@@ -1915,13 +2158,10 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_min_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinemin(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineMin.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combinemin(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinemax": FnSpec(
@@ -1933,13 +2173,10 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_max_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinemax(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineMax.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combinemax(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinemedian": FnSpec(
@@ -1951,13 +2188,10 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_median_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinemedian(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineMedian.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combinemedian(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinesum": FnSpec(
@@ -1969,13 +2203,10 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_sum_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinesum(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineSum.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combinesum(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinestddev": FnSpec(
@@ -1987,13 +2218,10 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_stddev_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinestddev(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineStddev.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combinestddev(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinecount": FnSpec(
@@ -2005,18 +2233,15 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_count_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinecount(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineCount.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_combinecount(arr),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     # rst_align_to: takes two tiles (source + reference) — no standard input_kind
     # for a two-tile function; fingerprint=False until the runner gains a
-    # two-tile input_kind (Task 18 reconciles).  Sources are declared here.
+    # two-tile input_kind.  Sources are declared here.
     "rst_align_to": FnSpec(
         "rst_align_to",
         "gbx_rst_align_to",
@@ -2026,14 +2251,11 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: agg_core.align_to_tiles(
             _ds_to_gtiff_bytes(ds), _ds_to_gtiff_bytes(ds)
         ),
-        col_fn=lambda t, a: prx.rst_align_to(t, t),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_AlignTo.scala",
-            _OPS + "RasterAlignment.scala",
-        ),
+        col_fn=lambda t, a: rx.rst_align_to(t, t),
+        sources=_AGG_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,
     ),
     "rst_merge": FnSpec(
         "rst_merge",
@@ -2044,14 +2266,11 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.merge_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_merge(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_Merge.scala",
-            _OPS + "MergeRasters.scala",
-        ),
+        col_fn=lambda arr, a: rx.rst_merge(arr),
+        sources=_AGG_LIGHT,
         core=False,
         input_kind="tile_array",
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- bucket C, group C4: tiling fns -> a COLLECTION of tiles (5) ----------
     # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands /
@@ -2074,15 +2293,11 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"size_in_mb": 1},
         core_fn=lambda ds, a: tiling.make_tiles(ds, float(a["size_in_mb"])),
-        col_fn=lambda t, a: prx.rst_maketiles(t, a["size_in_mb"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (
-            _HEAVY + "generators/RST_MakeTiles.scala",
-            _OPS + "BalancedSubdivision.scala",
-            _OPS + "ReTile.scala",
-        ),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_retile": FnSpec(
         "rst_retile",
@@ -2091,11 +2306,11 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"tile_width": 128, "tile_height": 128},
         core_fn=lambda ds, a: tiling.retile(ds, a["tile_width"], a["tile_height"]),
-        col_fn=lambda t, a: prx.rst_retile(t, a["tile_width"], a["tile_height"]),
+        col_fn=lambda t, a: prx._light_rst_retile(t, a["tile_width"], a["tile_height"]),
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (_HEAVY + "generators/RST_ReTile.scala", _OPS + "ReTile.scala"),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,
     ),
     "rst_tooverlappingtiles": FnSpec(
         "rst_tooverlappingtiles",
@@ -2107,17 +2322,11 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: tiling.to_overlapping_tiles(
             ds, a["tile_width"], a["tile_height"], a["overlap"]
         ),
-        col_fn=lambda t, a: prx.rst_tooverlappingtiles(
-            t, a["tile_width"], a["tile_height"], a["overlap"]
-        ),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (
-            _HEAVY + "generators/RST_ToOverlappingTiles.scala",
-            _OPS + "OverlappingTiles.scala",
-            _OPS + "ReTile.scala",
-        ),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_separatebands": FnSpec(
         "rst_separatebands",
@@ -2126,29 +2335,16 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: tiling.separate_bands(ds),
-        col_fn=lambda t, a: prx.rst_separatebands(t),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (
-            _HEAVY + "generators/RST_SeparateBands.scala",
-            _OPS + "SeparateBands.scala",
-        ),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
-    # rst_xyzpyramid is a tile-in / collection-out generator, but every emitted
-    # tile is one rst_tilexyz render — the pyramid just loops RST_TileXYZ.execute
-    # over the intersecting (z,x,y) set. Like rst_tilexyz, the rendered bytes are
-    # render-engine-specific: the heavyweight pipes raw source values through
-    # gdal_translate -of PNG, while the lightweight tier emits a rescaled RGBA
-    # web-map tile via rio-tiler/PIL. The slippy-map / web-mercator convention
-    # (this whole section is "Web-Mercator Tile Output") makes the RGBA display
-    # tile the canonical output, so the lightweight render is the correct one;
-    # the heavy gdal_translate path is non-canonical (deferred Scala follow-up:
-    # heavy RST_TileXYZ should rescale to RGBA before encoding). Either way the
-    # two stacks cannot be made pooled-pixel-identical, so — exactly as
-    # rst_tilexyz already is — this runs pure-core-only with its fingerprint
-    # suppressed. The intersecting tile COUNT already agrees across tiers; the
-    # render bytes are timed but never compared.
+    # rst_xyzpyramid is a tile-in / collection-out generator: every emitted tile is
+    # one rst_tilexyz render over the intersecting (z,x,y) set. Like rst_tilexyz,
+    # the rendered bytes are render-engine-specific, so it runs pure-core-only with
+    # its fingerprint suppressed: the render bytes are timed but never compared.
     "rst_xyzpyramid": FnSpec(
         "rst_xyzpyramid",
         "gbx_rst_xyzpyramid",
@@ -2165,15 +2361,11 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             d["bytes"] for d in xyz.pyramid(ds, a["min_z"], a["max_z"])
         ],
-        col_fn=lambda t, a: prx.rst_xyzpyramid(t, a["min_z"], a["max_z"]),
-        sources=_XYZ_LIGHT
-        + (
-            _HEAVY + "web/RST_XYZPyramid.scala",
-            _HEAVY + "web/RST_TileXYZ.scala",
-            "src/main/scala/com/databricks/labs/gbx/rasterx/tile/TileMath.scala",
-        ),
+        col_fn=_lateral_only,  # a table function with no spark-path leg: kept callable, and naming the cause if called
+        sources=_XYZ_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- bucket B, group B-grid: DGGS functions (11) --------------------------
     # rst_h3_tessellate + the 10 rst_{h3,quadbin}_rastertogrid{avg,count,max,
@@ -2205,16 +2397,41 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"resolution": 7},
         core_fn=lambda ds, a: [tessellate.tessellate_h3(ds, a["resolution"])],
-        col_fn=lambda t, a: prx.rst_h3_tessellate(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TESSELLATE_LIGHT
-        + (
-            _HEAVY + "generators/RST_H3_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_TESSELLATE_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
+    ),
+    # The default assignment (centroid + complete coverage) as its own case: the
+    # entry above times covering in pure-core. Same drain + id-only fingerprint;
+    # the args ride positionally into the LATERAL call in spark-path, and the heavy
+    # dispatch (BenchDispatch "rst_h3_tessellate_centroid") uses the same values.
+    "rst_h3_tessellate_centroid": FnSpec(
+        "rst_h3_tessellate_centroid",
+        "gbx_rst_h3_tessellate",
+        "dggs",
+        _BOTH,
+        {"resolution": 7, "assignment": "centroid", "coverage": "complete"},
+        core_fn=lambda ds, a: [
+            list(
+                tessellate.iter_tessellate(
+                    ds,
+                    a["resolution"],
+                    "h3",
+                    mode=a["assignment"],
+                    coverage=a["coverage"],
+                )
+            )
+        ],
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
+        fingerprint_kind="dggs_grid",
+        udtf=True,
+        sources=_TESSELLATE_LIGHT + (_GRIDX + "H3.scala",),
+        core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
+        variant_of="rst_h3_tessellate",
     ),
     # --- H3 raster->grid aggregates (gridagg.py): {avg,count,max,median,min} ---
     "rst_h3_rastertogridavg": FnSpec(
@@ -2226,16 +2443,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "avg", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridavg(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridAvg.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridcount": FnSpec(
         "rst_h3_rastertogridcount",
@@ -2246,16 +2459,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "count", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridcount(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridCount.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridmax": FnSpec(
         "rst_h3_rastertogridmax",
@@ -2266,16 +2475,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "max", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridmax(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridMax.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridmedian": FnSpec(
         "rst_h3_rastertogridmedian",
@@ -2291,16 +2496,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridmedian(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridMedian.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridmin": FnSpec(
         "rst_h3_rastertogridmin",
@@ -2311,16 +2512,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "min", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridmin(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridMin.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridsum": FnSpec(
         "rst_h3_rastertogridsum",
@@ -2331,16 +2528,12 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "sum", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridsum(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridSum.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridvariance": FnSpec(
         "rst_h3_rastertogridvariance",
@@ -2356,16 +2549,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridvariance(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridVariance.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridstddev": FnSpec(
         "rst_h3_rastertogridstddev",
@@ -2381,16 +2570,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridstddev(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_H3_RasterToGridStddev.scala",
-            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     # --- quadbin raster->grid aggregates (gridagg.py) -------------------------
     "rst_quadbin_rastertogridavg": FnSpec(
@@ -2407,16 +2592,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridavg(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridAvg.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridcount": FnSpec(
         "rst_quadbin_rastertogridcount",
@@ -2432,16 +2613,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridcount(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridCount.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridmax": FnSpec(
         "rst_quadbin_rastertogridmax",
@@ -2457,16 +2634,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridmax(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridMax.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridmedian": FnSpec(
         "rst_quadbin_rastertogridmedian",
@@ -2482,16 +2655,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridmedian(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridMedian.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridmin": FnSpec(
         "rst_quadbin_rastertogridmin",
@@ -2507,16 +2676,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridmin(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridMin.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridsum": FnSpec(
         "rst_quadbin_rastertogridsum",
@@ -2532,16 +2697,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridsum(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridSum.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridvariance": FnSpec(
         "rst_quadbin_rastertogridvariance",
@@ -2557,16 +2718,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridvariance(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridVariance.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridstddev": FnSpec(
         "rst_quadbin_rastertogridstddev",
@@ -2582,16 +2739,12 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridstddev(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Quadbin_RasterToGridStddev.scala",
-            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
-            _GRIDX + "Quadbin.scala",
-        ),
+        sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     # --- BNG raster->grid aggregates (gridagg.py): {avg,count,max,median,min} --
     # BNG cell ids are OS grid reference STRINGS (e.g. "TQ3080"), NOT Longs, so
@@ -2614,18 +2767,17 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "avg", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridavg(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridAvg.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridcount": FnSpec(
         "rst_bng_rastertogridcount",
@@ -2641,18 +2793,17 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridcount(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridCount.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridmax": FnSpec(
         "rst_bng_rastertogridmax",
@@ -2663,18 +2814,17 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "max", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridmax(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridMax.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridmedian": FnSpec(
         "rst_bng_rastertogridmedian",
@@ -2690,18 +2840,17 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridmedian(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridMedian.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridmin": FnSpec(
         "rst_bng_rastertogridmin",
@@ -2712,18 +2861,17 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "min", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridmin(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridMin.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridsum": FnSpec(
         "rst_bng_rastertogridsum",
@@ -2734,18 +2882,17 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "sum", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridsum(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridSum.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridvariance": FnSpec(
         "rst_bng_rastertogridvariance",
@@ -2761,18 +2908,17 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridvariance(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridVariance.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridstddev": FnSpec(
         "rst_bng_rastertogridstddev",
@@ -2788,18 +2934,17 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridstddev(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
-            _HEAVY + "grid/RST_BNG_RasterToGridStddev.scala",
-            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     # --- quadbin + BNG tessellation (tessellate.py): one tile per overlapping cell
     # Mirror rst_h3_tessellate: the core_fn wraps the FLAT list of (cellid, bytes)
@@ -2807,7 +2952,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # the tuples; the bytes carry no measure, so the fingerprint is count + hash
     # only (empty agg). quadbin ids are Longs (dggs_grid); BNG ids are STRINGS
     # (dggs_grid_str). BNG tessellate reprojects the tile to EPSG:27700 internally
-    # (timing includes that warp), like the heavy tessellateBngIter.
+    # (timing includes that warp). The BNG tessellate has no heavyweight level (it measured no faster than light).
     "rst_quadbin_tessellate": FnSpec(
         "rst_quadbin_tessellate",
         "gbx_rst_quadbin_tessellate",
@@ -2817,17 +2962,16 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             list(tessellate.iter_tessellate_quadbin(ds, a["resolution"]))
         ],
-        col_fn=lambda t, a: prx.rst_quadbin_tessellate(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
         + (
             _QUADBIN_LIB,
-            _HEAVY + "generators/RST_Quadbin_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
             _GRIDX + "Quadbin.scala",
         ),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_bng_tessellate": FnSpec(
         "rst_bng_tessellate",
@@ -2838,18 +2982,13 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             list(tessellate.iter_tessellate_bng(ds, a["resolution"]))
         ],
-        col_fn=lambda t, a: prx.rst_bng_tessellate(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TESSELLATE_LIGHT
-        + (
-            _BNG_LIB,
-            _HEAVY + "generators/RST_BNG_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _GRIDX + "BNG.scala",
-        ),
+        sources=_TESSELLATE_LIGHT + (_BNG_LIB,),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     # --- bucket B, group B-vec: vector-out functions (2) ----------------------
     # rst_contour (contour LINES) + rst_polygonize (POLYGONS) emit a set of
@@ -2864,8 +3003,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # ContourGenerateEx FIXED_LEVELS path), so the bench uses explicit fixed
     # levels [0.2, 0.4, 0.6, 0.8] -- the float32 corpus band is ~[0, 1], so
     # these span its value range and trace a handful of contour LineStrings.
-    # polygonize rides band 1 + connectedness 4 (the heavy RST_Polygonize
-    # builder's defaults: case 1 => Literal(1), Literal(4)). The contour
+    # polygonize rides band 1 + connectedness 4 (its defaults). The contour
     # `interval`/`base`/`attr_field` ride the binding defaults (0.0/0.0/"elev");
     # with non-empty levels `interval`/`base` are ignored on both engines.
     "rst_contour": FnSpec(
@@ -2874,8 +3012,16 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         _BOTH,
         {"levels": [0.2, 0.4, 0.6, 0.8]},
-        core_fn=lambda ds, a: analysis_core.contour(ds, a["levels"], 0.0, 0.0, "elev"),
-        col_fn=lambda t, a: prx.rst_contour(
+        core_fn=lambda ds, a: _engine_features(
+            "gbx_rst_contour",
+            {
+                "levels": a["levels"],
+                "interval": 0.0,
+                "base": 0.0,
+                "attr_field": "elev",
+            },
+        )(ds),
+        col_fn=lambda t, a: rx.rst_contour(
             t, F.array(*[F.lit(float(v)) for v in a["levels"]])
         ),
         fingerprint_kind="vector",
@@ -2890,7 +3036,8 @@ REGISTRY: Dict[str, FnSpec] = {
         # difference, not a parity bug -- a 2% per-fn tol absorbs it without
         # loosening the strict global tol for any other function.
         rel_tol=0.02,
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Contour.scala",),
+        sources=_ANALYSIS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_polygonize": FnSpec(
@@ -2899,16 +3046,18 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         _BOTH,
         {"band": 1, "connectedness": 4},
-        core_fn=lambda ds, a: features.polygonize(ds, a["band"], a["connectedness"]),
-        col_fn=lambda t, a: prx.rst_polygonize(
-            t, F.lit(a["band"]), F.lit(a["connectedness"])
-        ),
+        core_fn=lambda ds, a: _engine_features(
+            "gbx_rst_polygonize",
+            {"band": a["band"], "connectedness": a["connectedness"]},
+        )(ds),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         # Reads every pixel to vectorize and emits geometry rows, not an output tile:
         # the disposition sampler finds no tile-struct column, so we pin it explicitly.
         virtual_disposition="materialized",
         fingerprint_kind="vector",
-        sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Polygonize.scala",),
+        sources=_FEATURES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- bucket D: geometry-in constructors (3) -------------------------------
@@ -2938,7 +3087,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # spark-path is mode-filtered out (geometry-in, pure-core only); the col_fn
         # is here only for the FnSpec contract (callable). The static box / value
         # are unused at runtime.
-        col_fn=lambda t, a: prx.rst_rasterize(
+        col_fn=lambda t, a: rx.rst_rasterize(
             F.lit(b""),
             F.lit(0.0),
             F.lit(0.0),
@@ -2950,8 +3099,9 @@ REGISTRY: Dict[str, FnSpec] = {
             F.lit(4326),
         ),
         input_kind="geometry",
-        sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Rasterize.scala",),
+        sources=_FEATURES_LIGHT,
         core=False,
+        heavy=False,
     ),
     # max_pts is a LARGE sentinel (>= any corpus point count) so the lightweight
     # IDW uses ALL points -- NOT a nearest-k subset. This is required for parity:
@@ -2977,7 +3127,7 @@ REGISTRY: Dict[str, FnSpec] = {
             power=a["power"],
             max_pts=a["max_pts"],
         ),
-        col_fn=lambda t, a: prx.rst_gridfrompoints(
+        col_fn=lambda t, a: rx.rst_gridfrompoints(
             F.array(),
             F.array(),
             F.lit(0.0),
@@ -2991,8 +3141,9 @@ REGISTRY: Dict[str, FnSpec] = {
             a["max_pts"],
         ),
         input_kind="geometry",
-        sources=_TIN_LIGHT + (_HEAVY + "grid/RST_GridFromPoints.scala",),
+        sources=_TIN_LIGHT,
         core=False,
+        heavy=False,
     ),
     "rst_dtmfromgeoms": FnSpec(
         "rst_dtmfromgeoms",
@@ -3008,7 +3159,7 @@ REGISTRY: Dict[str, FnSpec] = {
             *_tile_extent_size_srid(ds),
             no_data=a["no_data"],
         ),
-        col_fn=lambda t, a: prx.rst_dtmfromgeoms(
+        col_fn=lambda t, a: rx.rst_dtmfromgeoms(
             F.array(),
             F.array(),
             F.lit(0.0),
@@ -3023,8 +3174,9 @@ REGISTRY: Dict[str, FnSpec] = {
             a["no_data"],
         ),
         input_kind="geometry",
-        sources=_TIN_LIGHT + (_HEAVY + "RST_DTMFromGeoms.scala",),
+        sources=_TIN_LIGHT,
         core=False,
+        heavy=False,
     ),
     # --- bucket A: the 7 *_agg aggregators (Spark groupBy aggregate harness) ----
     # Each reduces a GROUP of rows to ONE output tile via a real Spark
@@ -3061,17 +3213,12 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn receives the tile struct column; the harness wires the groupBy.
-        col_fn=lambda t, a: prx.rst_combineavg_agg(t),
+        col_fn=lambda t, a: prx._light_rst_combineavg_agg(t),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="tile_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "RST_CombineAvg.scala",
-            _HEAVY + "agg/RST_CombineAvgAgg.scala",
-            _OPS + "CombineAVG.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_merge_agg": FnSpec(
         "rst_merge_agg",
@@ -3079,17 +3226,12 @@ REGISTRY: Dict[str, FnSpec] = {
         "format",
         ("spark-path",),
         {},
-        col_fn=lambda t, a: prx.rst_merge_agg(t),
+        col_fn=lambda t, a: prx._light_rst_merge_agg(t),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "RST_Merge.scala",
-            _HEAVY + "agg/RST_MergeAgg.scala",
-            _OPS + "MergeRasters.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,
     ),
     "rst_frombands_agg": FnSpec(
         "rst_frombands_agg",
@@ -3098,17 +3240,12 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn takes (tile, band_index); the harness adds the band_index column.
-        col_fn=lambda t, a, bi: prx.rst_frombands_agg(t, bi),
+        col_fn=lambda t, a, bi: prx._light_rst_frombands_agg(t, bi),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "constructor/RST_FromBands.scala",
-            _HEAVY + "agg/RST_FromBandsAgg.scala",
-            _OPS + "MergeBands.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_derivedband_agg": FnSpec(
         "rst_derivedband_agg",
@@ -3118,19 +3255,14 @@ REGISTRY: Dict[str, FnSpec] = {
         # the fixed mean-bands pyfunc (same body the non-agg rst_derivedband rides),
         # hardcoded identically here and in the Scala dispatch.
         {"python_func": _DERIVEDBAND_PYFUNC, "func_name": _DERIVEDBAND_FUNC_NAME},
-        col_fn=lambda t, a: prx.rst_derivedband_agg(
+        col_fn=lambda t, a: prx._light_rst_derivedband_agg(
             t, a["python_func"], a["func_name"]
         ),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
-        sources=_DERIVEDBAND_LIGHT
-        + _AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "RST_DerivedBand.scala",
-            _HEAVY + "agg/RST_DerivedBandAgg.scala",
-        ),
+        sources=_DERIVEDBAND_LIGHT + _AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_rasterize_agg": FnSpec(
         "rst_rasterize_agg",
@@ -3140,18 +3272,14 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # col_fn takes (geom_wkb, value, xmin, ymin, xmax, ymax, w, h, srid); the
         # harness supplies the geometry columns + the per-group extent constants.
-        col_fn=lambda g, v, ext, a: prx.rst_rasterize_agg(
+        col_fn=lambda g, v, ext, a: prx._light_rst_rasterize_agg(
             g, v, ext[0], ext[1], ext[2], ext[3], ext[4], ext[5], ext[6]
         ),
         core_fn=lambda t, a: t,
         input_kind="geometry_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "vector/RST_Rasterize.scala",
-            _HEAVY + "agg/RST_RasterizeAgg.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # max_pts is the same large sentinel as the non-agg rst_gridfrompoints (see the
     # comment there): heavy gdal_grid ``invdist`` with no radius uses ALL points, so
@@ -3163,7 +3291,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"power": 2.0, "max_pts": 1000000},
-        col_fn=lambda g, v, ext, a: prx.rst_gridfrompoints_agg(
+        col_fn=lambda g, v, ext, a: prx._light_rst_gridfrompoints_agg(
             g,
             v,
             ext[0],
@@ -3178,13 +3306,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,
         input_kind="geometry_aggregate",
-        sources=_TIN_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "grid/RST_GridFromPoints.scala",
-            _HEAVY + "grid/RST_GridFromPointsAgg.scala",
-        ),
+        sources=_TIN_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,
     ),
     "rst_dtmfromgeoms_agg": FnSpec(
         "rst_dtmfromgeoms_agg",
@@ -3194,7 +3318,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # breaklines NULL on both tiers; tolerances 0.0 (scipy Delaunay is
         # unconstrained, so tolerances have no analogue -- mirrored heavy as 0.0).
         {"merge_tolerance": 0.0, "snap_tolerance": 0.0, "no_data": -9999.0},
-        col_fn=lambda g, v, ext, a: prx.rst_dtmfromgeoms_agg(
+        col_fn=lambda g, v, ext, a: prx._light_rst_dtmfromgeoms_agg(
             g,
             F.lit(None).cast("array<binary>"),
             a["merge_tolerance"],
@@ -3210,13 +3334,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,
         input_kind="geometry_aggregate",
-        sources=_TIN_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "RST_DTMFromGeoms.scala",
-            _HEAVY + "RST_DTMFromGeomsAgg.scala",
-        ),
+        sources=_TIN_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,
     ),
     # rst_h3_rasterize_agg: a GRID aggregator -- rows of (cellid LONG, value
     # DOUBLE) grouped -> one GTiff tile per group, burning each H3 cell's centroid
@@ -3227,8 +3347,11 @@ REGISTRY: Dict[str, FnSpec] = {
     # set onto the SAME canvas, so the consistency fingerprint is cross-tier
     # comparable (the masks match exactly -- see test_h3_rasterize_parity.py). The
     # cell recipe + grid constants are mirrored EXACTLY in BenchDispatch.scala.
-    # value=None -> presence mask (burns 1.0); mode "centroids"; kring_pad 1 (the
-    # grid was snapped with kring_pad=1, so the explicit extent already covers it).
+    # value OMITTED (value=None below, an untyped NULL) -> presence mask (burns 1.0);
+    # mode "centroids"; kring_pad 1 (the grid was snapped with kring_pad=1, so the
+    # explicit extent already covers it). The streamed `value` column is NOT passed:
+    # a typed all-null DOUBLE column is data to the light tier (it burns NaN), only
+    # an omitted value is the mask.
     "rst_h3_rasterize_agg": FnSpec(
         "rst_h3_rasterize_agg",
         "gbx_rst_h3_rasterize_agg",
@@ -3241,11 +3364,12 @@ REGISTRY: Dict[str, FnSpec] = {
             "kring_pad": _H3RAGG_KRING_PAD,
         },
         # col_fn takes (cellid_col, value_col, args); the harness streams the
-        # (cellid, value) rows and the explicit grid rides in args. value=None ->
-        # presence mask (1.0). Grid passed explicitly (NOT auto-derived per tier).
-        col_fn=lambda cid, v, a: prx.rst_h3_rasterize_agg(
+        # (cellid, value) rows and the explicit grid rides in args. The value is
+        # passed OMITTED (not `v`, a typed all-null column) -> presence mask (1.0).
+        # Grid passed explicitly (NOT auto-derived per tier).
+        col_fn=lambda cid, v, a: prx._light_rst_h3_rasterize_agg(
             cid,
-            value=v,
+            value=None,
             out_srid=F.lit(a["grid"][6]),
             pixel_size=F.lit(a["pixel_size"]),
             xmin=F.lit(a["grid"][0]),
@@ -3260,9 +3384,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="h3_aggregate",
         # Float burn order can differ across tiers, but the burn is a discrete LUT
-        # lookup (last-wins on a canonical (cellId, value) sort, identical both
-        # tiers), so the masks/values are exact -- keep the global tol. Loosen only
-        # if the cluster run shows a near-miss.
+        # lookup (a repeated cell burns its largest value, identical both tiers),
+        # so the masks/values are exact -- keep the global tol. Loosen only if the
+        # cluster run shows a near-miss.
         sources=_CELLRASTER_LIGHT
         + (
             _PYRX_SERDE,
@@ -3276,9 +3400,10 @@ REGISTRY: Dict[str, FnSpec] = {
     # streams (cellid LONG, value DOUBLE) rows from the fixed deterministic cell
     # set (quadbin_rasterize_cells) and uses the 2-arg overload that AUTO-DERIVES
     # the 4326 grid from that cell set -- deterministic given the fixed set, so the
-    # burn is reproducible and cross-tier comparable. value=None -> presence mask
-    # (1.0). Rides input_kind == "grid_aggregate" (the harness streams the LONG
-    # cell rows). Cell recipe mirrored EXACTLY in BenchDispatch.scala.
+    # burn is reproducible and cross-tier comparable. value OMITTED -> presence mask
+    # (1.0), not the streamed all-null column. Rides input_kind == "grid_aggregate"
+    # (the harness streams the LONG cell rows). Cell recipe mirrored EXACTLY in
+    # BenchDispatch.scala.
     "rst_quadbin_rasterize_agg": FnSpec(
         "rst_quadbin_rasterize_agg",
         "gbx_rst_quadbin_rasterize_agg",
@@ -3286,8 +3411,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn takes (cellid_col, value_col, args); 2-arg overload auto-derives
-        # the grid from the streamed cell set (NOT an explicit grid like H3).
-        col_fn=lambda cid, v, a: prx.rst_quadbin_rasterize_agg(cid, value=v),
+        # the grid from the streamed cell set (NOT an explicit grid like H3). The
+        # value is omitted (the presence mask), not the streamed all-null column.
+        col_fn=lambda cid, v, a: prx._light_rst_quadbin_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3303,7 +3429,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # DOUBLE) rows from the fixed deterministic BNG cell set (bng_rasterize_cells);
     # cellid is an OS grid reference STRING (not a Long). The 2-arg overload
     # auto-derives the 27700-native grid from the cell set (srid forced to 27700).
-    # value=None -> presence mask (1.0). Rides input_kind == "grid_aggregate" (the
+    # value OMITTED -> presence mask (1.0). Rides input_kind == "grid_aggregate" (the
     # harness streams STRING cell rows for BNG). The consistency fingerprint is a
     # raster (the burned tile), so no dggs_grid_str is needed here -- only the
     # rastertogrid/tessellate fns emit string cell-id fingerprints. Cell recipe
@@ -3314,7 +3440,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_bng_rasterize_agg(cid, value=v),
+        col_fn=lambda cid, v, a: prx._light_rst_bng_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3326,7 +3452,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core=False,
     ),
-    # --- Custom-grid raster functions (Task 8, Stage 3) ---
+    # --- Custom-grid raster functions ---
     # The 10 custom-grid raster functions: 8 rastertogrid aggs, tessellate, and
     # rasterize_agg.  These require a custom-grid struct argument (from
     # gbx_custom_grid(...)) that the bench runner's udtf-LATERAL SQL renderer
@@ -3335,7 +3461,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # simple scalars (int/float/str/bool).  The FnSpecs are registered here with
     # their correct ``sources`` tuples (for change-aware benchmarking) and
     # ``fingerprint=False`` (timing-only; no cross-engine comparison) until the
-    # bench framework is extended to support struct-literal grid arguments (Task 18).
+    # bench framework is extended to support struct-literal grid arguments.
     # The ``col_fn`` uses prx.rst_custom_rastertogrid* which raises NotImplementedError
     # (correct: these are UDTF-only); the ``core_fn`` placeholder is never invoked
     # because core=False.
@@ -3346,15 +3472,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},  # resolution only; grid struct not yet bench-renderable
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridavg(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,  # grid struct arg not yet supported in _udtf_lateral_sql
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridcount": FnSpec(
@@ -3364,15 +3486,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridcount(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridmax": FnSpec(
@@ -3382,15 +3500,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridmax(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridmin": FnSpec(
@@ -3400,15 +3514,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridmin(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridmedian": FnSpec(
@@ -3418,15 +3528,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridmedian(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridsum": FnSpec(
@@ -3436,15 +3542,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridsum(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridvariance": FnSpec(
@@ -3454,17 +3556,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridvariance(
-            t, None, a["resolution"]
-        ),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_rastertogridstddev": FnSpec(
@@ -3474,15 +3570,11 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridstddev(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_GRIDAGG_LIGHT
-        + (
-            _HEAVY + "grid/RST_Custom_RasterToGrid.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_GRIDAGG_LIGHT + (_PYGX + "_custom.py",),
         core=False,
     ),
     "rst_custom_tessellate": FnSpec(
@@ -3492,31 +3584,29 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_tessellate(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_TESSELLATE_LIGHT
-        + (
-            _HEAVY + "generators/RST_Custom_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_TESSELLATE_LIGHT + (_PYGX + "_custom.py",),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # rst_custom_rasterize_agg: like rst_bng_rasterize_agg/rst_quadbin_rasterize_agg,
-    # a GRID aggregator that needs a custom-grid struct.  The col_fn uses the Python
-    # API (prx.rst_custom_rasterize_agg) which requires both cellid and grid struct
-    # columns; the bench harness's grid_aggregate input_kind only streams cellid rows.
-    # Registered with fingerprint=False (timing-only) until the bench input harness
-    # is extended to carry the grid struct column (Task 18).
+    # a GRID aggregator that needs a custom-grid struct.  The col_fn passes the
+    # fixed grid (custom_grid_column) as a struct literal and the value OMITTED (the
+    # presence mask, like h3/quadbin/bng); the harness streams the custom cell set
+    # (custom_rasterize_cells).  fingerprint=False (timing-only): the heavyweight
+    # BenchDispatch has no custom-grid branch to compare against.
     "rst_custom_rasterize_agg": FnSpec(
         "rst_custom_rasterize_agg",
         "gbx_rst_custom_rasterize_agg",
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_custom_rasterize_agg(cid, None, value=v),
+        col_fn=lambda cid, v, a: prx._light_rst_custom_rasterize_agg(
+            cid, custom_grid_column(), value=None
+        ),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint=False,
@@ -3538,7 +3628,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # deterministic input), so they are compared through the dggs cell-set
     # fingerprint (cell count + sorted cell-id hash + order-independent agg over
     # filled values) -- NOT the raster fingerprint. Cross-tier cell-set identity
-    # is proven by the Task-10 cellfill parity tests. They ride input_kind ==
+    # is proven by the cellfill parity tests. They ride input_kind ==
     # "grid_aggregate" (the harness streams the fixed (cellid, value) corpus,
     # which CONTAINS NULLs so the fill does real work -- see cellfill_cells above)
     # and are spark-path-only (grouped UDAF; no single-row pure-core analogue).
@@ -3552,7 +3642,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.h3_cellfill(cid, v),
+        col_fn=lambda cid, v, a: pgx._light_h3_cellfill(cid, v),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         fingerprint_kind="cellfill",
@@ -3570,7 +3660,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.quadbin_cellfill(cid, v),
+        col_fn=lambda cid, v, a: pgx._light_quadbin_cellfill(cid, v),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint_kind="cellfill",
@@ -3578,7 +3668,6 @@ REGISTRY: Dict[str, FnSpec] = {
         + _CELLFILL_CORE_HEAVY
         + (
             _QUADBIN_LIB,
-            _GRIDX_ROOT + "quadbin/Quadbin_CellFill.scala",
             _GRIDX + "Quadbin.scala",
         ),
         core=False,
@@ -3589,7 +3678,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.bng_cellfill(cid, v),
+        col_fn=lambda cid, v, a: pgx._light_bng_cellfill(cid, v),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint_kind="cellfill_str",
@@ -3608,14 +3697,14 @@ REGISTRY: Dict[str, FnSpec] = {
     # cellid + value columns -- same limitation as the custom raster aggregators).
     # The grid struct is passed as F.lit(None) so the col_fn is callable for the
     # FnSpec contract and timing leg; it is never fingerprint-compared. Full-parity
-    # awaits the bench framework carrying a struct-literal grid column (Task 18).
+    # awaits the bench framework carrying a struct-literal grid column.
     "custom_cellfill": FnSpec(
         "custom_cellfill",
         "gbx_custom_cellfill",
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.custom_cellfill(cid, v, F.lit(None)),
+        col_fn=lambda cid, v, a: pgx._light_custom_cellfill(cid, v, F.lit(None)),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint=False,  # grid struct arg not yet streamable by grid_aggregate
@@ -3653,7 +3742,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"layer_name": "features"},
-        col_fn=lambda g, v, ext, a: pyvx.st_asmvt(
+        col_fn=lambda g, v, ext, a: pyvx._light_st_asmvt(
             g, F.lit(None), F.lit(a["layer_name"])
         ),
         core_fn=lambda ds, a: None,  # spark-path only
@@ -3661,7 +3750,8 @@ REGISTRY: Dict[str, FnSpec] = {
         fingerprint=False,
         input_kind="geometry_aggregate",
         geometry_set="srid_4326",
-        sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvt.scala",),
+        sources=_PYVX_MVT_LIGHT,
+        heavy=False,
     ),
     "st_legacyaswkb": FnSpec(
         "st_legacyaswkb",
@@ -3669,7 +3759,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_legacyaswkb(col),
+        col_fn=lambda col, a: vx.st_legacyaswkb(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3686,12 +3776,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_triangulate(col),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only (UDTF)
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py", _VECTORX + "ST_Triangulate.scala"),
+        sources=(_PYVX + "_tin.py",)
+        + _TIN_CONFORMING
+        + (_VECTORX + "ST_Triangulate.scala",),
     ),
     "st_interpolateelevationgeom": FnSpec(
         "st_interpolateelevationgeom",
@@ -3699,14 +3791,12 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_interpolateelevationgeom(
-            col, F.lit(None)
-        ),  # Placeholder points
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationGeom.scala"),
+        sources=(_PYVX + "_tin.py",) + _TIN_CONFORMING,
     ),
     "st_interpolateelevationbbox": FnSpec(
         "st_interpolateelevationbbox",
@@ -3714,14 +3804,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_interpolateelevationbbox(
-            col, F.lit(None)
-        ),  # Placeholder points
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationBBox.scala"),
+        sources=(_PYVX + "_tin.py",)
+        + _TIN_CONFORMING
+        + (_VECTORX + "ST_InterpolateElevationBBox.scala",),
     ),
     # 16 new vector function benchmarks: 1 heavy+light (asmvt_pyramid), 15 light-only
     # st_asmvt_pyramid is a per-feature MVT tiling UDTF (one geometry -> many
@@ -3737,14 +3827,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"attrs": None, "min_z": 0, "max_z": 5, "layer_name": "features"},
-        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,
         core=False,
         fingerprint=False,
         input_kind="geometry",
         geometry_set="srid_4326",
         udtf=True,
-        sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvtPyramid.scala",),
+        sources=_PYVX_MVT_LIGHT,
     ),
     # --- CRS Functions (Light-Only) ---
     "st_crs": FnSpec(
@@ -3754,13 +3844,13 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),  # Spark-path only; lightweight accessor
         {},
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
-        col_fn=lambda col, a: pyvx.st_crs(col),
+        col_fn=lambda col, a: vx.st_crs(col),
         core=False,
         fingerprint=False,  # Timing-only
         input_kind="geometry_scalar",
         geometry_set="srid_4326",
         virtual_disposition="deferred",  # Header-only, no pixel read
-        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_Crs.scala",),
+        sources=_PYVX_CRS_LIGHT,
     ),
     "st_setcrs": FnSpec(
         "st_setcrs",
@@ -3769,13 +3859,13 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"srid": 4326},  # Default WGS84
         core_fn=lambda col, a: None,  # Placeholder for spark-path only
-        col_fn=lambda col, a: pyvx.st_setcrs(col, F.lit(a["srid"])),
+        col_fn=lambda col, a: vx.st_setcrs(col, F.lit(a["srid"])),
         core=False,
         fingerprint=True,
         input_kind="geometry_scalar",
         geometry_set="srid_4326",
         virtual_disposition="deferred",  # Header edit only
-        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_SetCrs.scala",),
+        sources=_PYVX_CRS_LIGHT,
     ),
     "st_transformcrs": FnSpec(
         "st_transformcrs",
@@ -3784,7 +3874,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"source_crs": "EPSG:4326", "target_crs": "EPSG:3857"},
         core_fn=lambda col, a: None,  # Placeholder for spark-path only
-        col_fn=lambda col, a: pyvx.st_transformcrs(
+        col_fn=lambda col, a: vx.st_transformcrs(
             col, F.lit(a["target_crs"]), F.lit(a["source_crs"])
         ),
         core=False,
@@ -3801,7 +3891,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_shiftlongitude(col),
+        col_fn=lambda col, a: vx.st_shiftlongitude(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3818,7 +3908,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # Blade must be a LINE to split a polygon (shapely.ops.split rejects a
         # polygon blade). Use the antimeridian meridian at x=180; the corpus
         # crossers are represented in 0..360 lon, so this line bisects them.
-        col_fn=lambda col, a: pyvx.st_split(
+        col_fn=lambda col, a: vx.st_split(
             col, F.lit(shapely.geometry.LineString([(180, -95), (180, 95)]).wkb)
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -3834,7 +3924,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"wrap_x_origin": 180, "wrap_direction": -180},
-        col_fn=lambda col, a: pyvx.st_wrapx(
+        col_fn=lambda col, a: vx.st_wrapx(
             col, F.lit(a["wrap_x_origin"]), F.lit(a["wrap_direction"])
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -3851,7 +3941,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_explainvalidity(col),
+        col_fn=lambda col, a: vx.st_explainvalidity(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=False,  # Timing-only; text output
@@ -3865,7 +3955,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_makevalid(col),
+        col_fn=lambda col, a: F.call_function("gbx_st_makevalid", col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3880,7 +3970,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_node(col),
+        col_fn=lambda col, a: vx.st_node(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3894,7 +3984,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"grid_size": 0.0001},
-        col_fn=lambda col, a: pyvx.st_reduceprecision(col, F.lit(a["grid_size"])),
+        col_fn=lambda col, a: vx.st_reduceprecision(col, F.lit(a["grid_size"])),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3908,7 +3998,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_removerepeatedpoints(col),
+        col_fn=lambda col, a: vx.st_removerepeatedpoints(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3922,7 +4012,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"tolerance": 0.001},
-        col_fn=lambda col, a: pyvx.st_simplifypreservetopology(
+        col_fn=lambda col, a: vx.st_simplifypreservetopology(
             col, F.lit(a["tolerance"])
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -3938,7 +4028,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"tolerance": 0.0001},  # Reference WKB generated per-call
-        col_fn=lambda col, a: pyvx.st_snap(
+        col_fn=lambda col, a: vx.st_snap(
             col, F.lit(shapely.geometry.box(-1, -1, 1, 1).wkb), F.lit(a["tolerance"])
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -3960,7 +4050,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # col_fn receives (geom_col, value_col, extent_tuple, args) from the
         # geometry_aggregate harness; coverage uses only the geom column.
-        col_fn=lambda g, v, ext, a: pyvx.st_coverageisvalid(g),
+        col_fn=lambda g, v, ext, a: pyvx._light_st_coverageisvalid(g),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
         fingerprint=False,  # Timing-only; boolean result
@@ -3976,7 +4066,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # col_fn receives (geom_col, value_col, extent_tuple, args) from the
         # geometry_aggregate harness; coverage uses only the geom column.
-        col_fn=lambda g, v, ext, a: pyvx.st_coverageinvalidedges(g),
+        col_fn=lambda g, v, ext, a: pyvx._light_st_coverageinvalidedges(g),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
         # Timing-only: it returns WKB geometry, not a raster tile, and it is
@@ -4003,7 +4093,7 @@ REGISTRY: Dict[str, FnSpec] = {
             if g.zpoints
             else None
         ),
-        col_fn=lambda t, a: prx.rst_binpoints(
+        col_fn=lambda t, a: rx.rst_binpoints(
             F.array(),
             F.array(),
             F.array(),
@@ -4017,9 +4107,10 @@ REGISTRY: Dict[str, FnSpec] = {
             a["statistic"],
         ),
         input_kind="geometry",
-        sources=_BINNING_LIGHT + (_HEAVY + "RST_BinPoints.scala",),
+        sources=_BINNING_LIGHT,
         core=False,
         geometry_set="srid_4326",
+        heavy=False,
     ),
     "rst_binpoints_agg": FnSpec(
         "rst_binpoints_agg",
@@ -4033,7 +4124,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # args) and calls the real public rst_binpoints_agg -- the SAME function shape
         # the heavy tier runs (col("x"), col("y"), col("z"), ...), so the timed
         # groupBy times only the binning and the two tiers compare like-for-like.
-        col_fn=lambda x, y, z, ext, a: prx.rst_binpoints_agg(
+        col_fn=lambda x, y, z, ext, a: prx._light_rst_binpoints_agg(
             x,
             y,
             z,
@@ -4048,8 +4139,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="geometry_aggregate",
-        sources=_BINNING_LIGHT + (_HEAVY + "RST_BinPointsAgg.scala",),
+        sources=_BINNING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         geometry_set="srid_4326",
     ),
     "rst_isoband": FnSpec(
@@ -4059,13 +4151,14 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"breaks": [0.2, 0.4, 0.6, 0.8]},
         core_fn=lambda ds, a: features.isoband(ds, a["breaks"]),
-        col_fn=lambda t, a: prx.rst_isoband(
+        col_fn=lambda t, a: rx.rst_isoband(
             t, F.array(*[F.lit(float(v)) for v in a["breaks"]])
         ),
         fingerprint_kind="vector",
         virtual_disposition="materialized",
-        sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Isoband.scala",),
+        sources=_FEATURES_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_chm": FnSpec(
         "rst_chm",
@@ -4081,11 +4174,12 @@ REGISTRY: Dict[str, FnSpec] = {
             if dss
             else None
         ),
-        col_fn=lambda arr, a: prx.rst_chm(
+        col_fn=lambda arr, a: rx.rst_chm(
             F.element_at(arr, 1),
             F.coalesce(F.element_at(arr, 2), F.element_at(arr, 1)),
         ),
-        sources=_CHM_LIGHT + (_HEAVY + "RST_Chm.scala",),
+        sources=_CHM_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         input_kind="tile_array",
     ),
@@ -4104,7 +4198,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: (
             _land_cover_classify_bytes(ds, a["method"], a["n_clusters"], a["smooth"])
         ),
-        col_fn=lambda t, a: prx.rst_land_cover(
+        col_fn=lambda t, a: rx.rst_land_cover(
             t, a["method"], a["n_clusters"], a["smooth"]
         ),
         sources=(_PYRX + "land_cover.py", _PYRX + "_nodata.py"),
@@ -4112,6 +4206,56 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="synthetic_rgb_tile",
     ),
 }
+
+# The specs whose heavyweight run is skipped: the JVM bench (``BenchDispatch``, in
+# src/test/scala/.../bench) has no case for the name, so the run would only report an unknown
+# function. These have the lightweight form alone, or a heavyweight form that is timed through
+# a reader section of the cluster run. ``heavy`` is False exactly for the names ``BenchDispatch``
+# does not know; ``test_spec.py`` checks both directions against its source, so a new
+# ``BenchDispatch`` case or a new spec cannot leave this set stale. The raster-to-grid reducers,
+# retile, the merge aggregate and the other specs that carry ``heavy=False`` in their own entry are
+# the names ``BenchDispatch`` dropped with their companions.
+_NO_BENCH_DISPATCH = frozenset(
+    {
+        "rst_fromfile",
+        "rst_land_cover",
+        "rst_custom_tessellate",
+        "rst_custom_rasterize_agg",
+        "rst_custom_rastertogridavg",
+        "rst_custom_rastertogridcount",
+        "rst_custom_rastertogridmax",
+        "rst_custom_rastertogridmin",
+        "rst_custom_rastertogridmedian",
+        "rst_custom_rastertogridsum",
+        "rst_custom_rastertogridvariance",
+        "rst_custom_rastertogridstddev",
+        "quadbin_cellfill",
+        "custom_cellfill",
+        "st_asmvt",
+        "st_asmvt_pyramid",
+        "st_legacyaswkb",
+        "st_triangulate",
+        "st_interpolateelevationgeom",
+        "st_interpolateelevationbbox",
+        "st_crs",
+        "st_setcrs",
+        "st_transformcrs",
+        "st_shiftlongitude",
+        "st_split",
+        "st_wrapx",
+        "st_explainvalidity",
+        "st_makevalid",
+        "st_node",
+        "st_reduceprecision",
+        "st_removerepeatedpoints",
+        "st_simplifypreservetopology",
+        "st_snap",
+        "st_coverageisvalid",
+        "st_coverageinvalidedges",
+    }
+)
+for _name in _NO_BENCH_DISPATCH:
+    REGISTRY[_name] = replace(REGISTRY[_name], heavy=False)
 
 # Maps each tile-aggregator FnSpec to the bench.synth recipe whose tiles form its
 # fixed CONSISTENCY group (write-once-read-both, identical bytes across tiers).
@@ -4199,8 +4343,135 @@ def select(
     return out
 
 
+# --- Zarr (light tier only) -----------------------------------------------------------
+# The Zarr API is Python only (no gbx_* SQL binding), so its cases live beside REGISTRY and
+# the function-coverage check is unchanged. ``sql_name`` holds the Python name. Each case is
+# timed against a baseline on the same compute; the bench notebook's Zarr cell runs them
+# (gbx:bench:cluster --zarr-only) through ``bench.zarr_bench``. Corpus: the ERA5 January
+# 2023 store (744 h x 721 x 1440, v3 sharded zstd) and its copy as one tiled GeoTIFF per hour.
+_ZARR_SRC = "python/geobrix/src/databricks/labs/gbx/zarr/"
+_ZARR_READ = (_ZARR_SRC + "_read.py", _ZARR_SRC + "_engine.py", _ZARR_SRC + "_plan.py")
+_ZARR_WRITE = (
+    _ZARR_SRC + "_write.py",
+    _ZARR_SRC + "_write_tasks.py",
+    _ZARR_SRC + "_pack.py",
+    _ZARR_SRC + "_manifest.py",
+)
+_ZARR_ONLY = ("spark-path",)
+
+ZARR_CASES = {
+    "gbx_zarr_read": FnSpec(
+        "gbx_zarr_read",
+        "gbx_zarr_read",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "R1",
+            "workload": "one time step, full globe, t2m",
+            "time_index": 360,
+            "baseline": "raster_gbx reading the one GeoTIFF of that hour",
+        },
+        sources=_ZARR_READ,
+    ),
+    "gbx_zarr_sample": FnSpec(
+        "gbx_zarr_sample",
+        "gbx_zarr_sample",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "R2",
+            "workload": "1000 points x 744 hours, t2m",
+            "points": 1000,
+            "seed": 22,
+            "baseline": "rst_sample over the hourly GeoTIFFs crossed with the points",
+        },
+        sources=(_ZARR_SRC + "_sample.py",) + _ZARR_READ,
+    ),
+    "gbx_zarr_read_box": FnSpec(
+        "gbx_zarr_read_box",
+        "gbx_zarr_read",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "R3",
+            "workload": "a 30-day box over Europe, t2m",
+            "hours": 720,
+            "latitude": (72.0, 35.0),
+            "longitude": (350.0, 40.0),  # crosses the store's 0/360 seam
+            "baseline": "raster_gbx window reads of the 720 GeoTIFFs",
+        },
+        sources=_ZARR_READ,
+        variant_of="gbx_zarr_read",
+    ),
+    "gbx_zarr_write": FnSpec(
+        "gbx_zarr_write",
+        "gbx_zarr_write",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "W1",
+            "workload": "create a 1 GB cube: float32 (240, 721, 1440), 10 tasks",
+            "shape": (240, 721, 1440),
+            "chunks": {"time": 24, "latitude": 181, "longitude": 360},
+            "shards": {"time": 24, "latitude": 724, "longitude": 1440},
+            "baseline": "xarray.to_zarr region writes of the same cube to the same path",
+            # the prototype's throughput on the same compute and data (design 8.5, MEASURED)
+            "gate_mb_s": {
+                "dbr19_fuse": 109.0,
+                "dbr19_direct": 143.0,
+                "serverless": 137.0,
+            },
+            "gate_tolerance": 0.25,
+            # the gate restated: the files phase is held to the floors above;
+            # the fixed cost of a create (ownership claim + CREATE TABLE + commit) to this
+            "fixed_cost_s": 10.0,
+        },
+        sources=_ZARR_WRITE,
+    ),
+    "gbx_zarr_write_append": FnSpec(
+        "gbx_zarr_write_append",
+        "gbx_zarr_write",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "W2",
+            "workload": "8 appenders of one day each to a one-day store",
+            "writers": 8,
+            "baseline": "the same 8 appends one after another",
+        },
+        sources=_ZARR_WRITE,
+        variant_of="gbx_zarr_write",
+    ),
+}
+
+
+def zarr_case(case: str) -> FnSpec:
+    """The Zarr case with ``args["case"] == case`` (``"R1"`` ... ``"W2"``)."""
+    for c in ZARR_CASES.values():
+        if c.args["case"] == case:
+            return c
+    raise KeyError(f"no Zarr bench case {case!r}; cases: R1, R2, R3, W1, W2")
+
+
+def benched_function(name: str) -> str:
+    """The registered function a bench case times: its ``variant_of``, else ``name``."""
+    fs = REGISTRY.get(name)
+    return fs.variant_of if fs is not None and fs.variant_of else name
+
+
+def benched_functions(specs) -> "frozenset[str]":
+    """Registered function names timed by ``specs``; a variant case counts as its function."""
+    return frozenset(f.variant_of or f.name for f in specs)
+
+
+# A manifest row that is another FORM of a function the bench times under its own entry: the array, partial and
+# finalize scalars, the table-function form, and the scalar twin of a rasterize aggregate.
+_FORM_SUFFIXES = ("_array", "_partial", "_finalize", "_tvf")
+_RASTERIZE_TWIN = re.compile(r"(bng|custom|h3|quadbin)_rasterize")
+
+
 def registered_rst() -> "frozenset[str]":
-    """Canonical benched function names from registered_functions.txt.
+    """Canonical benched function names, from the function manifest.
 
     This is the coverage source-of-truth: the bench REGISTRY must equal this set.
     It is the ``rst_*`` (RasterX) and ``st_*`` (VectorX) surfaces PLUS the four
@@ -4208,39 +4479,18 @@ def registered_rst() -> "frozenset[str]":
     -- the only GridX functions with real grouped-shuffle + fill cost worth a
     light-vs-heavy perf-parity comparison. Every OTHER GridX function (kring /
     kloop / distance / pointascell / ...) is trivial cell-index math and is NOT
-    benched, so it is deliberately excluded here.
+    benched, so it is deliberately excluded here. A row that is only another form of a benched
+    function (see ``_FORM_SUFFIXES``) is left out too.
     """
-    from pathlib import Path
+    from databricks.labs.gbx import manifest
 
-    # resolve repo root robustly from this file's location
-    root = Path(__file__).resolve()
-    cand = None
-    for _ in range(12):
-        c = root / "docs" / "tests-function-info" / "registered_functions.txt"
-        if c.exists():
-            cand = c
-            break
-        root = root.parent
-    if cand is not None:
-        text = cand.read_text()
-    else:
-        # Installed without the repo tree above this file (e.g. the wheel on a cluster):
-        # read the copy packaged alongside this module. Kept byte-identical to the
-        # canonical docs/tests-function-info/registered_functions.txt by the
-        # binding-parity check (check-binding-parity.py), so there is no drift.
-        from importlib.resources import files
-
-        text = (
-            files("databricks.labs.gbx.bench")
-            .joinpath("registered_functions.txt")
-            .read_text()
-        )
     names = set()
-    for line in text.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
+    for sql_name in manifest.load().functions:
+        s = sql_name[4:] if sql_name.startswith("gbx_") else sql_name
+        if s.endswith(_FORM_SUFFIXES) or (
+            s.startswith("rst_") and _RASTERIZE_TWIN.fullmatch(s[4:])
+        ):
             continue
-        s = s[4:] if s.startswith("gbx_") else s
         if s.startswith("rst_") or s.startswith("st_") or s.endswith("_cellfill"):
             names.add(s)
     return frozenset(names)

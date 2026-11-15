@@ -1,0 +1,101 @@
+"""The SE forms at scale: slope, the DEM functions, the band-math functions, the warp functions, transformcrs and map algebra, each with the engine's light row-wise and batch UDFs and
+a floor, on one input that scales past the client cap. The engine
+has no JVM level, so no form of the set is L1.
+"""
+
+import pytest
+
+from databricks.labs.gbx.bench import levels_forms as lf
+from databricks.labs.gbx.bench import preflight
+
+# function -> the input its forms of the pass read
+PASS = {
+    "gbx_rst_slope": "se_dem_1024_mem",
+    "gbx_rst_transformcrs": "tiles_mat",
+    "gbx_rst_mapalgebra": "se_pair_512_mem",
+    **{fn: "se_dem_1024_mem" for fn in lf.SE_DEM_FUNCTIONS},
+    **{fn: "se_calc_512_mem" for fn in lf.SE_CALC_FUNCTIONS},
+    **{fn: "se_warp_1024_mem" for fn in lf.SE_WARP_FUNCTIONS},
+    **{fn: "se_warp_1024_mem" for fn in lf.SE_FILL_FUNCTIONS},
+}
+NEEDED = (
+    {  # (level, variant label without the input tag) every function has on its input
+        ("L3", "engine-c0"),
+        ("L3", "engine-c1"),
+        ("L3", "floor-c0"),
+    }
+)
+
+
+def _on(fn, inp):
+    return [
+        f for f in lf.FORMS["SE"] if f.fn == fn and f.input == inp and "@" in f.variant
+    ]
+
+
+@pytest.mark.parametrize("fn,inp", PASS.items())
+def test_each_function_has_every_form_of_the_pass_on_one_input(fn, inp):
+    got = {(f.level, f.variant.split("@")[0]) for f in _on(fn, inp)}
+    assert NEEDED <= got
+
+
+@pytest.mark.parametrize("fn,inp", PASS.items())
+def test_the_forms_of_the_pass_are_found_by_their_names_and_by_no_other_form(fn, inp):
+    names = [f.variant for f in _on(fn, inp)]
+    assert len(names) == len(set(names))
+    for f in _on(fn, inp):
+        assert [g for g in lf.FORMS["SE"] if g.fn == fn and g.variant == f.variant] == [
+            f
+        ]
+
+
+@pytest.mark.parametrize("fn,inp", PASS.items())
+def test_the_levels_are_compared_by_decoded_pixels_not_encoding_length(fn, inp):
+    for f in _on(fn, inp):
+        if f.variant.startswith("floor"):
+            assert not f.vsql  # the floor returns another raster by design
+        else:
+            assert "gbx_bench_vfp_raster" in f.vsql, f.variant
+            assert f.vsql.format(src="t", uc="")  # braces balanced, only {src} left
+
+
+def test_the_engine_has_no_jvm_form():
+    assert [f for f in lf.FORMS["SE"] if f.level == "L1"] == []
+    # no light kernel remains either: a `today` or plain `-` form would time the engine under another label
+    assert not [
+        f for f in lf.FORMS["SE"] if f.variant.startswith("today") or f.variant == "-"
+    ]
+
+
+def test_no_input_of_the_pass_is_built_on_the_client_at_16x():
+    assert (
+        preflight.client_cap_problems(
+            "SE", (4, 16), forms=("engine-c0@mem", "engine-c0@mat")
+        )
+        == []
+    )
+    assert (
+        preflight.client_cap_problems(
+            "SE",
+            (4, 16),
+            forms=tuple(f.variant for fn, inp in PASS.items() for f in _on(fn, inp)),
+        )
+        == []
+    )
+
+
+def test_the_fingerprint_query_of_the_corpus_tiles_does_not_hash_every_tile():
+    """It runs after the timed iterations over 4000 tiles of 16 MiB: it may pick its 64 by path, not by their bytes."""
+    for f in _on("gbx_rst_transformcrs", "tiles_mat"):
+        if f.vsql:
+            assert "ORDER BY tile.path LIMIT 64" in f.vsql and "xxhash" not in f.vsql
+            assert (
+                f.allows_null
+            )  # a tile the corpus holds that a level cannot warp is a note, not a lost row
+
+
+def test_the_corpus_tile_forms_report_which_tiles_are_null():
+    for f in _on("gbx_rst_transformcrs", "tiles_mat"):
+        if not f.variant.startswith("floor"):
+            assert "{fn}" not in f.nullsql and f.fn in f.nullsql, f.variant
+            assert f.nullsql.format(src="t", uc="")

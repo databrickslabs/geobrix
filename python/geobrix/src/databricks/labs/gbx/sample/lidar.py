@@ -207,6 +207,8 @@ def _make_fetch_nodes(
         import numpy as np
         import pandas as pd
 
+        from databricks.labs.gbx.ds.lidar import check_laz
+
         for pdf in iterator:
             for proj, key in zip(pdf["project"], pdf["node_key"]):
                 try:
@@ -223,6 +225,9 @@ def _make_fetch_nodes(
                         with open(laz_path, "wb") as fh:
                             fh.write(raw)
 
+                # A bad chunk table or run of 0xFF bytes can end the process in laspy's
+                # decoder: raise first.
+                check_laz(raw, f"{proj}/{key}.laz")
                 las = laspy.read(_io.BytesIO(raw))
                 x = np.asarray(las.x)
                 y = np.asarray(las.y)
@@ -405,6 +410,8 @@ class LidarDownloader:
         import laspy
         import numpy as np
 
+        from databricks.labs.gbx.ds.lidar import check_laz
+
         bases = {p: b.rstrip("/") + "/" for p, b in self.projects.items()}
         all_points: List[dict] = []
 
@@ -423,6 +430,9 @@ class LidarDownloader:
                     with open(laz_path, "wb") as fh:
                         fh.write(raw)
 
+            # A bad chunk table or run of 0xFF bytes can end the process in laspy's
+            # decoder: raise first.
+            check_laz(raw, f"{project}/{key}.laz")
             las = laspy.read(io.BytesIO(raw))
             x = np.asarray(las.x)
             y = np.asarray(las.y)
@@ -485,6 +495,8 @@ class LidarDownloader:
 
         Worker logic lives in ``_make_fetch_nodes`` (module-level, testable without Spark).
         The retry fetch is ``_urllib_fetch`` — single source of truth, no copy here.
+        The nodes are hashed on ``(project, node_key)``: a bare ``repartition(N)`` is coalesced by AQE
+        (Serverless in particular), which would download the nodes one after another.
         """
         from pyspark.sql.types import (
             DoubleType,
@@ -521,7 +533,7 @@ class LidarDownloader:
         )
         nodes_df = spark.createDataFrame(
             node_rows, "project string, node_key string"
-        ).repartition(num_partitions)
+        ).repartition(num_partitions, "project", "node_key")
         return nodes_df.mapInPandas(fetch_nodes, schema=_OUT_SCHEMA)
 
 

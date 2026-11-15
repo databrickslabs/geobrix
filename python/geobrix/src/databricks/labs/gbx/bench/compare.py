@@ -12,6 +12,7 @@ import csv
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
@@ -279,8 +280,33 @@ def _key(r: ResultRow):
     return (r.fn, r.mode, r.tile_px, r.bands, r.dtype, r.srid, r.nodata_frac, r.rows)
 
 
+class ModeMixError(ValueError):
+    """Rows from explore runs (or from runs with parts sharing a cluster) set beside isolated ones."""
+
+
+def _mode_of(rows) -> set:
+    return {getattr(r, "run_mode", "isolate") for r in rows}
+
+
+def check_comparable(*sides) -> None:
+    """Refuse a comparison that mixes modes: an explore run's times carry contention (parts sharing a cluster), so they
+    are not set against an isolated run's. Explore against explore is allowed (both carry it), and so is isolate against
+    isolate.
+    """
+    modes = set()
+    for rows in sides:
+        modes |= _mode_of(rows)
+    if len(modes) > 1:
+        raise ModeMixError(
+            "rows of different run modes cannot be compared: "
+            + ", ".join(sorted(modes))
+            + ". Time both sides with --mode isolate, or compare only explore runs with each other."
+        )
+
+
 def compare_cells(hw_rows: List[ResultRow], lw_rows: List[ResultRow]):
     """Return (cells, unmatched). cells: matched CellCompare list. unmatched: (fn, side, key)."""
+    check_comparable(hw_rows, lw_rows)
     hw_by = {_key(r): r for r in hw_rows}
     lw_by = {_key(r): r for r in lw_rows}
     cells: List[CellCompare] = []
@@ -375,9 +401,10 @@ def write_csv(cells: List[CellCompare], path) -> None:
 def pyrx_implemented() -> "frozenset[str]":
     """Names of every `rst_*` function the lightweight pyrx API implements.
 
-    Derived by parsing `def rst_<name>` definitions out of the pyrx
-    `functions.py` so the coverage scorecard guards against a regression (a
-    registered function losing its pyrx binding). Path resolved relative to the
+    Derived by parsing `def rst_<name>` definitions and module-level
+    `rst_<name> = ...` bindings out of the pyrx
+    `functions.py`, plus every manifest row's light (L3) kernel, so the coverage scorecard
+    guards against a regression (a registered function losing its pyrx binding). Path resolved relative to the
     repo root, mirroring `spec.registered_rst()`.
     """
     root = Path(__file__).resolve()
@@ -396,7 +423,18 @@ def pyrx_implemented() -> "frozenset[str]":
         from databricks.labs.gbx.pyrx import functions as _prx
 
         src = Path(_prx.__file__).read_text()
+    # `def rst_x(...)` plus module-level `rst_x = _factory(...)` bindings (e.g. the
+    # rst_combine* stats are built by a factory, not written out with `def`).
     names = set(re.findall(r"def (rst_[a-z0-9_]+)", src))
+    names |= set(re.findall(r"^(rst_[a-z0-9_]+)\s*=", src, flags=re.M))
+    # A manifest row has no light `def` in pyrx: its light kernel is its L3 entry.
+    from databricks.labs.gbx import manifest
+
+    names |= {
+        f.sql_name[len("gbx_") :]
+        for f in manifest.load().functions.values()
+        if f.sql_name.startswith("gbx_rst_") and "L3" in f.levels
+    }
     return frozenset(names)
 
 
@@ -424,7 +462,8 @@ def coverage_block(cells) -> str:
     implemented = pyrx_implemented()
     n_registered = len(registered)
 
-    benched_fns = {cl.fn for cl in cells}
+    # A variant case (e.g. rst_h3_tessellate_centroid) counts as its function.
+    benched_fns = {spec.benched_function(cl.fn) for cl in cells}
     n_benched = len(benched_fns)
 
     # Parity over compared (non-na) cells.
@@ -531,8 +570,9 @@ def scorecard_from_store(
     n_registered = len(registered)
 
     records = _store.read_all(root)
-    record_names = {r["fn"] for r in records}
-    n_benched = len(records)
+    # A variant case (e.g. rst_h3_tessellate_centroid) counts as its function.
+    record_names = {spec.benched_function(r["fn"]) for r in records}
+    n_benched = len(record_names)
 
     # Flatten all cells across records for parity + performance aggregation.
     all_cells = []
@@ -876,7 +916,11 @@ def main(argv=None):
 
     hw_rows = _r.read_jsonl(a.heavyweight)
     lw_rows = _r.read_jsonl(a.lightweight)
-    cells, unmatched = compare_cells(hw_rows, lw_rows)
+    try:
+        cells, unmatched = compare_cells(hw_rows, lw_rows)
+    except ModeMixError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(cells, out / "comparison.csv")

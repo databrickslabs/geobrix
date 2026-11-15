@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
 MDX = REPO_ROOT / "docs" / "docs" / "api" / "raster-functions.mdx"
 FUNCTION_INFO = (
     REPO_ROOT / "src/main/resources/com/databricks/labs/gbx/function-info.json"
@@ -121,6 +122,10 @@ def check_output_tables() -> list[str]:
                 rel = path.relative_to(REPO_ROOT)
                 failures.append(f"{rel}::{name}: " + "; ".join(probs))
     print(f"  scanned {scanned} *_example_output constants")
+    if not scanned:
+        failures.append(
+            "output tables: scanned 0 *_example_output constants (the example modules moved?); nothing was verified"
+        )
     return failures
 
 
@@ -150,8 +155,15 @@ def _module_names(rel_path: str) -> set[str]:
     return names
 
 
+# A function in the function manifest lists `surfaces` instead of `bindings`; FunctionExamples renders these
+# tabs for it (the Python tab shows the lightweight example until a function has its own Python example).
+_TIER_OF_SURFACE = {"session": "sql", "python": "python-light", "scala": "scala"}
+
+
 def _bindings_for(fns: dict, name: str) -> set[str]:
     entry = fns.get(name) or fns.get("gbx_" + name) or {}
+    if "surfaces" in entry:
+        return {_TIER_OF_SURFACE[s] for s in entry["surfaces"] if s in _TIER_OF_SURFACE}
     return set(entry.get("bindings", []))
 
 
@@ -164,9 +176,26 @@ def check_tab_completeness() -> list[str]:
     mdx = MDX.read_text()
 
     fe_checked = 0
-    for block in re.findall(r"<FunctionExamples\b(.*?)/>", mdx, re.S):
+    # A stable manifest row's tabs are checked by gbx:manifest:gen --check (the docs-tab gate, every page).
+    owned = {
+        r["sql_name"][len("gbx_") :]
+        for r in json.loads(MANIFEST_JSON.read_text())["functions"]
+    }
+    if not owned:
+        failures.append("tab completeness: the manifest has no stable rows; nothing was verified")
+    blocks = re.findall(r"<FunctionExamples\b(.*?)/>", mdx, re.S)
+    if not blocks:
+        failures.append(
+            f"tab completeness: found 0 <FunctionExamples> blocks in {MDX.relative_to(REPO_ROOT)} "
+            "(the page moved?); nothing was verified"
+        )
+    delegated = 0
+    for block in blocks:
         nm = re.search(r'name="([^"]+)"', block)
         if not nm:
+            continue
+        if nm.group(1) in owned:
+            delegated += 1
             continue
         name = nm.group(1)
         tiers = _bindings_for(fns, name)
@@ -202,7 +231,7 @@ def check_tab_completeness() -> list[str]:
         if not fn:
             continue
         base = re.sub(
-            r"_(sql|python_light|python_heavy|scala)_example$", "", fn.group(1)
+            r"_(sql|python_light|python_heavy|python|scala)_example$", "", fn.group(1)
         )
         tiers = _bindings_for(fns, base)
         if len(tiers) > 1:
@@ -210,7 +239,10 @@ def check_tab_completeness() -> list[str]:
                 f"{base}: single-tab <CodeFromTest> but bindings={sorted(tiers)} "
                 f"(should be 4-tab <FunctionExamples>)"
             )
-    print(f"  checked {fe_checked} declared FunctionExamples tabs")
+    print(
+        f"  checked {fe_checked} declared FunctionExamples tabs; "
+        f"{delegated} of {len(blocks)} blocks belong to manifest rows (checked by gbx:manifest:gen --check)"
+    )
     return failures
 
 
@@ -292,6 +324,10 @@ def check_annotation_consistency() -> list[str]:
                     f"annotation — {detail}"
                 )
     print(f"  compared {compared} identical-output tab groups")
+    if not compared:
+        failures.append(
+            "annotation consistency: compared 0 identical-output tab groups; nothing was verified"
+        )
     return failures
 
 

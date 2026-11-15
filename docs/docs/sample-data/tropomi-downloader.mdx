@@ -5,9 +5,9 @@ title: Sentinel-5P TROPOMI Downloader
 
 ## Sentinel-5P TROPOMI Downloader
 
-`TropomiDownloader` fetches **Sentinel-5P TROPOMI Level-2 methane (CH₄)** granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the netCDF-4 granules into a Unity Catalog Volume.
+`TropomiDownloader` fetches **Sentinel-5P TROPOMI Level-2 methane (CH₄)** granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API. It stages the netCDF-4 granules into a Unity Catalog Volume.
 
-Sentinel-5P TROPOMI images atmospheric methane globally on a near-daily basis. Its L2 CH4 product is **swath** data — a 2-D array of ground pixels each carrying its own lon/lat, not a regular grid — so it pairs naturally with the [NetCDF reader](../readers/netcdf)'s **vector mode**, which emits one point per ground pixel with no regridding or resampling.
+Sentinel-5P TROPOMI images atmospheric methane globally on a near-daily basis. Its L2 CH4 product is **swath** data: a 2-D array of ground pixels each carrying its own lon/lat, not a regular grid. It pairs naturally with the [NetCDF reader](../readers/netcdf)'s **vector mode**, which emits one point per ground pixel with no regridding or resampling.
 
 :::note Prerequisites
 - GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
@@ -24,9 +24,9 @@ Sentinel-5P TROPOMI images atmospheric methane globally on a near-daily basis. I
 
 1. **`discover(bbox, temporal=None)`** — driver-side STAC search against the `sentinel-5p-l2-netcdf` collection. Returns one row per distinct CH4 granule intersecting the AOI: `item_id`, `asset_name`, `item_bbox`, `href`. Defaults to a wide `2018-01-01/2030-01-01` window (S5P mission-to-date); pass a `temporal` STAC-style `"start/end"` string to narrow it.
 
-2. **`download(bbox, out_dir, temporal=None, ...)`** — re-runs the same STAC search, then fans out the granule fetch as parallel Spark tasks via `StacClient.download()`, saving each file as `{item_id}.nc`. Unlike the raster downloaders, S5P granules are **not** rasterio-windowed or bbox-clipped on download (a `.nc` isn't a GDAL-readable raster) — each granule is fetched and existence/size-validated whole; the AOI clip happens downstream when you filter the points `read()` emits. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+2. **`download(bbox, out_dir, temporal=None, ...)`** — re-runs the same STAC search, then fans out the granule fetch as parallel Spark tasks via `StacClient.download()`, saving each file as `{item_id}.nc`. Unlike the raster downloaders, S5P granules are **not** rasterio-windowed or bbox-clipped on download (a `.nc` isn't a GDAL-readable raster). Each granule is fetched and existence/size-validated whole. The AOI clip happens downstream when you filter the points `read()` emits. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
 
-3. **`read(out_dir, variables=..., group="/PRODUCT")`** — loads the staged `.nc` granules through the `netcdf_gbx` reader in **vector mode**: one point per ground pixel, with the requested variables (default: the bias-corrected CH4 mixing ratio plus the `qa_value` quality flag) passed through as columns, alongside `geom_0` (WKB point) and `geom_0_srid`. No quality filtering is applied for you — apply your own `qa_value` cut downstream.
+3. **`read(out_dir, variables=..., group="/PRODUCT")`** — loads the staged `.nc` granules through the `netcdf_gbx` reader in **vector mode**, with one point per ground pixel. The requested variables (default: the bias-corrected CH4 mixing ratio plus the `qa_value` quality flag) pass through as columns, alongside `geom_0` (WKB point) and `geom_0_srid`. No quality filtering is applied for you — apply your own `qa_value` cut downstream.
 
 Serverless-safe: no `spark.conf.set`, `_jvm`, `.rdd`, `cache`, or `persist` — parallelism comes from `StacClient.download()`'s Spark fan-out.
 
@@ -100,7 +100,7 @@ download_tropomi_aoi(
 
 ## Copy-Paste Example
 
-The example below downloads a single day of Sentinel-5P CH4 coverage for a Delaware Basin (Permian, TX) AOI into a UC Volume, then reads the swath as per-pixel points for a quality-filtered look at the data.
+The example below downloads a single day of Sentinel-5P CH4 coverage for a Delaware Basin (Permian, TX) AOI into a UC Volume. It then reads the swath as per-pixel points for a quality-filtered look at the data.
 
 ```python
 # Install dependencies if not already present
@@ -184,7 +184,7 @@ hotspots = (
 ```
 
 :::tip Scoping the temporal window
-S5P revisits daily. Leaving `temporal=None` searches the full mission-to-date window (`"2018-01-01/2030-01-01"`) and can match many overpasses for a wide AOI — scope `temporal` to a day or two unless you actually want the full time series.
+S5P revisits daily. Leaving `temporal=None` searches the full mission-to-date window (`"2018-01-01/2030-01-01"`) and can match many overpasses for a wide AOI. Scope `temporal` to a day or two unless you actually want the full time series.
 :::
 
 :::info Swath, not a grid
@@ -195,4 +195,4 @@ S5P L2 CH4 has no regular lat/lon grid — each ground pixel carries its own coo
 
 ## Notebook Reference
 
-`TropomiDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 01) to screen a Delaware Basin AOI for candidate methane super-emitter cells from a single day of Sentinel-5P coverage, before zooming in with Sentinel-2 and EMIT in later notebooks.
+`TropomiDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 01) to screen a Delaware Basin AOI for candidate methane super-emitter cells. It uses a single day of Sentinel-5P coverage. Later notebooks zoom in with Sentinel-2 and EMIT.

@@ -1,6 +1,6 @@
 """Tests for vizx._interactive (MapLibre-based plot_interactive).
 
-The old folium-based tests were removed in Task 7 when the folium implementation
+The old folium-based tests were removed when the folium implementation
 was retired. The new implementation is tested in test_interactive_maplibre.py.
 This file retains the public-API wiring check that is still valid.
 """

@@ -1,7 +1,7 @@
 """Light-tier gbx_<grid>_cellfill grouped aggregator tests.
 
 Mirrors heavy CellFillTest assertions (same inputs/expected values) so
-cross-tier parity (Task 11) is satisfiable by construction.
+cross-tier parity is satisfiable by construction.
 
 Pure-Python tests drive ``_cellfill.fill`` directly (no Spark).
 SQL tests drive the registered ``gbx_<grid>_cellfill`` pandas_udf and decode
@@ -181,17 +181,43 @@ def test_fill_k0_is_noop():
             assert out[nb] == pytest.approx(5.0), f"{label}: k=0 changed neighbour"
 
 
-def test_fill_duplicate_cellid_last_wins():
-    """Duplicate cell-ID tie-break: last row's value wins (matches heavy toMap)."""
+def test_a_repeated_cell_keeps_its_largest_value_in_any_row_order():
+    """A repeated cell id fills from its largest non-null value, whatever the row order.
+
+    Drives the four grouped aggregators with every order of the centre cell's three
+    rows (7.0, 99.0, NULL) beside five valid neighbours; "the last row wins" would give
+    7.0, or a value filled from the neighbours, for some orders.
+    """
+    import itertools
+
+    import pandas as pd
+    from pyspark.sql import Row
+
+    conf = Row(**_CUSTOM_CONF.__dict__)
+    udfs = {
+        "H3": (gx._h3_cellfill_agg_udf, lambda c: c),
+        "QUADBIN": (gx._quadbin_cellfill_agg_udf, lambda c: c),
+        "BNG": (gx._bng_cellfill_agg_udf, lambda c: _bng.format(c)),
+        "CUSTOM": (gx._custom_cellfill_agg_udf, lambda c: c),
+    }
     for label, center, k_loop in _grids():
-        # Build cells dict manually with last-wins semantics (matching UDF behaviour).
-        cells = {}
-        for val in (99.0, 7.0):  # first 99.0, then overwritten by 7.0
-            cells[center] = val
-        out = dict(
-            _cellfill.fill(cells, k=1, method="mean", power=2.0, k_loop_fn=k_loop)
-        )
-        assert out[center] == pytest.approx(7.0), f"{label}: expected last value 7.0"
+        udf, spell = udfs[label]
+        neighbours = [(nb, 5.0) for nb in k_loop(center, 1)[:5]]
+        outcomes = set()
+        for order in itertools.permutations([7.0, 99.0, None]):
+            rows = [(center, v) for v in order] + neighbours
+            args = [
+                pd.Series([spell(c) for c, _ in rows]),
+                pd.Series([v for _, v in rows], dtype="float64"),
+            ]
+            if label == "CUSTOM":
+                args.append(pd.Series([conf] * len(rows)))
+            args += [pd.Series([1] * len(rows)), pd.Series(["mean"] * len(rows))]
+            args.append(pd.Series([2.0] * len(rows)))
+            out = dict(_cellfill.decode(udf.func(*args)))
+            assert out[center] == pytest.approx(99.0), f"{label} {order}: {out[center]}"
+            outcomes.add(tuple(sorted(out.items())))
+        assert len(outcomes) == 1, f"{label}: the fill depends on the row order"
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +254,11 @@ def _decode_result(row_result) -> dict:
 
 def test_h3_cellfill_sql_mean_k1(spark):
     """gbx_h3_cellfill SQL: mean k=1 fills NULL center from ring1 neighbours."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_str = h3.latlng_to_cell(51.5, -0.1, 8)
     center = int(center_str, 16)
     ring1 = [int(c, 16) for c in h3.grid_ring(center_str, 1)]
@@ -250,7 +280,11 @@ def test_h3_cellfill_sql_mean_k1(spark):
 
 def test_h3_cellfill_sql_no_valid_neighbour_stays_null(spark):
     """gbx_h3_cellfill SQL: NULL cell with no valid neighbour stays NULL."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center = int(h3.latlng_to_cell(51.5, -0.1, 8), 16)
     df = spark.createDataFrame(
         [(1, center, None)], "grp int, cellid long, value double"
@@ -265,9 +299,12 @@ def test_h3_cellfill_sql_no_valid_neighbour_stays_null(spark):
 
 def test_quadbin_cellfill_sql_mean_k1(spark):
     """gbx_quadbin_cellfill SQL: mean k=1 fills NULL center from ring1 neighbours."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pygx import _quadbin
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center = quadbin.point_to_cell(-0.1, 51.5, 10)
     ring1 = _quadbin.k_loop(center, 1)
 
@@ -288,7 +325,11 @@ def test_quadbin_cellfill_sql_mean_k1(spark):
 
 def test_bng_cellfill_sql_mean_k1(spark):
     """gbx_bng_cellfill SQL: mean k=1 fills NULL center from ring1 neighbours."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_int = _bng.point_to_cell_id(530000.0, 180000.0, 4)
     center_str = _bng.format(center_int)
     ring1_int = _bng.k_loop(center_int, 1)
@@ -312,7 +353,11 @@ def test_bng_cellfill_sql_mean_k1(spark):
 
 def test_bng_cellfill_sql_no_valid_neighbour_stays_null(spark):
     """gbx_bng_cellfill SQL: NULL cell with no valid neighbour stays NULL."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_int = _bng.point_to_cell_id(530000.0, 180000.0, 4)
     center_str = _bng.format(center_int)
     df = spark.createDataFrame(
@@ -328,7 +373,11 @@ def test_bng_cellfill_sql_no_valid_neighbour_stays_null(spark):
 
 def test_custom_cellfill_sql_mean_k1(spark):
     """gbx_custom_cellfill SQL: mean k=1 fills NULL center from ring1 neighbours."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center = _custom.point_to_cell_id(_CUSTOM_CONF, 500000.0, 500000.0, 3)
     ring1 = _custom.k_loop(_CUSTOM_CONF, center, 1)
 
@@ -350,7 +399,11 @@ def test_custom_cellfill_sql_mean_k1(spark):
 
 def test_custom_cellfill_sql_idw_k2(spark):
     """gbx_custom_cellfill SQL: idw k=2 power=2 gives exact 12.0 for the center cell."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center = _custom.point_to_cell_id(_CUSTOM_CONF, 500000.0, 500000.0, 3)
     ring1 = _custom.k_loop(_CUSTOM_CONF, center, 1)
     ring2 = _custom.k_loop(_CUSTOM_CONF, center, 2)
@@ -371,7 +424,11 @@ def test_custom_cellfill_sql_idw_k2(spark):
 
 def test_h3_cellfill_sql_idw_k2(spark):
     """gbx_h3_cellfill SQL: idw k=2 power=2 gives exact 12.0 for the center cell."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_str = h3.latlng_to_cell(51.5, -0.1, 8)
     center = int(center_str, 16)
     ring1 = [int(c, 16) for c in h3.grid_ring(center_str, 1)]
@@ -407,7 +464,7 @@ def test_h3_cellfill_sql_idw_k2(spark):
 #   spark.sql("... gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) ...")
 #   The single-quoted 'mean' is a SQL string literal — it never passes
 #   through the Python ``_col()`` conversion.  Only the Python Column
-#   wrappers (df.groupBy().agg(gx.h3_cellfill(...))) hit the buggy path.
+#   wrappers (df.groupBy().agg(gx._light_h3_cellfill(...))) hit the buggy path.
 #
 # Each test below uses df.groupBy("grp").agg(gx.<grid>_cellfill(...)) —
 # the Column wrapper path — with an explicit keyword method= argument.
@@ -429,7 +486,11 @@ def test_h3_cellfill_wrapper_method_mean(spark):
     The old ``_col('mean')`` resolved "mean" as a column name; the fix wraps
     string values with ``f.lit()``.  Asserts non-vacuous output (center filled).
     """
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_str = h3.latlng_to_cell(51.5, -0.1, 8)
     center = int(center_str, 16)
     ring1 = [int(c, 16) for c in h3.grid_ring(center_str, 1)]
@@ -440,7 +501,7 @@ def test_h3_cellfill_wrapper_method_mean(spark):
     # Use the Python Column wrapper path — NOT a raw SQL string.
     result = (
         df.groupBy("grp")
-        .agg(gx.h3_cellfill("cellid", "value", k=1, method="mean").alias("v"))
+        .agg(gx._light_h3_cellfill("cellid", "value", k=1, method="mean").alias("v"))
         .collect()
     )
     assert len(result) == 1
@@ -460,7 +521,11 @@ def test_h3_cellfill_wrapper_method_idw(spark):
     Same bug path as mean; verifies both method string values go through f.lit().
     Expected: idw k=2 power=2 with ring1[0]=10 ring2[0]=20 → center=12.0.
     """
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_str = h3.latlng_to_cell(51.5, -0.1, 8)
     center = int(center_str, 16)
     ring1 = [int(c, 16) for c in h3.grid_ring(center_str, 1)]
@@ -472,7 +537,11 @@ def test_h3_cellfill_wrapper_method_idw(spark):
 
     result = (
         df.groupBy("grp")
-        .agg(gx.h3_cellfill("cellid", "value", k=2, method="idw", power=2.0).alias("v"))
+        .agg(
+            gx._light_h3_cellfill(
+                "cellid", "value", k=2, method="idw", power=2.0
+            ).alias("v")
+        )
         .collect()
     )
     assert len(result) == 1
@@ -485,7 +554,11 @@ def test_bng_cellfill_wrapper_method_mean(spark):
 
     BNG uses string cell IDs — covers the string-cellid grid type alongside H3's int IDs.
     """
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_int = _bng.point_to_cell_id(530000.0, 180000.0, 4)
     center_str = _bng.format(center_int)
     ring1_int = _bng.k_loop(center_int, 1)
@@ -496,7 +569,7 @@ def test_bng_cellfill_wrapper_method_mean(spark):
 
     result = (
         df.groupBy("grp")
-        .agg(gx.bng_cellfill("cellid", "value", k=1, method="mean").alias("v"))
+        .agg(gx._light_bng_cellfill("cellid", "value", k=1, method="mean").alias("v"))
         .collect()
     )
     assert len(result) == 1
@@ -516,7 +589,11 @@ def test_bng_cellfill_wrapper_method_idw(spark):
 
     Expected: idw k=2 power=2 with ring1[0]=10 ring2[0]=20 → center=12.0 (BNG string IDs).
     """
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center_int = _bng.point_to_cell_id(530000.0, 180000.0, 4)
     center_str = _bng.format(center_int)
     ring1_int = _bng.k_loop(center_int, 1)
@@ -530,7 +607,9 @@ def test_bng_cellfill_wrapper_method_idw(spark):
     result = (
         df.groupBy("grp")
         .agg(
-            gx.bng_cellfill("cellid", "value", k=2, method="idw", power=2.0).alias("v")
+            gx._light_bng_cellfill(
+                "cellid", "value", k=2, method="idw", power=2.0
+            ).alias("v")
         )
         .collect()
     )
@@ -543,9 +622,12 @@ def test_bng_cellfill_wrapper_method_idw(spark):
 
 def test_quadbin_cellfill_wrapper_method_mean(spark):
     """Regression: quadbin_cellfill Column wrapper with method='mean' executes without UNRESOLVED_COLUMN."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pygx import _quadbin
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center = quadbin.point_to_cell(-0.1, 51.5, 10)
     ring1 = _quadbin.k_loop(center, 1)
 
@@ -554,7 +636,9 @@ def test_quadbin_cellfill_wrapper_method_mean(spark):
 
     result = (
         df.groupBy("grp")
-        .agg(gx.quadbin_cellfill("cellid", "value", k=1, method="mean").alias("v"))
+        .agg(
+            gx._light_quadbin_cellfill("cellid", "value", k=1, method="mean").alias("v")
+        )
         .collect()
     )
     assert len(result) == 1
@@ -574,7 +658,11 @@ def test_custom_cellfill_wrapper_method_mean(spark):
     The grid argument is built via ``_f.expr(...)`` so the Column wrapper receives
     a real Column object for ``grid``, exercising the full wrapper code path.
     """
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     center = _custom.point_to_cell_id(_CUSTOM_CONF, 500000.0, 500000.0, 3)
     ring1 = _custom.k_loop(_CUSTOM_CONF, center, 1)
 
@@ -589,7 +677,7 @@ def test_custom_cellfill_wrapper_method_mean(spark):
     result = (
         df.groupBy("grp")
         .agg(
-            gx.custom_cellfill(
+            gx._light_custom_cellfill(
                 "cellid", "value", grid=grid_col, k=1, method="mean"
             ).alias("v")
         )

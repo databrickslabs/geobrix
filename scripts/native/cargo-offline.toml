@@ -1,0 +1,11 @@
+# The cargo config the build container uses: crates come from the vendor directory mounted at /vendor
+# (made on the host by scripts/native/cargo-vendor.sh) and the network is never touched. The container
+# copies this file to $CARGO_HOME/config.toml before it builds.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "/vendor"
+
+[net]
+offline = true

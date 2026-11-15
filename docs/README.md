@@ -121,8 +121,9 @@ Use fenced code blocks with language specification:
 
 ```markdown
 ```python
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
+gbx.register(spark)
 ```
 ```
 

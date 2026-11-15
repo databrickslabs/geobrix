@@ -1,7 +1,7 @@
-"""Unit tests for the FILE-table writer SQL builders (Task 4).
+"""Unit tests for the FILE-table writer SQL builders.
 
 These are pure string assertions — no Spark session required.
-Execution against a real FILE table is verified in Task 9 (dogfood DBR-19).
+Execution against a real FILE table is verified on Databricks Runtime 19.
 """
 
 from unittest.mock import MagicMock
@@ -16,7 +16,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from databricks.labs.gbx.pyrx import file_table as ft
+from databricks.labs.gbx.rasterx import file_table as ft
 
 
 def test_create_sql_external_no_partition_no_zorder():
@@ -216,7 +216,7 @@ def test_write_file_table_managed_uses_qualified_raster():
 
 
 # ---------------------------------------------------------------------------
-# I1: validate before DROP
+# validate before DROP
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +271,7 @@ def test_write_file_table_invalid_mode_raises_before_drop():
 
 
 # ---------------------------------------------------------------------------
-# M3: plain layout → honest write_strategy, no ORDER BY
+# plain layout → honest write_strategy, no ORDER BY
 # ---------------------------------------------------------------------------
 
 
@@ -304,7 +304,7 @@ def test_write_file_table_plain_layout_no_order_by():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: build_create_sql/write_file_table compose file_gbx._validate_layout
+# build_create_sql/write_file_table compose file_gbx._validate_layout
 # ---------------------------------------------------------------------------
 
 
@@ -333,7 +333,7 @@ def test_write_file_table_rejects_zorder_layout_before_drop():
 
 
 def test_build_create_sql_rejects_zorder_layout_via_shared_validator():
-    from databricks.labs.gbx.pyrx import file_table
+    from databricks.labs.gbx.rasterx import file_table
 
     with pytest.raises(ValueError, match="layout must be one of"):
         file_table.build_create_sql(

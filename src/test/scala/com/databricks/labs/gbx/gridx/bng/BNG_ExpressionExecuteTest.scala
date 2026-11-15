@@ -141,15 +141,6 @@ class BNG_ExpressionExecuteTest extends AnyFunSuite {
         dist2 shouldBe 1L
     }
 
-    test("BNG_EastNorthAsBNG should return cell ID for easting/northing pair") {
-        val east1 = 19922
-        val north1 = 22219
-        val cellId1 = BNG_EastNorthAsBNG.executeInt(east1, north1, 3)
-        val cellId2 = BNG_EastNorthAsBNG.executeString(east1, north1, "50m")
-        cellId1 shouldBe "SV1922"
-        cellId2 shouldBe "SV199222SW"
-    }
-
     test("BNG_EuclideanDistance should return the distance between two cells") {
         val cellId = "TQ388791"
         val cellId2 = "TQ389792"

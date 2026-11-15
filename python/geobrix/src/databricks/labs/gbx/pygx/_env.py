@@ -1,4 +1,4 @@
-"""Environment checks for the pygx light tier."""
+"""Environment checks for the pygx functions at the Python level."""
 
 
 def assert_quadbin_available() -> None:
@@ -14,9 +14,9 @@ def assert_quadbin_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pygx quadbin requires a light-tier extra; missing: "
+            "pygx quadbin needs "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ", which the env wheel provides. Fix: install the env wheel for this runtime."
         )
 
 
@@ -30,8 +30,8 @@ def assert_bng_available() -> None:
         import shapely  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx BNG requires a light-tier extra (shapely). "
-            "Install with: pip install 'geobrix[light_env6]'"
+            "pygx BNG needs shapely, which the env wheel provides. "
+            "Fix: install the env wheel for this runtime."
         )
 
 
@@ -45,8 +45,8 @@ def assert_custom_available() -> None:
         import shapely  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx custom gridding requires a light-tier extra (shapely). "
-            "Install with: pip install 'geobrix[light_env6]'"
+            "pygx custom gridding needs shapely, which the env wheel provides. "
+            "Fix: install the env wheel for this runtime."
         )
 
 
@@ -60,6 +60,6 @@ def assert_h3_available() -> None:
         import h3  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx h3 cellfill requires the h3 library. "
-            "Install with: pip install 'geobrix[light_env6]'"
+            "pygx h3 cellfill needs h3, which the env wheel provides. "
+            "Fix: install the env wheel for this runtime."
         )

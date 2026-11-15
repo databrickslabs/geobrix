@@ -4,7 +4,6 @@ These contain ALL the raster logic; the Spark layer (functions.py) only wraps
 them in Arrow UDFs. Keeping them Spark-free makes them fast to unit test.
 """
 
-import json
 import math
 from typing import Dict, List, Optional
 
@@ -12,7 +11,10 @@ import numpy as np
 from shapely import wkb as _wkb
 from shapely.geometry import box
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.core.crs import authority_srid_of
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask, valid_mask
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
 # Rasterio/numpy dtype string -> GDAL data-type name (mirrors heavyweight rst_type).
@@ -56,14 +58,14 @@ def crs(ds) -> Optional[str]:
 
 def pixelwidth(ds) -> float:
     # Ground pixel size in X = magnitude including skew: sqrt(scaleX^2 + skewY^2).
-    # Mirrors heavyweight RST_PixelWidth (always non-negative); distinct from the
+    # Always non-negative; distinct from the
     # raw signed scalex(). rasterio Affine: a=scaleX(gt1), d=skewY(gt4).
     return float(math.hypot(ds.transform.a, ds.transform.d))
 
 
 def pixelheight(ds) -> float:
     # Ground pixel size in Y = magnitude including skew: sqrt(scaleY^2 + skewX^2).
-    # Mirrors heavyweight RST_PixelHeight (always non-negative); distinct from the
+    # Always non-negative; distinct from the
     # raw signed scaley(). rasterio Affine: e=scaleY(gt5), b=skewX(gt2).
     return float(math.hypot(ds.transform.e, ds.transform.b))
 
@@ -104,15 +106,17 @@ def scaley(ds) -> float:
 
 
 def isempty(ds) -> bool:
-    """True if the raster has no size, or every band has zero valid pixels.
+    """True if the raster has no size, or no pixel of it is valid.
 
-    Mirrors heavyweight RasterAccessors.isEmpty (null / no size / all bands
-    fully NoData). A dimensionally-valid raster whose every band is NoData is
-    still empty (issue #59).
+    Mirrors heavyweight RasterAccessors.isEmpty (null / no size / no valid pixel).
+    A pixel is valid by the rule of both tiers (``_nodata.valid_mask``): a data band is
+    valid there and, for a raster with an alpha band, its alpha is above 0. A
+    dimensionally-valid raster whose every band is NoData, or that is entirely
+    transparent, is still empty (issue #59).
     """
     if int(ds.width) == 0 or int(ds.height) == 0 or int(ds.count) == 0:
         return True
-    return all(_valid_values(ds, bi).size == 0 for bi in range(1, ds.count + 1))
+    return not valid_mask(ds).any()
 
 
 def type(ds) -> List[str]:
@@ -129,13 +133,13 @@ def getnodata(ds) -> Optional[List[float]]:
 
 
 # --- per-band statistics over VALID pixels ----------------------------------
-# Heavyweight uses GDAL GetStatistics, which excludes NoData. We mirror that by
-# masking with rasterio read_masks (0 = invalid; also covers nodata).
+# A pixel is valid for a band when the band's own mask says so (NoData, the raster's own
+# mask band) and, for a raster with an alpha band, its alpha is above 0
+# (``_nodata.band_valid_mask``), whatever the band count.
 def _valid_values(ds, band_index: int) -> np.ndarray:
-    """Return a 1-D array of valid (non-masked, non-NoData) pixel values for a band."""
+    """Return a 1-D array of valid (non-masked, non-NoData, opaque) pixel values for a band."""
     arr = ds.read(band_index)
-    mask = ds.read_masks(band_index)  # uint8: 0 = invalid, 255 = valid
-    return arr[mask != 0].ravel()
+    return arr[band_valid_mask(ds, band_index)].ravel()
 
 
 def avg(ds) -> List[Optional[float]]:
@@ -143,7 +147,7 @@ def avg(ds) -> List[Optional[float]]:
     out: List[Optional[float]] = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.mean(vals)) if vals.size else None)
+        out.append(float(np.mean(vals, dtype=np.float64)) if vals.size else None)
     return out
 
 
@@ -162,6 +166,28 @@ def maximum(ds) -> List[Optional[float]]:
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
         out.append(float(np.max(vals)) if vals.size else None)
+    return out
+
+
+def stats_partial(ds) -> List[dict]:
+    """The mergeable state of each band's valid pixels, one dict per band (``band`` from 1, then ``count``, ``sum``,
+    ``m2``, ``min``, ``max``): the state of one group of the raster-to-grid partial, with the whole band as the group
+    (``gridagg._grouped_measures``, one kernel). ``m2`` is the sum of the squared deviations from the band's mean. A band
+    with no valid pixel has a ``count`` of 0.0 and None for the rest. Tiles of one table merge by summing ``count`` and
+    ``sum``, taking the least ``min`` and greatest ``max``, and adding to each ``m2`` the count times the squared distance
+    of its mean from the merged mean (Chan's update)."""
+    from databricks.labs.gbx.pyrx.core import gridagg
+
+    out: List[dict] = []
+    for bi in range(1, ds.count + 1):
+        vals = _valid_values(ds, bi)
+        if vals.size:
+            _, (state,) = gridagg._grouped_measures(
+                np.zeros(vals.size, dtype=np.intp), vals, gridagg._PARTIAL
+            )
+        else:
+            state = gridagg._EMPTY_STATE
+        out.append({"band": bi, **dict(zip(gridagg.PARTIAL_FIELDS, state))})
     return out
 
 
@@ -239,11 +265,9 @@ def subdatasets(ds) -> Dict[str, str]:
 def getsubdataset(ds, name: str):
     """Open the named subdataset and return its GTiff-encoded bytes.
 
-    Mirrors heavyweight RST_GetSubdataset: builds ``<driver>:<path>:<name>`` and
+    Builds ``<driver>:<path>:<name>`` and
     opens it. Raises ValueError if no subdataset matches ``name``.
     """
-    import rasterio
-    from rasterio.io import MemoryFile
 
     subs = ds.subdatasets or []
     # Match the subdataset URI whose trailing token equals the requested name.
@@ -258,56 +282,17 @@ def getsubdataset(ds, name: str):
             f"gbx_rst_getsubdataset: no subdataset named '{name}' "
             f"(available: {subs})"
         )
-    with rasterio.open(match) as sub:
+    with open_data(match) as sub:
         profile = sub.profile
         profile.update(driver="GTiff")
-        data = sub.read()
-        with MemoryFile() as mf:
-            with mf.open(**profile) as dst:
-                dst.write(data)
-            return mf.read()
+        return write_gtiff(profile, sub.read(), alpha_like=sub.colorinterp)
 
 
-def summary(ds) -> str:
-    """gdalinfo-style JSON summary string with per-band statistics.
-
-    Heavyweight emits GDAL's ``gdalinfo -json``; rasterio has no exact
-    equivalent, so we emit a stable JSON dict (driver, size, crs, bands with
-    min/max/mean/stdDev over valid pixels). Shape is GeoBrix-specific, not a
-    byte-for-byte gdalinfo match.
-    """
-    bands = []
-    for bi in range(1, ds.count + 1):
-        vals = _valid_values(ds, bi)
-        if vals.size:
-            stats = {
-                "min": float(np.min(vals)),
-                "max": float(np.max(vals)),
-                "mean": float(np.mean(vals)),
-                "stdDev": float(np.std(vals)),
-            }
-        else:
-            stats = {"min": None, "max": None, "mean": None, "stdDev": None}
-        nd = ds.nodatavals[bi - 1] if ds.nodatavals else None
-        bands.append(
-            {
-                "band": bi,
-                "type": _NP_TO_GDAL.get(str(ds.dtypes[bi - 1]), str(ds.dtypes[bi - 1])),
-                "noDataValue": None if nd is None else float(nd),
-                **stats,
-            }
-        )
-    info = {
-        "driverShortName": ds.driver,
-        "size": [int(ds.width), int(ds.height)],
-        "coordinateSystem": {
-            "epsg": authority_srid_of(ds.crs),
-            "crs": crs_to_canonical(ds.crs),
-        },
-        "geoTransform": list(_gdal_gt(ds)),
-        "bands": bands,
-    }
-    return json.dumps(info)
+def check_n_buckets(n_buckets) -> None:
+    """Raise, naming the value, for a bucket count below 1 (NULL means the default); a UDF calls this before its
+    own error swallowing, so a bad parameter is an error and not a NULL."""
+    if n_buckets is not None and int(n_buckets) < 1:
+        raise ValueError(f"gbx_rst_histogram: n_buckets must be >= 1; got {n_buckets}")
 
 
 def histogram(
@@ -324,9 +309,8 @@ def histogram(
     bucket). When min/max are omitted they default to the band's valid-pixel
     range. ``include_nodata`` includes masked pixels in the binning.
     """
+    check_n_buckets(n_buckets)
     n_buckets = int(n_buckets)
-    if n_buckets < 1:
-        raise ValueError(f"gbx_rst_histogram: n_buckets must be >= 1; got {n_buckets}")
     result: Dict[str, List[int]] = {}
     for bi in range(1, ds.count + 1):
         if include_nodata:

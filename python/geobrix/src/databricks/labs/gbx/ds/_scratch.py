@@ -27,9 +27,11 @@ multiple users** writing to the same parent directory, scratch must be:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import time
 import uuid
+from typing import Optional
 
 # gc_stale_local_temp relocated to the tier-neutral canonical module; re-exported
 # so existing callers (ds.vector) keep working. DEFAULT_STALE_TTL_SECONDS lives there now.
@@ -41,15 +43,33 @@ from databricks.labs.gbx.pyrx.core.local_temp import (  # noqa: F401
 #: Hidden container directory holding all per-write scratch subdirs.
 SCRATCH_CONTAINER = ".gbx_scratch"
 
+# A namespace dir: "<slug>-<8 hex>" (see namespace()). A GC without a namespace
+# (the writers') leaves these alone; each owner collects only its own.
+_NAMESPACE = re.compile(r".+-[0-9a-f]{8}\Z")
 
-def new_scratch_dir(parent: str) -> str:
+
+def namespace(owner: str) -> str:
+    """A stable, filesystem-safe namespace for ``owner`` (e.g. a fully qualified
+    table name): a readable slug plus a short hash of ``owner``, so two owners
+    never share one and the same owner always gets it."""
+    import hashlib
+
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", owner).strip("._-")[:60] or "owner"
+    return f"{slug}-{hashlib.sha1(owner.encode('utf-8')).hexdigest()[:8]}"
+
+
+def new_scratch_dir(parent: str, namespace: Optional[str] = None) -> str:
     """Return a unique (not-yet-created) scratch path under the hidden container.
 
     ``parent`` is the directory beside/under which scratch should live (the
     output file's parent dir, or the output dir itself for directory outputs).
-    The returned path is ``<parent>/.gbx_scratch/<uuid>``; the caller creates it
-    lazily (``os.makedirs(..., exist_ok=True)``) when it first writes a fragment.
+    The returned path is ``<parent>/.gbx_scratch/<uuid>``, or with a
+    ``namespace`` (one per owner sharing ``parent``, e.g. an ingestion target)
+    ``<parent>/.gbx_scratch/<namespace>/<uuid>``; the caller creates it lazily
+    (``os.makedirs(..., exist_ok=True)``) when it first writes a fragment.
     """
+    if namespace:
+        return os.path.join(parent, SCRATCH_CONTAINER, namespace, uuid.uuid4().hex)
     return os.path.join(parent, SCRATCH_CONTAINER, uuid.uuid4().hex)
 
 
@@ -67,15 +87,30 @@ def remove_scratch_dir(scratch_dir: str) -> None:
         return
     shutil.rmtree(scratch_dir, ignore_errors=True)
     container = os.path.dirname(scratch_dir)
-    if os.path.basename(container) == SCRATCH_CONTAINER:
+    # A namespaced dir (<container>/<namespace>/<uuid>): prune the namespace too.
+    empties = (
+        [container]
+        if os.path.basename(container) == SCRATCH_CONTAINER
+        else (
+            [container, os.path.dirname(container)]
+            if os.path.basename(os.path.dirname(container)) == SCRATCH_CONTAINER
+            else []
+        )
+    )
+    for d in empties:
         try:
-            os.rmdir(container)  # only removes it if now empty (no live siblings)
+            os.rmdir(d)  # only removes it if now empty (no live siblings)
         except OSError:
-            pass  # not empty (concurrent write) or already gone -- leave it
+            return  # not empty (concurrent write) or already gone -- leave it
 
 
-def gc_stale_scratch(parent: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS) -> None:
-    """Best-effort: remove scratch subdirs under ``<parent>/.gbx_scratch`` whose
+def gc_stale_scratch(
+    parent: str,
+    ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS,
+    namespace: Optional[str] = None,
+) -> None:
+    """Best-effort: remove scratch subdirs under ``<parent>/.gbx_scratch`` (or,
+    with a ``namespace``, only under ``<parent>/.gbx_scratch/<namespace>``) whose
     mtime is older than ``ttl_seconds``.
 
     Age-based and idempotent so it is safe to call from every write even when
@@ -83,13 +118,17 @@ def gc_stale_scratch(parent: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS) 
     alone, and racing deletes are swallowed (``ignore_errors`` / per-entry
     ``try``). Never raises.
     """
-    container = os.path.join(parent, SCRATCH_CONTAINER)
+    container = os.path.join(
+        parent, SCRATCH_CONTAINER, *([namespace] if namespace else [])
+    )
     try:
         entries = os.listdir(container)
     except OSError:
         return  # no container yet, or not listable -- nothing to GC
     now = time.time()
     for name in entries:
+        if namespace is None and _NAMESPACE.match(name):
+            continue  # another owner's namespace: its owner collects it
         sub = os.path.join(container, name)
         try:
             if os.path.isdir(sub) and (now - os.path.getmtime(sub)) > ttl_seconds:

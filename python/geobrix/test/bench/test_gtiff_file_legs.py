@@ -9,10 +9,15 @@ External/managed legs on FUSE tier:
     (gbx_file_read raises ValueError when FILE is unavailable)
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
+import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
+
+# the tests are about the FUSE tier (see `fuse_tier` in conftest.py)
+pytestmark = pytest.mark.usefixtures("fuse_tier")
 
 
 def _write_n_geotiffs(tmp_path, n):
@@ -30,7 +35,7 @@ def _write_n_geotiffs(tmp_path, n):
             transform=transform,
         )
         data = np.arange(12, dtype="float32").reshape(3, 4)
-        with rasterio.open(p, "w", **profile) as ds:
+        with open_raster(p, "w", **profile) as ds:
             ds.write(data, 1)
 
 

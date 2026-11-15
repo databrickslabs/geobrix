@@ -1,5 +1,7 @@
 """_open adapter: v1 struct / v2 materialized / v2 virtual / raw bytes / VirtualTile."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import rasterio
 
@@ -51,7 +53,7 @@ def test_open_v2_virtual_struct(tmp_path):
         transform=rasterio.transform.from_origin(10, 50, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(512 * 512, dtype="float32").reshape(512, 512), 1)
     tile = {
         "cellid": 0,

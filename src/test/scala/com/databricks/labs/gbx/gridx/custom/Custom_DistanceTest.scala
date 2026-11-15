@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx.custom
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.gridx.grid.{CustomGridSystem, GridConf}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Literal
@@ -106,7 +107,7 @@ class Custom_DistanceTest extends PlanTest with SilentSparkSession {
     }
 
     test("gbx_custom_distance: registers and runs as SQL function via functions.register") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val cell = sys.pointToCellID(15.0, 15.0, 0)
         val row  = spark.sql(
             s"""SELECT gbx_custom_distance(

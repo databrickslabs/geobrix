@@ -8,13 +8,28 @@ vectorizes each tile's label mask into georeferenced polygons via
 seam into one polygon per real-world object before dropping anything under
 ``min_area``.
 
-Seam-merge relies on georeferencing, not bookkeeping: when ``overlap`` > 0, an object
-split by a seam is captured by two (or more) neighboring windows, and because each
-window's fragment is vectorized with its own true ``ds.window_transform``, the two
-fragments land at their real-world footprint -- which necessarily overlaps wherever the
-windows themselves overlap. Grouping fragments by plain geometric intersection and
-unioning each group is therefore sufficient; no separate "touch within overlap"
-distance heuristic is needed on top of correct per-tile georeferencing.
+Seam-merge merges only the pieces of ONE object that a chip seam cut apart. Plain
+geometric intersection is not enough: SAM's automatic masks tile nearly the whole scene, so
+neighbouring objects touch, and grouping by ``intersects`` chains them into one blob. Each
+fragment therefore carries the id of the chip it came from, and two fragments are merged
+only when (a) they come from DIFFERENT chips and (b) they agree across the seam between
+those chips:
+
+* chips that overlap (``overlap`` > 0): each window's fragment is vectorized with its own
+  true ``ds.window_transform``, so an object both windows see lands at the same real-world
+  footprint inside their overlap zone. The two fragments are merged when, clipped to that
+  zone, their intersection-over-union is at least ``_SEAM_IOU``;
+* chips that only abut (``overlap`` = 0): the fragments must share a boundary segment ALONG
+  the seam line, at least a pixel long and covering ``_SEAM_IOU`` of their seam edges. A
+  shared edge anywhere else, or a single shared point, is not a seam.
+
+Fragments of one chip are never merged with each other: within a chip the segmenter's own
+labels are the objects (the pieces of one label are one object).
+
+NoData is masked before polygonizing: a pixel the raster marks invalid (NoData, its mask
+band, or alpha 0; ``pyrx.core._nodata.valid_mask``) -- or, for a raster that declares none
+of them, a pixel that is 0 in every band -- is background in every chip's label mask, so a
+black or transparent border never becomes an object.
 
 Light-only module: torch is imported lazily, and only when ``gpus="all"`` needs to
 probe ``torch.cuda.device_count()``. Passing an int ``gpus`` value never imports torch,
@@ -22,19 +37,23 @@ so this module stays importable (and Serverless-safe: no ``spark.conf``/``_jvm``
 ``.rdd``/``sparkContext``) with no GPU deps installed.
 """
 
+import os
 from contextlib import contextmanager
 from threading import Lock
 
 import numpy as np
 import pandas as pd
-import rasterio
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
+from shapely.geometry import Polygon
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.core.crs import area_m2 as _area_m2
-from databricks.labs.gbx.pyrx.core import features, tiling
+from databricks.labs.gbx.ds._listing import to_local_path
+from databricks.labs.gbx.pyrx.core import _nodata, features, tiling
 from databricks.labs.gbx.pyrx.core.gpu_pool import gpu_pool_map
 
 
@@ -75,30 +94,62 @@ def _open_input(tile_or_path):
         yield tile_or_path
         return
     if isinstance(tile_or_path, (bytes, bytearray)):
-        with MemoryFile(bytes(tile_or_path)) as mf, mf.open() as ds:
+        with MemoryFile(bytes(tile_or_path)) as mf, open_bytes(mf) as ds:
             yield ds
         return
-    with rasterio.open(tile_or_path) as ds:
+    with open_data(tile_or_path, remote_ok=True) as ds:  # the caller's own path
         yield ds
 
 
+def _declares_validity(ds) -> bool:
+    """True when ``ds`` says which pixels are NoData: a NoData value, a mask band or an
+    alpha band (any band whose GDAL mask is not ``all_valid``)."""
+    from rasterio.enums import MaskFlags
+
+    return _nodata.has_alpha(ds) or any(
+        MaskFlags.all_valid not in flags for flags in ds.mask_flag_enums
+    )
+
+
 def _iter_chips(ds, tile_px, overlap):
-    """Yield ``(array, transform)`` chips for the grid ``tiling.plan_grid_windows``
-    plans over ``ds``.
+    """Yield ``(image, transform, valid, footprint)`` chips for the grid
+    ``tiling.plan_grid_windows`` plans over ``ds``.
 
     This is the "thin overlapping-window adapter" R1 calls for -- ``iter_overlapping``
     does not exist on ``tiling``. ``plan_grid_windows`` (pure window planning, no
     dataset/bytes) already carries the correct overlap-PERCENTAGE contract shared with
-    heavy ``rst_tooverlappingtiles``; this just turns each planned window into the
-    (array, transform) pair a segmenter + polygonize need, mirroring the
-    Window/``ds.read``/``ds.window_transform`` idiom ``tiling._iter_window_tiles`` already
-    uses (skipping its GTiff-byte encode step, which we don't need here).
+    heavy ``rst_tooverlappingtiles``; this just turns each planned window into what a
+    segmenter + polygonize need, mirroring the Window/``ds.read``/``ds.window_transform``
+    idiom ``tiling._iter_window_tiles`` already uses (skipping its GTiff-byte encode step,
+    which we don't need here).
+
+    ``image`` is the window's data bands (the alpha band, when ``ds`` has one, is left
+    out: the segmenter takes color bands); ``valid`` is the window's HxW validity mask
+    (see the module docstring); ``footprint`` is the window's real-world polygon in
+    ``ds.crs``, which the seam merge uses to find the seam between two chips.
     """
+    declared = _declares_validity(ds)
+    alpha = _nodata.alpha_index(ds.colorinterp)
+    data_bands = [i + 1 for i in range(ds.count) if i != alpha]
     for col, row, w, h in tiling.plan_grid_windows(
         ds.width, ds.height, tile_px, tile_px, overlap
     ):
         win = Window(col, row, w, h)
-        yield ds.read(window=win), ds.window_transform(win)
+        arr = ds.read(data_bands, window=win)
+        if declared:
+            valid = _nodata.valid_mask(ds, window=win)
+        else:
+            valid = np.any(arr != 0, axis=0)
+        transform = ds.window_transform(win)
+        footprint = Polygon(
+            [
+                transform * (0, 0),
+                transform * (w, 0),
+                transform * (w, h),
+                transform * (0, h),
+            ]
+        )
+        yield arr, transform, valid, footprint
 
 
 def _polygonize_mask(mask, transform, crs):
@@ -128,7 +179,7 @@ def _polygonize_mask(mask, transform, crs):
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(mask, 1)
-        with mf.open() as src:
+        with open_bytes(mf) as src:
             frags = features.polygonize(src, band=1, connectedness=4)
     return [(wkb, value) for wkb, value in frags if value != 0]
 
@@ -139,31 +190,80 @@ def _polygonize_mask(mask, transform, crs):
 # metric coverage/min_area needs.
 
 
-def _merge_seams(frags, min_area, crs):
-    """Union polygon fragments that geometrically touch/overlap into one polygon per
-    connected group (see module docstring for why plain geometric intersection is a
-    sufficient seam-merge criterion here), then drop groups whose merged area (in
-    SQUARE METERS -- see ``_area_m2``; the polygons are in ``crs``) is under
+# The agreement two fragments from neighbouring chips need across their seam to be one
+# object: the intersection-over-union of the two, clipped to the chips' overlap zone (or,
+# for abutting chips, of their edges along the seam line).
+_SEAM_IOU = 0.5
+
+
+def _seam_match(a, b, zone, px) -> bool:
+    """True when fragments ``a`` and ``b`` (from two different chips whose footprints meet
+    in ``zone``) are the two sides of one object cut by the seam -- see the module
+    docstring. ``px`` is the pixel size in CRS units."""
+    # Overlapping chips: compare the two fragments inside the overlap zone.
+    if zone.area > 0:
+        za, zb = a.intersection(zone), b.intersection(zone)
+        inter = za.intersection(zb).area
+        if inter <= 0:
+            return False
+        return inter / za.union(zb).area >= _SEAM_IOU
+    if zone.length <= 0:  # chips that meet at a single corner point: no seam
+        return False
+    # Abutting chips: the seam is the line ``zone``. Each fragment's edge along it, as a
+    # thin strip (tolerant to float noise between the two window transforms).
+    tol = 0.05 * px
+    band = zone.buffer(tol, cap_style="flat")
+    sa, sb = a.buffer(tol).intersection(band), b.buffer(tol).intersection(band)
+    shared = sa.intersection(sb).area
+    # Less than a pixel of shared seam is a corner, not a seam.
+    if shared / (2 * tol) < px:
+        return False
+    return shared / sa.union(sb).area >= _SEAM_IOU
+
+
+def _merge_seams(frags, min_area, crs, footprints, px):
+    """Merge the fragments of one object that chip seams cut apart, then drop objects whose
+    merged area (in SQUARE METERS -- see ``_area_m2``; the polygons are in ``crs``) is under
     ``min_area``. Returns a list of ``{"label", "geom", "score"}`` row dicts.
+
+    ``frags`` holds ``(wkb, value, chip)`` triples: ``chip`` indexes ``footprints`` (each
+    chip's real-world polygon). The pieces of one label in one chip are one object; two
+    objects are merged only across a seam between different chips (``_seam_match``), never
+    within a chip. ``px`` is the raster's pixel size in CRS units.
     """
-    geoms = [shapely.wkb.loads(bytes(wkb)) for wkb, _ in frags]
+    # One object per (chip, label): the pieces of a label are the segmenter's own object.
+    pieces: dict = {}
+    for wkb, value, chip in frags:
+        pieces.setdefault((chip, value), []).append(shapely.wkb.loads(bytes(wkb)))
+    keys = list(pieces)
+    geoms = [g[0] if len(g) == 1 else unary_union(g) for g in pieces.values()]
+    chips = [chip for chip, _ in keys]
     n = len(geoms)
     parent = list(range(n))
 
     def find(i):
         while parent[i] != i:
+            parent[i] = parent[parent[i]]
             i = parent[i]
         return i
 
-    def union(i, j):
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
+    zones: dict = {}
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if geoms[i].intersects(geoms[j]):
-                union(i, j)
+    def zone_of(ci, cj):
+        k = (min(ci, cj), max(ci, cj))
+        if k not in zones:
+            zones[k] = footprints[ci].intersection(footprints[cj])
+        return zones[k]
+
+    if n > 1:
+        left, right = STRtree(geoms).query(geoms, predicate="intersects")
+        for i, j in zip(left.tolist(), right.tolist()):
+            if i >= j or chips[i] == chips[j]:
+                continue
+            if find(i) == find(j):
+                continue
+            if _seam_match(geoms[i], geoms[j], zone_of(chips[i], chips[j]), px):
+                parent[find(i)] = find(j)
 
     groups: dict = {}
     for i in range(n):
@@ -180,10 +280,39 @@ def _merge_seams(frags, min_area, crs):
     return rows
 
 
-def _default_geosam_factory(gpu_id: int):
+def _resolve_weights(weights, segmenter) -> str | None:
+    """Validate ``weights`` and return its bare local path (``None`` stays ``None``).
+
+    ``dbfs:/Volumes/...`` and ``file:`` forms are normalised through
+    ``ds._listing.to_local_path``. Refused up front, on the driver and before any chip
+    is cut or model is loaded: ``weights`` together with ``segmenter`` (an injected
+    segmenter never loads a checkpoint, so ``weights`` would be silently ignored), and a
+    path that is not a file.
+    """
+    if weights is None:
+        return None
+    if segmenter is not None:
+        raise ValueError(
+            "segment_raster: weights= and segmenter= cannot be used together; an "
+            "injected segmenter loads no checkpoint, so weights= would be ignored. "
+            "Fix: pass only one of them -- load the checkpoint inside your segmenter, "
+            "or drop segmenter= to use the built-in GeoSAM with weights=."
+        )
+    local = to_local_path(os.fspath(weights))
+    if not os.path.isfile(local):
+        raise FileNotFoundError(
+            f"segment_raster: GeoSAM checkpoint not found at {local!r} "
+            f"(weights={weights!r}). Fix: stage the checkpoint file (for example "
+            "sam_vit_h_4b8939.pth) on a Volume and pass its /Volumes/... path, or "
+            "omit weights= to let SamGeo download it (needs internet egress)."
+        )
+    return local
+
+
+def _default_geosam_factory(gpu_id: int, weights: str | None = None):
     """Per-device GeoSAM handle builder -- the default (``segmenter is None``)
     ``segment_raster`` factory. Binds inference to device ``gpu_id`` (``torch.cuda.
-    set_device`` + ``load_geosam(device=f"cuda:{gpu_id}")``) and returns a
+    set_device`` + ``load_geosam(weights=weights, device=f"cuda:{gpu_id}")``) and returns a
     ``(image) -> mask`` callable closed over that device-bound handle.
 
     ``segment_raster`` calls this at most ONCE per distinct ``gpu_id`` (caches the
@@ -197,6 +326,10 @@ def _default_geosam_factory(gpu_id: int):
     can ``monkeypatch.setattr(runner, "_default_geosam_factory", fake)`` to exercise the
     per-device plumbing without torch/GPU installed.
 
+    ``weights`` is a bare local checkpoint path (already validated by
+    ``_resolve_weights``) passed straight to ``load_geosam``; ``None`` lets SamGeo
+    download its default checkpoint.
+
     torch is imported lazily here, inside the default factory -- which only ever runs
     on a GPU worker taking the ``segmenter=None`` path -- so the light wheel stays
     importable with no torch installed.
@@ -207,7 +340,7 @@ def _default_geosam_factory(gpu_id: int):
     from databricks.labs.gbx.models.geosam import segment as _geosam_segment
 
     torch.cuda.set_device(gpu_id)
-    handle = load_geosam(device=f"cuda:{gpu_id}")
+    handle = load_geosam(weights=weights, device=f"cuda:{gpu_id}")
 
     def _segment(image):
         return _geosam_segment(handle, image)
@@ -219,6 +352,7 @@ def segment_raster(
     tile_or_path,
     *,
     segmenter=None,
+    weights=None,
     model: str = "geosam",
     gpus="all",
     tile_px: int = 1024,
@@ -242,6 +376,12 @@ def segment_raster(
             Device-agnostic -- every chip, on every GPU device slot, calls the SAME
             ``segmenter``. Defaults to a per-device GeoSAM handle (``model="geosam"``,
             the only backend wired up so far) when ``None``. Tests inject a fake.
+        weights: optional path to a GeoSAM checkpoint file -- a local path, a
+            ``/Volumes/...`` path or a ``dbfs:/Volumes/...`` URI. Passed to
+            ``load_geosam(weights=...)``. ``None`` (default) lets SamGeo download
+            ``sam_vit_h_4b8939.pth`` from its CDN, which needs internet egress; on a
+            workspace without it, stage the checkpoint on a Volume and pass its path.
+            Cannot be combined with ``segmenter``.
         model: which built-in backend to default to when ``segmenter`` is ``None``.
             Only ``"geosam"`` is implemented today.
         gpus: ``"all"`` probes ``torch.cuda.device_count()`` (lazy import); an int
@@ -262,6 +402,7 @@ def segment_raster(
         mask carries no per-object confidence; wire a real score through once a
         confidence-scored backend exists.
     """
+    local_weights = _resolve_weights(weights, segmenter)
     if segmenter is None:
         if model != "geosam":
             raise ValueError(
@@ -271,7 +412,13 @@ def segment_raster(
         # Per-device factory: segment_raster (below) calls this at most once per
         # distinct gpu_id and caches the result, so the default path binds inference to
         # the chip's actual assigned device instead of one shared cuda:0 handle.
-        factory = _default_geosam_factory
+        if local_weights is None:
+            factory = _default_geosam_factory
+        else:
+
+            def factory(gpu_id):
+                return _default_geosam_factory(gpu_id, weights=local_weights)
+
     else:
         # Injected segmenter is device-agnostic: every gpu_id gets the same callable.
         def factory(_gpu_id):
@@ -281,7 +428,9 @@ def segment_raster(
 
     with _open_input(tile_or_path) as ds:
         crs = ds.crs
-        chips = list(_iter_chips(ds, tile_px, overlap))
+        t = ds.transform
+        px = min(np.hypot(t.a, t.d), np.hypot(t.b, t.e))
+        chips = [(i, *c) for i, c in enumerate(_iter_chips(ds, tile_px, overlap))]
 
     # Per-gpu_id handle cache: gpu_pool_map guarantees at most one chip runs on a given
     # device at a time, so a cached per-device handle (e.g. a stateful SamGeo predictor)
@@ -293,17 +442,19 @@ def segment_raster(
     handles_lock = Lock()
 
     def _run_one(chip, gpu_id):
-        arr, transform = chip
+        chip_id, arr, transform, valid, _ = chip
         image = np.moveaxis(arr, 0, -1)
         with handles_lock:
             fn = handles.get(gpu_id)
             if fn is None:
                 fn = factory(gpu_id)
                 handles[gpu_id] = fn
-        mask = fn(image)
-        return _polygonize_mask(mask, transform, crs)
+        # NoData is background before polygonizing: no mask over it becomes an object.
+        mask = np.where(valid, np.asarray(fn(image)), 0)
+        return [(wkb, v, chip_id) for wkb, v in _polygonize_mask(mask, transform, crs)]
 
     per_chip = gpu_pool_map(chips, _run_one, gpus=max(1, n_gpus))
     all_frags = [frag for chip_frags in per_chip for frag in chip_frags]
-    rows = _merge_seams(all_frags, min_area, crs)
+    footprints = [c[4] for c in chips]
+    rows = _merge_seams(all_frags, min_area, crs, footprints, px)
     return pd.DataFrame(rows, columns=["label", "geom", "score"])

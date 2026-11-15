@@ -7,9 +7,53 @@ trusted developer code (the same trust model as any user-authored Spark UDF). Do
 NOT pass pyfunc sourced from untrusted input."""
 
 import numpy as np
-from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
+
+
+def check_function(pyfunc: str, func_name: str) -> None:
+    """The arguments of ``rst_derivedband`` without running the code: the source must parse, and define
+    ``func_name`` at its module level (a ``def``, a ``class``, an assignment or an import, also inside an
+    ``if``, ``try``, ``with``, ``for`` or ``while`` block). A ``ValueError`` names the offender.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(str(pyfunc))
+    except SyntaxError as exc:
+        raise ValueError(f"rst_derivedband: python_func does not parse: {exc}") from exc
+    defined = set()
+
+    def visit(body):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                defined.add(node.name)  # a definition's own body is not module scope
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                defined.update(
+                    n.id
+                    for t in targets
+                    for n in ast.walk(t)
+                    if isinstance(n, ast.Name)
+                )
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                defined.update((a.asname or a.name).split(".")[0] for a in node.names)
+            else:
+                # a compound statement runs at module scope: a name defined in an if/try/with/for/while block is
+                # bound once exec has run it
+                for field in ("body", "orelse", "finalbody"):
+                    visit(getattr(node, field, None) or [])
+                for handler in getattr(node, "handlers", None) or []:
+                    visit(handler.body)
+
+    visit(tree.body)
+    if str(func_name) not in defined:
+        raise ValueError(
+            f"rst_derivedband: python_func defines no function named {func_name!r}"
+        )
 
 
 def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
@@ -29,7 +73,8 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
         func_name: Name of the callable within ``pyfunc``.
 
     Returns:
-        GTiff bytes of the resulting single-band Float64 raster.
+        GTiff bytes of the resulting single-band Float64 raster; its own mask band marks the
+        pixels the input marks transparent (alpha band) or masked (own mask band).
     """
     namespace = {"np": np, "numpy": np}
     exec(pyfunc, namespace)  # noqa: S102 — trusted developer code by design
@@ -38,13 +83,12 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     out_ar = np.zeros((ds.height, ds.width), dtype="float64")
     gt = ds.transform.to_gdal()
     func(in_ar, out_ar, 0, 0, ds.width, ds.height, ds.width, ds.height, 0, gt)
-    profile = ds.profile.copy()
+    profile = _comp.source_profile(ds.profile)
     profile.update(driver="GTiff", count=1, dtype="float64")
-    decoded_bytes = out_ar.nbytes
-    profile.update(
-        _comp.creation_opts("float64", decoded_bytes=decoded_bytes, compress="auto")
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out_ar.astype("float64"), 1)
-        return mf.read()
+    # The output has one band and no alpha band of its own: where the input is transparent
+    # or masked (the rule of both tiers, ``_nodata.valid_mask``) the output is invalid,
+    # carried in its own mask band. An input with neither is written as before.
+    mask = None
+    if _nodata.has_alpha(ds) or _nodata.has_own_mask(ds):
+        mask = np.where(_nodata.valid_mask(ds), 255, 0).astype("uint8")
+    return _comp.write_gtiff(profile, out_ar[np.newaxis, ...], mask=mask)

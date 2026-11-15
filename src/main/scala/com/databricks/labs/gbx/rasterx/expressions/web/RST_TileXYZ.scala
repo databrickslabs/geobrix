@@ -27,8 +27,9 @@ import scala.util.Try
  *    3. `gdal.Translate -of <format>` to materialize PNG / JPEG / WEBP bytes.
  *    4. Read the bytes back from `/vsimem/`.
  *
- *  Out-of-extent tiles return a transparent PNG (alpha=0) of the requested size - NOT
- *  null. Slippy-map tile servers expect a 200-status non-zero body even outside source
+ *  A bad parameter (an unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096]) raises.
+ *  A data failure does not: out-of-extent tiles, and tiles that cannot be read or rendered, return a
+ *  transparent PNG (alpha=0) of the requested size - NOT null. Slippy-map tile servers expect a 200-status non-zero body even outside source
  *  coverage; returning null would surface as a 404 in the publishing pipeline.
  *
  *  Defaults: `format = "PNG"`, `size = 256`, `resampling = "bilinear"`, `rescale = "auto"`.
@@ -59,7 +60,9 @@ case class RST_TileXYZ(
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = RST_TileXYZ.name
-    override def replacement: Expression = invoke(RST_TileXYZ)
+    // propagateNull = false: a NULL tile is a transparent image (never NULL, for a slippy-map server); a NULL
+    // coordinate is a primitive and still nulls the result
+    override def replacement: Expression = invoke(RST_TileXYZ, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 }
@@ -68,17 +71,67 @@ case class RST_TileXYZ(
 object RST_TileXYZ extends WithExpressionInfo {
 
     /** GDAL drivers that can act as XYZ tile output formats. */
-    private val AllowedFormats: Set[String] = Set("PNG", "JPEG", "WEBP")
+    val AllowedFormats: Set[String] = Set("PNG", "JPEG", "WEBP")
 
     /** Allowed GDAL warp resampling algorithms. */
-    private val AllowedResampling: Set[String] = Set(
+    val AllowedResampling: Set[String] = Set(
         "near", "bilinear", "cubic", "cubicspline", "lanczos",
         "average", "mode", "max", "min", "med", "q1", "q3"
     )
 
+    /** Largest tile side, in pixels. */
+    val MaxTileSize: Int = 4096
+
+    /** Validates the render arguments of `rst_tilexyz`. They are parameters, not data, so they need no
+      * dataset and a bad one raises.
+      *
+      * @param fn
+      *   function name used as the message prefix
+      * @return
+      *   the normalized `(format, resampling)`: format upper-cased, resampling lower-cased
+      */
+    def validateRender(fn: String, format: String, size: Int, resampling: String): (String, String) = {
+        // scalastyle:off caselocale
+        val fmt = format.toUpperCase
+        val resampleLower = resampling.toLowerCase
+        // scalastyle:on caselocale
+        require(AllowedFormats.contains(fmt), s"$fn: format must be one of ${AllowedFormats.mkString(", ")}; got '$format'")
+        require(
+          AllowedResampling.contains(resampleLower),
+          s"$fn: unsupported resampling '$resampling'; allowed: ${AllowedResampling.toSeq.sorted.mkString(", ")}"
+        )
+        require(size > 0 && size <= MaxTileSize, s"$fn: size must be in (0, $MaxTileSize]; got $size")
+        (fmt, resampleLower)
+    }
+
+    /** The `rescale` argument: `auto`, `none`, or an explicit `min,max` pair. */
+    sealed trait Rescale
+    case object RescaleAuto extends Rescale
+    case object RescaleNone extends Rescale
+    final case class RescalePair(lo: Double, hi: Double) extends Rescale
+
+    /** Parses the `rescale` argument (null means `auto`); raises on anything else. Needs no dataset. */
+    def parseRescale(fn: String, rescale: String): Rescale = {
+        val mode = if (rescale == null) "auto" else rescale.trim
+        // scalastyle:off caselocale
+        val modeLower = mode.toLowerCase
+        // scalastyle:on caselocale
+        if (modeLower == "auto") RescaleAuto
+        else if (modeLower == "none") RescaleNone
+        else {
+            val parts = mode.split(",").map(_.trim)
+            require(parts.length == 2, s"$fn: rescale must be 'auto', 'none', or 'min,max'; got '$rescale'")
+            val bounds = Try((parts(0).toDouble, parts(1).toDouble))
+            require(bounds.isSuccess, s"$fn: rescale (min,max) must be two numbers; got '$rescale'")
+            val (lo, hi) = bounds.get
+            require(lo < hi, s"$fn: rescale (min,max) must have min < max; got ($lo, $hi)")
+            RescalePair(lo, hi)
+        }
+    }
+
     // Spark sends Python ints as LongType - we accept both Int and Long overloads. Int
     // overloads are needed for SQL literal default args; Long overloads cover the
-    // PySpark-from-notebook case (Wave 3 found this in Quadbin_PointAsCell).
+    // PySpark-from-notebook case.
     def eval(row: InternalRow, z: Int, x: Int, y: Int, format: UTF8String, size: Int, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
         doInvoke(row, z, x, y, format, size, resampling, rescale, conf, BinaryType)
     def eval(row: InternalRow, z: Long, x: Long, y: Long, format: UTF8String, size: Long, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
@@ -90,26 +143,24 @@ object RST_TileXYZ extends WithExpressionInfo {
         format: UTF8String, size: Int, resampling: UTF8String,
         rescale: UTF8String, conf: UTF8String, dt: DataType
     ): Array[Byte] = {
+        // A bad PARAMETER raises (error-handling.mdx): validate before the Try below, which exists for bad DATA.
+        // These checks read no dataset, so a failure here is never a data failure.
+        val fmtStr = if (format == null) "PNG" else format.toString
+        val resampleStr = if (resampling == null) "bilinear" else resampling.toString
+        val rescaleStr = if (rescale == null) "auto" else rescale.toString
+        val (fmt, resampleLower) = validateRender("rst_tilexyz", fmtStr, size, resampleStr)
+        parseRescale("rst_tilexyz", rescaleStr)
+
         val safe: () => Array[Byte] = () => {
             val exprConf = ExpressionConfig.fromB64(conf.toString)
             RST_ExpressionUtil.init(exprConf)
-            val fmtStr = if (format == null) "PNG" else format.toString
-            val resampleStr = if (resampling == null) "bilinear" else resampling.toString
-            val rescaleStr = if (rescale == null) "auto" else rescale.toString
-            // scalastyle:off caselocale
-            val fmt = fmtStr.toUpperCase
-            val resampleLower = resampleStr.toLowerCase
-            // scalastyle:on caselocale
-            require(AllowedFormats.contains(fmt), s"rst_tilexyz: format must be one of ${AllowedFormats.mkString(", ")}; got '$fmtStr'")
-            require(AllowedResampling.contains(resampleLower),
-                s"rst_tilexyz: unsupported resampling '$resampleStr'; allowed: ${AllowedResampling.toSeq.sorted.mkString(", ")}")
-            require(size > 0 && size <= 4096, s"rst_tilexyz: size must be in (0, 4096]; got $size")
             val (_, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
             try execute(ds, options, z, x, y, fmt, size, resampleLower, rescaleStr)
             finally RasterDriver.releaseDataset(ds)
         }
         // safeEval wraps Throwables -> null; for BinaryType callers want bytes, never null.
-        // On hard failure we still want a transparent PNG, so wrap the safe-eval ourselves.
+        // On a data failure (unreadable tile, nothing to render) we still want a transparent PNG, so wrap the
+        // safe-eval ourselves.
         val result = Try(safe()).toOption.flatMap(Option(_))
         result.getOrElse(transparentPng(size))
     }
@@ -134,10 +185,6 @@ object RST_TileXYZ extends WithExpressionInfo {
      *  bands of every output format -- PNG, JPEG, and WEBP alike.
      */
     private[web] def resolveScale(ds: Dataset, rescale: String): String = {
-        val mode = if (rescale == null) "auto" else rescale.trim
-        // scalastyle:off caselocale
-        val modeLower = mode.toLowerCase
-        // scalastyle:on caselocale
         val nbands = ds.GetRasterCount
 
         // Use repeated -scale (one per band in order) rather than -scale_<n> form;
@@ -145,27 +192,22 @@ object RST_TileXYZ extends WithExpressionInfo {
         def fmtBands(pairs: Seq[(Double, Double)]): String =
             pairs.map { case (lo, hi) => s"-scale $lo $hi 0 255" }.mkString(" ")
 
-        if (modeLower == "none") {
-            ""
-        } else if (modeLower == "auto") {
-            val firstDt = ds.GetRasterBand(1).GetRasterDataType
-            if (firstDt == gdalconstConstants.GDT_Byte) {
-                "" // uint8 pass-through
-            } else {
-                val pairs = (1 to nbands).map { b =>
-                    val (lo, hi) = BandAccessors.getMinMax(ds.GetRasterBand(b))
-                    if (!(lo < hi)) (lo, lo + 1.0) else (lo, hi)
+        parseRescale("rst_tilexyz", rescale) match {
+            case RescaleNone => ""
+            case RescaleAuto =>
+                val firstDt = ds.GetRasterBand(1).GetRasterDataType
+                if (firstDt == gdalconstConstants.GDT_Byte) {
+                    "" // uint8 pass-through
+                } else {
+                    val pairs = (1 to nbands).map { b =>
+                        val (lo, hi) = BandAccessors.getMinMax(ds.GetRasterBand(b))
+                        if (!(lo < hi)) (lo, lo + 1.0) else (lo, hi)
+                    }
+                    fmtBands(pairs)
                 }
-                fmtBands(pairs)
-            }
-        } else {
-            // explicit "min,max" pair (e.g. "8000,12000"), repeated per band.
-            val parts = mode.split(",").map(_.trim)
-            require(parts.length == 2, s"rst_tilexyz: rescale must be 'auto', 'none', or 'min,max'; got '$rescale'")
-            val lo = parts(0).toDouble
-            val hi = parts(1).toDouble
-            require(lo < hi, s"rst_tilexyz: rescale (min,max) must have min < max; got ($lo, $hi)")
-            fmtBands(Seq.fill(nbands)((lo, hi)))
+            case RescalePair(lo, hi) =>
+                // explicit "min,max" pair (e.g. "8000,12000"), repeated per band.
+                fmtBands(Seq.fill(nbands)((lo, hi)))
         }
     }
 
@@ -192,8 +234,9 @@ object RST_TileXYZ extends WithExpressionInfo {
         executeWithScale(ds, options, z, x, y, format, size, resampling, scaleFlags)
     }
 
-    /** Render with a PRE-RESOLVED scale string (RST_XYZPyramid resolves once and passes it
-     *  here for every tile so all tiles share one mapping -- no seams, stats read once).
+    /** Render with a PRE-RESOLVED scale string: a caller that renders many tiles of one source
+     *  resolves it once and passes it here for every tile, so all tiles share one mapping
+     *  (no seams, stats read once).
      */
     private[web] def executeWithScale(
         ds: Dataset,

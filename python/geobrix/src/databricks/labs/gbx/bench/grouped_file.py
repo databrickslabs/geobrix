@@ -37,6 +37,9 @@ import os
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
+
 from .results import ResultRow
 from .runner import capture_env, peak_rss_mb, time_iters
 
@@ -62,20 +65,20 @@ MANIFEST_NAME = "cog_multiwindow_manifest.json"
 
 
 def _apply_clip(prx, df, *, geom_wkb, geom_crs, **_):
-    return prx.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
+    return rx_helpers.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
 
 
 def _apply_transform(prx, df, *, target_srid, **_):
     # Reproject to WebMercator EPSG code via the generic transform fn.
-    return prx.rst_transform_grouped(df, int(target_srid))
+    return rx_helpers.rst_transform_grouped(df, int(target_srid))
 
 
 def _apply_to_webmercator(prx, df, **_):
-    return prx.rst_to_webmercator_grouped(df)
+    return rx_helpers.rst_to_webmercator_grouped(df)
 
 
 def _apply_slope(prx, df, **_):
-    return prx.rst_slope_grouped(df)
+    return rx_helpers.rst_slope_grouped(df)
 
 
 # name -> (apply, category-note).  category is a free label used only for the
@@ -172,10 +175,9 @@ def _clip_geom_from_source(src_path):
     in a multiwindow corpus share one georeferencing transform).  Serverless-safe
     -- pure rasterio, no Spark.
     """
-    import rasterio
     from shapely.geometry import box
 
-    with rasterio.open(str(src_path)) as ds:
+    with open_data(str(src_path)) as ds:
         b = ds.bounds
         crs = ds.crs
         crs_str = None
@@ -193,16 +195,17 @@ def _window_gtiff_bytes(src_path, window) -> bytes:
     Used to build the ``materialized`` mode's inline raster: the same pixels a
     virtual tile would read lazily, baked into the row.
     """
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.windows import Window
     from rasterio.windows import transform as window_transform
 
+    from databricks.labs.gbx.pyrx.core.compression import source_profile
+
     col_off, row_off, width, height = window
-    with rasterio.open(str(src_path)) as ds:
+    with open_data(str(src_path)) as ds:
         win = Window(col_off, row_off, width, height)
         data = ds.read(window=win)
-        profile = ds.profile.copy()
+        profile = source_profile(ds.profile, unless_jpeg=True)
         profile.update(
             driver="GTiff",
             width=width,

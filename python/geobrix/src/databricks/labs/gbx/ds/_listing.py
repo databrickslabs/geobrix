@@ -8,71 +8,35 @@ from __future__ import annotations
 
 import os
 import re
-import time
-from typing import Callable, List, TypeVar
+import time  # noqa: F401  # tests patch ``_listing.time.sleep``
+from typing import Callable, Iterator, List, Optional
 
-_T = TypeVar("_T")
-
-# ---------------------------------------------------------------------------
-# Transient-retry helper for UC Volume FUSE eventual-consistency
-# ---------------------------------------------------------------------------
-# UC Volume FUSE mounts can raise FileNotFoundError or OSError transiently
-# even when the file is healthy and readable — especially soon after a write
-# (eventual-consistency propagation lag). Mosaic worked around this with up to
-# ~10 retries. We use the same bound.
-#
-# Usage:
-#   result = _retry_transient(lambda: open(path, "rb"))
-#   size   = _retry_transient(lambda: os.stat(path).st_size)
-
-
-def _retry_transient(
-    fn: Callable[[], _T], attempts: int = 10, backoff: float = 0.5
-) -> _T:
-    """Call *fn()*, retrying on FileNotFoundError / OSError up to *attempts* times.
-
-    Each retry waits ``backoff * attempt`` seconds (linear backoff).  After all
-    attempts are exhausted the last exception is re-raised.
-
-    Only retries :class:`FileNotFoundError` and :class:`OSError` (the FUSE
-    transient-miss family).  Programming errors (TypeError, ValueError, …) are
-    propagated immediately.
-
-    Args:
-        fn:       Zero-argument callable to call and return the result of.
-        attempts: Maximum number of tries (default 10; matches Mosaic precedent).
-        backoff:  Base sleep multiplier in seconds (default 0.5 → max ~4.5 s total).
-
-    Returns:
-        The return value of *fn()* on the first successful call.
-
-    Raises:
-        The last :class:`OSError` / :class:`FileNotFoundError` if all attempts fail.
-    """
-    last_exc: OSError | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            return fn()
-        except (FileNotFoundError, OSError) as exc:
-            last_exc = exc
-            if attempt < attempts:
-                time.sleep(backoff * attempt)
-    raise last_exc  # type: ignore[misc]
-
+# the retry guard lives in the light core; callers keep importing it from here
+from databricks.labs.gbx.core._retry import _retry_transient
 
 # Schemes Hadoop already understands; leave their qualified form untouched.
 _KNOWN_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://?")
 
 
+def is_empty_plan(partition) -> bool:
+    """True for the placeholder Spark passes to ``read`` when ``partitions()`` planned nothing.
+
+    It is ``None`` on OSS Spark and a bare ``InputPartition`` (no fields) on the Databricks runtime.
+    A reader that gets it emits no rows.
+    """
+    from pyspark.sql.datasource import InputPartition
+
+    return partition is None or type(partition) is InputPartition
+
+
 def to_spark_uri(path: str) -> str:
     """Scheme-qualify a listed path to the form Hadoop's FileSystem produces on Databricks.
 
-    ``binaryFile`` and the heavy ``gdal``/``gtiff_gdal`` reader both qualify paths
-    via the Hadoop FileSystem, so a Volume file comes back as ``dbfs:/Volumes/...``.
-    The light reader lists bare FUSE paths (``os.path.abspath`` -> ``/Volumes/...``),
-    which then fail to join (0 rows) against a binaryFile/heavy ``path`` column.
-    This mirrors the heavy ``HadoopUtils.cleanPath`` mapping but for the OUTPUT
-    form (what ``listFiles`` returns), so the light ``source`` column matches.
+    ``binaryFile`` qualifies paths via the Hadoop FileSystem, so a Volume file comes
+    back as ``dbfs:/Volumes/...``. The light reader lists bare FUSE paths
+    (``os.path.abspath`` -> ``/Volumes/...``), which then fail to join (0 rows)
+    against a binaryFile ``path`` column. This maps to the OUTPUT form (what
+    ``listFiles`` returns), so the light ``source`` column matches.
 
     The bare path is still what we hand to rasterio for the actual read — only the
     emitted ``source`` column is qualified.
@@ -131,11 +95,17 @@ def to_local_path(path: str) -> str:
     return path
 
 
+def _hidden(name: str) -> bool:
+    """Spark's file sources skip names starting with ``.`` or ``_``."""
+    return name.startswith((".", "_"))
+
+
 def list_files(
     path: str,
     filter_regex: str = ".*",
     recursive: bool = True,
     raise_on_empty: bool = True,
+    skip_hidden: bool = False,
 ) -> List[str]:
     """Return sorted absolute file paths under ``path`` whose full path matches ``filter_regex``.
 
@@ -150,6 +120,10 @@ def list_files(
         raise_on_empty: When True (default) raise :class:`FileNotFoundError` if no files
                         match.  When False return an empty list instead (callers that want
                         to check emptiness themselves, e.g. existence checks).
+        skip_hidden:    When True, skip files and folders whose name starts with ``.`` or
+                        ``_``, and never descend into such folders (Spark's file-source
+                        convention, which :func:`first_file` always follows). A ``path``
+                        that names a file is returned as is.
 
     Both the recursive and non-recursive traversal paths are wrapped in
     :func:`_retry_transient` so UC Volume FUSE eventual-consistency
@@ -169,8 +143,12 @@ def list_files(
 
         def _walk() -> List[str]:
             result: List[str] = []
-            for root, _dirs, names in os.walk(abspath):
+            for root, dirs, names in os.walk(abspath):
+                if skip_hidden:
+                    dirs[:] = [d for d in dirs if not _hidden(d)]
                 for name in names:
+                    if skip_hidden and _hidden(name):
+                        continue
                     full = os.path.join(root, name)
                     if pattern.match(full):
                         result.append(full)
@@ -190,10 +168,15 @@ def list_files(
 
             def _listdir() -> List[str]:
                 result: List[str] = []
-                for name in os.listdir(abspath):
-                    full = os.path.join(abspath, name)
-                    if os.path.isfile(full) and pattern.match(full):
-                        result.append(full)
+                # scandir reads the entry type with the listing: one stat per file on a FUSE mount would take
+                # minutes for a folder of tens of thousands of files
+                with os.scandir(abspath) as entries:
+                    for entry in entries:
+                        if skip_hidden and _hidden(entry.name):
+                            continue
+                        full = os.path.join(abspath, entry.name)
+                        if entry.is_file() and pattern.match(full):
+                            result.append(full)
                 return result
 
             candidates = _retry_transient(_listdir)
@@ -205,3 +188,51 @@ def list_files(
             )
         return []
     return sorted(candidates)
+
+
+def first_file(
+    path: str,
+    accept: Callable[[str], bool],
+    accept_dir: Optional[Callable[[str], bool]] = None,
+) -> Optional[str]:
+    """First file under ``path`` (recursive, sorted full-path order) whose base name
+    passes ``accept``; ``None`` if there is none.
+
+    A directory whose base name passes ``accept_dir`` (e.g. a ``.gdb`` dataset
+    folder) is a candidate itself, at its place in that order, and is not walked
+    into.
+
+    Stops at the first match: each directory is still read in full (to sort its
+    entries), but the subtrees after the match are never read. Entries whose name
+    starts with ``.`` or ``_`` (and everything under such a directory) are skipped,
+    as Spark's file sources do. Each directory read is wrapped in
+    :func:`_retry_transient`.
+    """
+    root = os.path.abspath(to_local_path(path))
+    if os.path.isfile(root):
+        return root if accept(os.path.basename(root)) else None
+
+    def _entries(d: str) -> list:
+        with os.scandir(d) as it:
+            # A directory sorts as "<name>/", so a depth-first walk over sorted
+            # entries visits files in exactly sorted(full path) order.
+            return sorted(
+                ((e.name + "/" if e.is_dir() else e.name), e.path, e.is_dir())
+                for e in it
+                if not _hidden(e.name)
+            )
+
+    def _matches(d: str) -> Iterator[str]:
+        for _key, full, is_dir in _retry_transient(lambda: _entries(d)):
+            name = os.path.basename(full)
+            if not is_dir:
+                if accept(name):
+                    yield full
+            elif accept_dir is not None and accept_dir(name):
+                yield full
+            else:
+                yield from _matches(full)
+
+    if not os.path.isdir(root):
+        return None
+    return next(_matches(root), None)

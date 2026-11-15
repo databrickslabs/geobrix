@@ -46,7 +46,7 @@ gbx:versions:bump --from 0.5.0 --to 0.5.1
 ## What it will NOT touch (reported for you to judge)
 
 - **Historically-scoped prose** — "introduced in `<OLD>`", "Requires GeoBrix `<OLD>`+", "capabilities introduced in `<OLD>`". These state *when* a feature landed and stay true after a bump; bumping them would be factually wrong. Listed under "Residual bare occurrences" for review.
-- **Lock files** (`package-lock.json`, `pnpm-lock.yaml`), the standalone `genie_map` app version (`apps/genie_map/package.json`), and third-party dep pins that happen to share the number — all false positives.
+- **Lock files** (`package-lock.json`, `pnpm-lock.yaml`), the standalone `genie_map` app version (`examples/apps/genie_map/package.json`), and third-party dep pins that happen to share the number — all false positives.
 - **The committed diagram PNGs** — the docs site displays the `.png`, not the `.svg`. After the SVG pill text is bumped, re-render each PNG from its SVG (headless-Chrome screenshot per the generator header). A version bump alone leaves stale PNGs on the site. The command prints this reminder.
 
 ## Verify after applying
@@ -54,7 +54,7 @@ gbx:versions:bump --from 0.5.0 --to 0.5.1
 1. `pom.xml`, `__init__.py`, and `docs/package.json` all read the new version.
 2. `git grep -n "<OLD>-py3-none-any.whl\|<OLD>-jar-with-dependencies"` returns nothing.
 3. `git grep -n "Current version: <OLD>"` returns nothing.
-4. Build sanity: the wheel builds as `dblabs_geobrix-<NEW>-*.whl`, the JAR as `geobrix-<NEW>-jar-with-dependencies.jar`.
+4. Build sanity: the wheel builds as `geobrix-<NEW>-py3-none-any.whl`, the JAR as `geobrix-<NEW>-jar-with-dependencies.jar`.
 5. Run affected tests: function-info, bindings/parity, and any JAR-path-pinned conftest or parity test.
 
 ## Release flow (after the bump PR merges to `main`)
@@ -65,7 +65,7 @@ gh release create v<NEW> --latest --title "GeoBrix v<NEW> (Beta)" --notes "..."
 gh workflow run "package geobrix artifacts" -f ref=v<NEW> -f attach_to_tag=v<NEW>
 ```
 
-Builds and attaches six assets (JAR, wheel, docs zip, GDAL tarball + `.sha256`, GDAL init script); docs deploy auto-triggers on the docs-touching merge to `main`. Run as `mjohns-databricks` (`gh auth switch --user mjohns-databricks`).
+Builds and attaches three assets: the JAR, the docs zip, and the DCS Dockerfile. The release owner builds and attaches the env wheels users install (`+env5`, `+env6`), not the workflow. See "Release: building and attaching the env wheels" in `gbx-build-wheel.md`. Docs deploy auto-triggers on the docs-touching merge to `main`. Run as `mjohns-databricks` (`gh auth switch --user mjohns-databricks`).
 
 ## Notes
 

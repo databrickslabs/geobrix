@@ -8,6 +8,11 @@ Column expressions only (no _jvm / spark.conf / rdd).
 
 from __future__ import annotations
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import io
 import json
 from typing import Optional, Sequence
@@ -24,7 +29,7 @@ from pyspark.sql.types import BinaryType
 from databricks.labs.gbx.ds.tiles._header import build_header_info, sniff_tile_type
 from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
 
-# Mirror heavy PMTilesAcc's 100 MiB accumulation cap so the failure mode matches.
+# The 100 MiB accumulation cap of one archive (a group over it raises).
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 
 # Set True by register_pmtiles_agg; only the fallback wrapper path consults it.

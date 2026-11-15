@@ -8,9 +8,9 @@ import pmtilesRead from '!!raw-loader!../../tests/python/readers/pmtiles_gbx_rea
 
 # PMTiles Reader
 
-_Since:_ lightweight `pmtiles_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `pmtiles_gbx` **v0.4.0**
 
-The **lightweight** `pmtiles_gbx` reader produces a tile pyramid as
+The `pmtiles_gbx` reader produces a tile pyramid as
 `(z, x, y, bytes)` rows. It has two sources, chosen by the `source` option:
 
 - **`source="raster"`** — build an XYZ (slippy-map) tile **mosaic pyramid** from a
@@ -20,19 +20,17 @@ The **lightweight** `pmtiles_gbx` reader produces a tile pyramid as
 - **`source="archive"`** — read tiles back **out of an existing `.pmtiles`
   archive**, one row per stored tile.
 
-Both sources emit the **same `(z, x, y, bytes)` schema** — which is exactly the
-input schema the [PMTiles writer](../writers/pmtiles) expects — so a read feeds
+Both sources emit the **same `(z, x, y, bytes)` schema**. This is exactly the
+input schema the [PMTiles writer](../writers/pmtiles) expects, so a read feeds
 straight into a write with no reshaping.
 
-:::note Lightweight-only read path
-`pmtiles_gbx` is a pure-Python DataSource V2 reader: **no JAR, no init script**,
+:::note Python-only read path
+`pmtiles_gbx` is a pure-Python DataSource V2 reader: **no JAR**,
 and it runs on Serverless, standard (shared), and ARM clusters. The
-Release Notes' note that heavyweight PMTiles read "is not supported" refers to the
-**heavyweight** `spark.read.format("pmtiles")` path — the lightweight
-`pmtiles_gbx` reader documented here **is** a supported read path.
+`pmtiles_gbx` reader documented here is the read path for PMTiles in GeoBrix.
 :::
 
-Register the lightweight DataSources once per session:
+Register the `*_gbx` DataSources once per session:
 
 <CodeFromTest code={pmtilesRead} language="python" functionName="REGISTER"
   source="docs/tests/python/readers/pmtiles_gbx_read_examples.py"
@@ -54,7 +52,7 @@ root
 
 ## `source="raster"` — mosaic pyramid from rasters
 
-Point the reader at a directory of rasters and an area of interest; it enumerates
+Point the reader at a directory of rasters and an area of interest. It enumerates
 the slippy tiles across the zoom range, attaches only the sources that intersect
 each tile, and renders one tile per `(z, x, y)` with `rio-tiler`.
 
@@ -82,7 +80,7 @@ into a `.pmtiles` archive is a direct hand-off:
 | `pixelSelection` | `"first"` | Mosaic pixel-selection method. Only `"first"` is supported in v1; any other value raises. |
 
 An AOI (or `bbox`) that intersects zero tiles for the requested zoom range logs a
-warning and returns an **empty** DataFrame with the standard schema — not an error.
+warning. The result is an **empty** DataFrame with the standard schema, not an error.
 
 ## `source="archive"` — read an existing `.pmtiles`
 
@@ -106,6 +104,7 @@ stores — PNG/JPEG/WebP/MVT).
 - [PMTiles Writer](../writers/pmtiles) — package `(z, x, y, bytes)` rows into archives.
 - [VizX — PMTiles viewer](../api/vizx-pmtiles) — inspect a `.pmtiles` archive in a notebook.
 - [Helios notebooks](../notebooks/helios) — end-to-end tiling to PMTiles over a San Francisco AOI.
+- [Ingestion Pipelines](../ingestion/overview) — ingest new and changed files incrementally
 
 ## Common functions: used vs excluded
 
@@ -119,5 +118,5 @@ primitives. The table below shows which are active in this reader and which are 
 | `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

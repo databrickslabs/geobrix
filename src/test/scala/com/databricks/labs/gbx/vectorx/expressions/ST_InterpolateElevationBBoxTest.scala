@@ -151,4 +151,38 @@ class ST_InterpolateElevationBBoxTest extends AnyFunSuite {
             pt.getCoordinate.getZ should be(planeZ(pt.getX, pt.getY) +- 1e-6)
         }
     }
+
+    test("st_interpolateelevationbbox splits a break line into parts, as st_triangulate does") {
+        // A multi-line adds each line, a polygon adds its ring and a point element is ignored: the same grid
+        // as the parts given one by one, in both modes. Off-plane break line Z makes the answer depend on them.
+        val wkt = new org.locationtech.jts.io.WKTReader()
+        def wkb(s: String): Array[Byte] = JTS.toWKB3(wkt.read(s))
+        val parts = Seq(
+          "LINESTRING Z (10 20 500, 90 20 500)",
+          "LINESTRING Z (10 80 -50, 90 80 -50)",
+          "LINEARRING Z (40 40 300, 60 40 300, 60 60 300, 40 60 300, 40 40 300)"
+        ).map(wkb)
+        val grouped = Seq(
+          "MULTILINESTRING Z ((10 20 500, 90 20 500), (10 80 -50, 90 80 -50))",
+          "POLYGON Z ((40 40 300, 60 40 300, 60 60 300, 40 60 300, 40 40 300))",
+          "POINT Z (50 50 999)"
+        ).map(wkb)
+        def run(breaks: Seq[Array[Byte]], mode: String): Seq[(Double, Double, Double)] =
+            evalExpr(ST_InterpolateElevationBBox(
+              geomArrayLit(cornerPoints: _*), geomArrayLit(breaks: _*), Literal(0.0), Literal(0.01),
+              Literal.create(UTF8String.fromString("NONENCROACHING"), StringType),
+              Literal(0.0), Literal(0.0), Literal(100.0), Literal(100.0),
+              Literal(10), Literal(10), Literal(32633), Literal(mode)
+            )).map { r =>
+                val c = JTS.fromWKB(r.getBinary(0)).getCoordinate
+                (c.x, c.y, c.getZ)
+            }.sorted
+        Seq("constrained", "conforming").foreach { mode =>
+            val split = run(parts, mode)
+            split.length shouldBe 100
+            run(grouped, mode) shouldBe split
+            // the break lines change the surface: it is not the corner plane any more
+            split.exists { case (x, y, z) => math.abs(z - planeZ(x, y)) > 1.0 } shouldBe true
+        }
+    }
 }

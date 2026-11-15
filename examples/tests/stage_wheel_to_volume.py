@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""
+Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 or GBX_BUNDLE_SKIP_JAR=1,
+either of which skips the JAR build AND upload ENTIRELY -- no Maven, and python/geobrix/lib/
+is left untouched -- for light-tier-only wheel changes), then build the GeoBrix Python wheel
+(python3 -m build) and stage it to TWO locations:
+  1. GBX_ARTIFACT_VOLUME/<whl_filename>  — artifact Volume dir; dedupes to exactly one
+     geobrix-*.whl (any other-version geobrix-*.whl in that dir is removed before upload;
+     a listing/delete failure aborts the run with a non-zero exit).
+  2. bundle volroot/<whl_filename>       — /Volumes/<GBX_BUNDLE_VOLUME_CATALOG>/
+     <GBX_BUNDLE_VOLUME_SCHEMA>/<GBX_BUNDLE_VOLUME_NAME>/ — the bundle/%pip path used by
+     notebooks and the bench launcher; overwrite in place.
+Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip both Databricks
+uploads. Loads config from databricks_cluster_config.env. Overwrites if file already exists.
+
+--env 5|6|both stages the env wheel(s) instead (dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl,
+built by gbx:build:wheel): no JAR step (the env wheel carries its JAR), no build, and only the
+bundle volroot (the %pip path); the artifact Volume dir and its plain wheel are left as they are.
+--no-prune keeps every other geobrix-*.whl in the artifact Volume dir (no single-version cleanup).
+--versioned (with --env) stages each env wheel to <volroot>/geobrix/<version>/env<N>/ instead of the volroot itself,
+removes every other geobrix-*.whl in that folder and verifies the uploaded size; the wheels of the volroot are left alone.
+--dest DIR (with one --env 5|6) stages that wheel to the Volume folder DIR (created if missing), removes every other
+geobrix-*.whl there and verifies the uploaded size: an isolated folder that holds this one wheel, e.g. for a Unity
+Catalog install. It excludes --versioned and --env both.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from _artifact_volume import bundle_root, prune_stale, upload_verified, versioned_dir, wheel_version
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
+
+TESTS_DIR = Path(__file__).resolve().parent
+_env_file = cluster_config_file(TESTS_DIR)
+if _env_file.exists():
+    with open(_env_file) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if k and v and not os.environ.get(k):
+                    os.environ[k] = v
+
+
+_BUILD_REQUIRES_CHECK = """
+import sys, tomllib
+from importlib.metadata import PackageNotFoundError, version
+from packaging.requirements import Requirement
+
+with open(sys.argv[1], "rb") as f:
+    requires = tomllib.load(f).get("build-system", {}).get("requires", [])
+for spec in requires:
+    req = Requirement(spec)
+    try:
+        if not req.specifier.contains(version(req.name), prereleases=True):
+            sys.exit(1)
+    except PackageNotFoundError:
+        sys.exit(1)
+"""
+
+
+def _venv_meets_build_requires(venv_py: Path, pkg_dir: Path) -> bool:
+    """True when `venv_py` has every package in pyproject's [build-system] requires at a version
+    that satisfies it, so `build --no-isolation` can use the venv. Any doubt answers False."""
+    probe = subprocess.run(
+        [str(venv_py), "-c", _BUILD_REQUIRES_CHECK, str(pkg_dir / "pyproject.toml")],
+        capture_output=True,
+    )
+    return probe.returncode == 0
+
+
+def _env_wheels(project_root: Path, envs) -> list:
+    """dist/env<N>/'s wheel for each requested env, or an error string."""
+    out = []
+    for env in envs:
+        found = sorted((project_root / "dist" / f"env{env}").glob(f"geobrix-*+env{env}-py3-none-any.whl"))
+        if len(found) != 1:
+            return f"dist/env{env}/ holds {[f.name for f in found]}: build it with gbx:build:wheel --env {env}"
+        out.append(found[0])
+    return out
+
+
+def _upload_then_prune(w, whl: Path, folder: str) -> int:
+    """Upload ``whl`` to ``folder`` and verify it, and only then remove every other geobrix-*.whl there: a failed
+    upload never leaves the folder with no wheel. 0 on success, else 1 after one line on stderr."""
+    rc = upload_verified(w, whl, f"{folder}/{whl.name}")
+    if rc:
+        return rc
+    try:
+        prune_stale(w, folder, "geobrix-", ".whl", whl.name)
+    except Exception as e:
+        print(f"Error: uploaded {whl.name} but could not remove the other wheels in {folder}: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main() -> int:
+    exit_if_help(__doc__)
+    args = sys.argv[1:]
+    no_prune = "--no-prune" in args
+    versioned = "--versioned" in args
+    if versioned and "--env" not in args:
+        print("--versioned stages env wheels: pass --env 5|6|both", file=sys.stderr)
+        return 2
+    dest = None
+    if "--dest" in args:
+        i = args.index("--dest")
+        dest = (args[i + 1] if i + 1 < len(args) else "").rstrip("/")
+        if not dest.startswith("/Volumes/") or dest.count("/") < 5:
+            print("--dest needs a Volume folder: /Volumes/<catalog>/<schema>/<volume>/<folder>", file=sys.stderr)
+            return 2
+        env_arg = args[args.index("--env") + 1 : args.index("--env") + 2] if "--env" in args else []
+        if versioned or env_arg not in (["5"], ["6"]):
+            print("--dest stages ONE env wheel: pass --env 5|6, without --versioned", file=sys.stderr)
+            return 2
+    envs = None
+    if "--env" in args:
+        i = args.index("--env")
+        value = args[i + 1] if i + 1 < len(args) else ""
+        if value not in ("5", "6", "both"):
+            print("--env must be 5, 6 or both", file=sys.stderr)
+            return 2
+        envs = (5, 6) if value == "both" else (int(value),)
+    skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+
+    project_root = TESTS_DIR.parent.parent
+    pkg_dir = project_root / "python" / "geobrix"
+    dist = pkg_dir / "dist"
+
+    # Auth/volume checks: only required when uploading the wheel
+    artifact_volume = None
+    w = None
+    if not skip_wheel_upload:
+        artifact_volume = (os.environ.get("GBX_ARTIFACT_VOLUME") or "").strip().rstrip("/")
+        if not artifact_volume and envs is None:  # an env wheel goes to the bundle volroot only
+            print("Set GBX_ARTIFACT_VOLUME (e.g. /Volumes/catalog/schema/volume/artifacts)", file=sys.stderr)
+            return 2
+
+        host = os.environ.get("DATABRICKS_HOST")
+        token = os.environ.get("DATABRICKS_TOKEN")
+        profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+        if not (host and token) and not profile:
+            print("Set DATABRICKS_HOST and DATABRICKS_TOKEN, or DATABRICKS_CONFIG_PROFILE", file=sys.stderr)
+            return 2
+
+        try:
+            from databricks.sdk import WorkspaceClient
+        except ImportError:
+            print("Install databricks-sdk: pip install databricks-sdk", file=sys.stderr)
+            return 2
+
+        w = WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)
+
+    if envs is not None:
+        wheels = _env_wheels(project_root, envs)
+        if isinstance(wheels, str):
+            print(f"PRECONDITION MISSING: {wheels}; gbx:data:stage-wheel --env not run", file=sys.stderr)
+            return 1
+        if skip_wheel_upload:
+            print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: %s found; skipping Databricks upload." % [x.name for x in wheels])
+            return 0
+        b_root = bundle_root()
+        if dest:  # an isolated folder: this wheel alone is left in it, the others removed once it has landed
+            try:
+                w.files.create_directory(dest)
+            except Exception as e:
+                print(f"Error: could not prepare {dest}: {e}", file=sys.stderr)
+                return 1
+            return _upload_then_prune(w, wheels[0], dest)
+        if not versioned:
+            try:
+                w.files.create_directory(b_root)
+            except Exception:
+                pass
+        for env, whl in zip(envs, wheels):
+            folder = b_root
+            if versioned:  # <volroot>/geobrix/<version>/env<N>/: this wheel alone is left in it
+                folder = versioned_dir(b_root, wheel_version(whl.name), f"env{env}")
+                try:
+                    w.files.create_directory(folder)  # also creates its parents
+                except Exception as e:
+                    print(f"Error: could not prepare {folder}: {e}", file=sys.stderr)
+                    return 1
+                rc = _upload_then_prune(w, whl, folder)
+            else:
+                # by its own +env<N> name; unversioned, no other wheel is touched
+                rc = upload_verified(w, whl, f"{folder}/{whl.name}")
+            if rc:
+                return rc
+        return 0
+
+    # JAR first so the wheel build can include it if needed. GBX_BUNDLE_SKIP_JAR and
+    # GBX_BUNDLE_SKIP_JAR_UPLOAD both skip the JAR step ENTIRELY here (no Maven build, no
+    # upload) for light-tier-only wheel changes; the wheel is JAR-less (the package-data
+    # glob names the non-existent package "geobrix", so setuptools bundles no lib/*.jar).
+    # python/geobrix/lib/ holds the locally staged JAR for heavy tests and is refilled ONLY
+    # by the Maven build (pom.xml copy-files-on-build), so it is cleared and recreated only
+    # on the path that rebuilds it; a skip-JAR stage leaves it untouched.
+    skip_jar_build = any(
+        os.environ.get(k, "").strip().lower() in ("1", "true", "yes")
+        for k in ("GBX_BUNDLE_SKIP_JAR", "GBX_BUNDLE_SKIP_JAR_UPLOAD")
+    )
+    if skip_jar_build:
+        print("GBX_BUNDLE_SKIP_JAR(_UPLOAD)=1: skipping JAR build + upload; wheel-only stage (JAR-less light tier).")
+    else:
+        lib_dir = pkg_dir / "lib"
+        if lib_dir.exists():
+            shutil.rmtree(lib_dir)
+        lib_dir.mkdir(parents=True)
+        print("Running stage_jar_to_volume (JAR before wheel)...")
+        rc = subprocess.run([sys.executable, str(TESTS_DIR / "stage_jar_to_volume.py")], cwd=project_root)
+        if rc.returncode != 0:
+            return rc.returncode
+
+    if dist.exists():
+        shutil.rmtree(dist)
+    dist.mkdir(parents=True)
+    print("Building wheel (python3 -m build)...")
+    # The build's pip index comes from the AMBIENT environment (PIP_INDEX_URL /
+    # pip.conf). If your network firewalls public PyPI, set PIP_INDEX_URL to your
+    # mirror before running -- we do not hardcode one here.
+    build_env = dict(os.environ)
+    # Prefer the project venv (.venv-pyrx, Python 3.12) for the build: it has a coherent
+    # build backend, so `--no-isolation` builds without any PyPI fetch (the ambient
+    # `python` may be an unrelated interpreter with a mismatched setuptools/packaging that
+    # breaks even isolated builds). Fall back to sys.executable + isolation + the proxy
+    # (the CI path, where the runner's env is clean and just needs the mirror).
+    # The venv's backend must also satisfy pyproject's [build-system] requires: the curated
+    # host venv can hold an older setuptools than the project needs (`project.license` as an
+    # SPDX string needs setuptools >= 77), which fails with "invalid pyproject.toml config".
+    # In that case build isolated (the backend is fetched from the ambient index) instead.
+    venv_py = Path(project_root) / ".venv-pyrx" / "bin" / "python"
+    if venv_py.exists() and _venv_meets_build_requires(venv_py, pkg_dir):
+        build_cmd = [str(venv_py), "-m", "build", "--no-isolation", str(pkg_dir)]
+    elif venv_py.exists():
+        print("The venv's build backend is older than pyproject's [build-system] requires: building isolated.")
+        build_cmd = [str(venv_py), "-m", "build", str(pkg_dir)]
+    else:
+        build_cmd = [sys.executable, "-m", "build", str(pkg_dir)]
+    rc = subprocess.run(
+        build_cmd, cwd=project_root, capture_output=False, env=build_env
+    )
+    if rc.returncode != 0:
+        print("Build failed", file=sys.stderr)
+        return 1
+    whl = next((f for f in dist.glob("geobrix-*.whl")), None)
+    if not whl:
+        print("No geobrix-*.whl in dist/", file=sys.stderr)
+        return 1
+
+    if skip_wheel_upload:
+        print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: wheel built locally (%s); skipping Databricks upload." % whl.name)
+        return 0
+
+    # ── Destination 1: artifact Volume dir (GBX_ARTIFACT_VOLUME) ──────────────────────────
+    # Keep exactly one geobrix-*.whl in this dir; remove any other-version wheel before
+    # uploading. Never touch JARs or subdirs.
+    # A failure here is fatal: swallowing it would leave two wheel versions in the artifact dir.
+    try:
+        w.files.create_directory(artifact_volume)
+    except Exception:
+        pass
+    try:
+        if no_prune:
+            print("--no-prune: other geobrix-*.whl files in %s are kept." % artifact_volume)
+        else:
+            # the plain wheel's other versions only: an env wheel (+env5 / +env6) is never this stage's to delete
+            prune_stale(w, artifact_volume, "geobrix-", ".whl", whl.name, exclude="+env")
+    except Exception as e:
+        print(f"Error: could not list/clean artifact volume {artifact_volume}: {e}", file=sys.stderr)
+        return 1
+
+    volume_path = f"{artifact_volume}/{whl.name}"
+    print("Uploading to %s (overwrite if exists)..." % volume_path)
+    # Use files.upload (streaming PUT) — NOT files.upload_from. upload_from hits
+    # an admin-gated bulk API that PermissionDenies non-account-admins on some
+    # workspaces (e.g. dogfood: "This API is disabled for users without account
+    # admin status"), while the streaming files.upload may return without raising
+    # even if bytes do not land on some workspaces (e.g. dogfood for non-admins).
+    # Verify bytes actually landed by comparing remote size to local size.
+    local_size = whl.stat().st_size
+    with open(whl.resolve(), "rb") as _fh:
+        w.files.upload(volume_path, _fh, overwrite=True)
+    try:
+        remote_metadata = w.files.get_metadata(volume_path)
+        remote_size = remote_metadata.content_length
+        if remote_size != local_size:
+            print(
+                f"Error: upload verification failed. Local size: {local_size}, "
+                f"remote size: {remote_size}. Bytes may not have landed correctly.",
+                file=sys.stderr,
+            )
+            return 1
+    except Exception as e:
+        print(
+            f"Error: failed to verify upload. Could not read remote metadata for "
+            f"{volume_path}: {e}",
+            file=sys.stderr,
+        )
+        return 1
+    print("Done: %s" % volume_path)
+
+    # ── Destination 2: bundle volroot (bundle/%pip path) ──────────────────────────────
+    # The notebook %pip install and the bench launcher both resolve the wheel from the
+    # bundle volroot. Mirror the same resolution used by stage_jar_to_volume for the
+    # tests.jar (GBX_BUNDLE_VOLUME_* env vars). Overwrite in place.
+    b_cat = (os.environ.get("GBX_BUNDLE_VOLUME_CATALOG") or "main").strip()
+    b_sch = (os.environ.get("GBX_BUNDLE_VOLUME_SCHEMA") or "default").strip()
+    b_vol = (os.environ.get("GBX_BUNDLE_VOLUME_NAME") or "geobrix_samples").strip()
+    b_root = f"/Volumes/{b_cat}/{b_sch}/{b_vol}"
+    bundle_whl_path = f"{b_root}/{whl.name}"
+    try:
+        w.files.create_directory(b_root)
+    except Exception:
+        pass
+    print("Uploading to %s (overwrite if exists)..." % bundle_whl_path)
+    with open(whl.resolve(), "rb") as _fh:
+        w.files.upload(bundle_whl_path, _fh, overwrite=True)
+    try:
+        remote_metadata = w.files.get_metadata(bundle_whl_path)
+        remote_size = remote_metadata.content_length
+        if remote_size != local_size:
+            print(
+                f"Error: bundle upload verification failed. Local size: {local_size}, "
+                f"remote size: {remote_size}. Bytes may not have landed correctly.",
+                file=sys.stderr,
+            )
+            return 1
+    except Exception as e:
+        print(
+            f"Error: failed to verify bundle upload. Could not read remote metadata for "
+            f"{bundle_whl_path}: {e}",
+            file=sys.stderr,
+        )
+        return 1
+    print("Done: %s" % bundle_whl_path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

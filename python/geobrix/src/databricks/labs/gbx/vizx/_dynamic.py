@@ -61,7 +61,7 @@ class _TileCache:
     2. Within each class (viewed / unviewed), evict the least-recently used.
 
     # TODO: distance-aware eviction (evict farthest from current viewport center) is
-    # a documented future refinement — see Task 13b plan notes.
+    # a documented future refinement.
     """
 
     def __init__(self, max_entries: int = 64) -> None:

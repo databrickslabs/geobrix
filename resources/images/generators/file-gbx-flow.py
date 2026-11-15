@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the file_gbx access-flow diagram SVG (light-tier read + write).
+"""Generate the file_gbx access-flow diagram SVG (Python-level read + write).
 
 Two lanes — READ (top) and WRITE (bottom) — each a left->right stage sequence
 in the shared GeoBrix glyph style. The READ lane resolves a source through
@@ -338,7 +338,7 @@ def render():
     parts.append(text(PAD, PAD + 30, "GeoBrix · file_gbx Access Flow",
                       size=30, weight=800, fill=C_INK))
     parts.append(text(PAD, PAD + 58,
-                      "One file-access base under every lightweight reader & writer — capability-tiered "
+                      "One file-access base under every *_gbx reader & writer — capability-tiered "
                       "FILE / FUSE routing on read, governed MANAGED / EXTERNAL / FUSE modes on write, "
                       "chosen per runtime",
                       size=14.5, fill=C_MUTED))
@@ -423,7 +423,7 @@ def render():
 
     # --- Stage 4 — Reader + LRU amortization ---
     parts += stage_card(C4_X, sy, C4_W, num=4, title="Reader",
-                        subtitle="the light-tier engine reads the window", accent=ACCENT_READ)
+                        subtitle="the Python-level engine reads the window", accent=ACCENT_READ)
     parts.append(glyph_reader(C4_X + 48, sy + 96, ACCENT_READ, TINT_READ, s=44))
     rc1, rw1 = chip(C4_X + 92, sy + 78, "rasterio", fg=ACCENT_READ, bg=TINT_READ,
                     border=ACCENT_READ, mono_font=True)
@@ -454,7 +454,7 @@ def render():
 
     # ============================ WRITE LANE ============================
     parts.append(lane_band(lane2_top, ACCENT_WRITE, TINT_WRITE, "WRITE",
-                           "open_for_write(spark, df, target, file_mode=\"auto\", layout=…)"))
+                           "open_for_write(spark, df, target, file_mode=\"fuse\", layout=…)"))
     wy = lane2_top + BAND_PAD
 
     # --- Stage 1 — Writer output ---
@@ -473,11 +473,11 @@ def render():
 
     # --- Stage 2 — open_for_write + auto-select rule ---
     parts += stage_card(C2_X, wy, C2_W, num=2, title="Resolve mode",
-                        subtitle="file_mode=\"auto\" · no gating", accent=ACCENT_WRITE)
+                        subtitle="default \"fuse\" · \"auto\" opts in", accent=ACCENT_WRITE)
     _wc, _ww = chip(C2_X + 18, wy + 66, "open_for_write", fg=ACCENT_WRITE, bg=TINT_WRITE,
                     border=ACCENT_WRITE, mono_font=True, h=22, size=11.5)
     parts.append(_wc)
-    parts.append(text(C2_X + 18, wy + 108, "AUTO-SELECT", size=9, weight=700,
+    parts.append(text(C2_X + 18, wy + 108, "\"AUTO\" (OPT-IN) PICKS", size=9, weight=700,
                       fill=C_MUTED_3, letter_spacing="1.2"))
     rules = [("filespace given", "→ MANAGED", C_FILE),
              ("no filespace", "→ EXTERNAL", C_FILE),
@@ -583,7 +583,7 @@ def render():
     parts.append(mono(ox + 40, ng_top + 32, 'access="auto"', size=12, weight=700, fill=C_OK))
     parts.append(text(ox + 40, ng_top + 50, "graceful FUSE fallback — never errors", size=11,
                       weight=500, fill=C_MUTED))
-    parts.append(text(ox + 40, ng_top + 66, "the default on every lightweight reader & writer",
+    parts.append(text(ox + 40, ng_top + 66, "the reader default; writers default to file_mode=\"fuse\"",
                       size=10, weight=500, fill=C_MUTED_2))
     # ERR path
     ex = PAD + 800
@@ -594,12 +594,12 @@ def render():
                       weight=700, fill=C_ERR))
     parts.append(text(ex + 40, ng_top + 50, "explicit FILE on a FUSE-only runtime → clear ValueError",
                       size=11, weight=500, fill=C_MUTED))
-    parts.append(text(ex + 40, ng_top + 66, "the message names the DBR upgrade path & the auto fallback",
+    parts.append(text(ex + 40, ng_top + 66, "the message names the DBR upgrade path, fuse & auto",
                       size=10, weight=500, fill=C_MUTED_2))
 
     # ---- Footer ----
     parts.append(text(PAD, canvas_h - 12,
-                      "databrickslabs/geobrix  ·  lightweight tier (pyrx)",
+                      "databrickslabs/geobrix  ·  Python level",
                       size=11, fill=C_MUTED_3))
     parts.append(text(CANVAS_W - PAD, canvas_h - 12, "docs/readers-writers",
                       size=11, fill=C_MUTED_3, anchor="end"))

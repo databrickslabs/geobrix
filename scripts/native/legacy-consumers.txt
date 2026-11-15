@@ -1,0 +1,11 @@
+# Places that still pin an OLD native version, until the task that retires them lands.
+# One per line: path|regex (exactly one capture group)|legacy value|retired by
+# `pins.py audit` fails when the regex matches its file other than once, or captures another value
+# (the consumer drifted), and also when the regex no longer matches (the consumer was retired: delete
+# its line). A consumer that moves to the new stack is retired by pointing it at pins.conf instead.
+scripts/docker/Dockerfile|(?m)^ARG GDAL_VERSION=(\S+)|3.11.4|kept as the fallback dev image
+.github/actions/scala_build/action.yml|(?m)^\s*GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|CI scale-out
+.github/actions/python_build/action.yml|(?m)^\s*GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|CI scale-out
+.github/workflows/build_main.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out
+.github/workflows/build_scala_by_package.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out
+.github/workflows/codecov-scala-parallel.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out

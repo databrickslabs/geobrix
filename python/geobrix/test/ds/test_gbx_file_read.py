@@ -1,4 +1,4 @@
-"""Task 2: gbx_file_read — new [path, size, file] reference contract.
+"""gbx_file_read — new [path, size, file] reference contract.
 
 Old tests that asserted a `content` column have been replaced: the previous
 implementation returned bytes (via binaryFile / read_files SELECT content), which

@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:test:notebooks - Run notebook execution tests (notebooks/tests/)
+# gbx:test:notebooks - Run notebook execution tests (examples/tests/)
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -39,7 +39,7 @@ LOG_PATH=""
 INCLUDE_INTEGRATION=false
 ALLOW_ABSOLUTE_READS=false
 ALLOW_ABSOLUTE_WRITES=false
-TEST_PATH="/root/geobrix/notebooks/tests"
+TEST_PATH="/root/geobrix/examples/tests"
 PATH_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -62,10 +62,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --path)
             # Path: subdir (e.g. sample-data, fixtures) or test file (e.g. test_setup_sample_data.py).
-            # If user passes notebooks/tests/..., strip that prefix.
+            # If user passes examples/tests/..., strip that prefix.
             PATH_ARG="$2"
-            [[ "$PATH_ARG" == notebooks/tests/* ]] && PATH_ARG="${PATH_ARG#notebooks/tests/}"
-            TEST_PATH="/root/geobrix/notebooks/tests/$PATH_ARG"
+            [[ "$PATH_ARG" == examples/tests/* ]] && PATH_ARG="${PATH_ARG#examples/tests/}"
+            TEST_PATH="/root/geobrix/examples/tests/$PATH_ARG"
             shift 2
             ;;
         --help|-h)
@@ -83,15 +83,15 @@ done
 
 cd "$PROJECT_ROOT"
 
-# If --path is a bare .py filename and it doesn't exist under notebooks/tests/, look under subdirs
+# If --path is a bare .py filename and it doesn't exist under examples/tests/, look under subdirs
 if [[ -n "${PATH_ARG:-}" && "$PATH_ARG" == *.py && "$PATH_ARG" != */* ]]; then
-    NBTEST="$PROJECT_ROOT/notebooks/tests"
+    NBTEST="$PROJECT_ROOT/examples/tests"
     if [[ ! -f "$NBTEST/$PATH_ARG" ]]; then
         FOUND=
         for sub in sample-data fixtures; do
             if [[ -f "$NBTEST/$sub/$PATH_ARG" ]]; then
                 PATH_ARG="$sub/$PATH_ARG"
-                TEST_PATH="/root/geobrix/notebooks/tests/$PATH_ARG"
+                TEST_PATH="/root/geobrix/examples/tests/$PATH_ARG"
                 FOUND=1
                 break
             fi
@@ -107,7 +107,7 @@ setup_log_file "$LOG_PATH"
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
 
 # Notebook tests need /Volumes so the notebook can use get_volumes_path() and run_*_bundle()
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
     echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
     echo ""
@@ -152,12 +152,15 @@ cd /root/geobrix
 # the hash-pinned dev container lockfile). nbformat / nbconvert are also
 # pre-installed there; no ad-hoc pip install needed (would defeat the
 # supply-chain hardening).
-pip install --no-deps -e /root/geobrix/python/geobrix --break-system-packages -q 2>/dev/null || true
-python3 /root/geobrix/notebooks/tests/run_notebooks_cell_by_cell.py ${PATH_ARG:+'$PATH_ARG_ESCAPED'}
+# Only when it is missing or is not the editable install of this checkout (a copy in site-packages
+# would run the notebooks against stale code): this command takes no container lock (no Maven, no Spark JVM on
+# target/), so a routine run must not rewrite the shared site-packages under a locked pytest.
+pip show geobrix 2>/dev/null | grep -q '^Editable project location: /root/geobrix/python/geobrix' || pip install --no-deps -e /root/geobrix/python/geobrix --break-system-packages -q 2>/dev/null || true
+python3 /root/geobrix/examples/tests/run_notebooks_cell_by_cell.py ${PATH_ARG:+'$PATH_ARG_ESCAPED'}
 "
 
 # -t allocates a pseudo-TTY so testbook's Jupyter kernel doesn't hang (common in Docker)
-docker exec -t geobrix-dev /bin/bash -c "$RUN_CMD"
+docker exec -t "$GBX_DEV_CONTAINER" /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

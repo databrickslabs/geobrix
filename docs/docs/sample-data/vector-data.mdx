@@ -140,7 +140,7 @@ NYC neighborhoods - medium-sized areas for detailed analysis.
 Included in the **Complete** setup script (downloaded as shapefile and converted to GeoJSON at `london/boroughs/london_boroughs.geojson`).
 :::
 
-London's boroughs—perfect for UK-based analysis and GridX BNG examples. Use the **geojson_ogr** reader.
+London's boroughs—perfect for UK-based analysis and GridX BNG examples. Use the `geojson_gbx` reader.
 
 
 <CodeFromTest
@@ -261,7 +261,7 @@ Multi-layer GeoPackage with all NYC vector data in one file - demonstrates layer
 ### File Geodatabase - NYC Multi-Feature Class
 
 :::info Complete bundle
-Optional: Create with the script below. GeoBrix can read FileGDB (OpenFileGDB driver). The Complete setup script creates a GeoPackage instead; use this section if you need FileGDB format.
+The Complete setup creates this geodatabase as `nyc/filegdb/NYC_Sample.gdb.zip` (alongside the GeoPackage). Use the script below to build it by hand or to change its feature classes. GeoBrix can read FileGDB (OpenFileGDB driver).
 :::
 
 Multi-feature class File Geodatabase (Esri format) created with **OpenFileGDB driver** (GDAL 3.6+).

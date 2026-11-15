@@ -1,3 +1,5 @@
+import pytest
+
 from databricks.labs.gbx.pyrx.core import budget
 
 _MIB = 1024 * 1024
@@ -107,6 +109,44 @@ def test_decoded_budget_serverless_without_cgroup_limit(monkeypatch):
     assert budget.decoded_budget_bytes("serverless") == 64 * _MIB
 
 
+@pytest.mark.parametrize(
+    "strategy, kind, limit, ceiling, want",
+    [
+        # 1/16 of the tile budget: 64 MiB serverless, 1536 MiB classic (under the 128 MiB ceiling)
+        ("serverless", None, None, None, 4 * _MIB),
+        ("classic", None, None, None, 96 * _MIB),
+        ("serverless", None, 64 * _1_GIB, None, 128 * _MIB),  # a big pod: the ceiling
+        ("serverless", None, _1_GIB, None, int(_1_GIB * 0.15) // 16),  # follows the pod
+        # no tile splitting says nothing about memory: sized for the runtime
+        ("none", "serverless", None, None, 4 * _MIB),
+        ("none", "classic", None, None, 96 * _MIB),
+        # the streaming COG copy's ceiling: the same on both runtimes
+        ("serverless", None, None, budget.STREAMING_BLOCK_CACHE_MAX, 4 * _MIB),
+        ("classic", None, None, budget.STREAMING_BLOCK_CACHE_MAX, 4 * _MIB),
+    ],
+)
+def test_block_cache_is_a_share_of_the_tile_budget_under_a_ceiling(
+    monkeypatch, strategy, kind, limit, ceiling, want
+):
+    """The size every site that caps GDAL's block cache takes: 1/16 of the decoded bytes a tile
+    may take, never above the ceiling (128 MiB; the streaming COG copy passes a lower one).
+    """
+    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: limit)
+    if kind:
+        monkeypatch.setattr(budget, "runtime_kind", lambda: kind)
+    kwargs = {} if ceiling is None else {"ceiling": ceiling}
+    assert budget.block_cache_bytes(strategy, **kwargs) == want
+
+
+def test_a_folds_block_cache_is_never_smaller_than_one_large_block():
+    """A fold within a tiny budget (the rows that lower the read cap to a few hundred bytes) still gets 1 MiB of GDAL
+    cache, the block of a 512-pixel float32 tile; a real budget gets its 1/16 share, under the ceiling.
+    """
+    assert budget.block_cache_for(0) == budget.block_cache_for(300) == _MIB
+    assert budget.block_cache_for(64 * _MIB) == 4 * _MIB
+    assert budget.block_cache_for(64 * _MIB, ceiling=_MIB // 2) == _MIB // 2
+
+
 def test_none_budget_single_tile():
     plan = budget.plan_layout(2000, 2000, 1, 1, False, None, None, 0)
     assert plan.tiles == [(0, 0, 2000, 2000)]
@@ -146,3 +186,83 @@ def test_max_tiles_cap_sets_degraded():
     plan = budget.plan_layout(100000, 100000, 1, 4, False, None, None, 1024)
     assert len(plan.tiles) <= 512
     assert plan.degraded is True
+
+
+# ---------------------------------------------------------------------------
+# the read cap: decoded size from a header, the cap a call carries, the refusal
+# ---------------------------------------------------------------------------
+
+
+def test_grid_bytes_is_the_pixels_times_each_bands_type_size():
+    assert budget.grid_bytes(10, 20, ["uint8", "float32", "int16"]) == 200 * (1 + 4 + 2)
+    # numpy has no dtype for GDAL's complex integers; the table gives their sizes
+    assert budget.grid_bytes(4, 4, ["complex_int16", "complex_int32"]) == 16 * (4 + 8)
+    assert budget.grid_bytes(7, 3, []) == 0
+    assert budget.grid_bytes("5", "4", ["uint8"]) == 20
+
+
+def test_the_tile_read_cap_is_the_carried_cap_else_the_process_budget(monkeypatch):
+    from databricks.labs.gbx import _gdal_policy
+
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 123)
+    monkeypatch.setattr(budget, "process_read_cap", lambda: 456)
+    assert budget.tile_read_cap() == 123
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: None)
+    assert budget.tile_read_cap() == 456
+    # a carried cap of 0 is a cap, not "none carried"
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 0)
+    assert budget.tile_read_cap() == 0
+
+
+def test_a_window_over_the_read_cap_is_refused_from_its_header(monkeypatch):
+    monkeypatch.setattr(budget, "tile_read_cap", lambda: 1000)
+    budget.refuse_window_over_cap(100, 10, ["uint8"])  # exactly the cap: allowed
+    budget.refuse_window_over_cap(10, 10, ["uint8", "uint8"])
+    with pytest.raises(budget.WindowOverReadCap) as e:
+        budget.refuse_window_over_cap(40, 30, ["uint8"])
+    assert str(e.value) == budget.read_cap_refusal(1200, 1000)
+    with pytest.raises(budget.WindowOverReadCap):
+        budget.refuse_window_over_cap(100, 10, ["uint8", "uint8"])
+    assert issubclass(budget.WindowOverReadCap, ValueError)
+
+
+def test_the_refusal_names_the_decoded_size_and_the_cap_in_whole_units():
+    text = budget.read_cap_refusal(5 * _MIB + 17, 2 * _MIB)
+    assert "5 MiB decoded" in text and "(2 MiB)" in text and "Fix: retile" in text
+    assert budget.size_text(3 * 1024) == "3 KiB"
+    assert budget.size_text(_MIB) == "1 MiB"
+
+
+def test_a_serverless_or_cgroup_worker_keeps_its_own_call_budget(monkeypatch):
+    """The Serverless flag and a task cgroup limit are memory signals of the worker's own: a carried cap holds only up
+    to its own budget. With neither, the carried cap is the budget (standard access mode).
+    """
+    from databricks.labs.gbx import _gdal_policy
+
+    for k in (*budget.CLASSIC_MEMORY_ENV, "IS_SERVERLESS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: None)
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 4096 * _MIB)
+    assert budget.call_decoded_budget() == 4096 * _MIB
+    monkeypatch.setenv("IS_SERVERLESS", "true")
+    assert budget.call_decoded_budget() == 64 * _MIB
+    monkeypatch.delenv("IS_SERVERLESS")
+    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: _1_GIB)
+    assert budget.call_decoded_budget() == int(_1_GIB * 0.15)
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 32 * _MIB)
+    assert (
+        budget.call_decoded_budget() == 32 * _MIB
+    )  # a cap lowered on the driver still holds
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: None)
+    assert budget.call_decoded_budget() == int(_1_GIB * 0.15)
+
+
+def test_a_streaming_cache_takes_what_the_call_budget_leaves(monkeypatch):
+    """A streaming engine call's GDAL cache: the budget less what the call holds, under the 128 MiB ceiling, never less
+    than the tile share (block_cache_bytes); a call with no budget gets the ceiling."""
+    monkeypatch.setattr(budget, "block_cache_bytes", lambda *a, **k: 4 * _MIB)
+    assert budget.streaming_cache_bytes(64 * _MIB, 17 * _MIB) == 47 * _MIB
+    assert budget.streaming_cache_bytes(64 * _MIB, 62 * _MIB) == 4 * _MIB
+    assert budget.streaming_cache_bytes(64 * _MIB, 80 * _MIB) == 4 * _MIB
+    assert budget.streaming_cache_bytes(1536 * _MIB, 17 * _MIB) == 128 * _MIB
+    assert budget.streaming_cache_bytes(0, 17 * _MIB) == 128 * _MIB

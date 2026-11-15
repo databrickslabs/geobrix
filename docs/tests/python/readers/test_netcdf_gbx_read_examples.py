@@ -55,3 +55,16 @@ def test_read_vector(spark, tmp_path):
     _write_points(p)
     df = ex.read_vector(spark, p, "methane_mixing_ratio_bias_corrected,qa_value")
     assert df.count() == 4
+
+
+_FIXTURES = Path(__file__).resolve().parents[4] / "src/test/resources/binary"
+
+
+def test_read_vector_profile(spark):
+    ex.read_vector_profile(spark, str(_FIXTURES / "netcdf-dsg-profile" / "profiles.nc"))
+
+
+def test_read_vector_trajectory(spark):
+    ex.read_vector_trajectory(
+        spark, str(_FIXTURES / "netcdf-dsg-trajectory" / "trajectories.nc")
+    )

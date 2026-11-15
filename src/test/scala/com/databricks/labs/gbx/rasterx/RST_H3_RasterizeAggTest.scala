@@ -3,9 +3,7 @@ package com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.expressions.agg.RST_H3_RasterizeAgg
-import com.databricks.labs.gbx.rasterx.expressions.grid.RST_H3_CellBBox
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.types.{IntegerType, LongType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -17,7 +15,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** Direct-execute tests for [[RST_H3_RasterizeAgg]] + [[RST_H3_CellBBox]].
+/** Direct-execute tests for [[RST_H3_RasterizeAgg]].
  *
  *  We construct the aggregator with Literal constant children (same approach as
  *  RST_RasterizeAggTest) and drive `update`/`eval` directly -- no Spark session.
@@ -73,8 +71,7 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
     private case class RasterRead(gt: Array[Double], width: Int, height: Int, data: Array[Double])
 
     private def readRaster(tileRow: Any): RasterRead = {
-        val ir    = tileRow.asInstanceOf[InternalRow]
-        val bytes = ir.getBinary(1)
+        val bytes = tileRow.asInstanceOf[Array[Byte]]  // the aggregate returns the GeoTIFF bytes
         bytes should not be null
         val tmp = s"/vsimem/h3ragg_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
         gdal.FileFromMemBuffer(tmp, bytes)
@@ -182,50 +179,5 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         val deserialized = agg.deserialize(agg.serialize(buf))
         deserialized.cells.length shouldBe cellIds.length
         deserialized.cells.map(_._1).toSet shouldBe cellIds.toSet
-    }
-
-    private val _noCrs = Literal(null, org.apache.spark.sql.types.StringType)
-
-    test("gbx_h3_cell_bbox centroids mode returns a degenerate point bbox") {
-        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
-        val expr = RST_H3_CellBBox(
-          Literal(cell), Literal(4326), Literal("centroids"), Literal(0), _noCrs)
-        val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
-        row should not be null
-        val xmin = row.getDouble(0); val ymin = row.getDouble(1)
-        val xmax = row.getDouble(2); val ymax = row.getDouble(3)
-        // Degenerate (single centroid) -> xmin == xmax, ymin == ymax.
-        xmin shouldBe xmax +- 1e-12
-        ymin shouldBe ymax +- 1e-12
-        // Centroid should index back to the same cell.
-        H3.pointToCellID(xmin, ymin, res) shouldBe cell
-    }
-
-    test("gbx_h3_cell_bbox spatial_envelope mode is a non-degenerate hexagon envelope") {
-        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
-        val expr = RST_H3_CellBBox(
-          Literal(cell), Literal(4326), Literal("spatial_envelope"), Literal(0), _noCrs)
-        val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
-        val xmin = row.getDouble(0); val ymin = row.getDouble(1)
-        val xmax = row.getDouble(2); val ymax = row.getDouble(3)
-        xmax should be > xmin
-        ymax should be > ymin
-    }
-
-    test("gbx_h3_cell_bbox out_crs string wins over srid + reprojects to web mercator") {
-        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
-        // out_crs = EPSG:3857 -> bbox in metres (large magnitudes), not degrees.
-        val expr = RST_H3_CellBBox(
-          Literal(cell), Literal(4326), Literal("centroids"), Literal(0), Literal("EPSG:3857"))
-        val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
-        math.abs(row.getDouble(2)) should be > 1000.0
-    }
-
-    test("gbx_h3_cell_bbox accepts an ESRI srid (resolveCrs), no error") {
-        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
-        val expr = RST_H3_CellBBox(
-          Literal(cell), Literal(54008), Literal("centroids"), Literal(0), _noCrs)
-        val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
-        row should not be null
     }
 }

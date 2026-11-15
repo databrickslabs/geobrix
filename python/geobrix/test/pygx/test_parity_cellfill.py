@@ -1,25 +1,18 @@
-"""gbx_<grid>_cellfill cross-tier parity: light BINARY vs heavy array<struct<cellid,value>>.
+"""gbx_<grid>_cellfill cross-tier parity: both tiers return the same BINARY payload.
 
-OUTPUT ASYMMETRY (the crux of this test):
-  - Light  returns BINARY (pandas_udf grouped-agg cannot return array-of-struct).
-    Decoded via ``_cellfill.decode`` → list[(cellid_int, value|None)].
-  - Heavy returns array<struct<cellid, value>> where cellid is LONG for H3/Quadbin/
-    Custom, STRING for BNG.  Collected as a Python list of Row objects.
+The payload (documented in ``gridx-functions``): a big-endian Int32 count, then per cell an Int64 id, a present
+byte and, when present, a Float64, in ascending id order. A BNG id is the grid's own Int64 number in the payload
+in both tiers. ``_cellfill.decode`` reads it in both → ``{int_cellid: value_or_None}``.
 
-Reconciliation:
-  - Light  → {int_cellid: value_or_None}  (decode then dict)
-  - Heavy LONG grids → {r.cellid: r.value for r in array_result}
-  - Heavy BNG        → {_bng.parse_safe(r.cellid): r.value for r in array_result}
-    (int64 keys to match the light BINARY encoding, which stores int64 even for BNG)
-
-Two scenarios per grid:
+Two scenarios per grid (quadbin runs at the lightweight level only, so its results are checked against the
+expected values alone):
   - mean/k=1 : center NULL surrounded by valid ring-1 neighbours (all 5.0)
                → center filled with 5.0; isolated NULL (group 2) stays NULL.
   - idw/k=2/power=2 : center NULL, ring1[0]=10.0, ring2[0]=20.0
                → center = (10*1^-2 + 20*2^-2) / (1^-2 + 2^-2) = 12.0;
                   isolated NULL (group 2) stays NULL.
 
-Protocol (mirrors test_parity_quadbin.py):
+Protocol:
   Phase 1 — ``gx.register(spark)`` (light PySpark UDFs), collect ALL light results.
   Phase 2 — register all four heavy modules (overwrite the SQL names with JVM
              expressions), collect ALL heavy results.
@@ -57,7 +50,7 @@ _HERE = Path(__file__).resolve()
 _JARS = sorted((_HERE.parents[2] / "lib").glob("geobrix-*-jar-with-dependencies.jar"))
 
 # ---------------------------------------------------------------------------
-# Spark fixture (same guard as test_parity_quadbin.py)
+# Spark fixture (needs the staged JAR for the heavy grids)
 # ---------------------------------------------------------------------------
 
 _CUSTOM_CONF = _custom.CustomGridConf(
@@ -114,30 +107,11 @@ def spark_with_jar():
 # ---------------------------------------------------------------------------
 
 
-def _decode_light(blob) -> Dict[int, Optional[float]]:
-    """Decode light BINARY payload → {int_cellid: value_or_None}."""
+def _decode(blob) -> Dict[int, Optional[float]]:
+    """Decode a cellfill BINARY payload → {int_cellid: value_or_None} (the same layout in both tiers)."""
     if blob is None:
         return {}
     return dict(_cellfill.decode(bytes(blob)))
-
-
-def _decode_heavy_long(array_result) -> Dict[int, Optional[float]]:
-    """Decode heavy array<struct<cellid LONG, value DOUBLE?>> → {int: val|None}."""
-    if array_result is None:
-        return {}
-    return {r.cellid: r.value for r in array_result}
-
-
-def _decode_heavy_bng(array_result) -> Dict[int, Optional[float]]:
-    """Decode heavy array<struct<cellid STRING, value DOUBLE?>> → {int: val|None}.
-
-    Heavy BNG renders cell IDs as OS grid reference STRINGs (e.g. 'TQ3080');
-    light BINARY stores them as int64.  Reconcile by parsing the STRING back to
-    int64 via ``_bng.parse_safe`` so both dicts share the same key type.
-    """
-    if array_result is None:
-        return {}
-    return {_bng.parse_safe(r.cellid): r.value for r in array_result}
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +166,24 @@ def _assert_fill_parity(
         ), f"{ctx}: heavy cell {cid} should be None (no valid neighbours); got {heavy.get(cid)}"
 
 
+def _assert_fill_light(
+    light: Dict[int, Optional[float]],
+    ctx: str,
+    expected_filled: Dict[int, float],
+    expected_null: set,
+) -> None:
+    """Assert one group's fill result for a grid that has only the lightweight form."""
+    for cid, exp_val in expected_filled.items():
+        l_val = light.get(cid)
+        assert l_val == pytest.approx(
+            exp_val, abs=1e-9
+        ), f"{ctx}: light cell {cid} = {l_val!r}; expected {exp_val}"
+    for cid in expected_null:
+        assert (
+            light.get(cid) is None
+        ), f"{ctx}: light cell {cid} should be None (no valid neighbours); got {light.get(cid)}"
+
+
 # ---------------------------------------------------------------------------
 # Main parity test — all 4 grids × 2 scenarios in one function
 # (light-all-grids first, then heavy-all-grids, to avoid Scala idempotency
@@ -200,15 +192,15 @@ def _assert_fill_parity(
 
 
 def _register_h3_heavy(spark) -> None:
-    """Register gbx_h3_* JVM expressions via the register_ds data source.
+    """Register gbx_h3_* at L1 (the JAR's expressions) through the manager."""
+    from databricks.labs.gbx import manager as gbx_manager
 
-    There is no Python heavy-wrapper module for H3 (the Scala ``gridx.h3.functions``
-    only exposes ``gbx_h3_cellfill``).  The ``register_ds`` DataSource is the
-    canonical registration path when no Python thin-wrapper module exists — the
-    same pattern used by ``gridx.custom.functions.register``, ``bng.functions.register``,
-    and ``quadbin.functions.register`` under the hood.
-    """
-    spark.read.format("register_ds").option("functions", "gridx.h3").load().collect()
+    gbx_manager.register_family(
+        spark,
+        ("gbx_h3_",),
+        only=gbx_manager.names_at_level(("gbx_h3_",), "L1"),
+        level="L1",
+    )
 
 
 def test_cellfill_parity_all_grids(spark_with_jar):
@@ -222,13 +214,9 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     agree on the neighbourhood structure — this is required for the parity to be
     meaningful (cell-set equality, not just value equality).
 
-    H3 note: there is no Python heavy-wrapper module for the H3 grid; heavy
-    registration uses ``_register_h3_heavy`` (``register_ds`` approach) directly.
+    H3 note: the heavy leg registers ``gbx_h3_*`` at L1 through ``_register_h3_heavy``.
     """
-    from databricks.labs.gbx.gridx.bng import functions as bnghx
-    from databricks.labs.gbx.gridx.custom import functions as custhx
-    from databricks.labs.gbx.gridx.quadbin import functions as qbhx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
@@ -363,14 +351,16 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     # -----------------------------------------------------------------------
     # Phase 1: LIGHT — register Python UDFs, collect all results
     # -----------------------------------------------------------------------
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
 
     def _collect(view: str, fn_sql: str) -> Dict[int, Dict[int, Optional[float]]]:
         """Run grouped-fill SQL and return {grp: decoded_dict}."""
         rows = spark.sql(
             f"SELECT grp, {fn_sql} AS fill FROM {view} GROUP BY grp"
         ).collect()
-        return {r.grp: _decode_light(r.fill) for r in rows}
+        return {r.grp: _decode(r.fill) for r in rows}
 
     h3_mean_light = _collect(
         "_cf_h3_mean", "gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0)"
@@ -403,50 +393,43 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     # Phase 2: HEAVY — register JVM expressions (overwrite the SQL names),
     #          collect all results
     # -----------------------------------------------------------------------
-    _register_h3_heavy(spark)  # no Python module; use register_ds directly
-    qbhx.register(spark)
-    bnghx.register(spark)
-    custhx.register(spark)
+    _register_h3_heavy(spark)
+    gbx_manager.register_family(
+        spark,
+        ("gbx_bng_",),
+        only=gbx_manager.names_at_level(("gbx_bng_",), "L1"),
+        level="L1",
+    )
+    gbx_manager.register_family(
+        spark,
+        ("gbx_custom_",),
+        only=gbx_manager.names_at_level(("gbx_custom_",), "L1"),
+        level="L1",
+    )
 
-    def _collect_heavy_long(
-        view: str, fn_sql: str
-    ) -> Dict[int, Dict[int, Optional[float]]]:
+    def _collect_heavy(view: str, fn_sql: str) -> Dict[int, Dict[int, Optional[float]]]:
         rows = spark.sql(
             f"SELECT grp, {fn_sql} AS fill FROM {view} GROUP BY grp"
         ).collect()
-        return {r.grp: _decode_heavy_long(r.fill) for r in rows}
+        return {r.grp: _decode(r.fill) for r in rows}
 
-    def _collect_heavy_bng(
-        view: str, fn_sql: str
-    ) -> Dict[int, Dict[int, Optional[float]]]:
-        rows = spark.sql(
-            f"SELECT grp, {fn_sql} AS fill FROM {view} GROUP BY grp"
-        ).collect()
-        return {r.grp: _decode_heavy_bng(r.fill) for r in rows}
-
-    h3_mean_heavy = _collect_heavy_long(
+    h3_mean_heavy = _collect_heavy(
         "_cf_h3_mean", "gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0)"
     )
-    h3_idw_heavy = _collect_heavy_long(
+    h3_idw_heavy = _collect_heavy(
         "_cf_h3_idw", "gbx_h3_cellfill(cellid, value, 2, 'idw', 2.0)"
     )
-    qb_mean_heavy = _collect_heavy_long(
-        "_cf_qb_mean", "gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0)"
-    )
-    qb_idw_heavy = _collect_heavy_long(
-        "_cf_qb_idw", "gbx_quadbin_cellfill(cellid, value, 2, 'idw', 2.0)"
-    )
-    bng_mean_heavy = _collect_heavy_bng(
+    bng_mean_heavy = _collect_heavy(
         "_cf_bng_mean", "gbx_bng_cellfill(cellid, value, 1, 'mean', 2.0)"
     )
-    bng_idw_heavy = _collect_heavy_bng(
+    bng_idw_heavy = _collect_heavy(
         "_cf_bng_idw", "gbx_bng_cellfill(cellid, value, 2, 'idw', 2.0)"
     )
-    cust_mean_heavy = _collect_heavy_long(
+    cust_mean_heavy = _collect_heavy(
         "_cf_cust_mean",
         f"gbx_custom_cellfill(cellid, value, {_GRID_SQL}, 1, 'mean', 2.0)",
     )
-    cust_idw_heavy = _collect_heavy_long(
+    cust_idw_heavy = _collect_heavy(
         "_cf_cust_idw",
         f"gbx_custom_cellfill(cellid, value, {_GRID_SQL}, 2, 'idw', 2.0)",
     )
@@ -496,31 +479,27 @@ def test_cellfill_parity_all_grids(spark_with_jar):
         expected_null={h3_isolated},
     )
 
-    # Quadbin ------------------------------------------------------------
-    _assert_fill_parity(
+    # Quadbin (light only: it has no heavy form) ------------------------
+    _assert_fill_light(
         qb_mean_light[1],
-        qb_mean_heavy[1],
         "Quadbin mean/k=1 grp=1",
         expected_filled={qb_center: 5.0},
         expected_null=set(),
     )
-    _assert_fill_parity(
+    _assert_fill_light(
         qb_mean_light[2],
-        qb_mean_heavy[2],
         "Quadbin mean/k=1 grp=2 (isolated)",
         expected_filled={},
         expected_null={qb_isolated},
     )
-    _assert_fill_parity(
+    _assert_fill_light(
         qb_idw_light[1],
-        qb_idw_heavy[1],
         "Quadbin idw/k=2/power=2 grp=1",
         expected_filled={qb_center: 12.0},
         expected_null=set(),
     )
-    _assert_fill_parity(
+    _assert_fill_light(
         qb_idw_light[2],
-        qb_idw_heavy[2],
         "Quadbin idw/k=2/power=2 grp=2 (isolated)",
         expected_filled={},
         expected_null={qb_isolated},

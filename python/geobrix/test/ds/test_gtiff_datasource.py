@@ -1,7 +1,8 @@
 """gtiff_gbx named reader: same output as raster_gbx with driver preset."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
@@ -18,7 +19,7 @@ def _write_sample(path):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
@@ -39,7 +40,7 @@ def test_reads_geotiff_like_catch_all(spark, tmp_path):
     df = spark.read.format("gtiff_gbx").load(str(f))
     rows = df.collect()
     assert len(rows) == 1
-    # Task 2: whole-file virtual tiles defer the rasterio.open, so 'driver' is
+    # Whole-file virtual tiles defer the rasterio.open, so 'driver' is
     # no longer eagerly emitted.  'format' is inferred from the file extension.
     assert rows[0]["tile"]["metadata"]["format"] == "gtiff"
     assert rows[0]["tile"]["cellid"] == -1

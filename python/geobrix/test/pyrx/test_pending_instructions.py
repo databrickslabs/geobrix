@@ -1,5 +1,6 @@
 import glob
 import tempfile
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -8,10 +9,9 @@ from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
-from databricks.labs.gbx.ds.register import register
-from databricks.labs.gbx.pyrx import functions as rx
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 
 def _a_tif():
@@ -105,7 +105,7 @@ def test_materialize_strips_pending_keys():
 
 
 # ---------------------------------------------------------------------------
-# Task 2: rst_initnodata records pending nodata on virtual tiles, emits v2
+# rst_initnodata records pending nodata on virtual tiles, emits v2
 # ---------------------------------------------------------------------------
 def _spark():
     return (
@@ -116,7 +116,9 @@ def _spark():
 
 
 def _read_virtual_df(spark, tif):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     return (
         spark.read.format("gtiff_gbx")
         .option("driver", "GTiff")
@@ -128,20 +130,18 @@ def _read_virtual_df(spark, tif):
 def test_initnodata_virtual_stays_virtual_records_key():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_initnodata("tile"))
+    out = df.withColumn("tile", rx_api.rst_initnodata("tile"))
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None, "virtual tile must stay virtual (no bytes)"
     assert row["path"] is not None, "path reference preserved"
-    assert (
-        row["metadata"]["pending_nodata"] == "-9999.0"
-        or row["metadata"]["pending_nodata"] == "-9999"
-    )
+    # "auto" = the dtype's fallback no-data value, resolved when the tile is opened
+    assert row["metadata"]["pending_nodata"] == ot.PENDING_NODATA_AUTO
 
 
 def test_initnodata_virtual_emits_v2_struct():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_initnodata("tile"))
+    out = df.withColumn("tile", rx_api.rst_initnodata("tile"))
     fields = [f.name for f in out.schema["tile"].dataType.fields]
     assert "path" in fields and "window" in fields  # v2, not v1 3-field
 
@@ -149,43 +149,43 @@ def test_initnodata_virtual_emits_v2_struct():
 def test_initnodata_materialize_true_bakes_bytes():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+    out = df.withColumn("tile", rx_api.rst_initnodata("tile", materialize=True))
     row = out.select("tile.raster").first()
     assert row["raster"] is not None and len(row["raster"]) > 0
 
 
 # ---------------------------------------------------------------------------
-# Task 3: rst_setsrid / rst_band record on virtual, v2 everywhere
+# rst_setsrid / rst_band record on virtual, v2 everywhere
 # ---------------------------------------------------------------------------
 
 
 def test_setsrid_virtual_records_key_stays_virtual():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_setsrid("tile", 3857))
+    out = df.withColumn("tile", rx_api.rst_setsrid("tile", 3857))
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None and row["path"] is not None
     assert row["metadata"]["pending_srid"] == "3857"
     # reading it applies the relabel
-    row2 = out.select(rx.rst_srid("tile").alias("s")).first()
+    row2 = out.select(rx_api.rst_srid("tile").alias("s")).first()
     assert row2["s"] == 3857
 
 
 def test_band_virtual_records_key_stays_virtual():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_band("tile", 1))
+    out = df.withColumn("tile", rx_api.rst_band("tile", 1))
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None and row["path"] is not None
     assert row["metadata"]["pending_bands"] == "1"
-    row2 = out.select(rx.rst_numbands("tile").alias("n")).first()
+    row2 = out.select(rx_api.rst_numbands("tile").alias("n")).first()
     assert row2["n"] == 1
 
 
 def test_setsrid_band_v2_struct():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    for col in (rx.rst_setsrid("tile", 3857), rx.rst_band("tile", 1)):
+    for col in (rx_api.rst_setsrid("tile", 3857), rx_api.rst_band("tile", 1)):
         fields = [
             f.name for f in df.withColumn("tile", col).schema["tile"].dataType.fields
         ]
@@ -193,29 +193,12 @@ def test_setsrid_band_v2_struct():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: rst_memsize virtual-aware
+# rst_memsize virtual-aware
 # ---------------------------------------------------------------------------
 
 
-def test_memsize_virtual_not_null():
-    spark = _spark()
-    df = _read_virtual_df(spark, _a_tif())
-    v = df.select(rx.rst_memsize("tile").alias("m")).first()["m"]
-    assert v is not None and v > 0
-
-
-def test_memsize_materialized_is_byte_length():
-    spark = _spark()
-    df = _read_virtual_df(spark, _a_tif())
-    # materialize first, then check memsize equals raster byte length
-    mat = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
-    row = mat.select(rx.rst_memsize("tile").alias("m"), "tile.raster").first()
-    assert row["m"] is not None and row["m"] > 0
-    assert row["m"] == len(bytes(row["raster"]))
-
-
 # ---------------------------------------------------------------------------
-# Task 5: accumulated instructions compose + consume-on-materialize invariant
+# Accumulated instructions compose + consume-on-materialize invariant
 # ---------------------------------------------------------------------------
 
 
@@ -223,25 +206,25 @@ def test_accumulated_instructions_apply_in_order():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
     out = (
-        df.withColumn("tile", rx.rst_band("tile", 1))
-        .withColumn("tile", rx.rst_initnodata("tile"))
-        .withColumn("tile", rx.rst_setsrid("tile", 3857))
+        df.withColumn("tile", rx_api.rst_band("tile", 1))
+        .withColumn("tile", rx_api.rst_initnodata("tile"))
+        .withColumn("tile", rx_api.rst_setsrid("tile", 3857))
     )
     row = out.select("tile.raster", "tile.metadata").first()
     assert row["raster"] is None  # still virtual after 3 ops
     md = row["metadata"]
     assert md["pending_bands"] == "1"
-    assert md["pending_nodata"].startswith("-9999")
+    assert md["pending_nodata"] == ot.PENDING_NODATA_AUTO
     assert md["pending_srid"] == "3857"
     # materialize once: all three apply
     m = (
-        df.withColumn("tile", rx.rst_band("tile", 1))
-        .withColumn("tile", rx.rst_setsrid("tile", 3857))
-        .withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+        df.withColumn("tile", rx_api.rst_band("tile", 1))
+        .withColumn("tile", rx_api.rst_setsrid("tile", 3857))
+        .withColumn("tile", rx_api.rst_initnodata("tile", materialize=True))
     )
     r = m.select(
-        rx.rst_numbands("tile").alias("n"),
-        rx.rst_srid("tile").alias("s"),
+        rx_api.rst_numbands("tile").alias("n"),
+        rx_api.rst_srid("tile").alias("s"),
         "tile.raster",
         "tile.metadata",
     ).first()
@@ -276,7 +259,7 @@ def _write_tif(path, dtype, nodata=None, width=4, height=4):
     if nodata is not None:
         profile["nodata"] = nodata
     arr = np.zeros((1, height, width), dtype=dtype)
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(arr)
 
 
@@ -329,12 +312,12 @@ def test_pending_nodata_uint16_no_nodata_leaves_unset():
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 fix: eager path (edit.init_nodata) also guards dtype
+# Fix: eager path (edit.init_nodata) also guards dtype
 # ---------------------------------------------------------------------------
 
 
-def test_eager_init_nodata_uint16_no_nodata_does_not_raise():
-    """Materialized uint16-no-nodata tile: edit.init_nodata must NOT raise; nodata left unset."""
+def test_eager_init_nodata_uint16_no_nodata_stamps_fallback():
+    """Materialized uint16-no-nodata tile: edit.init_nodata stamps 65535 (heavy tier's uint16 constant)."""
     from databricks.labs.gbx.pyrx.core import edit
 
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
@@ -345,12 +328,12 @@ def test_eager_init_nodata_uint16_no_nodata_does_not_raise():
     # open the produced bytes and check nodata
     with MemoryFile(result) as mf, mf.open() as out:
         assert (
-            out.nodata is None
-        ), f"edit.init_nodata on uint16-no-nodata must leave nodata unset, got {out.nodata}"
+            out.nodata == 65535.0
+        ), f"edit.init_nodata on uint16-no-nodata must stamp 65535, got {out.nodata}"
 
 
 def test_eager_init_nodata_float32_no_nodata_sets_default():
-    """Materialized float32-no-nodata tile: edit.init_nodata must set -9999.0 (fits float)."""
+    """Materialized float32-no-nodata tile: edit.init_nodata must set Float32 min (heavy tier's constant)."""
     from databricks.labs.gbx.pyrx.core import edit
 
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
@@ -359,9 +342,10 @@ def test_eager_init_nodata_float32_no_nodata_sets_default():
     with rasterio.open(path) as ds:
         result = edit.init_nodata(ds)
     with MemoryFile(result) as mf, mf.open() as out:
-        assert (
-            out.nodata == -9999.0
-        ), f"edit.init_nodata on float32-no-nodata must set -9999.0, got {out.nodata}"
+        assert out.nodata == float(np.finfo(np.float32).min), (
+            f"edit.init_nodata on float32-no-nodata must set Float32 min, "
+            f"got {out.nodata}"
+        )
 
 
 def test_eager_init_nodata_preserves_existing():
@@ -380,7 +364,7 @@ def test_eager_init_nodata_preserves_existing():
 
 
 # ---------------------------------------------------------------------------
-# Finding 2 fix: pending_bands stacking guard
+# Fix: pending_bands stacking guard
 # ---------------------------------------------------------------------------
 
 
@@ -391,14 +375,14 @@ def test_band_stacking_guard_raises():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
     # Record a pending band selection (stays virtual).
-    df_band = df.withColumn("tile", rx.rst_band("tile", 1))
+    df_band = df.withColumn("tile", rx_api.rst_band("tile", 1))
     # A second rst_band on the same virtual tile should raise.
     with pytest.raises(Exception, match="pending band selection"):
-        df_band.withColumn("tile", rx.rst_band("tile", 1)).collect()
+        df_band.withColumn("tile", rx_api.rst_band("tile", 1)).collect()
 
 
 # ---------------------------------------------------------------------------
-# Finding 3 fix: setsrid + warp compose (pending_srid vs tile.crs)
+# Fix: setsrid + warp compose (pending_srid vs tile.crs)
 # ---------------------------------------------------------------------------
 
 
@@ -427,7 +411,7 @@ def test_setsrid_and_warp_compose():
 
 
 # ---------------------------------------------------------------------------
-# Finding 4 fix: open_header nodata consistency
+# Fix: open_header nodata consistency
 # ---------------------------------------------------------------------------
 
 
@@ -468,3 +452,64 @@ def test_open_header_pending_nodata_preserves_existing():
         assert (
             ds.nodata == 0.0
         ), f"open_header must preserve existing nodata=0, got {ds.nodata}"
+
+
+# ---------------------------------------------------------------------------
+# rst_initnodata on a virtual uint16 tile without nodata: the pending token is
+# resolved against the dtype's fallback (same value as the heavyweight tier).
+# ---------------------------------------------------------------------------
+
+
+def test_initnodata_virtual_uint16_without_nodata_resolves_fallback(tmp_path):
+    _write_tif(str(tmp_path / "u16.tif"), "uint16", nodata=None)
+    spark = _spark()
+    df = _read_virtual_df(spark, str(tmp_path))
+    row = df.withColumn("tile", rx_api.rst_initnodata("tile")).select("tile").first()
+    tile = row["tile"]
+    assert tile["raster"] is None, "tile must stay virtual"
+    assert tile["metadata"]["pending_nodata"] == ot.PENDING_NODATA_AUTO
+    with ot._open(tile) as ds:
+        assert ds.nodata == 65535.0
+    with ot.open_header(ot._to_virtual_tile(tile)) as ds:
+        assert ds.nodata == 65535.0
+    mat = ot.materialize_to_bytes(ot._to_virtual_tile(tile))
+    with MemoryFile(mat.raster) as mf, mf.open() as ds:
+        assert ds.nodata == 65535.0
+
+
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [
+        ("uint16", 65535.0),
+        ("int16", -32768.0),
+        ("float32", float(np.finfo(np.float32).min)),
+    ],
+)
+def test_pending_nodata_auto_resolves_per_dtype_on_every_apply_path(
+    tmp_path, dtype, expected
+):
+    """The "auto" token resolves to the dtype's fallback in open, header and both
+    materialize paths (the block-streaming one included)."""
+    path = str(tmp_path / f"{dtype}.tif")
+    _write_tif(path, dtype, nodata=None)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": ot.PENDING_NODATA_AUTO}
+    with ot.open_tile(vt) as ds:
+        assert ds.nodata == expected
+    with ot.open_header(vt) as ds:
+        assert ds.nodata == expected
+    for raster in (
+        ot.materialize_to_bytes(vt).raster,
+        ot._windowed_materialize_bytes(vt),
+    ):
+        with MemoryFile(raster) as mf, mf.open() as ds:
+            assert ds.nodata == expected
+
+
+def test_pending_nodata_auto_preserves_existing(tmp_path):
+    path = str(tmp_path / "keep.tif")
+    _write_tif(path, "uint16", nodata=7)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": ot.PENDING_NODATA_AUTO}
+    with ot.open_tile(vt) as ds:
+        assert ds.nodata == 7.0

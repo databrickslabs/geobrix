@@ -11,6 +11,8 @@ and Custom grids, which return NULL (None) when a point falls outside their
 declared extent.
 """
 
+import decimal
+import functools
 import math
 
 import numpy as np
@@ -125,6 +127,60 @@ def cell_union(cells):
     return _ewkb(union_all(polys))
 
 
+# A latitude whose web-mercator tile row sits within this distance of a whole number is
+# decided exactly (see _tile_y_at_least), not by the libm functions of the fast formula.
+# The libm results of tan, cos and log differ by an ulp or two between platforms (glibc,
+# macOS, the JVM's intrinsics), which is 1e-9 of a tile row at zoom 26 at most.
+_EDGE_BAND = 1e-6
+_PI60 = decimal.Decimal(
+    "3.14159265358979323846264338327950288419716939937510582097494459"
+)
+
+
+@functools.lru_cache(maxsize=4096)
+def _tile_y_at_least(lat: float, z: int, m: int) -> bool:
+    """True when the web-mercator tile row of the double ``lat`` at zoom ``z`` is at least ``m``.
+
+    Exact, in 60-digit decimal arithmetic on the binary value of ``lat``:
+    ``y >= m`` is ``tan(r) + sec(r) <= exp(pi * (1 - 2m / n))`` for ``r = lat`` in radians.
+    Identical in both tiers (heavy ``Quadbin.tileYAtLeast``), so a pixel centre on a tile
+    edge lands in the same row whatever the platform's libm says. Memoised: the rows of a
+    raster's pixel centres repeat one latitude along a row, and an exact decision is ~0.07 ms.
+    """
+    n = 1 if z == 0 else (1 << z)
+    with decimal.localcontext() as ctx:
+        ctx.prec = 60
+        r = decimal.Decimal(lat) * _PI60 / 180
+        # Taylor series; |r| < 1.49, so 70 terms are far past 60 digits
+        r2 = r * r
+        cos, sin = decimal.Decimal(1), r
+        term_c, term_s = decimal.Decimal(1), r
+        for k in range(1, 70):
+            term_c = -term_c * r2 / ((2 * k - 1) * (2 * k))
+            term_s = -term_s * r2 / ((2 * k) * (2 * k + 1))
+            cos += term_c
+            sin += term_s
+        lhs = (1 + sin) / cos
+        rhs = (_PI60 * (1 - decimal.Decimal(2 * m) / n)).exp()
+        return lhs <= rhs
+
+
+def _tile_y(lat: float, lat_rad: float, z: int) -> int:
+    """The web-mercator tile row of a (clamped) latitude: ``floor`` of the fast formula, decided
+    exactly (:func:`_tile_y_at_least`) when the formula lands within ``_EDGE_BAND`` of a row edge.
+    """
+    n = 1 if z == 0 else (1 << z)
+    y = (
+        (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi)
+        / 2.0
+        * n
+    )
+    m = round(y)
+    if 0 < m < n and abs(y - m) <= _EDGE_BAND:
+        return m if _tile_y_at_least(lat, z, m) else m - 1
+    return math.floor(y)
+
+
 def _lonlat_to_tile(lon: float, lat: float, z: int):
     """Port of Quadbin.scala lonLatToTile: (lon, lat) -> clamped (xTile, yTile)."""
     lat = max(_LAT_MIN, min(_LAT_MAX, lat))
@@ -132,11 +188,7 @@ def _lonlat_to_tile(lon: float, lat: float, z: int):
     n = 1 if z == 0 else (1 << z)
     lat_rad = lat * math.pi / 180.0
     x = math.floor((lon + 180.0) / 360.0 * n)
-    y = math.floor(
-        (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi)
-        / 2.0
-        * n
-    )
+    y = _tile_y(lat, lat_rad, z)
     x = max(0, min(n - 1, x))
     y = max(0, min(n - 1, y))
     return x, y
@@ -157,9 +209,16 @@ def _lonlat_to_tile_vec(lons: np.ndarray, lats: np.ndarray, z: int):
     n = 1 if z == 0 else (1 << z)
     lat_rad = lat * math.pi / 180.0
     x = np.floor((lon + 180.0) / 360.0 * n)
-    y = np.floor(
-        (1.0 - np.log(np.tan(lat_rad) + 1.0 / np.cos(lat_rad)) / math.pi) / 2.0 * n
+    yf = (1.0 - np.log(np.tan(lat_rad) + 1.0 / np.cos(lat_rad)) / math.pi) / 2.0 * n
+    y = np.floor(yf)
+    # the rows within _EDGE_BAND of a row edge are decided exactly, as _tile_y does
+    near = (
+        (np.abs(yf - np.rint(yf)) <= _EDGE_BAND) & (np.rint(yf) > 0) & (np.rint(yf) < n)
     )
+    for idx in np.argwhere(near):
+        at = tuple(idx)
+        m = int(np.rint(yf[at]))
+        y[at] = m if _tile_y_at_least(float(lat[at]), z, m) else m - 1
     x = np.clip(x, 0, n - 1).astype(np.uint64)
     y = np.clip(y, 0, n - 1).astype(np.uint64)
     return x, y
@@ -208,12 +267,12 @@ def resolution_vec(cells: np.ndarray) -> np.ndarray:
     return ((c >> np.uint64(52)) & np.uint64(0x1F)).astype(np.int64)
 
 
-def polyfill(geom, resolution: int) -> list:
-    """Quadbin cells covering the geometry's envelope (bbox) at `resolution`.
+MAX_POLYFILL_CELLS = 1_000_000  # mirrors Quadbin.polyfillBbox maxCells
 
-    Mirrors heavy Quadbin_Polyfill / Quadbin.polyfillBbox: derive the SW/NE
-    tile range from the bbox corners at `resolution` and enumerate every tile.
-    """
+
+def _polyfill_range(geom, resolution: int):
+    """``(x_lo, x_hi, y_lo, y_hi, z)`` of the tiles the geometry's bounding box covers at ``resolution``, or None for an
+    empty geometry; a resolution out of range raises."""
     z = int(resolution)
     if z < 0 or z > _MAX_POLYFILL_RES:
         raise ValueError(
@@ -221,16 +280,33 @@ def polyfill(geom, resolution: int) -> list:
         )
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
-        return []
+        return None
     w, s, e, n = parsed.bounds  # (minx, miny, maxx, maxy)
     x0, y0 = _lonlat_to_tile(w, n, z)  # upper-left
     x1, y1 = _lonlat_to_tile(e, s, z)  # lower-right
-    x_lo, x_hi = min(x0, x1), max(x0, x1)
-    y_lo, y_hi = min(y0, y1), max(y0, y1)
+    return min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1), z
+
+
+def polyfill_count(geom, resolution: int) -> int:
+    """How many cells :func:`polyfill` would return, without building them (0 for an empty geometry)."""
+    r = _polyfill_range(geom, resolution)
+    return 0 if r is None else (r[1] - r[0] + 1) * (r[3] - r[2] + 1)
+
+
+def polyfill(geom, resolution: int) -> list:
+    """Quadbin cells covering the geometry's envelope (bbox) at `resolution`.
+
+    Mirrors heavy Quadbin_Polyfill / Quadbin.polyfillBbox: derive the SW/NE
+    tile range from the bbox corners at `resolution` and enumerate every tile.
+    """
+    r = _polyfill_range(geom, resolution)
+    if r is None:
+        return []
+    x_lo, x_hi, y_lo, y_hi, z = r
     count = (x_hi - x_lo + 1) * (y_hi - y_lo + 1)
-    if count > 1_000_000:  # mirrors Quadbin.polyfillBbox maxCells
+    if count > MAX_POLYFILL_CELLS:
         raise ValueError(
-            f"polyfill would produce {count} cells (max=1000000); use a lower zoom"
+            f"polyfill would produce {count} cells (max={MAX_POLYFILL_CELLS}); use a lower zoom"
         )
     return [
         quadbin.tile_to_cell((x, y, z))

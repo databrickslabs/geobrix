@@ -15,7 +15,7 @@ import scala.collection.mutable.ArrayBuffer
  *  origin upper-left, Y flipped) and handed to [[MvtWriter.encode]] which wraps the GDAL OGR
  *  MVT driver.
  *
- *  Pairs with [[com.databricks.labs.gbx.rasterx.expressions.web.RST_XYZPyramid]] — the raster
+ *  Pairs with `gbx_rst_xyzpyramid` (the Python level) — the raster
  *  sibling that explodes one raster across the same zoom range. Output rows from both feed
  *  directly into the PMTiles encoder for end-to-end vector or raster publishing.
  *
@@ -24,7 +24,7 @@ import scala.collection.mutable.ArrayBuffer
  */
 object MvtPyramidBuilder {
 
-    /** Cap on total emitted tiles across the requested zoom range. Mirrors `RST_XYZPyramid` —
+    /** Cap on total emitted tiles across the requested zoom range. Mirrors the tile cap of `gbx_rst_xyzpyramid` —
      *  prevents accidental fan-outs (a tiny extent at z=20 is still fine; a global extent at
      *  z=10+ blows up quickly).
      */
@@ -72,7 +72,7 @@ object MvtPyramidBuilder {
         parsed.foreach { case (g, _) => unionEnv.expandToInclude(g.getEnvelopeInternal) }
         if (unionEnv.isNull) return Array.empty
 
-        // Cell-count guard — same shape as RST_XYZPyramid.
+        // Cell-count guard — same shape as gbx_rst_xyzpyramid's.
         var total: Long = 0L
         var zg = minZ
         while (zg <= maxZ) {

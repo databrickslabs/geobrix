@@ -14,9 +14,10 @@ import os
 import shutil
 import time
 from typing import Callable, Optional
+from urllib.parse import urlsplit
 
-import requests
-
+from databricks.labs.gbx._gdal_policy import open_data, remote_location
+from databricks.labs.gbx.core import _http
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
@@ -25,9 +26,19 @@ _log = logging.getLogger(__name__)
 _EXIST_FLOOR_BYTES = 1024  # validate=False idempotency floor (non-empty check)
 
 
-def download_href(href: str, outpath: str, get: Callable = requests.get) -> str:
+def download_href(
+    href: str, outpath: str, get: Optional[Callable] = None, allowed_hosts=None
+) -> str:
     """Stream an href to outpath. raise_for_status() so HTTP throttle/expiry (429/403)
-    raises -> the caller's retry backs off instead of writing the error body as data."""
+    raises -> the caller's retry backs off instead of writing the error body as data.
+
+    The href comes from data (a catalog, a table), so the fetch is ``core._http``'s: its host must not resolve to a
+    loopback, private, link-local or unspecified address, nor be off ``allowed_hosts`` when that is set; every
+    redirect hop is checked the same way; no ``~/.netrc`` is read. ``get`` is a test seam (a fake fetcher that
+    redirects nowhere): the href is checked before it is called."""
+    if get is None:
+        return _http.download(href, outpath, allowed_hosts=allowed_hosts)
+    _http.check_href(href, allowed_hosts)
     resp = get(href, timeout=100, stream=True)
     resp.raise_for_status()
     with open(outpath, "wb") as fh:
@@ -44,11 +55,10 @@ def read_validate(path: str) -> bool:
     It rejects throttled bodies and header-only truncation but does not catch
     corruption confined to large data sections.
     """
-    import rasterio
     from rasterio.windows import Window
 
     try:
-        with rasterio.open(path) as ds:
+        with open_data(path) as ds:
             ds.read(1, window=Window(0, 0, min(512, ds.width), min(512, ds.height)))
         return True
     except Exception:
@@ -65,7 +75,7 @@ def _sanitize_filename(filename: str) -> str:
 
 
 def windowed_download(
-    href: str, outpath: str, bbox, bbox_crs=None, max_mpp=None
+    href: str, outpath: str, bbox, bbox_crs=None, max_mpp=None, allowed_hosts=None
 ) -> str:
     """Open href (rasterio /vsicurl for https; any path locally), window to bbox, and
     write a windowed GeoTIFF. The window is clipped to the dataset, so the output is
@@ -81,15 +91,32 @@ def windowed_download(
         Memory bound: a 4 km × 4 km NAIP AOI at 0.6 m native is ~44 M pixels per band.
         Setting max_mpp=6.0 reduces that to ~444 K pixels (~100× smaller array).
 
-    GDAL_CACHEMAX is set to 128 (MB) via rasterio.Env to bound /vsicurl block cache
-    even when decimation is active (defence-in-depth for Serverless 1 GB UDF cap).
+    The GDAL block cache is capped (``capped_block_cache``, sized by ``budget.block_cache_bytes``)
+    to bound /vsicurl blocks even when decimation is active (defence-in-depth for the Serverless
+    1 GB UDF cap).
+
+    An http(s) href comes from data: its redirects are followed here first, each hop
+    checked as ``download_href`` checks it, and GDAL opens the URL they end at, with
+    ``GDAL_HTTP_NETRC=NO`` (GDAL reads ``~/.netrc`` by default). Any other remote form
+    (``/vsicurl/...``) is refused: GeoBrix fetches an href from data only as an http(s) URL.
     """
     import rasterio
 
     from databricks.labs.gbx.ds._window import window_for_bbox
+    from databricks.labs.gbx.pyrx._env import capped_block_cache
+    from databricks.labs.gbx.pyrx.core.budget import block_cache_bytes
 
-    with rasterio.Env(GDAL_CACHEMAX=128):
-        with rasterio.open(href) as src:
+    # judged by the parse rasterio uses (urlsplit's scheme), so a spelling it reads as a URL is a URL here too
+    if urlsplit(href).scheme.lower() in ("http", "https"):
+        href = _http.final_url(href, allowed_hosts=allowed_hosts)
+    elif remote_location(href) is not None:
+        _http.check_href(href, allowed_hosts)  # refuses: not an http(s) URL
+    with (
+        capped_block_cache(block_cache_bytes("auto")),
+        rasterio.Env(GDAL_HTTP_NETRC="NO"),
+    ):
+        # the href is an http(s) URL the checks passed, or a path the remote-path gate allows
+        with open_data(href, remote_ok=True) as src:
             win = window_for_bbox(src, bbox, bbox_crs)
             if win is None:
                 raise ValueError(f"bbox {bbox} does not overlap the asset {href!r}")
@@ -117,7 +144,7 @@ def windowed_download(
 
             out_dtype = src.dtypes[0]
             decoded_bytes = data.nbytes
-            profile = src.profile.copy()
+            profile = _comp.source_profile(src.profile)
             profile.update(
                 driver="GTiff",
                 width=ow,
@@ -129,7 +156,7 @@ def windowed_download(
                     out_dtype, decoded_bytes=decoded_bytes, compress="auto"
                 )
             )
-            with rasterio.open(outpath, "w", **profile) as dst:
+            with open_data(outpath, "w", **profile) as dst:
                 dst.write(data)
     return outpath
 
@@ -138,13 +165,14 @@ def fetch_validate_publish(
     href_fn: Callable[[], str],
     out_dir: str,
     filename: str,
-    get: Callable = requests.get,
+    get: Optional[Callable] = None,
     max_tries: int = 5,
     sleep: Callable = time.sleep,
     validate: bool = True,
     bbox=None,
     bbox_crs=None,
     max_mpp=None,
+    allowed_hosts=None,
 ) -> Optional[str]:
     """Download -> optionally read-validate -> publish to out_dir, with retries.
 
@@ -171,17 +199,20 @@ def fetch_validate_publish(
         Still raise_for_status() so HTTP throttle/expiry triggers a retry.
         is_out_file_valid reflects "downloaded + published OK", not decode success.
 
-    Idempotency (I3): if the target Volume path already exists and passes the
+    Idempotency: if the target Volume path already exists and passes the
     validity check (read_validate when validate=True, exists-above-size-floor when
     validate=False), return it immediately WITHOUT re-downloading.
 
-    I5: filename is sanitized via os.path.basename to prevent path-traversal.
+    The filename is sanitized via os.path.basename to prevent path-traversal.
+
+    An href the destination checks refuse (``core._http.RefusedHref``: a private
+    address, a host off ``allowed_hosts``, a redirect to either) is not retried.
     """
     safe_filename = _sanitize_filename(filename)
     outpath = os.path.join(out_dir, safe_filename)
     os.makedirs(out_dir, exist_ok=True)
 
-    # I3 — idempotency short-circuit
+    # a target that is already valid is returned without downloading again
     if os.path.exists(outpath):
         if validate:
             if read_validate(outpath):
@@ -198,18 +229,28 @@ def fetch_validate_publish(
             if bbox is not None:
                 # Windowed read decodes-on-read; a successful write IS the validation,
                 # so publish directly (skip the separate read_validate window-decode).
-                windowed_download(href_fn(), local, bbox, bbox_crs, max_mpp=max_mpp)
+                windowed_download(
+                    href_fn(),
+                    local,
+                    bbox,
+                    bbox_crs,
+                    max_mpp=max_mpp,
+                    allowed_hosts=allowed_hosts,
+                )
                 shutil.copyfile(local, outpath)
                 return outpath
-            download_href(href_fn(), local, get=get)
+            download_href(href_fn(), local, get=get, allowed_hosts=allowed_hosts)
             if validate:
                 if read_validate(local):
                     shutil.copyfile(local, outpath)  # publish only validated files
                     return outpath
             else:
-                # I1 — no-validate path: publish without rasterio decode
+                # validate=False: publish the bytes without a rasterio decode
                 shutil.copyfile(local, outpath)
                 return outpath
+        except _http.RefusedHref as exc:
+            _last_exc = exc
+            break  # the same href is refused again: no retry
         except Exception as exc:
             _last_exc = exc
         finally:
@@ -217,12 +258,15 @@ def fetch_validate_publish(
         if attempt < max_tries - 1:
             sleep(min(60, 4 * (2**attempt)))
 
-    _log.warning(
-        "fetch_validate_publish: all %d attempts exhausted for %r; last error: %r",
-        max_tries,
-        filename,
-        _last_exc,
-    )
+    if isinstance(_last_exc, _http.RefusedHref):
+        _log.warning("fetch_validate_publish: %r refused: %s", filename, _last_exc)
+    else:
+        _log.warning(
+            "fetch_validate_publish: all %d attempts exhausted for %r; last error: %r",
+            max_tries,
+            filename,
+            _last_exc,
+        )
     try:
         if os.path.exists(outpath):
             os.remove(outpath)

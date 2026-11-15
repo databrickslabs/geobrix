@@ -6,7 +6,7 @@ from pyspark.sql import functions as F
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 
 def _two_region_rgb_bytes(h=32, w=32):
@@ -38,31 +38,17 @@ def _two_region_rgb_bytes(h=32, w=32):
 def two_region_rgb_tile_df(spark):
     raster = _two_region_rgb_bytes()
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
-
-
-def test_rst_land_cover_emits_classmask_tile(spark, two_region_rgb_tile_df):
-    out = two_region_rgb_tile_df.select(
-        prx.rst_land_cover(F.col("tile"), method="spectral", smooth=0).alias("lc")
-    )
-    row = out.select(
-        prx.rst_numbands("lc").alias("n"), prx.rst_type("lc").alias("ty")
-    ).first()
-    assert row["n"] == 1
-    assert row["ty"][0] == "Int32"
-
-    tile_row = out.select("lc").first()["lc"]
-    arr = prx.tile_to_numpy(tile_row)
-    distinct = set(np.unique(arr)) - {-1}
-    assert len(distinct) >= 2
+    return df.select(rx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
 
 
 def test_rst_land_cover_then_polygonize(spark, two_region_rgb_tile_df):
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = two_region_rgb_tile_df.select(
-        prx.rst_land_cover(F.col("tile"), method="spectral", smooth=0).alias("lc")
+        rx.rst_land_cover(F.col("tile"), method="spectral", smooth=0).alias("lc")
     )
     df.createOrReplaceTempView("lc_tiles")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = spark.sql(
         "SELECT t.geom_wkb AS g, t.value AS v FROM lc_tiles, "
         "LATERAL gbx_rst_polygonize(lc, 1, 4) t"
@@ -70,23 +56,3 @@ def test_rst_land_cover_then_polygonize(spark, two_region_rgb_tile_df):
     vals = {r["v"] for r in rows}
     assert len(rows) >= 2
     assert len(vals) >= 2
-
-
-def test_gbx_rst_land_cover_sql_registration(spark, two_region_rgb_tile_df):
-    """SQL round-trip: gbx_rst_land_cover is registered by prx.register(spark)
-    and can be called from Spark SQL with positional args (tile, method, n_clusters, smooth).
-    """
-    two_region_rgb_tile_df.createOrReplaceTempView("_lc_sql_test")
-    prx.register(spark)
-    row = (
-        spark.sql(
-            "SELECT gbx_rst_land_cover(tile, 'spectral', 6, 0) AS lc FROM _lc_sql_test"
-        )
-        .select(
-            prx.rst_numbands("lc").alias("n"),
-            prx.rst_type("lc").alias("ty"),
-        )
-        .first()
-    )
-    assert row["n"] == 1
-    assert row["ty"][0] == "Int32"

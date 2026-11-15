@@ -1,6 +1,6 @@
 """Tests for gbx.models.serving.
 
-RULING R4: mlflow is ABSENT from the light CI env (not in
+mlflow is ABSENT from the light CI env (not in
 requirements-light-env6-ci.txt; confirmed not importable in the geobrix-dev container
 either). serving.py imports mlflow lazily inside each function that needs it, so the
 module itself always imports cleanly. These tests split the same way:
@@ -27,6 +27,32 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.models import serving
+
+ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def _installed_from(monkeypatch, url):
+    """Fake the running geobrix's PEP 610 ``direct_url.json`` (``url=None``: no such file)."""
+    import importlib.metadata
+
+    class _Dist:
+        @staticmethod
+        def read_text(name):
+            assert name == "direct_url.json"
+            return None if url is None else json.dumps({"url": url, "archive_info": {}})
+
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda n: _Dist())
+
+
+@pytest.fixture
+def installed_wheel(monkeypatch, tmp_path):
+    """A real wheel file the running geobrix 'was installed from' (file:// origin)."""
+    wheel = tmp_path / "vol with space" / ENV6_WHEEL
+    wheel.parent.mkdir()
+    wheel.write_bytes(b"PK")
+    _installed_from(monkeypatch, wheel.as_uri())
+    return str(wheel)
+
 
 _FAKE_GEOM_WKB = shapely.wkb.dumps(shapely.geometry.box(0, 0, 1, 1))
 
@@ -59,7 +85,7 @@ def _fake_segment_raster(*_a, **_k):
 
 
 def test_predict_geojson_returns_feature_collection(monkeypatch):
-    """R4: the predict LOGIC lives in _predict_geojson, mlflow-free. Patches the
+    """The predict LOGIC lives in _predict_geojson, mlflow-free. Patches the
     runner module ATTRIBUTE (not a name copied at def time) so the lazy in-function
     `from databricks.labs.gbx.models import runner` call inside _predict_geojson picks
     up the patch."""
@@ -148,7 +174,7 @@ def test_profile_auth_noop_when_profile_none(monkeypatch):
     assert "DATABRICKS_CONFIG_PROFILE" not in os.environ
 
 
-def test_register_uses_uc_registry(monkeypatch):
+def test_register_uses_uc_registry(monkeypatch, installed_wheel):
     calls = {}
     monkeypatch.setattr(
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
@@ -160,7 +186,7 @@ def test_register_uses_uc_registry(monkeypatch):
     assert "geobrix" in " ".join(calls["pip_reqs"])  # geobrix rides into the served env
 
 
-def test_register_bundles_wheel_via_code_paths(monkeypatch):
+def test_register_bundles_wheel_via_code_paths(monkeypatch, installed_wheel):
     """mlflow's private-wheel pattern (the fix): code_paths=[wheel_path] bundles the
     wheel INTO the model (mlflow copies it to code/<basename> -- no subdirs), and
     pip_requirements must reference that BUNDLED path, not the original
@@ -171,16 +197,18 @@ def test_register_bundles_wheel_via_code_paths(monkeypatch):
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
     )
     serving.register_to_unity_gateway(object(), "cat.sch.geosam", profile="oauth-fe")
-    assert calls["code_paths"] == [serving.DEFAULT_WHEEL_PATH]
+    assert calls["code_paths"] == [installed_wheel]
     pip_reqs_str = " ".join(calls["pip_reqs"])
-    assert "code/geobrix-0.5.2-py3-none-any.whl[models_gpu_env5]" in pip_reqs_str
+    assert calls["pip_reqs"] == ["code/" + ENV6_WHEEL, *serving.MODEL_DEPS]
     assert "segment-geospatial" in pip_reqs_str
     assert "file:///Volumes" not in pip_reqs_str
 
 
-def test_register_wheel_path_override_changes_pip_reqs(monkeypatch):
+def test_register_wheel_path_override_changes_pip_reqs(monkeypatch, tmp_path):
     """A caller-supplied wheel_path (e.g. a different staged version) must flow through
     to BOTH code_paths and the bundled-basename pip requirement -- not just one."""
+    wheel = tmp_path / "geobrix-9.9.9+env6-py3-none-any.whl"
+    wheel.write_bytes(b"PK")
     calls = {}
     monkeypatch.setattr(
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
@@ -189,15 +217,15 @@ def test_register_wheel_path_override_changes_pip_reqs(monkeypatch):
         object(),
         "cat.sch.geosam",
         profile="oauth-fe",
-        wheel_path="/Volumes/x/y/geobrix-9.9.9-py3-none-any.whl",
+        wheel_path=str(wheel),
     )
-    assert calls["code_paths"] == ["/Volumes/x/y/geobrix-9.9.9-py3-none-any.whl"]
-    assert "code/geobrix-9.9.9-py3-none-any.whl[models_gpu_env5]" in " ".join(
-        calls["pip_reqs"]
-    )
+    assert calls["code_paths"] == [str(wheel)]
+    assert calls["pip_reqs"][0] == "code/geobrix-9.9.9+env6-py3-none-any.whl"
 
 
-def test_register_pip_reqs_override_still_passes_code_paths(monkeypatch):
+def test_register_pip_reqs_override_still_passes_code_paths(
+    monkeypatch, installed_wheel
+):
     """An explicit pip_reqs= override replaces the computed default, but code_paths
     (the wheel bundling itself) is always passed regardless."""
     calls = {}
@@ -211,7 +239,77 @@ def test_register_pip_reqs_override_still_passes_code_paths(monkeypatch):
         pip_reqs=["some-other-pkg"],
     )
     assert calls["pip_reqs"] == ["some-other-pkg"]
-    assert calls["code_paths"] == [serving.DEFAULT_WHEEL_PATH]
+    assert calls["code_paths"] == [installed_wheel]
+
+
+def test_default_wheel_is_the_one_the_running_geobrix_was_installed_from(
+    installed_wheel,
+):
+    """PEP 610: a ``%pip install "geobrix @ file:///Volumes/.../x.whl"`` records that URL; the
+    default is its BARE local path (unquoted), whichever workspace/Volume it sits in."""
+    assert serving.default_wheel_path() == installed_wheel
+    assert not serving.default_wheel_path().startswith("file:")
+
+
+def test_default_wheel_is_the_logging_environments(monkeypatch):
+    """The served model bundles the wheel of the environment that logs it (env5 or env6)."""
+    _installed_from(
+        monkeypatch, "file:///Volumes/c/s/v/geobrix-0.6.0+env5-py3-none-any.whl"
+    )
+    assert (
+        serving.default_wheel_path()
+        == "/Volumes/c/s/v/geobrix-0.6.0+env5-py3-none-any.whl"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        None,  # source checkout / no direct_url.json
+        "https://example.com/geobrix-0.6.0+env6-py3-none-any.whl",  # not a local file
+        "file:///Users/me/geobrix/python/geobrix",  # a source directory, not a wheel
+    ],
+)
+def test_default_wheel_unknown_origin_raises(monkeypatch, url):
+    """No known wheel origin: never fall back to a path of some other workspace."""
+    _installed_from(monkeypatch, url)
+    with pytest.raises(ValueError, match="wheel_path="):
+        serving.default_wheel_path()
+
+
+def test_default_wheel_not_installed_raises(monkeypatch):
+    import importlib.metadata
+
+    def _missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _missing)
+    with pytest.raises(ValueError, match="wheel_path="):
+        serving.default_wheel_path()
+
+
+def test_register_fails_early_when_the_wheel_is_missing(monkeypatch, tmp_path):
+    """mlflow's 'Failed to copy the specified code path' is an opaque way to learn the wheel
+    is not there: check first, name the path, and never reach mlflow."""
+    calls = {}
+    monkeypatch.setattr(
+        serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
+    )
+    missing = str(tmp_path / ENV6_WHEEL)
+    with pytest.raises(FileNotFoundError, match="geobrix-0.6.0"):
+        serving.register_to_unity_gateway(
+            object(), "cat.sch.geosam", profile="oauth-fe", wheel_path=missing
+        )
+    assert calls == {}
+
+
+def test_register_without_a_known_wheel_asks_for_wheel_path(monkeypatch):
+    _installed_from(monkeypatch, None)
+    monkeypatch.setattr(serving, "_mlflow_log_and_register", lambda **k: "3")
+    with pytest.raises(ValueError, match="wheel_path="):
+        serving.register_to_unity_gateway(
+            object(), "cat.sch.geosam", profile="oauth-fe"
+        )
 
 
 def test_create_endpoint_uses_serving_seam(monkeypatch):
@@ -304,3 +402,22 @@ def test_query_uses_serving_seam(monkeypatch):
     assert calls["endpoint_name"] == "geosam-endpoint"
     assert calls["profile"] == "oauth-fe"
     assert base64.b64decode(calls["image_b64"]) == b"raw-image-bytes"
+
+
+def test_the_served_environment_names_only_extras_its_env_wheel_defines():
+    # 0.6.0 drops the *_gpu_env5 and light_* names: every extra a pip requirement of the served
+    # environment asks for must be one the bundled env wheel declares (envs/env<N>/extra-*.txt).
+    import re
+    from pathlib import Path
+
+    envs = Path(__file__).resolve().parents[2] / "envs"
+    for wheel in ("/V/" + ENV6_WHEEL, "/V/geobrix-0.6.0+env5-py3-none-any.whl"):
+        env = re.search(r"\+env([56])-", wheel).group(1)
+        shipped = {
+            f.stem.removeprefix("extra-")
+            for f in (envs / f"env{env}").glob("extra-*.txt")
+        }
+        for req in serving._bundled_pip_reqs(wheel):
+            extras = re.search(r"\[([^\]]*)\]", req)
+            asked = set(extras.group(1).split(",")) if extras else set()
+            assert asked <= shipped, (req, sorted(asked - shipped))

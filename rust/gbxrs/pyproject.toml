@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "gbxrs"
+version = "0.6.0"
+requires-python = ">=3.12"
+
+[tool.maturin]
+bindings = "pyo3"
+strip = true

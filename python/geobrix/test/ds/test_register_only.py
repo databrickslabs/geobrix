@@ -2,8 +2,6 @@
 
 import pytest
 
-from databricks.labs.gbx.ds import register as ds_register
-
 
 def _format_ok(spark, fmt):
     """A format is registered if .format(fmt) builds a reader without an
@@ -20,28 +18,38 @@ def _format_ok(spark, fmt):
 
 
 def test_only_subset_registers_just_those(spark):
-    ds_register.register(spark, only=["raster_gbx", "gtiff_gbx"])
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark, only=["raster_gbx", "gtiff_gbx"])
     assert _format_ok(spark, "raster_gbx")
     assert _format_ok(spark, "gtiff_gbx")
 
 
 def test_only_accepts_bare_name_without_suffix(spark):
-    ds_register.register(spark, only=["raster"])  # -> raster_gbx
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark, only=["raster"])  # -> raster_gbx
     assert _format_ok(spark, "raster_gbx")
 
 
 def test_only_unknown_format_raises(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     with pytest.raises(ValueError) as ei:
-        ds_register.register(spark, only=["raster_gpx"])
+        gbx_manager.register_sources(spark, only=["raster_gpx"])
     assert "raster_gpx" in str(ei.value)
 
 
 def test_only_none_registers_all(spark):
-    ds_register.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     for fmt in ("raster_gbx", "gtiff_gbx", "shapefile_gbx", "geojson_gbx"):
         assert _format_ok(spark, fmt)
 
 
 def test_lidar_registered(spark):
-    ds_register.register(spark, only=["lidar"])
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark, only=["lidar"])
     assert _format_ok(spark, "lidar_gbx")

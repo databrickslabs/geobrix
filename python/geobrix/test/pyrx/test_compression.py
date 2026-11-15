@@ -1,8 +1,14 @@
 """Tests for pyrx.core.compression authority."""
 
+import numpy as np
 import pytest
+from rasterio.enums import ColorInterp
+from rasterio.io import MemoryFile
+from rasterio.transform import from_bounds
 
 from databricks.labs.gbx.pyrx.core import compression as C
+
+from ._compression_sources import assert_canonical, assert_zstd_without_ycbcr, ycbcr_src
 
 
 def test_predictor_for_dtype():
@@ -16,7 +22,7 @@ def test_predictor_for_dtype():
 
 def test_auto_level_scales_down_with_size():
     # New ladder: ≤128 MiB → L6, ≤1 GiB → L3, >1 GiB → L1
-    # Grounded by .superpowers/sdd/2026-09-10-grid-fidelity-stage3/followup-compression-matrix-report.md:
+    # Grounded by a ZSTD level sweep across 11 tile types (see the ladder in compression.py):
     # L6 is the universal knee; L9/L12 add nothing; L16 often regresses.
     small = C.auto_level(1 * 1024**2)  # 1 MiB -> L6 (<=128 MiB)
     mid = C.auto_level(200 * 1024**2)  # 200 MiB -> L3 (<=1 GiB)
@@ -53,6 +59,17 @@ def test_creation_opts_none():
     assert "zstd_level" not in o and "zlevel" not in o
 
 
+@pytest.mark.parametrize("driver", ["GTiff", "COG"])
+@pytest.mark.parametrize("name", ["raw", "none", "RAW", "NONE"])
+def test_creation_opts_no_codec_names_say_none_explicitly(name, driver):
+    """'raw' and 'none' mean no compression for every driver. The key is emitted, not omitted:
+    the COG driver compresses with LZW when COMPRESS is absent, and a profile copied from a
+    compressed source would keep its codec."""
+    assert C.creation_opts("uint16", compress=name, driver=driver) == {
+        "compress": "none"
+    }
+
+
 def test_auto_plus_explicit_level_warns():
     with pytest.warns(UserWarning, match="auto"):
         C.creation_opts("int16", decoded_bytes=1024, compress="auto", level=22)
@@ -73,6 +90,29 @@ def test_creation_opts_cog_driver_emits_level_not_zstd_level():
     assert "LEVEL" in o  # COG driver option
     assert "zstd_level" not in o  # GTiff-only option
     assert o["LEVEL"] == str(C.auto_level(1 * 1024**2))
+
+
+def test_cog_profile_drops_the_layout_and_codec_keys_of_a_source():
+    # the COG driver lays the file out itself and takes its codec from creation_opts(driver="COG")
+    source = dict(
+        driver="GTiff",
+        width=4,
+        count=3,
+        dtype="uint8",
+        nodata=0,
+        interleave="pixel",
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        photometric="rgb",
+        compress="deflate",
+        zlevel=6,
+        predictor=2,
+    )
+    assert C.cog_profile(source) == dict(
+        driver="GTiff", width=4, count=3, dtype="uint8", nodata=0, interleave="pixel"
+    )
+    assert "tiled" in source  # the source is left as it was
 
 
 def test_creation_opts_gtiff_driver_emits_zstd_level():
@@ -226,7 +266,7 @@ def test_creation_opts_gtiff_deflate_uses_zlevel():
 
 # ---------------------------------------------------------------------------
 # Missing matrix: explicit ZSTD predictor for float32/uint8; full LZW matrix
-# (T3 completeness additions — these test canonical which is already correct;
+# (completeness additions — these test canonical which is already correct;
 # they are regression guards, not red→green drivers)
 # ---------------------------------------------------------------------------
 
@@ -253,7 +293,7 @@ def test_creation_opts_explicit_zstd_uint8_predictor_1():
 def test_creation_opts_explicit_deflate_uint8_predictor_1():
     """Explicit compress='deflate' + uint8 must derive predictor=1.
 
-    DIV-2 guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
+    Regression guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
     Canonical creation_opts must return predictor=1 (matching heavy OperatorOptions).
     """
     o = C.creation_opts("uint8", compress="deflate", level=6)
@@ -331,9 +371,9 @@ def test_cog_predictor_hygiene_int8_auto_omits_predictor():
 
 
 def test_cog_predictor_hygiene_float32_preserves_predictor_3():
-    """DIV-1 guard: COG + float32 must still emit predictor=3.
+    """Regression guard: COG + float32 must still emit predictor=3.
 
-    This is the SP3 DIV-1 regression guard.  The hygiene fix must not affect
+    The hygiene fix must not affect
     the floating-point predictor case.
     """
     o = C.creation_opts(
@@ -342,7 +382,7 @@ def test_cog_predictor_hygiene_float32_preserves_predictor_3():
     assert o["compress"] == "zstd"
     assert (
         o.get("predictor") == "3"
-    ), f"DIV-1 guard: COG float32 must have predictor='3', got {o.get('predictor')!r}"
+    ), f"COG float32 must have predictor='3', got {o.get('predictor')!r}"
 
 
 def test_cog_predictor_hygiene_int16_preserves_predictor_2():
@@ -362,3 +402,348 @@ def test_cog_predictor_hygiene_gtiff_uint8_unaffected():
         "uint8", compress="auto", driver="GTiff", decoded_bytes=1 * 1024**2
     )
     assert o.get("predictor") == "1"
+
+
+@pytest.mark.parametrize("compress", ["auto", "zstd", "deflate", "lzw"])
+def test_creation_opts_promotes_odd_nbits_under_predictor_2(compress):
+    """PREDICTOR=2 needs 8/16/32/64-bit samples: a 15-bit source (Sentinel-2 style
+    uint16 with NBITS=15) is promoted to the dtype's full width, losslessly."""
+    opts = C.creation_opts("uint16", compress=compress, driver="COG", nbits=15)
+    assert opts["predictor"] == "2" and opts["nbits"] == "16"
+
+
+def test_creation_opts_leaves_nbits_alone_when_not_needed():
+    """No promotion for byte-aligned depths, unknown depths, or no predictor 2."""
+    for nbits in (None, 16):
+        assert "nbits" not in C.creation_opts("uint16", compress="deflate", nbits=nbits)
+    assert "nbits" not in C.creation_opts("uint8", compress="deflate", nbits=4)
+    assert "nbits" not in C.creation_opts("uint16", compress="none", nbits=15)
+
+
+def test_drop_stripe_blocks_drops_only_the_strip_width_of_an_untiled_profile():
+    striped = {"tiled": False, "blockxsize": 64, "blockysize": 8, "compress": "deflate"}
+    assert C.drop_stripe_blocks(striped) == {
+        "tiled": False,
+        "blockysize": 8,
+        "compress": "deflate",
+    }
+    assert striped["blockxsize"] == 64  # the argument is not changed
+    tiled = {"tiled": True, "blockxsize": 256, "blockysize": 256}
+    assert C.drop_stripe_blocks(tiled) == tiled
+    assert C.drop_stripe_blocks({"width": 4}) == {"width": 4}  # no block keys at all
+
+
+@pytest.mark.parametrize(
+    "driver, compress, want",
+    [
+        ("GTiff", "none", {"compress": "none"}),
+        ("COG", "raw", {"compress": "none"}),
+        ("PNG", "none", {}),
+        ("JPEG", "raw", {}),
+        (
+            "PNG",
+            "deflate",
+            {"zlevel": "6"},
+        ),  # PNG's own level, the one codec option it takes
+        ("JPEG", "deflate", {}),
+        ("PNG", "auto", {}),
+        ("JPEG", "zstd", {}),
+    ],
+)
+def test_png_and_jpeg_are_handed_no_codec_options(driver, compress, want):
+    """PNG always deflates and JPEG always takes JPEG: GDAL logs CPLE_NotSupported for a
+    COMPRESS or PREDICTOR it is handed, and for a codec level on JPEG. GTiff and COG are as before.
+    """
+    assert C.creation_opts("uint8", compress=compress, driver=driver) == want
+
+
+def test_a_source_profile_for_png_or_jpeg_loses_its_codec_keys():
+    prof = {
+        "compress": "deflate",
+        "predictor": 2,
+        "zstd_level": 9,
+        "width": 4,
+        "tiled": False,
+    }
+    for driver in ("PNG", "jpeg"):
+        assert C.source_profile(prof, driver=driver) == {"width": 4, "tiled": False}
+    assert C.source_profile(prof, driver="GTiff") == prof == C.source_profile(prof)
+
+
+def test_source_profile_is_drop_ycbcr_and_drop_stripe_blocks_in_one():
+    prof = {
+        "photometric": "ycbcr",
+        "compress": "jpeg",
+        "tiled": False,
+        "blockxsize": 64,
+        "blockysize": 8,
+    }
+    assert C.source_profile(prof) == {
+        "compress": "jpeg",
+        "tiled": False,
+        "blockysize": 8,
+    }
+    assert C.source_profile(prof, unless_jpeg=True)["photometric"] == "ycbcr"
+
+
+def test_drop_ycbcr_is_called_only_inside_the_compression_module():
+    """A writer starts from a source's profile through ``source_profile`` (``drop_ycbcr`` plus
+    ``drop_stripe_blocks``), never by calling ``drop_ycbcr`` itself: one call site per rule, so a site
+    cannot pick up the YCbCr photometric fix and miss the strip-width one."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(C.__file__).parents[2]  # .../databricks/labs/gbx
+    offenders = []
+    for path in sorted(src.rglob("*.py")):
+        if path.name == "compression.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = (
+                    fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else getattr(fn, "id", None)
+                )
+                if name == "drop_ycbcr":
+                    offenders.append(f"{path.relative_to(src)}:{node.lineno}")
+    assert offenders == [], offenders
+
+
+# A function that copies a source dataset's profile must also clean it (``source_profile``,
+# ``cog_profile``) or hand it to ``write_gtiff``, which does. These copy a profile for another use.
+_PROFILE_CLEANERS = {"source_profile", "cog_profile", "write_gtiff"}
+_PROFILE_COPY_EXCEPTIONS = {
+    (
+        "pyrx/core/open_tile.py",
+        "profile",
+    ): "a read-only view of a window; nothing is written",
+    (
+        "pyrx/core/open_tile.py",
+        "materialize_array",
+    ): "returns the profile to its caller",
+    (
+        "pyrx/core/focal.py",
+        "_out_profile",
+    ): "drops tiled, blockxsize, blockysize and interleave itself",
+}
+
+
+def _copies_of_a_dataset_profile(tree):
+    """``(line, enclosing function)`` of each place a dataset's profile is taken: ``x.profile.copy()``,
+    ``dict(x.profile)``, ``{**x.profile}``, ``x.profile | {...}`` (or ``{...} | x.profile``),
+    ``profile = x.profile`` (the alias is then changed or written) and ``f(**x.profile)``.
+    """
+    import ast
+
+    def is_profile(node):
+        return isinstance(node, ast.Attribute) and node.attr == "profile"
+
+    def takes_profile(node):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            return (
+                (
+                    isinstance(fn, ast.Attribute)
+                    and fn.attr == "copy"
+                    and is_profile(fn.value)
+                )
+                or (
+                    isinstance(fn, ast.Name)
+                    and fn.id == "dict"
+                    and any(is_profile(a) for a in node.args)
+                )
+                or any(k.arg is None and is_profile(k.value) for k in node.keywords)
+            )
+        if isinstance(node, ast.Dict):
+            return any(
+                k is None and is_profile(v) for k, v in zip(node.keys, node.values)
+            )
+        if isinstance(node, ast.BinOp):
+            return isinstance(node.op, ast.BitOr) and (
+                is_profile(node.left) or is_profile(node.right)
+            )
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            return is_profile(node.value)
+        return False
+
+    found = []
+
+    def visit(node, func):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node
+        if takes_profile(node):
+            found.append((node.lineno, func))
+        for child in ast.iter_child_nodes(node):
+            visit(child, func)
+
+    visit(tree, None)
+    return found
+
+
+def _called_names(func):
+    import ast
+
+    return {
+        (
+            n.func.attr
+            if isinstance(n.func, ast.Attribute)
+            else getattr(n.func, "id", None)
+        )
+        for n in ast.walk(func)
+        if isinstance(n, ast.Call)
+    }
+
+
+def test_a_profile_copied_from_a_source_is_cleaned_before_it_is_written():
+    """A writer that starts from ``ds.profile.copy()`` and never cleans it logs GDAL's BLOCKXSIZE
+    warning for a striped source and fails on a JPEG/YCbCr one (15 sites did before ``source_profile``
+    was applied to them). New writers go through ``source_profile`` / ``cog_profile`` /
+    ``write_gtiff``; the few that copy a profile for another use are listed with their reason.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path(C.__file__).parents[2]  # .../databricks/labs/gbx
+    offenders, used = [], set()
+    for path in sorted(src.rglob("*.py")):
+        rel = path.relative_to(src).as_posix()
+        # the wheel's copy of rasterio and osgeo sits under _vendor on a node: not GeoBrix's code
+        if rel.startswith("_vendor/"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for lineno, func in _copies_of_a_dataset_profile(tree):
+            name = func.name if func is not None else "<module>"
+            if (rel, name) in _PROFILE_COPY_EXCEPTIONS:
+                used.add((rel, name))
+            elif func is None or not (_called_names(func) & _PROFILE_CLEANERS):
+                offenders.append(f"{rel}:{lineno} in {name}")
+    assert offenders == [], (
+        f"{offenders} take a dataset's profile without cleaning it. Fix: start from "
+        "source_profile(ds.profile) (databricks.labs.gbx.pyrx.core.compression; or cog_profile "
+        "for a COG, or write_gtiff), or, for a copy made for another use, list the function in "
+        "_PROFILE_COPY_EXCEPTIONS with the reason"
+    )
+    assert used == set(
+        _PROFILE_COPY_EXCEPTIONS
+    ), "a listed exception no longer copies a profile"
+
+
+@pytest.mark.parametrize(
+    "source, taken",
+    [
+        ("p = ds.profile.copy()", 1),
+        ("p = dict(ds.profile)", 1),
+        ("p = {**ds.profile, 'driver': 'GTiff'}", 1),
+        ("p = ds.profile | {'driver': 'GTiff'}", 1),
+        ("p = {'driver': 'GTiff'} | ds.profile", 1),
+        ("profile = ds.profile", 1),
+        ("mf.open(**ds.profile)", 1),
+        ("w = ds.profile['width']", 0),
+        ("n = ds.profile.get('count')", 0),
+        ("p = ds.meta | {'driver': 'GTiff'}", 0),
+        ("mf.open(**kwargs)", 0),
+    ],
+)
+def test_the_profile_copy_guard_sees_every_way_to_take_a_profile(source, taken):
+    """The guard above finds a profile by its spelling; each spelling a writer can use to start
+    from a source's profile is one row (a read of one key of it is not a copy)."""
+    import ast
+
+    tree = ast.parse(f"def writer(ds, mf, kwargs):\n    {source}\n")
+    assert len(_copies_of_a_dataset_profile(tree)) == taken
+
+
+# ---------------------------------------------------------------------------
+# write_gtiff: the one canonical light writer
+# ---------------------------------------------------------------------------
+
+
+def test_write_gtiff_is_canonical_and_leaves_profile_alone():
+    prof = dict(
+        driver="COG",
+        width=8,
+        height=8,
+        count=1,
+        dtype="int16",
+        crs="EPSG:32618",
+        transform=from_bounds(0, 0, 8, 8, 8, 8),
+        compress="lzw",
+    )
+    before = dict(prof)
+    out = C.write_gtiff(prof, np.arange(64, dtype="int16").reshape(1, 8, 8))
+    assert prof == before, "write_gtiff must not mutate the caller's profile"
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.driver == "GTiff"
+    assert_canonical(out, "int16")
+
+
+@pytest.mark.parametrize(
+    "count,dtype,alpha_at",
+    [
+        (4, "uint8", 3),  # RGBA: GDAL's own default for a 4-band uint8 raster
+        (4, "uint8", None),  # RGB + NIR: GDAL's default would label band 4 alpha
+        (4, "uint16", 3),  # 16-bit RGBA: GDAL's default has no alpha band
+        (4, "uint16", None),
+        (2, "uint8", 1),  # gray + alpha
+        (3, "uint8", 2),  # gray + extra + alpha: GDAL labels no band alpha
+        (6, "uint8", 5),  # RGB + extra + alpha
+        (
+            5,
+            "uint8",
+            3,
+        ),  # an alpha label that is not the last band is data: not carried
+        (3, "uint8", None),
+        (1, "float32", None),
+    ],
+)
+def test_write_gtiff_labels_a_band_alpha_exactly_where_alpha_like_does(
+    count, dtype, alpha_at
+):
+    like = [ColorInterp.undefined] * count
+    if alpha_at is not None:
+        like[alpha_at] = ColorInterp.alpha
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=count,
+        dtype=dtype,
+        crs="EPSG:32618",
+        transform=from_bounds(0, 0, 4, 4, 4, 4),
+    )
+    data = np.full((count, 4, 4), 9, dtype=dtype)
+    out = C.write_gtiff(prof, data, alpha_like=like)
+    # the alpha band is the last band, when it is labelled alpha (the one alpha rule)
+    want = [i == count - 1 and like[-1] == ColorInterp.alpha for i in range(count)]
+    with MemoryFile(out) as m, m.open() as c:
+        assert [ci == ColorInterp.alpha for ci in c.colorinterp] == want
+        assert np.array_equal(c.read(), data)
+
+
+def test_write_gtiff_drops_ycbcr_photometric_of_a_jpeg_source():
+    """A JPEG/YCbCr source's profile fails a ZSTD write on PHOTOMETRIC unless it is dropped."""
+    with MemoryFile(ycbcr_src()) as m, m.open() as ds:
+        prof, data = ds.profile.copy(), ds.read()
+    assert str(prof.get("photometric")).lower() == "ycbcr"  # premise of the test
+    before = dict(prof)
+    out = C.write_gtiff(prof, data)
+    assert prof == before, "write_gtiff must not mutate the caller's profile"
+    assert_zstd_without_ycbcr(out)
+    with MemoryFile(out) as m, m.open() as c:
+        assert np.array_equal(c.read(), data), "values must survive the re-encode"
+
+
+def test_drop_ycbcr_unless_jpeg_keeps_the_key_only_for_a_jpeg_codec():
+    base = {"photometric": "YCbCr", "count": 3}
+    assert "photometric" not in C.drop_ycbcr({**base, "compress": "jpeg"})
+    assert "photometric" not in C.drop_ycbcr(
+        {**base, "compress": "zstd"}, unless_jpeg=True
+    )
+    assert "photometric" not in C.drop_ycbcr(dict(base), unless_jpeg=True)
+    for codec in ("jpeg", "JPEG"):
+        kept = C.drop_ycbcr({**base, "compress": codec}, unless_jpeg=True)
+        assert kept["photometric"] == "YCbCr"
+    rgb = {"photometric": "rgb", "compress": "zstd"}
+    assert C.drop_ycbcr(rgb, unless_jpeg=True) == rgb

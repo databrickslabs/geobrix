@@ -11,7 +11,7 @@ from pathlib import Path
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # NYC Open Data - Socrata API (dataset: 8meu-9t5y)
-url = 'https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=300'
+url = 'https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=50000'
 
 # Output path (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/nyc/taxi-zones")
@@ -28,7 +28,7 @@ print(f"✅ Downloaded NYC Taxi Zones ({len(response.content):,} bytes)")
 print(f"   Path: {output_file}")
 
 # Verify by reading
-nyc_zones = spark.read.format("geojson_ogr").load(str(output_file))
+nyc_zones = spark.read.format("geojson_gbx").load(str(output_file))
 print(f"   Features: {nyc_zones.count()}")
 nyc_zones.select("zone", "borough").show(5)"""
 
@@ -45,7 +45,7 @@ DOWNLOAD_NYC_TAXI_ZONES_output = """✅ Downloaded NYC Taxi Zones (1,234,567 byt
 +------------------+---------+"""
 
 USAGE_NYC_TAXI_ZONES = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-nyc_zones = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/taxi-zones/nyc_taxi_zones.geojson")"""
+nyc_zones = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/taxi-zones/nyc_taxi_zones.geojson")"""
 
 DOWNLOAD_LONDON_POSTCODES = """# Download London Postcode Zones
 import requests
@@ -70,7 +70,7 @@ print(f"✅ Downloaded London Postcode Zones ({len(response.content):,} bytes)")
 print(f"   Path: {output_file}")
 
 # Verify by reading
-london_zones = spark.read.format("geojson_ogr").load(str(output_file))
+london_zones = spark.read.format("geojson_gbx").load(str(output_file))
 print(f"   Features: {london_zones.count()}")
 london_zones.select("name").show(5)"""
 
@@ -87,7 +87,7 @@ DOWNLOAD_LONDON_POSTCODES_output = """✅ Downloaded London Postcode Zones (912,
 +-----+"""
 
 USAGE_LONDON_POSTCODES = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-london_zones = spark.read.format("geojson_ogr").load(f"{sample_path}/london/postcodes/london_postcodes.geojson")"""
+london_zones = spark.read.format("geojson_gbx").load(f"{sample_path}/london/postcodes/london_postcodes.geojson")"""
 
 DOWNLOAD_NYC_BOROUGHS = """# Download NYC Boroughs
 import requests
@@ -95,7 +95,7 @@ from pathlib import Path
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # NYC Open Data - Socrata API (dataset: gthc-hcne)
-url = 'https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=10'
+url = 'https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=50000'
 
 # Output path (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/nyc/boroughs")
@@ -113,15 +113,15 @@ print(f"✅ Downloaded NYC Boroughs ({file_size:.1f} KB)")
 print(f"   Path: {output_file}")
 
 # Verify
-nyc_boroughs = spark.read.format("geojson_ogr").load(str(output_file))
+nyc_boroughs = spark.read.format("geojson_gbx").load(str(output_file))
 print(f"   Boroughs: {nyc_boroughs.count()}")
-nyc_boroughs.select("boro_name", "boro_code").show()"""
+nyc_boroughs.select("boroname", "borocode").show()"""
 
 DOWNLOAD_NYC_BOROUGHS_output = """✅ Downloaded NYC Boroughs (12.3 KB)
    Path: /Volumes/.../nyc/boroughs/nyc_boroughs.geojson
    Boroughs: 5
 +----------+---------+
-|boro_name |boro_code|
+|boroname  |borocode |
 +----------+---------+
 |Manhattan |1        |
 |Bronx     |2        |
@@ -129,7 +129,7 @@ DOWNLOAD_NYC_BOROUGHS_output = """✅ Downloaded NYC Boroughs (12.3 KB)
 +----------+---------+"""
 
 USAGE_NYC_BOROUGHS = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-nyc_boroughs = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")"""
+nyc_boroughs = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")"""
 
 DOWNLOAD_NYC_NTA = """# Download NYC Neighborhood Tabulation Areas (NTA)
 import requests
@@ -137,7 +137,7 @@ from pathlib import Path
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # NYC Open Data - Socrata API (dataset: 9nt8-h7nd)
-url = 'https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=250'
+url = 'https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=50000'
 
 # Output path (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/nyc-neighborhoods")
@@ -155,13 +155,13 @@ print(f"✅ Downloaded NYC Neighborhoods ({file_size:.1f} MB)")
 print(f"   Path: {output_file}")
 
 # Verify
-nyc_nta = spark.read.format("geojson_ogr").load(str(output_file))
+nyc_nta = spark.read.format("geojson_gbx").load(str(output_file))
 print(f"   Neighborhoods: {nyc_nta.count()}")
 nyc_nta.select("ntaname", "boroname").show(10)"""
 
 DOWNLOAD_NYC_NTA_output = """✅ Downloaded NYC Neighborhoods (4.1 MB)
    Path: /Volumes/.../nyc-neighborhoods/nyc_nta.geojson
-   Neighborhoods: 250
+   Neighborhoods: 262
 +------------------+----------+
 |ntaname           |boroname  |
 +------------------+----------+
@@ -171,10 +171,10 @@ DOWNLOAD_NYC_NTA_output = """✅ Downloaded NYC Neighborhoods (4.1 MB)
 +------------------+----------+"""
 
 USAGE_NYC_NTA = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-nyc_neighborhoods = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc-neighborhoods/nyc_nta.geojson")"""
+nyc_neighborhoods = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc-neighborhoods/nyc_nta.geojson")"""
 
 DOWNLOAD_LONDON_BOROUGHS = """# Download London Boroughs (GeoJSON)
-# Converts official shapefile to GeoJSON for use with geojson_ogr reader.
+# Converts official shapefile to GeoJSON for use with the geojson_gbx reader.
 import requests
 from pathlib import Path
 import zipfile
@@ -209,7 +209,7 @@ if shp_files:
     shutil.rmtree(tmp_dir, ignore_errors=True)
     print(f"✅ Downloaded London Boroughs ({len(response.content) / (1024*1024):.1f} MB → GeoJSON)")
     print(f"   Path: {out_file}")
-    london_boroughs = spark.read.format("geojson_ogr").load(str(out_file))
+    london_boroughs = spark.read.format("geojson_gbx").load(str(out_file))
     print(f"   Boroughs: {london_boroughs.count()}")
     london_boroughs.select("NAME").show(5)"""
 
@@ -227,7 +227,7 @@ DOWNLOAD_LONDON_BOROUGHS_output = """✅ Downloaded London Boroughs (2.1 MB → 
 +------------------+"""
 
 USAGE_LONDON_BOROUGHS = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-london_boroughs = spark.read.format("geojson_ogr").load(f"{sample_path}/london/boroughs/london_boroughs.geojson")"""
+london_boroughs = spark.read.format("geojson_gbx").load(f"{sample_path}/london/boroughs/london_boroughs.geojson")"""
 
 DOWNLOAD_NYC_PARKS = """# Download NYC Parks Shapefile
 import requests
@@ -262,7 +262,7 @@ if shp_files:
     print(f"   Shapefile: {shp_file}")
     
     # Verify
-    parks = spark.read.format("shapefile_ogr").load(shp_file)
+    parks = spark.read.format("shapefile_gbx").load(shp_file)
     print(f"   Parks: {parks.count()}")
     parks.select("name311", "borough", "acres").show(5)"""
 
@@ -278,7 +278,7 @@ DOWNLOAD_NYC_PARKS_output = """✅ Downloaded NYC Parks Shapefile (5.2 MB)
 +------------------+--------+-----+"""
 
 USAGE_NYC_PARKS = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-parks = spark.read.format("shapefile_ogr").load(f"{sample_path}/nyc/parks/*.shp")"""
+parks = spark.read.format("shapefile_gbx").load(f"{sample_path}/nyc/parks/")"""
 
 DOWNLOAD_NYC_SUBWAY = """# Download NYC Subway Stations Shapefile
 import requests
@@ -313,16 +313,16 @@ if shp_files:
     print(f"   Shapefile: {shp_file}")
     
     # Verify
-    subway = spark.read.format("shapefile_ogr").load(shp_file)
+    subway = spark.read.format("shapefile_gbx").load(shp_file)
     print(f"   Stations: {subway.count()}")
-    subway.select("Station_Na", "Line").show(5)"""
+    subway.select("stop_name", "line").show(5)"""
 
 DOWNLOAD_NYC_SUBWAY_output = """✅ Downloaded NYC Subway Stations Shapefile (1.1 MB)
    Path: .../nyc/subway/
    Shapefile: .../nyc/subway/geo_export_....shp
    Stations: 2120
 +------------------+------------------+
-|Station_Na        |Line              |
+|stop_name         |line              |
 +------------------+------------------+
 |72 St             |N Q R W           |
 |Lexington Av/63   |F Q               |
@@ -330,7 +330,7 @@ DOWNLOAD_NYC_SUBWAY_output = """✅ Downloaded NYC Subway Stations Shapefile (1.
 +------------------+------------------+"""
 
 USAGE_NYC_SUBWAY = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-subway = spark.read.format("shapefile_ogr").load(f"{sample_path}/nyc/subway/*.shp")"""
+subway = spark.read.format("shapefile_gbx").load(f"{sample_path}/nyc/subway/")"""
 
 CREATE_GEOPACKAGE_NYC = """# Create NYC Multi-Layer GeoPackage
 # Requires: Essential Bundle and Complete Bundle shapefiles already downloaded
@@ -406,12 +406,12 @@ This combines multiple datasets into one file with separate layers.
 
 USAGE_GEOPACKAGE_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Read specific layer
-boroughs = spark.read.format("gpkg") \\
+boroughs = spark.read.format("gpkg_gbx") \\
     .option("layerName", "boroughs") \\
     .load(f"{sample_path}/nyc/geopackage/nyc_complete.gpkg")
 
 # Read another layer
-parks = spark.read.format("gpkg") \\
+parks = spark.read.format("gpkg_gbx") \\
     .option("layerName", "parks") \\
     .load(f"{sample_path}/nyc/geopackage/nyc_complete.gpkg")"""
 
@@ -465,8 +465,8 @@ else:
         # Add features
         for idx, row in boroughs.iterrows():
             feature = ogr.Feature(layer_boroughs.GetLayerDefn())
-            feature.SetField('BORO_NAME', str(row.get('boro_name', '')))
-            feature.SetField('BORO_CODE', str(row.get('boro_code', '')))
+            feature.SetField('BORO_NAME', str(row.get('boroname', '')))
+            feature.SetField('BORO_CODE', str(row.get('borocode', '')))
             feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
             layer_boroughs.CreateFeature(feature)
             feature = None
@@ -486,7 +486,7 @@ else:
         for idx, row in zones.iterrows():
             feature = ogr.Feature(layer_zones.GetLayerDefn())
             feature.SetField('ZONE_NAME', str(row.get('zone', '')))
-            feature.SetField('LOCATION_ID', int(row.get('LocationID', 0)))
+            feature.SetField('LOCATION_ID', int(row.get('locationid', 0)))
             feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
             layer_zones.CreateFeature(feature)
             feature = None
@@ -503,12 +503,14 @@ else:
             # Add fields
             layer_parks.CreateField(ogr.FieldDefn('PARK_NAME', ogr.OFTString))
             layer_parks.CreateField(ogr.FieldDefn('ACRES', ogr.OFTReal))
+            layer_parks.CreateField(ogr.FieldDefn('BOROUGH', ogr.OFTString))
             
             # Add features (limit to first 100 for size)
             for idx, row in parks.head(100).iterrows():
                 feature = ogr.Feature(layer_parks.GetLayerDefn())
                 feature.SetField('PARK_NAME', str(row.get('name311', '')))
                 feature.SetField('ACRES', float(row.get('acres', 0)))
+                feature.SetField('BOROUGH', str(row.get('borough', '')))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
                 layer_parks.CreateFeature(feature)
                 feature = None
@@ -529,8 +531,8 @@ else:
             # Add features
             for idx, row in subway.iterrows():
                 feature = ogr.Feature(layer_subway.GetLayerDefn())
-                feature.SetField('STATION_NAME', str(row.get('Station_Na', '')))
-                feature.SetField('LINE', str(row.get('Line', '')))
+                feature.SetField('STATION_NAME', str(row.get('stop_name', '')))
+                feature.SetField('LINE', str(row.get('line', '')))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
                 layer_subway.CreateFeature(feature)
                 feature = None
@@ -564,18 +566,18 @@ This creates an Esri FileGDB with multiple feature classes.
 
 USAGE_FILEGDB_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Read FileGDB feature classes (created in Complete Bundle)
-boroughs = spark.read.format("filegdb") \\
+boroughs = spark.read.format("file_gdb_gbx") \\
     .option("layerName", "NYC_Boroughs") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")
 
-zones = spark.read.format("filegdb") \\
+zones = spark.read.format("file_gdb_gbx") \\
     .option("layerName", "NYC_TaxiZones") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")
 
-parks = spark.read.format("filegdb") \\
+parks = spark.read.format("file_gdb_gbx") \\
     .option("layerName", "NYC_Parks") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")
 
-subway = spark.read.format("filegdb") \\
+subway = spark.read.format("file_gdb_gbx") \\
     .option("layerName", "NYC_SubwayStations") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")"""

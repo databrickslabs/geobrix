@@ -42,6 +42,7 @@ SAMPLE_NYC_TAXI = f"{SAMPLE_DATA_BASE}/nyc/taxi-zones/nyc_taxi_zones.geojson"
 SAMPLE_NYC_BOROUGHS = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
 SAMPLE_NYC_RASTER = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 SAMPLE_NYC_SUBWAY_SHP = f"{SAMPLE_DATA_BASE}/nyc/subway/nyc_subway.shp.zip"
+SAMPLE_NYC_GPKG = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
 
 
 # Spark fixture provided by conftest.py
@@ -53,10 +54,10 @@ def test_quickstart_display_constants_exist():
         "REGISTER_RASTERX", "REGISTER_GRIDX", "REGISTER_VECTORX", "REGISTER_RASTERX_SCALA",
         "REGISTER_RASTERX_LIGHT", "REGISTER_VECTORX_LIGHT", "REGISTER_QUADBIN_LIGHT",
         "REGISTER_LIGHT_READERS",
-        "READ_GEOTIFF", "READ_SHAPEFILE", "READ_GEOJSON",
+        "READ_GEOJSON",
         "READ_GEOTIFF_LIGHT", "READ_SHAPEFILE_LIGHT", "USE_QUADBIN",
         "USE_RASTERX", "USE_BNG", "USE_VECTORX",
-        "SQL_LIST_FUNCTIONS", "SQL_DESCRIBE", "SQL_READ_AND_USE",
+        "SQL_DESCRIBE", "SQL_READ_AND_USE",
     ):
         assert hasattr(examples, name), f"Missing display constant: {name}"
         snippet = getattr(examples, name)
@@ -66,10 +67,10 @@ def test_quickstart_display_constants_exist():
 def test_quickstart_output_constants_exist():
     """Output constants (for Example output blocks) must exist so docs can show results."""
     for name in (
-        "READ_GEOTIFF_output", "READ_SHAPEFILE_output", "READ_GEOJSON_output",
+        "READ_GEOJSON_output",
         "READ_GEOTIFF_LIGHT_output", "READ_SHAPEFILE_LIGHT_output", "USE_QUADBIN_output",
         "USE_RASTERX_output", "USE_BNG_output", "USE_VECTORX_output",
-        "SQL_LIST_FUNCTIONS_output", "SQL_DESCRIBE_output", "SQL_READ_AND_USE_output",
+        "SQL_DESCRIBE_output", "SQL_READ_AND_USE_output",
     ):
         assert hasattr(examples, name), f"Missing output constant: {name}"
         out = getattr(examples, name)
@@ -99,20 +100,6 @@ def test_exec_register_rasterx_snippet(spark):
     _exec_snippet(spark, examples.REGISTER_RASTERX, "REGISTER_RASTERX")
 
 
-def test_exec_read_geotiff_snippet(spark):
-    """Quick-start snippet READ_GEOTIFF runs with sample data path (executes and .show())."""
-    if not os.path.isfile(SAMPLE_NYC_RASTER):
-        pytest.skip("Minimal bundle has no nyc/sentinel2 raster; run gbx:data:generate-minimal-bundle or use full bundle")
-    _exec_snippet(spark, examples.READ_GEOTIFF, "READ_GEOTIFF")
-
-
-def test_exec_read_shapefile_snippet(spark):
-    """Quick-start snippet READ_SHAPEFILE runs with sample data path."""
-    if not os.path.isfile(SAMPLE_NYC_SUBWAY_SHP):
-        pytest.skip("Minimal bundle has no nyc/subway .shp.zip; run gbx:data:generate-minimal-bundle or use full bundle")
-    _exec_snippet(spark, examples.READ_SHAPEFILE, "READ_SHAPEFILE")
-
-
 def test_exec_read_geojson_snippet(spark):
     """Quick-start snippet READ_GEOJSON runs with sample data path."""
     _exec_snippet(spark, examples.READ_GEOJSON, "READ_GEOJSON")
@@ -138,7 +125,7 @@ def test_exec_use_quadbin_snippet(spark):
 
 
 def test_read_geotiff_light_returns_tile(spark, sample_raster_path):
-    """Lightweight gtiff_gbx reader returns a 'tile' column with non-empty data, like gtiff_gdal."""
+    """Lightweight gtiff_gbx reader returns a 'tile' column with non-empty data, """
     if not os.path.isfile(sample_raster_path):
         pytest.skip("Minimal bundle has no nyc/sentinel2 raster; run gbx:data:generate-minimal-bundle or use full bundle")
     result_df = examples.read_geotiff_files_light(spark, sample_raster_path)
@@ -153,7 +140,7 @@ def test_read_geotiff_light_returns_tile(spark, sample_raster_path):
 
 
 def test_read_shapefile_light_returns_geometry(spark):
-    """Lightweight shapefile_gbx reader returns a geometry column with rows, like shapefile_ogr."""
+    """Lightweight shapefile_gbx reader returns a geometry column with rows."""
     if not os.path.isfile(SAMPLE_NYC_SUBWAY_SHP):
         pytest.skip("Minimal bundle has no nyc/subway .shp.zip; run gbx:data:generate-minimal-bundle or use full bundle")
     result_df = examples.read_shapefiles_light(spark, SAMPLE_NYC_SUBWAY_SHP)
@@ -195,12 +182,13 @@ def test_exec_use_vectorx_snippet(spark):
 
 def test_use_vectorx_returns_one_row_with_wkb(spark):
     """Legacy point example produces one row with a wkb column (same struct as USE_VECTORX)."""
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import Row
     from pyspark.sql.types import ArrayType, DoubleType, IntegerType, StructField, StructType
 
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     legacy_schema = StructType([
         StructField("typeId", IntegerType()),
         StructField("srid", IntegerType()),
@@ -214,18 +202,6 @@ def test_use_vectorx_returns_one_row_with_wkb(spark):
     assert len(rows) == 1, "Expected one row from legacy point example"
     assert "wkb" in result.columns, "Expected wkb column"
     assert rows[0]["wkb"] is not None, "WKB bytes should be non-null"
-
-
-def test_exec_sql_list_functions_snippet(spark):
-    """Quick-start SQL_LIST_FUNCTIONS runs (after register); executes SHOW FUNCTIONS."""
-    examples.register_functions(spark)
-    examples.register_gridx_functions(spark)
-    examples.register_vectorx_functions(spark)
-    for stmt in examples.SQL_LIST_FUNCTIONS.strip().split(";"):
-        stmt = stmt.strip()
-        if not stmt or stmt.startswith("--"):
-            continue
-        spark.sql(stmt).show()
 
 
 def test_exec_sql_describe_snippet(spark):
@@ -374,6 +350,20 @@ def test_read_shapefiles_returns_dataframe_with_geometry(spark, sample_shapefile
     assert count <= 10, f"Expected at most 10 boroughs, got {count}"
 
 
+def test_read_geopackage_uses_the_registered_gpkg_gbx_reader(spark):
+    """
+    The GeoPackage snippet reads through ``gpkg_gbx`` (there is no ``gpkg`` alias).
+
+    Validates:
+    - It reads the sample GeoPackage into a DataFrame with a geometry column
+      (an unregistered reader name fails with DATA_SOURCE_NOT_FOUND)
+    """
+    result_df = examples.read_geopackage(spark, SAMPLE_NYC_GPKG)
+
+    assert result_df.count() >= 1
+    assert "geom" in result_df.columns, result_df.columns
+
+
 # Test: Using Functions
 def test_use_rasterx_functions_with_sentinel2(spark, sample_raster_path):
     """
@@ -445,7 +435,6 @@ def test_sql_constants_are_valid_strings():
     - Contain expected SQL keywords
     """
     # Validate they exist and are strings
-    assert isinstance(examples.SQL_LIST_FUNCTIONS, str)
     # These constants may not exist in examples.py, check if they do
     if hasattr(examples, 'SQL_DESCRIBE_FUNCTION'):
         assert isinstance(examples.SQL_DESCRIBE_FUNCTION, str)
@@ -455,9 +444,6 @@ def test_sql_constants_are_valid_strings():
         assert isinstance(examples.SQL_CONVERSION, str)
     
     # Validate content
-    assert len(examples.SQL_LIST_FUNCTIONS) > 0
-    assert "SHOW FUNCTIONS" in examples.SQL_LIST_FUNCTIONS
-    assert "gbx_rst_*" in examples.SQL_LIST_FUNCTIONS
     
     if hasattr(examples, 'SQL_DESCRIBE_FUNCTION'):
         assert "DESCRIBE FUNCTION" in examples.SQL_DESCRIBE_FUNCTION
@@ -465,7 +451,7 @@ def test_sql_constants_are_valid_strings():
     
     if hasattr(examples, 'SQL_WORKING_WITH_SQL'):
         assert "CREATE OR REPLACE TEMP VIEW" in examples.SQL_WORKING_WITH_SQL
-        assert "shapefile" in examples.SQL_WORKING_WITH_SQL  # shapefile_ogr or shapefile
+        assert "shapefile" in examples.SQL_WORKING_WITH_SQL
     
     if hasattr(examples, 'SQL_CONVERSION'):
         assert "st_geomfromwkb" in examples.SQL_CONVERSION

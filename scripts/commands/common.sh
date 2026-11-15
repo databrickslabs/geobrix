@@ -9,30 +9,68 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Which dev container THIS checkout uses ($GBX_DEV_CONTAINER, ports, mounts): geobrix-dev for the main
+# checkout, the name in an untracked .gbx-local.env for a linked worktree (scripts/docker/gbx-container.sh).
+# A refused load is not fatal here, so commands that never touch the container run anywhere; every command
+# that does calls check_docker or gbx_require_local_env, which exit with the reason.
+GBX_COMMON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$GBX_COMMON_ROOT/scripts/docker/gbx-container.sh"
+gbx_load_local_env "$GBX_COMMON_ROOT" 2>/dev/null || true
+export GBX_DEV_CONTAINER
+
 # Maven env for Docker runs: unset conflicting opts, set Jupyter dirs, and tune Maven/JVM for coverage
-# MAVEN_OPTS speeds up builds and scoverage (G1GC + 4G heap when running in geobrix-dev)
-export DOCKER_MAVEN_ENV="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export MAVEN_OPTS=\"-Xmx4G -XX:+UseG1GC\""
+# MAVEN_OPTS speeds up builds and scoverage (G1GC + 4G heap when running in the dev container)
+# LC_ALL: the container has no locale, so the JVM's sun.jnu.encoding would be ASCII and the tests
+# that create non-ASCII file names (NodeFilePathUtilTest) would cancel; every Maven run that
+# executes tests gets the same locale (gbx:test:scala passes it with `docker exec -e` as well).
+export DOCKER_MAVEN_ENV="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && export MAVEN_OPTS=\"-Xmx4G -XX:+UseG1GC\""
 
 check_docker() {
+    gbx_require_local_env
     if ! docker ps &> /dev/null; then
         echo -e "${RED}❌ Error: Docker is not running${NC}"
         echo "Start Docker and try again."
         exit 1
     fi
     
-    if ! docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
-        echo -e "${RED}❌ Error: geobrix-dev container not found${NC}"
-        echo "Start the development container first:"
-        echo -e "  ${YELLOW}./scripts/docker/start_docker.sh${NC}"
+    if ! docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+        echo -e "${RED}❌ Error: $GBX_DEV_CONTAINER container not found${NC}"
+        echo "Start this checkout's development container first:"
+        echo -e "  ${YELLOW}bash scripts/commands/gbx-docker-start.sh${NC}"
         exit 1
     fi
+    gbx_require_owned_container "$GBX_COMMON_ROOT"
     
-    if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+    if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
         echo -e "${YELLOW}⚠️  Container is not running. Starting...${NC}"
-        docker start geobrix-dev
+        docker start "$GBX_DEV_CONTAINER"
         sleep 2
     fi
 }
+
+# abs_path <path>: absolute (against the caller's cwd, before a command cd's to the repo root) and without
+# trailing slashes or "." segments, so a staging or old-venv name derived from it lands beside the venv, never
+# inside it (`.`, `foo/.` and `foo/./` are `foo`'s directory, not a name ending in a dot).
+abs_path() {
+    local p="$1"
+    case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+    local prev="" slash="/"
+    while [[ "$p" != "$prev" ]]; do
+        prev="$p"
+        p="${p//\/\//$slash}"
+        [[ "$p" != "/" && "$p" == */ ]] && p="${p%/}"
+        [[ "$p" == */. ]] && p="${p%/.}"
+        [[ -z "$p" ]] && p="/"
+    done
+    printf '%s' "$p"
+}
+
+# One meaning for a relative GBX_PYRX_VENV in every command that sources this file: the caller's directory,
+# resolved now, before the command cd's to the repo root.
+if [[ -n "${GBX_PYRX_VENV:-}" ]]; then
+    GBX_PYRX_VENV="$(abs_path "$GBX_PYRX_VENV")"
+    export GBX_PYRX_VENV
+fi
 
 resolve_log_path() {
     local log_arg="$1"
@@ -97,7 +135,7 @@ setup_log_file() {
     # Flush-safe teardown: capture the real exit code, restore stdout/stderr (closing the
     # FIFO write end so tee reaches EOF), wait for tee to finish, then exit with that code.
     # `exit` inside an EXIT trap does not re-run the trap, so this is not recursive.
-    trap 'rc=$?; exec 1>&3 2>&3 3>&-; [ -n "${GBX_TEE_PID:-}" ] && wait "${GBX_TEE_PID}" 2>/dev/null; exit $rc' EXIT
+    trap 'rc=$?; exec 1>&3 2>&3 3>&-; [ -n "${GBX_TEE_PID:-}" ] && wait "${GBX_TEE_PID}" 2>/dev/null; [ -n "${GBX_SNAP_RM:-}" ] && rm -rf "$GBX_SNAP_RM"; exit $rc' EXIT
 }
 
 show_banner() {
@@ -172,6 +210,46 @@ warn_if_jar_stale() {
     fi
 }
 
+# Copy the newest built assembly JAR from target/ into python/geobrix/lib/ -- the dir the
+# heavy Python tests glob (`geobrix-*-jar-with-dependencies.jar`) for spark.jars. This is
+# the host-side twin of the pom's maven-resources-plugin `copy-files-on-build` execution
+# (package phase), which is how CI stages it; use it when the Maven build already ran but the
+# staging dir was emptied. Only the current JAR is kept staged, so a stale one can never be
+# picked up instead. Returns 1 (prints nothing) when target/ holds no assembly JAR.
+# Usage: stage_jar_from_target "$PROJECT_ROOT"
+stage_jar_from_target() {
+    local project_root="$1"
+    local stage_dir="$project_root/python/geobrix/lib"
+    local built
+    built=$(ls -t "$project_root"/target/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+    [ -n "$built" ] || return 1
+    mkdir -p "$stage_dir"
+    rm -f "$stage_dir"/geobrix-*-jar-with-dependencies.jar
+    cp "$built" "$stage_dir/"
+    echo -e "${GREEN}📦 Staged $(basename "$built") → python/geobrix/lib/${NC}"
+}
+
+# Guarantee the heavy Python tests can find a JAR: keep an already-staged one (re-staging
+# only when target/ holds a newer build, as Maven's copy would), else stage the built one
+# from target/. Never runs Maven. With neither, prints ONE
+# `PRECONDITION MISSING` line and returns 1 -- a missing artifact, not a code defect --
+# instead of letting every heavy module die at collection with `IndexError` on
+# `candidates[-1]`.
+# Usage: ensure_staged_jar "$PROJECT_ROOT"
+ensure_staged_jar() {
+    local project_root="$1"
+    local built staged
+    built=$(ls -t "$project_root"/target/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+    staged=$(ls -t "$project_root"/python/geobrix/lib/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+    if [ -n "$built" ] && { [ -z "$staged" ] || [ "$built" -nt "$staged" ]; }; then
+        stage_jar_from_target "$project_root"
+        return $?
+    fi
+    [ -n "$staged" ] && return 0
+    echo -e "${RED}PRECONDITION MISSING: no built JAR in target/ and none staged in python/geobrix/lib/; heavy tests not run. Build it: gbx:docker:exec \"mvn clean package -PskipScoverage -DskipTests\"${NC}"
+    return 1
+}
+
 # Print the port(s) of any running gbx:docs:dev / serve server, one per line.
 # Detects them via the /tmp/docusaurus-<port>.pid files written by the docs
 # commands (only ports whose PID is still alive). Empty output = none running.
@@ -185,6 +263,43 @@ detect_docs_dev_servers() {
             echo "$port"
         fi
     done
+}
+
+# Docs servers are told apart by listening port and by the checkout they run from, so a command
+# only touches its own checkout's server unless told otherwise (gbx-docs-stop.sh --force).
+# PIDs listening on a TCP port (empty when none).
+gbx_docs_port_pids() {
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u
+}
+
+# The checkout (git top level, else the working directory) a docs server PID runs from; empty when
+# its working directory cannot be read.
+gbx_docs_pid_checkout() {
+    local cwd top
+    cwd=$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+    [ -n "$cwd" ] || return 0
+    top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
+    if [ -n "$top" ]; then
+        (cd "$top" 2>/dev/null && pwd -P) || echo "$top"
+    else
+        echo "$cwd"
+    fi
+}
+
+# True when every server listening on PORT runs from checkout ROOT (a physical path). A directory
+# under ROOT counts only when it is not a git checkout of its own (a nested worktree is foreign).
+# A server whose checkout cannot be read counts as foreign.
+# Usage: gbx_docs_port_is_mine PORT ROOT
+gbx_docs_port_is_mine() {
+    local pid owner found=false
+    for pid in $(gbx_docs_port_pids "$1"); do
+        found=true
+        owner=$(gbx_docs_pid_checkout "$pid")
+        [ -n "$owner" ] || return 1
+        [ "$owner" = "$2" ] && continue
+        [[ "$owner" == "$2"/* && ! -e "$owner/.git" ]] || return 1
+    done
+    [ "$found" = true ]
 }
 
 # Warn (non-fatal) before a host-side `npm run build` when a docs server is
@@ -204,6 +319,174 @@ warn_if_docs_server_running() {
     fi
 }
 
+# ---------------------------------------------------------------------------------------
+# One container test run at a time.
+#
+# Maven and the Spark test JVMs of the gbx:test:*, gbx:coverage:* and build commands share the
+# container's target/ directory and Maven repository, so two overlapping runs corrupt each
+# other. Every such command calls gbx_acquire_test_lock once, right after check_docker (and
+# setup_log_file), and sends its Maven/pytest work through $GBX_LOCK_RUN. The locks live
+# INSIDE the dev container (scripts/docker/gbx-lock.sh), so they cover every caller of the
+# container, whichever host shell or agent started it. There are two, with different owners:
+#
+#   RUN lock   (/tmp/gbx-test.lock)  held for as long as THIS script, or a child of it, lives:
+#              the container-side `hold` process blocks reading a FIFO whose write end this
+#              shell keeps open, and releases the lock when every holder of that end is gone.
+#              It makes whole runs take turns, with no gap between the execs of one run.
+#   WORK lock  (/tmp/gbx-work.lock)  held by the WORK: `$GBX_LOCK_RUN <command>` runs the
+#              command on a descriptor that the Maven or pytest process itself keeps for as
+#              long as it runs (its bash and fork() children hold it too; a child started by
+#              Python's subprocess or Java's ProcessBuilder, such as a Surefire fork or
+#              pyspark's JVM, does not, and normally exits with its parent). Killing this
+#              script or its `docker exec` client (kill -9, a harness tree-kill, a timeout)
+#              frees the RUN lock but NOT the container's work, which keeps running; the main
+#              process keeps the WORK lock, so the next run's acquisition waits for it to end
+#              (exit 75 under --no-wait), naming the process still holding it.
+#
+# What this guarantees: gbx commands never overlap, including after a killed run. What it does
+# not: Maven or pytest started in the container outside a gbx command (an interactive
+# `docker exec <container> mvn ...`) is not seen; a work process that never ends blocks later
+# runs until GBX_TEST_LOCK_TIMEOUT (the message names it, so it can be killed). A locked exec
+# must never start another locked exec: it would wait for the lock its own parent holds.
+#
+#   default      wait for the lock, naming the holder once; give up after
+#                $GBX_TEST_LOCK_TIMEOUT seconds (default 3600) with exit 75. That is ONE budget
+#                for the whole acquisition: waiting for the run lock and then for earlier work
+#                share it. A waiter whose script is killed ends within a second (the helper
+#                sees its stdin close), not at the timeout.
+#   --no-wait    (GBX_LOCK_NO_WAIT=true) fail at once with exit 75, naming the holder.
+#
+# A gbx command run by a parent that already holds the lock (gbx:test:docs runs the three doc
+# suites) skips taking it: GBX_TEST_LOCK_HELD_BY carries the parent's pid.
+# ---------------------------------------------------------------------------------------
+GBX_TEST_LOCK_FILE="${GBX_TEST_LOCK_FILE:-/tmp/gbx-test.lock}"        # RUN lock, a path INSIDE the dev container
+GBX_WORK_LOCK_FILE="${GBX_WORK_LOCK_FILE:-/tmp/gbx-work.lock}"        # WORK lock, likewise
+GBX_TEST_LOCK_TIMEOUT="${GBX_TEST_LOCK_TIMEOUT:-3600}"
+GBX_LOCK_NO_WAIT="${GBX_LOCK_NO_WAIT:-false}"
+GBX_CONTAINER_ROOT="${GBX_CONTAINER_ROOT:-/root/geobrix}"             # the repo, as mounted in the container
+GBX_CONTAINER_LOCK="$GBX_CONTAINER_ROOT/scripts/docker/gbx-lock.sh"
+# Prefix for a Maven/pytest `docker exec`, left UNQUOTED on purpose (it is several words):
+#   docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$CMD"
+# The `env` words carry this shell's lock overrides into the container: `docker exec` does not
+# pass the host environment, and `run` reads the work-lock file and the timeout from there
+# (`hold` gets the same values through `docker exec -e` in gbx_acquire_test_lock).
+case "$GBX_WORK_LOCK_FILE$GBX_TEST_LOCK_TIMEOUT$GBX_CONTAINER_ROOT" in
+    *[[:space:]]*)
+        echo "ERROR: GBX_WORK_LOCK_FILE, GBX_TEST_LOCK_TIMEOUT and GBX_CONTAINER_ROOT must not contain whitespace (GBX_LOCK_RUN is split into words)" >&2
+        exit 2 ;;
+esac
+GBX_LOCK_RUN="env GBX_WORK_LOCK_FILE=$GBX_WORK_LOCK_FILE GBX_LOCK_TIMEOUT=$GBX_TEST_LOCK_TIMEOUT /bin/bash $GBX_CONTAINER_LOCK run"
+# Command line of the script that sourced this file (written into the lock info and the log).
+GBX_LOCK_CMD="$(basename "${BASH_SOURCE[1]:-$0}") $*"
+GBX_LOCK_CMD="${GBX_LOCK_CMD:0:200}"
+
+# The --no-wait line for a command's show_help.
+print_lock_help() {
+    echo -e "  ${GREEN}--no-wait${NC}              Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it"
+}
+
+# The TERM/INT/HUP handler of gbx_acquire_test_lock's wait phase: stop the container-side waiter,
+# remove the status dir, and exit with the signal's conventional status (128 + n). It reads
+# holder_pid and dir from the function that is waiting (shell dynamic scope).
+_gbx_lock_abort() {
+    [ -n "${holder_pid:-}" ] && kill "$holder_pid" 2>/dev/null
+    [ -n "${dir:-}" ] && rm -rf "$dir"
+    exit "$1"
+}
+
+# Take the container test lock, or exit 75. Call once after check_docker. Prints this run's
+# pid and the acquisition, so a duplicate launch is obvious in the log.
+gbx_acquire_test_lock() {
+    if [ -n "${GBX_TEST_LOCK_HELD_BY:-}" ]; then
+        echo -e "${CYAN}🔒 test lock: held by the parent command (pid ${GBX_TEST_LOCK_HELD_BY}); this run is pid $$${NC}"
+        return 0
+    fi
+    local info dir status fifo holder_pid line saved_traps start="$SECONDS" next_note=30 waiting=false
+    info="pid=$$ cmd=${GBX_LOCK_CMD} since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/gbx-lock.XXXXXX")" || return 1
+    status="$dir/status"
+    fifo="$dir/hold"
+    mkfifo "$fifo" || { rm -rf "$dir"; return 1; }
+    : > "$status"
+    # fd 7 (read-write, so opening never blocks) is the write end the lock depends on; the
+    # holder's stdin is a read-only open (fd 6) of the same FIFO, so it sees EOF only when
+    # every holder of fd 7 -- this script and its children -- is gone.
+    exec 7<>"$fifo" 6<"$fifo"
+    rm -f "$fifo"
+    # A TERM/INT/HUP while waiting must not leave the container-side waiter or the status dir
+    # behind (kill -9 cannot run this; the helper then notices the closed pipe by itself).
+    saved_traps="$(trap -p TERM INT HUP)"   # the caller's own, put back once the lock is held
+    trap '_gbx_lock_abort 143' TERM
+    trap '_gbx_lock_abort 130' INT
+    trap '_gbx_lock_abort 129' HUP
+    docker exec -i \
+        -e GBX_LOCK_FILE="$GBX_TEST_LOCK_FILE" \
+        -e GBX_WORK_LOCK_FILE="$GBX_WORK_LOCK_FILE" \
+        -e GBX_LOCK_TIMEOUT="$GBX_TEST_LOCK_TIMEOUT" \
+        -e GBX_LOCK_NO_WAIT="$GBX_LOCK_NO_WAIT" \
+        -e GBX_LOCK_INFO="$info" \
+        "$GBX_DEV_CONTAINER" /bin/bash "$GBX_CONTAINER_LOCK" hold \
+        <&6 >"$status" 2>&1 3>&- 7>&- 6<&- &
+    holder_pid=$!
+    exec 6<&-
+    while :; do
+        if grep -q '^ACQUIRED' "$status"; then
+            break
+        fi
+        if line="$(grep -E '^(WORK_)?(BUSY|TIMEOUT) |^ERROR ' "$status" | head -1)" && [ -n "$line" ]; then
+            wait "$holder_pid" 2>/dev/null
+            rm -rf "$dir"
+            exec 7<&-
+            case "$line" in
+                BUSY*)
+                    echo -e "${RED}❌ Another test run holds the container lock: ${line#BUSY }${NC}"
+                    echo -e "${YELLOW}   Not waiting (--no-wait). This run: pid $$ ${GBX_LOCK_CMD}${NC}"
+                    exit 75 ;;
+                WORK_BUSY*)
+                    echo -e "${RED}❌ Work from an earlier run is still running in the container: ${line#WORK_BUSY }${NC}"
+                    echo -e "${YELLOW}   Not waiting (--no-wait). This run: pid $$ ${GBX_LOCK_CMD}${NC}"
+                    exit 75 ;;
+                TIMEOUT*)
+                    echo -e "${RED}❌ Timed out after ${GBX_TEST_LOCK_TIMEOUT}s waiting for the container lock held by: ${line#TIMEOUT }${NC}"
+                    exit 75 ;;
+                WORK_TIMEOUT*)
+                    echo -e "${RED}❌ Timed out after ${GBX_TEST_LOCK_TIMEOUT}s waiting for earlier work still running in the container: ${line#WORK_TIMEOUT }${NC}"
+                    exit 75 ;;
+                *)
+                    echo -e "${RED}❌ Could not take the container lock: ${line#ERROR }${NC}"
+                    exit 70 ;;
+            esac
+        fi
+        if ! kill -0 "$holder_pid" 2>/dev/null; then
+            echo -e "${RED}❌ The container lock helper exited without taking the lock:${NC}"
+            sed 's/^/   /' "$status"
+            rm -rf "$dir"
+            exec 7<&-
+            exit 70
+        fi
+        if [ "$waiting" = false ] && line="$(grep -E '^(WORK_)?WAITING ' "$status" | head -1)" && [ -n "$line" ]; then
+            waiting=true
+            case "$line" in
+                WORK_WAITING*)
+                    echo -e "${YELLOW}⏳ Work from an earlier run is still running in the container (that run was killed or detached): ${line#WORK_WAITING }${NC}" ;;
+                *)
+                    echo -e "${YELLOW}⏳ Another test run holds the container lock: ${line#WAITING }${NC}" ;;
+            esac
+            echo -e "${YELLOW}   Waiting up to ${GBX_TEST_LOCK_TIMEOUT}s (--no-wait fails at once). This run: pid $$ ${GBX_LOCK_CMD}${NC}"
+        fi
+        if [ "$waiting" = true ] && [ $((SECONDS - start)) -ge "$next_note" ]; then
+            echo -e "${YELLOW}   ...still waiting for the container lock ($((SECONDS - start))s)${NC}"
+            next_note=$((next_note + 30))
+        fi
+        sleep 0.2
+    done
+    rm -rf "$dir"
+    trap - TERM INT HUP
+    [ -n "$saved_traps" ] && eval "$saved_traps"
+    export GBX_TEST_LOCK_HELD_BY="$$"
+    echo -e "${GREEN}🔒 test lock acquired: pid $$ ${GBX_LOCK_CMD} (waited $((SECONDS - start))s; ${GBX_TEST_LOCK_FILE} in ${GBX_DEV_CONTAINER})${NC}"
+}
+
 # Aliases for backward compatibility
 print_banner() { show_banner "$@"; }
 print_separator() { show_separator "$@"; }
@@ -220,25 +503,312 @@ validate_set() {
 
 # Run a command inside the isolated pyrx venv (host, no Docker).
 # Usage: run_in_pyrx_venv "<command string>"
-# Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx).
+# Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx, or $GBX_PYRX_VENV).
+# PySpark starts its Python workers from PYSPARK_PYTHON, and a worker on any other interpreter
+# than the driver's fails with PYTHON_VERSION_MISMATCH. Both are set to the venv python here,
+# overriding whatever the caller's shell exports (a system python3 is another minor version).
+# TZ is pinned to UTC, as in the dev container and on the CI runners: a developer's local zone
+# (EST/EDT) makes timestamp tests fail natively, and the Spark JVM takes its zone from TZ too.
+# GBX_TEST_TZ=<zone> runs under another zone on purpose, to check that a timestamp test does not
+# depend on UTC (the caller's own TZ is still ignored).
+# The host's bytecode goes to <venv>/pycache (PYTHONPYCACHEPREFIX), not into the tree's __pycache__ dirs, which the dev
+# container shares through the bind mount. pytest's rewritten test modules carry the absolute path of the file they were
+# compiled from, so a pyc the host wrote ran in the container with /Users/... as its source path, and a test that reads
+# its own source (inspect.getsource) found none there (the input-stamp tests failed, and only in the main tree).
 run_in_pyrx_venv() {
     local _cmd="$1"
-    local _venv="${PROJECT_ROOT}/.venv-pyrx"
+    local _venv="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}"
     if [[ ! -x "${_venv}/bin/python" ]]; then
         echo "ERROR: pyrx venv not found at ${_venv}. Run: bash scripts/commands/gbx-venv-sync.sh" >&2
         return 1
     fi
     # shellcheck disable=SC1091
     source "${_venv}/bin/activate"
-    bash -c "${_cmd}"
+    PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" TZ="${GBX_TEST_TZ:-UTC}" \
+        PYTHONPYCACHEPREFIX="${_venv}/pycache" bash -c "${_cmd}"
     local _rc=$?
     deactivate || true
     return $_rc
 }
 
+# gbx_main_checkout_root [root]: the main checkout's root, when `root` (default PROJECT_ROOT) is a linked git worktree
+# (git's common dir is the main checkout's .git). Returns 1 in the main checkout itself or outside git.
+gbx_main_checkout_root() {
+    local root="${1:-$PROJECT_ROOT}" common main
+    common="$(cd "$root" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
+    common="$(cd "$root" && cd "$common" 2>/dev/null && pwd -P)" || return 1
+    main="$(dirname "$common")"
+    [[ "$(cd "$root" && pwd -P)" == "$main" ]] && return 1
+    [[ -d "$main" ]] || return 1
+    echo "$main"
+}
+
+# gbx_resolve_untracked <relative-path> [root]: prints the path of an untracked file or directory (a config env, a venv).
+# It is `root`'s own when that exists; in a linked worktree that lacks it, the main checkout's, with one line on stderr that
+# says so (cluster work builds and launches from a clean detached worktree, which has no untracked files). Returns 1 when
+# neither has it.
+gbx_resolve_untracked() {
+    local rel="$1" root="${2:-$PROJECT_ROOT}" main
+    if [[ -e "$root/$rel" ]]; then echo "$root/$rel"; return 0; fi
+    main="$(gbx_main_checkout_root "$root")" || return 1
+    if [[ -e "$main/$rel" ]]; then
+        echo "gbx: $rel is not in this worktree; using the main checkout's $main/$rel" >&2
+        echo "$main/$rel"
+        return 0
+    fi
+    return 1
+}
+
+# gbx_export_cluster_config: exports GBX_CLUSTER_CONFIG_ENV, the path of examples/tests/databricks_cluster_config.env, for
+# the launchers (they read it through examples/tests/_cluster_config.py). It is this checkout's own file, else (a linked
+# worktree) the main checkout's, with one line on stderr naming it. Returns 1, exporting nothing, when neither has it.
+gbx_export_cluster_config() {
+    local f
+    f="$(gbx_resolve_untracked examples/tests/databricks_cluster_config.env)" && [[ -f "$f" ]] || { unset GBX_CLUSTER_CONFIG_ENV; return 1; }
+    export GBX_CLUSTER_CONFIG_ENV="$f"
+}
+
+# The databricks-sdk the launchers run against (gbx_python_with_sdk pins `uv run --with` to it,
+# so a launcher does not float to whatever PyPI has that day). 0.157.0 is the release that
+# `uv run --with databricks-sdk` resolved on the dev workstation on 2026-10-27, and every
+# databricks.sdk import in examples/tests (38) and JobsAPI.submit(idempotency_token=...) were
+# checked against it when it was pinned. The oldest release the repo names is 0.115.0
+# (examples/tests/run_notebooks_serverless.py). Bump it on purpose: re-run that import check
+# first. GBX_DATABRICKS_SDK_SPEC overrides it for one run.
+GBX_DATABRICKS_SDK_SPEC="${GBX_DATABRICKS_SDK_SPEC:-databricks-sdk==0.157.0}"
+
+# 0 when <python> is 3.11 or newer: the serverless runner reads pyproject.toml with tomllib.
+_gbx_py_ok() {
+    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
+}
+
+# Python that can import databricks-sdk, for the launchers that talk to a workspace
+# (gbx:data:stage-jar, gbx:data:stage-wheel, gbx:test:notebooks-serverless, gbx:bench:cluster,
+# gbx:test:bundle-databricks, gbx:test:primitive-databricks).
+# Sets the array GBX_SDK_PYTHON; run a script with it (after parsing arguments, so --help
+# works anywhere):
+#   gbx_python_with_sdk [extra-pip-package ...] || exit 1
+#   "${GBX_SDK_PYTHON[@]}" examples/tests/<launcher>.py ...
+# Every interpreter it picks is Python >= 3.11 (an older venv or python3 is passed over).
+# The pyrx venv is the CI light lock and carries no databricks-sdk, so it is used as it is only
+# when it can import the SDK (extra packages are then the venv's business). Otherwise
+# `uv run --with $GBX_DATABRICKS_SDK_SPEC [--with <extra> ...]` layers the SDK over the venv's
+# own interpreter (its packages, such as the bench launcher's rasterio, stay importable), or over
+# Python 3.12 when there is no usable venv, where only the SDK and the extras exist: a launcher
+# that builds the wheel passes `build`. Without uv, system python3 is used if it has the SDK;
+# otherwise this prints one hint and returns 1.
+# Needs PROJECT_ROOT (every command sets it before sourcing this file); GBX_PYRX_VENV moves the venv.
+gbx_python_with_sdk() {
+    # A linked worktree has no .venv-pyrx of its own: the main checkout's is used (GBX_PYRX_VENV still wins).
+    if [[ -z "${GBX_PYRX_VENV:-}" && ! -x "${PROJECT_ROOT}/.venv-pyrx/bin/python" ]]; then
+        local _main_venv
+        if _main_venv="$(gbx_resolve_untracked .venv-pyrx)" && [[ -x "${_main_venv}/bin/python" ]]; then
+            GBX_PYRX_VENV="${_main_venv}"
+        fi
+    fi
+    local _venv_py="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}/bin/python"
+    local _with=(--with "${GBX_DATABRICKS_SDK_SPEC}") _pkg
+    for _pkg in "$@"; do _with+=(--with "${_pkg}"); done
+    local _venv_ok=false
+    [[ -x "${_venv_py}" ]] && _gbx_py_ok "${_venv_py}" && _venv_ok=true
+    if [[ "${_venv_ok}" == true ]] && "${_venv_py}" -c "import databricks.sdk" >/dev/null 2>&1; then
+        GBX_SDK_PYTHON=("${_venv_py}")
+    elif command -v uv >/dev/null 2>&1; then
+        local _base="3.12"
+        [[ "${_venv_ok}" == true ]] && _base="${_venv_py}"
+        GBX_SDK_PYTHON=(uv run --no-project --python "${_base}" "${_with[@]}" python)
+    elif command -v python3 >/dev/null 2>&1 && _gbx_py_ok python3 && python3 -c "import databricks.sdk" >/dev/null 2>&1; then
+        GBX_SDK_PYTHON=(python3)
+    else
+        echo "ERROR: no Python >= 3.11 with databricks-sdk: uv is not installed and python3 is older or cannot import it." >&2
+        echo "       Install uv (https://docs.astral.sh/uv/), which fetches the SDK on demand," >&2
+        echo "       or run: python3 -m pip install ${GBX_DATABRICKS_SDK_SPEC} (on Python 3.11 or newer)" >&2
+        return 1
+    fi
+}
+
+# gbx_native_env_args: GBX_NATIVE_ENV_ARGS, the `docker exec` arguments that give a container pytest run the
+# caller's GBX_NATIVE_ROOT (a native payload, e.g. build/env-wheel/env6/payload), so the run's Python and the JVM it
+# starts use that payload's GDAL. A path under this checkout (relative to it or absolute) becomes its /root/geobrix
+# path; any other absolute path is taken as a path inside the container. Empty when GBX_NATIVE_ROOT is unset.
+gbx_native_env_args() {
+    GBX_NATIVE_ENV_ARGS=()
+    [ -n "${GBX_NATIVE_ROOT:-}" ] || return 0
+    local p="$GBX_NATIVE_ROOT" root="$GBX_COMMON_ROOT"
+    case "$p" in
+        /root/geobrix|/root/geobrix/*) ;;
+        "$root"/*) p="/root/geobrix/${p#"$root"/}" ;;
+        /*) ;;
+        *) p="/root/geobrix/${p#./}" ;;
+    esac
+    GBX_NATIVE_ENV_ARGS=(-e "GBX_NATIVE_ROOT=${p%/}")
+}
+
+# gbx_test_env_args: GBX_TEST_ENV_ARGS, the `docker exec` -e arguments for the test-selection variables a host
+# caller sets (GBX_ORACLE_TABLES: the oracle tables the family harness runs; PYTEST_ADDOPTS: the caller's
+# --durations / --junitxml; GBX_DRIVERS_SNAPSHOT=write: refresh manifest/shipped_drivers.json from the payload's GDAL,
+# see python/geobrix/test/core/test_drivers.py; GBX_ORACLE_BATCH=0: the family harness runs each oracle case as its
+# own query, to compare with the batched default). Empty when none is set.
+gbx_test_env_args() {
+    GBX_TEST_ENV_ARGS=()
+    [ -n "${PYTEST_ADDOPTS:-}" ] && GBX_TEST_ENV_ARGS+=(-e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS}")
+    [ -n "${GBX_ORACLE_TABLES:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_ORACLE_TABLES=${GBX_ORACLE_TABLES}")
+    [ -n "${GBX_DRIVERS_SNAPSHOT:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_DRIVERS_SNAPSHOT=${GBX_DRIVERS_SNAPSHOT}")
+    [ -n "${GBX_ORACLE_BATCH:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_ORACLE_BATCH=${GBX_ORACLE_BATCH}")
+    return 0
+}
+
+# gbx_ensure_container_python_deps: make the dev container able to run geobrix's Python tests.
+# Called by every command that runs them in the container (gbx:test:python, gbx:test:parity), so a
+# fresh container works whichever runs first. Idempotent and near-zero cost when everything is
+# present. The installs go through the work lock like the tests they serve (they rewrite the
+# container's shared site-packages).
+gbx_ensure_container_python_deps() {
+    # Ensure geobrix is importable in Spark worker processes. pytest's pythonpath= in
+    # pyproject.toml covers the driver (pytest) process only; UDF workers start with the
+    # system sys.path, so without an editable install every @f.udf test fails with
+    # ModuleNotFoundError. The pip show check is idempotent — near-zero cost when present.
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
+        "pip show geobrix >/dev/null 2>&1 || \
+         pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
+
+    # STOPGAP: optional test deps that the current ~4-month-old geobrix-dev image predates.
+    # Covers: pmtiles, h3, pyarrow, netCDF4, quadbin, numexpr,
+    # laspy/lazrs (LiDAR), rio-tiler, mapbox-vector-tile, exifread, tenacity, contextily, anywidget.
+    # All are pinned in requirements-dev-container.txt or the env5/env6-all CI lockfiles; a fresh
+    # image build bakes them in — but a local rebuild is blocked (no JFrog token; CI-only path;
+    # see dev-image-rebuild-is-ci-operation note in MEMORY.md).  Until the image is rebuilt, this
+    # targeted (NOT hash-locked) install keeps local suites collecting + running from the dev proxy.
+    # One import probe gates one install of all packages (versions match the lockfile); near-zero
+    # cost when present; transitive deps resolve off the dev proxy without drifting numpy/pandas pins.
+    # The probe also fails when the installed lazrs is older than 0.8.2 (the floor in pyproject.toml):
+    # 0.8.0 / 0.8.1 print Rust panics on a LAZ file that declares more points than it holds.
+    # Remove once the image ships these.
+    # NOTE: tippecanoe is intentionally excluded — it installs but segfaults natively in-container
+    # (exit 139); a pip install cannot fix a native crash.
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
+        "python3 -c 'import importlib.metadata as m, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget; assert tuple(int(v) for v in m.version(\"lazrs\").split(\".\")[:3]) >= (0, 8, 2)' >/dev/null 2>&1 || \
+         pip3 install --break-system-packages --quiet \
+           pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.4 \
+           quadbin==0.2.2 numexpr==2.14.1 laspy==2.7.0 rio-tiler==9.4.12 \
+           lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
+           tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
+}
+
+# True when every pin of the [zarr_dbr19] extra, read from pyproject.toml (the single source),
+# is satisfied by what is installed in the container. Used by the commands that run Zarr tests.
+zarr_extra_installed() {
+    docker exec -i "$GBX_DEV_CONTAINER" python3 - >/dev/null 2>&1 <<'PY'
+import importlib.metadata as md
+import tomllib
+
+from packaging.requirements import Requirement
+
+with open("/root/geobrix/python/geobrix/pyproject.toml", "rb") as f:
+    pins = tomllib.load(f)["project"]["optional-dependencies"]["zarr_dbr19"]
+for pin in map(Requirement, pins):
+    # PackageNotFoundError (not installed) is a non-zero exit too.
+    if not pin.specifier.contains(md.version(pin.name), prereleases=True):
+        raise SystemExit(f"{pin.name} {md.version(pin.name)} does not satisfy {pin}")
+PY
+}
+
+# Install the [zarr_dbr19] extra into the dev container when its pins are not all met: a dev image built
+# before it was baked in (requirements-dev-container.txt) would otherwise make a Zarr test skip on
+# its importorskip, or fail on import. The pins are NOT repeated here: pip installs the extra from
+# pyproject.toml, so a pin change reaches the container without touching this file. `-e`
+# re-resolves only that extra for the already-editable geobrix. Remove once no image lacks it.
+ensure_zarr_extra() {
+    if ! zarr_extra_installed; then
+        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into $GBX_DEV_CONTAINER${NC}"
+        docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
+            "pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'" \
+            || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
+    fi
+}
+
+# Everything a Zarr test needs that the base dev image does not carry. Call it only when the tests
+# about to run include a Zarr test, so other runs pay nothing. Shared by every command that runs
+# one (gbx:test:python, gbx:test:python-docs, gbx:test:sql-docs), so there is one copy.
+#   * the [zarr_dbr19] extra (ensure_zarr_extra above).
+#   * the OSS Delta Lake jars, which the manifest tests run against in a local Spark session
+#     (the test conftests put them on the JVM classpath). They are not a pip package and Spark's
+#     Ivy resolver cannot reach the dev proxy, so scripts/ci/fetch-delta-test-jars.sh fetches them
+#     with Maven and checks their sha256. A missing jar is a warning (unrelated suites still run,
+#     and the Delta-backed Zarr tests fail loudly, naming it); a sha256 MISMATCH (exit 3) aborts,
+#     so tampered jars are never put on a classpath.
+# $1 names what will fail without the jars, for the warning (default: the Delta-backed zarr tests).
+ensure_zarr_test_env() {
+    local what="${1:-Delta-backed zarr tests}"
+    ensure_zarr_extra
+    local rc=0
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
+        exit 1
+    elif [ "$rc" -eq 75 ] || [ "$rc" -eq 70 ]; then
+        # The work-lock wrapper, not the fetch: earlier work is still running in the container
+        # (75, timed out) or the lock file cannot be used (70). The pytest exec that follows would
+        # stop the same way, so say so instead of calling it a missing Delta jar.
+        echo -e "${RED}❌ Could not take the container work lock (exit $rc; see the message above); not running${NC}"
+        exit "$rc"
+    elif [ "$rc" -ne 0 ]; then
+        echo -e "${YELLOW}⚠️  Delta jars unavailable: ${what} will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
+    fi
+}
+
+# True when a doc-test target ($1, a container path under $2 = docs/tests/python) covers a Zarr doc
+# test: the whole suite, formats/, a whole readers/, writers/ or api/ directory, or any path that
+# names zarr. One rule for the commands that run doc tests (gbx:test:python-docs, gbx:test:sql-docs).
+# A "." or "./" segment names the same directory, so it is read as the path it names.
+zarr_doc_tests_selected() {
+    local path base="$2"
+    path="$(printf '%s' "$1" | sed -E 's#/(\./)+#/#g; s#/\.$#/#')"
+    [[ "$path" == "${base}/" || "$path" == *"/formats"* || "$path" == *zarr* \
+        || "$path" =~ ^${base}/(readers|writers|api)/?$ ]]
+}
+
+# gbx_snapshot_exec "$0" "$@": run the calling command from a snapshot of the files it executes, so that editing
+# a script, the launcher or the bench package while the run is live cannot change it (bash reads a script as it
+# runs it: an edit under a live runner once made it execute half of a changed line, "dk: command not found").
+# Called right after `source common.sh`, before the argument loop. In the first run it copies scripts/commands,
+# the top-level scripts of scripts/docker (never its m2/ Maven repo), the examples/tests launchers (with the untracked config env) and python/geobrix/{src,envs,pyproject}
+# into a temp dir and execs the snapshot's copy of the command with GBX_SNAPSHOT_DIR and GBX_SOURCE_ROOT set; in the
+# snapshot's run it sets the exit trap that removes the dir and returns 0, and the command then points PROJECT_ROOT
+# back at GBX_SOURCE_ROOT (the venv, the logs and the local build are the source tree's) and runs the launcher from
+# the snapshot. --help/-h run in place (no work to protect). GBX_NO_SNAPSHOT=1 turns it off.
+gbx_snapshot_exec() {
+    local script="$1" arg; shift
+    if [[ -n "${GBX_SNAPSHOT_DIR:-}" ]]; then
+        GBX_SNAP_RM="$GBX_SNAPSHOT_DIR"  # setup_log_file's own EXIT trap removes it too
+        trap "rm -rf '$GBX_SNAP_RM'" EXIT
+        unset GBX_SNAPSHOT_DIR  # a command this one starts takes a snapshot of its own, and never removes this one
+        return 0
+    fi
+    [[ "${GBX_NO_SNAPSHOT:-}" == "1" ]] && return 0
+    for arg in "$@"; do [[ "$arg" == "--help" || "$arg" == "-h" ]] && return 0; done
+    local root snap rel
+    root="$(cd "$(dirname "$script")/../.." && pwd)"
+    snap="$(mktemp -d "${TMPDIR:-/tmp}/gbx-snapshot.XXXXXX")" || return 1
+    # scripts/docker holds the 1+ GB persistent Maven repo (m2/) and other state: only the top-level scripts and
+    # templates the commands source or exec (gbx-container.sh, gbx-lock.sh, ...) are copied, by an include rule.
+    mkdir -p "$snap/scripts/docker"
+    cp "$root"/scripts/docker/*.sh "$root"/scripts/docker/*.example "$snap/scripts/docker/" 2>/dev/null || true
+    for rel in scripts/commands python/geobrix/src python/geobrix/envs python/geobrix/pyproject.toml; do
+        [[ -e "$root/$rel" ]] || continue
+        mkdir -p "$snap/$(dirname "$rel")"
+        cp -R "$root/$rel" "$snap/$rel" 2>/dev/null || { rm -rf "$snap"; echo "ERROR: could not snapshot $rel; set GBX_NO_SNAPSHOT=1 to run in place." >&2; exit 1; }
+    done
+    mkdir -p "$snap/examples/tests"
+    cp "$root"/examples/tests/*.py "$root"/examples/tests/*.env "$snap/examples/tests/" 2>/dev/null || true
+    export GBX_SNAPSHOT_DIR="$snap" GBX_SOURCE_ROOT="$root"
+    exec "$BASH" "$snap/scripts/commands/$(basename "$script")" "$@"
+}
+
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
-export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV
+export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv validate_set 2>/dev/null || true
+          print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_main_checkout_root gbx_resolve_untracked gbx_export_cluster_config gbx_python_with_sdk validate_set \
+          print_lock_help _gbx_lock_abort gbx_acquire_test_lock gbx_ensure_container_python_deps zarr_extra_installed ensure_zarr_extra ensure_zarr_test_env zarr_doc_tests_selected gbx_snapshot_exec 2>/dev/null || true

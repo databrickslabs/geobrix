@@ -1,0 +1,1034 @@
+"""Host tests for gbx:test:lakeflow-connector: the driver (examples/tests/lakeflow_connector_it.py) and the
+QC check check_lakeflow_connector_evidence.py.
+
+The driver runs against a fake WorkspaceClient (schemas, volumes, files, connections, workspace, pipelines,
+tables, statements): nothing reaches a workspace. The QC check runs in a scratch git repository with copies
+of its scripts, so nothing touches the real checkout.
+"""
+
+import ast
+import base64
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from conftest import REPO_ROOT
+
+CI = REPO_ROOT / "scripts" / "ci"
+SH = REPO_ROOT / "scripts" / "commands" / "gbx-test-lakeflow-connector.sh"
+SHA12 = "0123456789ab"
+
+
+@pytest.fixture
+def it(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    monkeypatch.syspath_prepend(str(CI))
+    import importlib
+
+    return importlib.import_module("lakeflow_connector_it")
+
+
+# ---- names, spec, connection, source file ---------------------------------------------------------------------------
+
+
+def test_every_scratch_name_carries_the_commit(it):
+    n = it.names(SHA12, "cat")
+    assert n["schema"] == n["connection"] == n["pipeline"] == f"geobrix_lfc_it_{SHA12}"
+    assert n["landing"] == f"/Volumes/cat/geobrix_lfc_it_{SHA12}/files/landing"
+    assert n["wheels"] == f"/Volumes/cat/geobrix_lfc_it_{SHA12}/files/wheels"
+    assert n["ws_folder"] == f"lfc-it-{SHA12}"
+    with pytest.raises(ValueError):
+        it.names("main", "cat")  # never a name another run could own
+
+
+def test_the_framework_commit_of_the_docs_is_the_one_the_unit_tests_use(it, tmp_path):
+    commit = it.framework_commit()
+    assert len(commit) == 40 and commit in it.doc_constant("BUILD_WHEELS")
+    # Fail on revert: a docs bump that the unit tests do not follow stops the run.
+    root = tmp_path / "r"
+    for rel in ("docs/tests/python/ingestion/lakeflow_connector_examples.py", "scripts/commands/gbx-test-connectors.sh"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / rel, root / rel)
+    sh = root / "scripts/commands/gbx-test-connectors.sh"
+    sh.write_text(sh.read_text().replace(commit, "f" * 40))
+    with pytest.raises(it.StepFailed, match="unit tests"):
+        it.framework_commit(root)
+
+
+def test_the_connection_carries_the_spec_allowlist_the_docs_name(it):
+    allow = it.allowlist()
+    doc = (REPO_ROOT / "docs/docs/ingestion/lakeflow-connector.mdx").read_text()
+    assert f"`{allow}`" in doc  # the docs' connection table names the same allowlist
+    body = it.connection_body("c1", "/Volumes/a/b/c/landing", allow, "x")
+    assert body["connection_type"] == "COMMUNITY" and body["name"] == "c1"
+    assert body["options"] == {"sourceName": "geobrix", "externalOptionsAllowList": allow, "root_path": "/Volumes/a/b/c/landing"}
+
+
+def test_the_pipeline_source_is_the_shipped_file_with_its_spec_filled_in(it):
+    template = it.INGEST_TEMPLATE.read_text()
+    spec = it.pipeline_spec("conn1")
+    text = it.pipeline_source(template, spec, ["what it is", "", "how long"])
+    compile(text, "ingest.py", "exec")
+    assert text.startswith("# what it is\n#\n# how long\n")
+    for line in template.splitlines():  # every line outside the spec block stays as shipped
+        if line.startswith(("from ", "spark.", "ingest(")) or "connectionDfOptionInjection" in line:
+            assert line in text
+    tree = ast.parse(text)
+    assigned = [n.value for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "pipeline_spec"]
+    assert len(assigned) == 1 and ast.literal_eval(assigned[0]) == spec
+    tables = [o["table"] for o in spec["objects"]]
+    assert {t["source_table"] for t in tables} == {d.table for d in it.DATASETS}
+    assert all(t["table_configuration"]["scd_type"] == "APPEND_ONLY" for t in tables)
+    with pytest.raises(it.StepFailed):
+        it.pipeline_source("ingest(spark, pipeline_spec)\n", spec)
+
+
+def test_the_dependency_lines_are_the_documented_ones_for_the_staged_wheels(it):
+    wheels = {"geobrix": "geobrix-0.6.0+env6-py3-none-any.whl", "framework": "lakeflow_community_connectors-0.1.0-py3-none-any.whl",
+              "connector": "geobrix_lakeflow_connectors-0.1.0-py3-none-any.whl"}
+    lines = it.dependency_lines(it.doc_constant("PIPELINE_DEPENDENCIES"), "/Volumes/c/s/files/wheels/", wheels)
+    assert lines == [
+        "geobrix@file:///Volumes/c/s/files/wheels/geobrix-0.6.0+env6-py3-none-any.whl",
+        "/Volumes/c/s/files/wheels/lakeflow_community_connectors-0.1.0-py3-none-any.whl",
+        "/Volumes/c/s/files/wheels/geobrix_lakeflow_connectors-0.1.0-py3-none-any.whl",
+    ]
+    assert not any(" " in x for x in lines)
+    # Fail on revert: a docs line with spaces around @ splits under the pipeline's unquoted %pip install.
+    with pytest.raises(it.StepFailed, match="without spaces"):
+        it.dependency_lines("geobrix @ file:///Volumes/a/b/c/d/geobrix-1+env5-py3-none-any.whl\n"
+                            "/Volumes/a/b/c/d/lakeflow_community_connectors-1-py3-none-any.whl\n"
+                            "/Volumes/a/b/c/d/geobrix_lakeflow_connectors-1-py3-none-any.whl", "/V", wheels)
+    with pytest.raises(it.StepFailed, match="one line per wheel"):
+        it.dependency_lines("/Volumes/a/b/c/d/lakeflow_community_connectors-1-py3-none-any.whl", "/V", wheels)
+
+
+def test_source_paths_are_judged_relative_to_the_landing_folder(it):
+    assert it.rel_source("/Volumes/c/s/v/landing/a/b.tif", "/Volumes/c/s/v/landing") == "a/b.tif"
+    assert it.rel_source("dbfs:/Volumes/c/s/v/landing/x.gpkg", "/Volumes/c/s/v/landing/") == "x.gpkg"
+    assert it.rel_source("/Volumes/c/s/v/landing2/x.gpkg", "/Volumes/c/s/v/landing") is None
+
+
+# ---- the judges -----------------------------------------------------------------------------------------------------
+
+EXPECT = {
+    "a": {"columns": [["x", "int"], ["_source_path", "string"], ["_source_mtime", "timestamp"]], "files": {"a/1.geojson": 5}},
+    "e": {"columns": [["tile", "binary"], ["_source_path", "string"], ["_source_mtime", "timestamp"]],
+          "files": {"e/1.tif": 1, "e/2.tif": 2}},
+}
+COLS = {t: [c[0] for c in v["columns"]] for t, v in EXPECT.items()}
+
+
+def obs(a=None, e=None):
+    out = {}
+    if a is not None:
+        out["a"] = {"columns": COLS["a"], "files": a}
+    if e is not None:
+        out["e"] = {"columns": COLS["e"], "files": e}
+    return out
+
+
+def test_update_one_passes_when_each_table_holds_each_files_rows(it):
+    got = it.judge_tables("update1", EXPECT, obs({"a/1.geojson": 5}, {"e/1.tif": 1}), {"a": ["a/1.geojson"], "e": ["e/1.tif"]})
+    assert [c["ok"] for c in got] == [True, True] and "5 row(s) from 1 file(s)" in got[0]["detail"]
+
+
+def test_update_one_fails_on_a_missing_table_wrong_columns_or_rows(it):
+    landed = {"a": ["a/1.geojson"], "e": ["e/1.tif"]}
+    got = it.judge_tables("update1", EXPECT, obs({"a/1.geojson": 5}), landed)
+    assert not got[1]["ok"] and "does not exist" in got[1]["detail"]
+    bad = obs({"a/1.geojson": 4}, {"e/1.tif": 1})
+    bad["e"]["columns"] = ["tile", "_source_path"]
+    got = it.judge_tables("update1", EXPECT, bad, landed)
+    assert not got[0]["ok"] and "rows per file" in got[0]["detail"]
+    assert not got[1]["ok"] and "no _source_mtime column" in got[1]["detail"]
+
+
+def test_update_two_must_append_only_the_new_files_rows(it):
+    before = obs({"a/1.geojson": 5}, {"e/1.tif": 1})
+    good = it.judge_increment("e", "e/2.tif", EXPECT, before, obs({"a/1.geojson": 5}, {"e/1.tif": 1, "e/2.tif": 2}))
+    assert good["ok"] and "+2 row(s), all from e/2.tif" in good["detail"]
+    # Fail on revert: an update that reads the old file again appends its rows twice.
+    twice = it.judge_increment("e", "e/2.tif", EXPECT, before, obs({"a/1.geojson": 5}, {"e/1.tif": 2, "e/2.tif": 2}))
+    assert not twice["ok"]
+    other = it.judge_increment("e", "e/2.tif", EXPECT, before, obs({"a/1.geojson": 10}, {"e/1.tif": 1, "e/2.tif": 2}))
+    assert not other["ok"] and "a changed" in other["detail"]
+
+
+def test_update_three_must_fail_name_the_file_and_append_nothing(it):
+    o = obs({"a/1.geojson": 5}, {"e/1.tif": 1})
+    assert it.judge_unreadable("zz.geojson", False, ["flow a: cannot read /Volumes/x/zz.geojson"], o, o)["ok"]
+    assert not it.judge_unreadable("zz.geojson", True, [], o, o)["ok"]
+    assert not it.judge_unreadable("zz.geojson", False, ["some other error"], o, o)["ok"]
+    assert not it.judge_unreadable("zz.geojson", False, ["zz.geojson"], o, obs({"a/1.geojson": 6}, {"e/1.tif": 1}))["ok"]
+
+
+def test_a_refusal_of_the_workspace_is_a_precondition_line(it):
+    exc = RuntimeError("Securable kind 'CONNECTION_COMMUNITY' is not enabled. If this is a securable kind associated "
+                       "with a preview feature, please enable it in workspace settings.")
+    line = it.precondition_line(exc, "CREATE CONNECTION (type COMMUNITY)", "fevm-geospatial")
+    assert line.startswith("PRECONDITION MISSING: CREATE CONNECTION (type COMMUNITY) on fevm-geospatial")
+    assert it.precondition_line(RuntimeError("PERMISSION_DENIED: User does not have CREATE CONNECTION"), "x", "p")
+    assert it.precondition_line(ValueError("bad value"), "x", "p") is None
+
+
+def test_the_result_is_pass_only_when_every_check_passed(it):
+    assert it.decide([it.check("a", True, ""), it.check("b", True, "")]) == "pass"
+    assert it.decide([it.check("a", True, ""), it.check("b", False, "")]) == "fail"
+    assert it.decide([]) == "fail"
+
+
+# ---- the run, against a fake workspace ------------------------------------------------------------------------------
+
+
+class NotFound(Exception):
+    pass
+
+
+class FakeW:
+    """The calls the driver makes. Tables appear after update 1; ``rows`` per update decide what they hold."""
+
+    def __init__(self, it, connection_error=None, update_states=("COMPLETED", "COMPLETED", "FAILED")):
+        self.it = it
+        self.calls = []
+        self.schemas_ = set()
+        self.files_ = {}
+        self.connection_error = connection_error
+        self.update_states = list(update_states)
+        self.updates = 0
+        self.connections_ = set()  # connection names that exist
+        self.pipelines_ = []  # pipelines that exist: SimpleNamespace(name, pipeline_id)
+        self.delete_gone = False  # every delete finds nothing (already gone)
+        self.config = SimpleNamespace(host="https://ws.example")
+        w = self
+
+        def rec(_what, **kw):
+            w.calls.append((_what, kw))
+
+        class Schemas:
+            def get(self, full):
+                if full not in w.schemas_:
+                    raise NotFound(full)
+
+            def create(self, name, catalog_name, comment=None):
+                rec("schemas.create", name=name)
+                w.schemas_.add(f"{catalog_name}.{name}")
+
+            def delete(self, full, force=False):
+                rec("schemas.delete", full=full, force=force)
+                if w.delete_gone:
+                    raise NotFound(f"Schema '{full}' does not exist.")
+                w.schemas_.discard(full)
+
+        class Volumes:
+            def create(self, **kw):
+                rec("volumes.create", **{k: v for k, v in kw.items() if k != "volume_type"})
+
+        class Files:
+            def create_directory(self, path):
+                pass
+
+            def upload(self, path, contents, overwrite=False):
+                w.files_[path] = len(contents.read())
+
+            def list_directory_contents(self, folder):
+                return [SimpleNamespace(path=p, file_size=n, is_directory=False) for p, n in w.files_.items()
+                        if p.rsplit("/", 1)[0] == folder]
+
+        class Api:
+            def do(self, method, path, body=None):
+                rec(f"api.{method} {path.split('/')[-1] if method == 'POST' else 'connection'}", **(body or {"path": path}))
+                if method == "DELETE" and w.delete_gone:
+                    raise NotFound(f"Connection '{path.rsplit('/', 1)[-1]}' does not exist.")
+                if path.endswith("/connections") and w.connection_error:
+                    raise w.connection_error
+                if path == "/api/2.0/pipelines":
+                    return {"pipeline_id": "pid-1"}
+                return {}
+
+        class Connections:
+            def get(self, name):
+                if name not in w.connections_:
+                    raise NotFound(name)
+                return SimpleNamespace(name=name)
+
+        class Workspace:
+            def mkdirs(self, path):
+                pass
+
+        class Pipelines:
+            def list_pipelines(self, filter=None):
+                return list(w.pipelines_)
+
+            def start_update(self, pipeline_id):
+                w.updates += 1
+                return SimpleNamespace(update_id=f"u{w.updates}")
+
+            def delete(self, pipeline_id):
+                rec("pipelines.delete", pipeline_id=pipeline_id)
+                if w.delete_gone:
+                    raise NotFound(f"The specified pipeline {pipeline_id} was not found.")
+
+        class Tables:
+            def get(self, full):
+                if w.updates == 0:
+                    raise NotFound(full)
+                t = full.rsplit(".", 1)[-1]
+                return SimpleNamespace(columns=[SimpleNamespace(name=c[0]) for c in EXPECT_RUN[t]["columns"]])
+
+        class Statements:
+            def execute_statement(self, statement, warehouse_id, wait_timeout=None):
+                rec("sql", warehouse_id=warehouse_id)
+                land = w.it.names(SHA12, "cat")["landing"]
+                rows = []
+                done = min(w.updates, 2)  # update 3 fails: it appends nothing
+                for t, v in EXPECT_RUN.items():
+                    for f, n in v["files"].items():
+                        if f == w.it.INCREMENT[1] and done < 2:
+                            continue
+                        rows.append([t, f"{land}/{f}", str(n)])
+                return SimpleNamespace(status=SimpleNamespace(state="SUCCEEDED"), result=SimpleNamespace(data_array=rows))
+
+        self.schemas, self.volumes, self.files = Schemas(), Volumes(), Files()
+        self.api_client, self.connections, self.workspace = Api(), Connections(), Workspace()
+        self.pipelines, self.tables, self.statement_execution = Pipelines(), Tables(), Statements()
+        self.current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name="me@example.com"))
+
+    def names_called(self):
+        return [c[0] for c in self.calls]
+
+
+EXPECT_RUN = {}
+
+
+@pytest.fixture
+def fake_run(it, monkeypatch, tmp_path):
+    """A Run whose local steps are stubbed and whose workspace is a FakeW; returns (make, evidence path)."""
+    EXPECT_RUN.clear()
+    for d in it.DATASETS:
+        files = {rel: 3 for rel, _ in d.files}
+        if d.table == it.INCREMENT[0]:
+            files[it.INCREMENT[1]] = 2
+        EXPECT_RUN[d.table] = {"columns": [["v", "int"], ["_source_path", "string"], ["_source_mtime", "timestamp"]],
+                               "files": files, "format": "x"}
+    data = tmp_path / "data"
+    (data / it.UNREADABLE[2]).parent.mkdir(parents=True)
+    (data / it.UNREADABLE[2]).write_bytes(b"x" * 9000)
+    landing = tmp_path / "landing"
+    for rel in [r for d in it.DATASETS for r, _ in d.files] + [it.INCREMENT[1]]:
+        (landing / rel).parent.mkdir(parents=True, exist_ok=True)
+        (landing / rel).write_bytes(b"data")
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    wheels = {}
+    for kind, name in (("geobrix", "geobrix-0.6.0+env6-py3-none-any.whl"),
+                       ("framework", "lakeflow_community_connectors-0.1.0-py3-none-any.whl"),
+                       ("connector", "geobrix_lakeflow_connectors-0.1.0-py3-none-any.whl")):
+        (wheel_dir / name).write_bytes(kind.encode())
+        wheels[kind] = wheel_dir / name
+    out = tmp_path / "out"
+    monkeypatch.setattr(it, "OUT_DIR", out)
+    monkeypatch.setattr(it, "EVIDENCE", out / "evidence.json")
+    monkeypatch.setattr(it.uc, "warehouse_problem", lambda *a, **k: None)
+    monkeypatch.setattr(it.uc, "catalog_problem", lambda *a, **k: None)
+    monkeypatch.setattr(it.uc_sources_hash, "head_sha", lambda root: SHA12 + "c" * 28)
+    monkeypatch.setattr(it.lfc_check, "sources_hash", lambda root=None, rev="HEAD": "h" * 64)
+    monkeypatch.setattr(it.Run, "step_unit_tests", lambda self: self.checks.append(it.check("unit-tests", True, "60 passed")))
+    monkeypatch.setattr(it.Run, "step_wheels", lambda self, commit: wheels)
+    monkeypatch.setattr(it.Run, "step_expect", lambda self: (landing, EXPECT_RUN))
+
+    def fake_poll(w, *, pipeline_ids, update, **kw):
+        state = w.update_states[w.updates - 1]
+        if state == "COMPLETED":
+            return True, []
+        # As the poll does: 400 characters per error, so the file name in the worker's traceback is cut off.
+        return False, ["pipeline lfc: flow boroughs: [STREAM_FAILED] ... Traceback (most recent call last): ..."]
+
+    def fake_errors(w, pipeline_id, update_id, limit=200):
+        if w.update_states[w.updates - 1] == "COMPLETED":
+            return []
+        return [("source_boroughs_append_flow", "[STREAM_FAILED] ... Traceback ... DataSourceError: "
+                 f"/Volumes/x/{it.UNREADABLE[1]}: Failed to read GeoJSON data")]
+
+    monkeypatch.setattr(it.run_sdp_bundle, "poll", fake_poll)
+    monkeypatch.setattr(it.run_sdp_bundle, "pipeline_errors", fake_errors)
+
+    def make(**kw):
+        args = it.parse_args(["--profile", "p", "--catalog", "cat", "--warehouse-id", "wh", "--data-dir", str(data)]
+                             + kw.pop("argv", []))
+        r = it.Run(args)
+        r.w = FakeW(it, **kw)
+        return r
+
+    return make, out / "evidence.json"
+
+
+def test_a_full_run_passes_writes_evidence_and_drops_everything_it_made(fake_run, it):
+    make, ev_path = fake_run
+    r = make()
+    assert r.run() == 0
+    ev = json.loads(ev_path.read_text())
+    assert ev["result"] == "pass", [c for c in ev["checks"] if not c["ok"]]
+    names = {c["name"] for c in ev["checks"]}
+    assert {"unit-tests", "update1:completed", "update2:completed", "update2:increment", "update3:unreadable"} <= names
+    assert {f"update1:{d.table}" for d in it.DATASETS} <= names
+    assert ev["update_ids"] == ["u1", "u2", "u3"] and ev["pipeline_id"] == "pid-1" and ev["cleanup"] == "dropped"
+    assert ev["head_sha"].startswith(SHA12) and ev["sources_hash"] == "h" * 64 and len(ev["wheels"]) == 3
+    assert ev["tables"][it.INCREMENT[0]]["update2"][it.INCREMENT[1]] == 2
+    calls = r.w.names_called()
+    # Cleanup order: the pipeline (its tables), then the connection, then the schema with its Volume.
+    tail = [c for c in calls if c in ("pipelines.delete", "api.DELETE connection", "schemas.delete")]
+    assert tail == ["pipelines.delete", "api.DELETE connection", "schemas.delete"]
+    assert dict(r.w.calls)["schemas.delete"]["force"] is True
+    created = dict(r.w.calls)["api.POST pipelines"]
+    assert created["serverless"] is True and created["channel"] == "PREVIEW" and created["schema"] == f"geobrix_lfc_it_{SHA12}"
+    assert created["development"] is True  # Lakeflow does not retry a failed update
+    assert created["environment"]["dependencies"][0].startswith("geobrix@file:///Volumes/cat/")
+    src = f"/Users/me@example.com/jobs/geobrix/lfc-it-{SHA12}/ingest.py"
+    assert created["libraries"] == [{"file": {"path": src}}]
+    imported = dict(r.w.calls)["api.POST import"]
+    assert imported["path"] == src and imported["format"] == "RAW"
+    assert "ingest(spark, pipeline_spec)" in base64.b64decode(imported["content"]).decode()
+    conn = dict(r.w.calls)["api.POST connections"]
+    assert conn["connection_type"] == "COMMUNITY" and conn["options"]["root_path"] == it.names(SHA12, "cat")["landing"]
+    # The truncated file was uploaded as a few KiB of the real one.
+    trunc = f"{it.names(SHA12, 'cat')['landing']}/{it.UNREADABLE[1]}"
+    assert r.w.files_[trunc] == it.UNREADABLE[3]
+
+
+def test_keep_leaves_the_pipeline_connection_and_schema(fake_run):
+    make, ev_path = fake_run
+    r = make(argv=["--keep"])
+    assert r.run() == 0
+    assert not {"pipelines.delete", "api.DELETE connection", "schemas.delete"} & set(r.w.names_called())
+    assert json.loads(ev_path.read_text())["cleanup"] == "kept"
+
+
+def test_an_update_that_does_not_fail_on_the_unreadable_file_fails_the_run(fake_run):
+    make, ev_path = fake_run
+    r = make(update_states=("COMPLETED", "COMPLETED", "COMPLETED"))
+    assert r.run() == 1
+    ev = json.loads(ev_path.read_text())
+    bad = [c for c in ev["checks"] if not c["ok"]]
+    assert [c["name"] for c in bad] == ["update3:unreadable"] and ev["cleanup"] == "dropped"
+
+
+def test_a_failed_first_update_stops_the_run_and_still_cleans_up(fake_run):
+    make, ev_path = fake_run
+    r = make(update_states=("FAILED",))
+    assert r.run() == 1
+    ev = json.loads(ev_path.read_text())
+    assert ev["update_ids"] == ["u1"] and ev["result"] == "fail" and ev["cleanup"] == "dropped"
+    assert any(c["name"] == "run" and "fail fast" in c["detail"] for c in ev["checks"])
+
+
+def test_a_refused_connection_is_a_precondition_and_drops_the_schema(fake_run, capsys):
+    make, ev_path = fake_run
+    r = make(connection_error=RuntimeError("Securable kind 'CONNECTION_COMMUNITY' is not enabled."))
+    assert r.run() == 1
+    out = capsys.readouterr().out
+    assert "PRECONDITION MISSING: CREATE CONNECTION (type COMMUNITY) on p" in out
+    calls = r.w.names_called()
+    assert "api.POST pipelines" not in calls and "api.DELETE connection" not in calls and "schemas.delete" in calls
+    assert json.loads(ev_path.read_text())["result"] == "fail"
+
+
+def test_leftovers_of_the_same_commit_stop_the_run_before_anything_is_made(fake_run, it):
+    make, ev_path = fake_run
+    r = make()
+    r.w.schemas_.add(f"cat.geobrix_lfc_it_{SHA12}")
+    assert r.run() == 1
+    assert "schemas.create" not in r.w.names_called() and "schemas.delete" not in r.w.names_called()
+    detail = [c["detail"] for c in json.loads(ev_path.read_text())["checks"] if c["name"] == "run"][0]
+    assert f"--drop {SHA12}" in detail
+
+
+def test_the_driver_needs_a_profile_and_a_dry_run_makes_no_client(it, monkeypatch, capsys):
+    assert it.main([]) == 2
+    assert "--profile required" in capsys.readouterr().err
+    monkeypatch.setattr(it.uc_sources_hash, "dirty_files", lambda root, paths=None: [])
+    monkeypatch.setattr(it.Run, "client", lambda self: (_ for _ in ()).throw(AssertionError("no workspace call")))
+    assert it.main(["--profile", "p", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "dry run" in out and "geobrix@file:///Volumes/geospatial_docs/geobrix_lfc_it_" in out
+
+
+def test_the_driver_refuses_dirty_connector_sources(it, monkeypatch, capsys):
+    monkeypatch.setattr(it.uc_sources_hash, "dirty_files", lambda root, paths=None: ["connectors/lakeflow/pyproject.toml"])
+    assert it.main(["--profile", "p", "--dry-run"]) == 1
+    assert "connectors/lakeflow/pyproject.toml" in capsys.readouterr().err
+
+
+def test_the_command_help_names_the_options_and_bad_options_exit_2():
+    res = subprocess.run(["bash", str(SH), "--help"], capture_output=True, text=True)
+    assert res.returncode == 0
+    for opt in ("--profile", "--catalog", "--warehouse-id", "--keep", "--drop", "--dry-run", "--skip-unreadable", "--timeout-min", "--log"):
+        assert opt in res.stdout
+    assert subprocess.run(["bash", str(SH), "--nope"], capture_output=True, text=True).returncode == 2
+    assert subprocess.run(["bash", str(SH), "--profile"], capture_output=True, text=True).returncode == 2
+
+
+# ---- check_lakeflow_connector_evidence ------------------------------------------------------------------------------
+
+
+def git(root, *args):
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True,
+                   capture_output=True, text=True)
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    (root / "scripts" / "ci").mkdir(parents=True)
+    for name in ("uc_sources_hash.py", "check_uc_integration_evidence.py", "check_lakeflow_connector_evidence.py"):
+        shutil.copy(CI / name, root / "scripts" / "ci" / name)
+    for rel in ("connectors/lakeflow/sources/geobrix/a.py", "python/geobrix/src/pkg/mod.py", "docs/a.md", "src/main/scala/A.scala"):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("v1\n")
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return root
+
+
+def run_check(root, *args, rng="origin/main..HEAD"):
+    env = {k: v for k, v in os.environ.items() if k not in ("QC_RANGE", "GBX_LFC_EVIDENCE")}
+    if rng is not None:
+        env["QC_RANGE"] = rng
+    return subprocess.run([sys.executable, str(root / "scripts/ci/check_lakeflow_connector_evidence.py"), *args],
+                          capture_output=True, text=True, env=env, cwd=root)
+
+
+def write_ev(root, sources_hash, result="pass"):
+    ev = {"head_sha": "a" * 40, "sources_hash": sources_hash, "result": result, "catalog": "c", "schema": "s",
+          "pipeline_id": "pid", "finished": "2026-11-13T12:00:00Z", "tables": {"t": {}},
+          "checks": [{"name": "update1:t", "ok": result == "pass", "detail": ""}]}
+    path = root / "test-logs" / "lakeflow-connector" / "evidence.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(ev))
+    return path
+
+
+def current(root):
+    return run_check(root, "--hash", rng=None).stdout.strip()
+
+
+def test_the_check_skips_a_range_not_based_on_main(repo):
+    res = run_check(repo, rng="origin/streamline/0.6.0..HEAD")
+    assert res.returncode == 0 and "not a main-bound range" in res.stdout
+
+
+def test_the_check_fails_without_evidence_with_a_fix(repo):
+    res = run_check(repo)
+    assert res.returncode == 1 and "no Lakeflow connector evidence" in res.stderr
+    assert "gbx-test-lakeflow-connector.sh --profile" in res.stderr
+
+
+def test_the_check_passes_fresh_passing_evidence_and_prints_the_summary(repo):
+    write_ev(repo, current(repo))
+    res = run_check(repo)
+    assert res.returncode == 0, res.stderr
+    assert "gbx:test:lakeflow-connector PASS" in res.stdout and "checks 1/1" in res.stdout
+
+
+def test_the_check_fails_a_failed_run_and_names_the_failed_checks(repo):
+    write_ev(repo, current(repo), result="fail")
+    res = run_check(repo)
+    assert res.returncode == 1 and "did not pass" in res.stderr and "update1:t" in res.stderr
+
+
+def test_evidence_goes_stale_on_a_connector_or_read_core_commit_not_a_docs_or_scala_one(repo):
+    write_ev(repo, current(repo))
+    for rel in ("docs/a.md", "src/main/scala/A.scala"):
+        (repo / rel).write_text("v2\n")
+        git(repo, "commit", "-q", "-am", rel)
+        assert run_check(repo).returncode == 0
+    (repo / "connectors/lakeflow/sources/geobrix/a.py").write_text("v2\n")
+    git(repo, "commit", "-q", "-am", "connector")
+    res = run_check(repo)
+    assert res.returncode == 1 and "stale" in res.stderr
+    write_ev(repo, current(repo))
+    (repo / "python/geobrix/src/pkg/mod.py").write_text("v2\n")
+    git(repo, "commit", "-q", "-am", "read core")
+    assert run_check(repo).returncode == 1
+
+
+def test_unreadable_evidence_fails(repo):
+    write_ev(repo, current(repo)).write_text("{not json")
+    assert run_check(repo).returncode == 1
+
+
+def test_the_hash_covers_the_documented_paths():
+    sys.path.insert(0, str(CI))
+    import check_lakeflow_connector_evidence as c
+
+    assert "connectors/lakeflow" in c.LFC_PATHS and "python/geobrix/src" in c.LFC_PATHS
+    assert "examples/tests/lakeflow_connector_it.py" in c.LFC_PATHS
+    assert all((REPO_ROOT / p).exists() for p in c.LFC_PATHS)
+
+
+# ---- --drop: only the scratch names of one commit ------------------------------------------------------------------
+
+DROP_SHA = "fedcba987654"
+SCRATCH = f"geobrix_lfc_it_{DROP_SHA}"
+
+
+def drop_run(it, w, sha12=DROP_SHA, catalog="cat"):
+    """A Run as main() builds it for --drop SHA12, on the fake workspace ``w``."""
+    r = it.Run(it.parse_args(["--profile", "p", "--catalog", catalog, "--warehouse-id", "wh", "--drop", sha12]))
+    r.sha12, r.n, r.w = sha12, it.names(sha12, catalog), w
+    return r
+
+
+def drop_world(it, w):
+    """The commit's leftovers, next to other objects with near names that must stay."""
+    w.schemas_ |= {f"cat.{SCRATCH}", "cat.geobrix_lfc_it_000000000000", "cat.geobrix_uc_it_fedcba987654", "cat.geobrix"}
+    w.connections_ |= {SCRATCH, "geobrix_lfc_it_000000000000", "geobrix_dev"}
+    w.pipelines_ += [SimpleNamespace(name=SCRATCH, pipeline_id="p-mine"),
+                     SimpleNamespace(name=f"{SCRATCH}_copy", pipeline_id="p-near"),  # the LIKE filter can match it
+                     SimpleNamespace(name="geobrix_lfc_it_000000000000", pipeline_id="p-other")]
+
+
+def deleted(w):
+    out = []
+    for what, kw in w.calls:
+        if what == "pipelines.delete":
+            out.append(("pipeline", kw["pipeline_id"]))
+        elif what == "api.DELETE connection":
+            out.append(("connection", kw["path"].rsplit("/", 1)[-1]))
+        elif what == "schemas.delete":
+            out.append(("schema", kw["full"]))
+    return out
+
+
+def test_drop_removes_only_the_named_commits_pipeline_connection_and_schema(it):
+    w = FakeW(it)
+    drop_world(it, w)
+    assert drop_run(it, w).drop() == 0
+    assert deleted(w) == [("pipeline", "p-mine"), ("connection", SCRATCH), ("schema", f"cat.{SCRATCH}")]
+    assert dict(w.calls)["schemas.delete"]["force"] is True
+    assert w.schemas_ == {"cat.geobrix_lfc_it_000000000000", "cat.geobrix_uc_it_fedcba987654", "cat.geobrix"}
+
+
+def test_drop_refuses_a_name_outside_the_scratch_pattern(it):
+    # Fail on revert: a drop must never act on a schema or connection it does not own.
+    for n in ({"schema": "geobrix", "connection": SCRATCH, "pipeline": SCRATCH},
+              {"schema": SCRATCH, "connection": "geobrix_dev", "pipeline": SCRATCH},
+              {"schema": SCRATCH, "connection": SCRATCH, "pipeline": "geobrix_lfc_it_000000000000"}):
+        w = FakeW(it)
+        drop_world(it, w)
+        r = drop_run(it, w)
+        r.n = dict(r.n, **n)
+        assert r.drop() == 2
+        assert deleted(w) == []
+    assert it.scratch_name_ok(SCRATCH, DROP_SHA)
+    assert not it.scratch_name_ok("geobrix_lfc_it_000000000000", DROP_SHA)
+    assert not it.scratch_name_ok(f"{SCRATCH}_copy", DROP_SHA)
+    assert not it.scratch_name_ok(f"x{SCRATCH}", DROP_SHA)
+
+
+def test_cleanup_refuses_to_drop_a_foreign_schema(it):
+    w = FakeW(it)
+    drop_world(it, w)
+    r = drop_run(it, w)
+    r.n = dict(r.n, schema="geobrix")
+    r.created = {"schema": True, "connection": True, "pipeline": None}
+    assert r.cleanup().startswith("refused:")
+    assert deleted(w) == []
+
+
+def test_drop_with_nothing_left_or_already_gone_succeeds(it, capsys):
+    w = FakeW(it)
+    assert drop_run(it, w).drop() == 0 and deleted(w) == []
+    assert "leftovers of fedcba987654: none" in capsys.readouterr().out
+    w = FakeW(it)
+    drop_world(it, w)
+    w.delete_gone = True  # each object vanished between the listing and the delete
+    assert drop_run(it, w).drop() == 0
+    assert [k for k, _ in deleted(w)] == ["pipeline", "connection", "schema"]
+
+
+def test_drop_dry_run_lists_and_deletes_nothing(it, capsys):
+    w = FakeW(it)
+    drop_world(it, w)
+    assert drop_run(it, w).drop(dry_run=True) == 0
+    out = capsys.readouterr().out
+    assert deleted(w) == []
+    assert f"would drop schema cat.{SCRATCH}" in out and f"would drop connection {SCRATCH}" in out
+    assert "would drop pipeline p-mine" in out and "p-near" not in out
+
+
+def test_main_drop_validates_the_commit_and_passes_dry_run(it, monkeypatch):
+    assert it.main(["--profile", "p", "--drop", "geobrix"]) == 2
+    assert it.main(["--profile", "p", "--drop", "FEDCBA987654"]) == 2
+    seen = {}
+    monkeypatch.setattr(it.Run, "drop", lambda self, dry_run=False: seen.update(sha=self.sha12, n=self.n, dry=dry_run) or 0)
+    assert it.main(["--profile", "p", "--drop", DROP_SHA, "--dry-run"]) == 0
+    assert seen["sha"] == DROP_SHA and seen["dry"] is True and seen["n"]["schema"] == SCRATCH
+
+
+# ---- the GeoBrix wheel: given, reused or built ----------------------------------------------------------------------
+
+
+def wheel_run(it, tmp_path, *argv):
+    r = it.Run(it.parse_args(["--profile", "p", "--warehouse-id", "wh", *argv]))
+    r.run_dir = tmp_path / "run"
+    r.run_dir.mkdir(exist_ok=True)
+    return r
+
+
+def test_a_given_wheel_must_be_an_existing_env6_wheel(it, tmp_path):
+    good = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    good.write_bytes(b"w")
+    assert wheel_run(it, tmp_path, "--geobrix-wheel", str(good)).geobrix_wheel() == good
+    env5 = tmp_path / "geobrix-0.6.0+env5-py3-none-any.whl"
+    env5.write_bytes(b"w")
+    with pytest.raises(it.StepFailed, match=r"not an env 6 wheel.*Fix: pass the \+env6 wheel"):
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(env5)).geobrix_wheel()
+    with pytest.raises(it.StepFailed, match="not an env 6 wheel"):
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "geobrix-0.6.0-py3-none-any.whl")).geobrix_wheel()
+    with pytest.raises(it.StepFailed, match="no such file. Fix:"):
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "gone" / good.name)).geobrix_wheel()
+
+
+def test_the_wheel_record_has_its_sha_commit_and_whether_it_fits_head(it, tmp_path, monkeypatch):
+    wheel = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.write_bytes(b"w")
+    info = {"name": wheel.name, "sha256": "s" * 64, "git_sha": "b" * 40, "dirty": False}
+    monkeypatch.setattr(it.uc, "wheel_info", lambda p: dict(info))
+    monkeypatch.setattr(it.uc, "wheel_reusable", lambda i: (False, "3 wheel input(s) changed since bbbbbbbbbbbb"))
+    r = wheel_run(it, tmp_path)
+    rec = r.record_geobrix_wheel(wheel)
+    assert rec == {"name": wheel.name, "sha256": "s" * 64, "git_sha": "b" * 40, "dirty": False, "fits_head": False,
+                   "why": "3 wheel input(s) changed since bbbbbbbbbbbb"}
+    assert r.ev["geobrix_wheel"] is rec
+
+
+@pytest.fixture
+def dist(it, tmp_path, monkeypatch):
+    """dist/env6 in tmp_path, and a build that records what it ran and leaves ``built`` there."""
+    d = tmp_path / "dist" / "env6"
+    d.mkdir(parents=True)
+    monkeypatch.setattr(it, "untracked", lambda rel, root=None: tmp_path / rel)
+    monkeypatch.setattr(it, "DIST_ENV6", d)
+    state = {"ran": [], "reusable": (True, "no wheel input changed"), "built_sha": SHA12 + "c" * 28, "dirty": False}
+    monkeypatch.setattr(it.uc, "wheel_info", lambda p: {"name": p.name, "sha256": "s", "git_sha": state["built_sha"],
+                                                        "dirty": state["dirty"]})
+    monkeypatch.setattr(it.uc, "wheel_reusable", lambda i: state["reusable"])
+    monkeypatch.setattr(it.uc, "jar_stale", lambda jar: False)
+    monkeypatch.setattr(it.uc_sources_hash, "head_sha", lambda root: SHA12 + "c" * 28)
+
+    def run_cmd(argv, log, label, env=None, echo=True):
+        state["ran"].append(Path(argv[1]).name)
+        (d / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"built")
+        return 0, "ok"
+
+    monkeypatch.setattr(it.uc, "run_cmd", run_cmd)
+    return d, state
+
+
+def test_a_dist_wheel_that_fits_head_is_reused_without_a_build(it, tmp_path, dist):
+    d, state = dist
+    (d / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"old")
+    assert wheel_run(it, tmp_path).geobrix_wheel() == d / "geobrix-0.6.0+env6-py3-none-any.whl"
+    assert state["ran"] == []
+
+
+def test_a_dist_wheel_that_does_not_fit_head_or_rebuild_builds_one(it, tmp_path, dist):
+    d, state = dist
+    (d / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"old")
+    state["reusable"] = (False, "1 wheel input(s) changed")
+    assert wheel_run(it, tmp_path).geobrix_wheel().read_bytes() == b"built"
+    assert state["ran"] == ["gbx-build-wheel.sh"]
+    state["ran"].clear()
+    state["reusable"] = (True, "fits")
+    assert wheel_run(it, tmp_path, "--rebuild").geobrix_wheel().read_bytes() == b"built"
+    assert state["ran"] == ["gbx-build-wheel.sh"]
+
+
+def test_a_build_that_is_dirty_or_at_another_commit_is_refused(it, tmp_path, dist):
+    d, state = dist
+    state["dirty"] = True
+    with pytest.raises(it.StepFailed, match="no clean env 6 wheel"):
+        wheel_run(it, tmp_path).geobrix_wheel()
+    state["dirty"], state["built_sha"] = False, "d" * 40
+    state["reusable"] = (False, "the wheel in dist/env6 is the dirty one")  # so the run builds again
+    with pytest.raises(it.StepFailed, match="no clean env 6 wheel"):
+        wheel_run(it, tmp_path).geobrix_wheel()
+
+
+# ---- step_expect: the local read through the connector venv --------------------------------------------------------
+
+
+def sample_tree(it, root):
+    for d in it.DATASETS:
+        for _, src in d.files:
+            (root / src).parent.mkdir(parents=True, exist_ok=True)
+            (root / src).write_bytes(src.encode())
+    (root / it.INCREMENT[2]).write_bytes(b"inc")
+    return root
+
+
+def test_step_expect_copies_the_landing_tree_and_reads_it_through_the_helper(it, tmp_path, monkeypatch):
+    data = sample_tree(it, tmp_path / "data")
+    r = wheel_run(it, tmp_path, "--data-dir", str(data))
+    seen = {}
+    helper_out = {d.table: {"columns": [["_source_path", "string"]], "format": "x", "files": {"f": 1}} for d in it.DATASETS}
+
+    def fake_run(argv, capture_output, text, env):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=0, stdout=json.dumps(helper_out), stderr="")
+
+    monkeypatch.setattr(it, "subprocess", SimpleNamespace(run=fake_run))
+    landing, expect = r.step_expect()
+    assert expect == helper_out
+    assert json.loads((r.run_dir / "expect.json").read_text()) == helper_out
+    argv = seen["argv"]
+    assert argv[0] == str(it.CONNECTOR_VENV_PY) and argv[1].endswith("_lfc_expect.py")
+    assert argv[argv.index("--root") + 1] == str(landing)
+    assert json.loads(argv[argv.index("--tables") + 1]) == [{"table": d.table, "config": d.cfg} for d in it.DATASETS]
+    # The landing copy holds every dataset file plus the update-2 file, never the unreadable one.
+    for d in it.DATASETS:
+        for rel, src in d.files:
+            assert (landing / rel).read_bytes() == src.encode()
+    assert (landing / it.INCREMENT[1]).read_bytes() == b"inc"
+    assert not (landing / it.UNREADABLE[1]).exists()
+
+
+def test_step_expect_fails_on_missing_sample_data_or_a_failed_read(it, tmp_path, monkeypatch):
+    r = wheel_run(it, tmp_path, "--data-dir", str(tmp_path / "empty"))
+    with pytest.raises(it.StepFailed, match="sample data missing.*gbx-data-download.sh --bundle essential"):
+        r.step_expect()
+    data = sample_tree(it, tmp_path / "data")
+    r = wheel_run(it, tmp_path, "--data-dir", str(data))
+    monkeypatch.setattr(it, "subprocess", SimpleNamespace(
+        run=lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="Traceback ...\nValueError: Table 'x' has no matching files")))
+    with pytest.raises(it.StepFailed, match=r"(?s)local connector read failed.*no matching files"):
+        r.step_expect()
+
+
+@pytest.mark.skipif(not (REPO_ROOT / ".venv-connectors" / "bin" / "python").exists(),
+                    reason="needs the connector venv (bash scripts/commands/gbx-test-connectors.sh makes it)")
+def test_the_expect_helper_reads_a_tiny_landing_folder_with_the_connector(tmp_path):
+    # The real local read: two GeoJSON files in one folder, through the connector's own code.
+    feat = '{{"type": "Feature", "properties": {{"name": "{n}"}}, "geometry": {{"type": "Point", "coordinates": [{x}, 1]}}}}'
+    folder = tmp_path / "landing" / "pts"
+    folder.mkdir(parents=True)
+    for name, xs in (("a.geojson", (1, 2)), ("b.geojson", (3,))):
+        feats = ", ".join(feat.format(n=f"p{x}", x=x) for x in xs)
+        (folder / name).write_text(f'{{"type": "FeatureCollection", "features": [{feats}]}}')
+    (folder / "_skip.geojson").write_text("not read: the name starts with _")
+    res = subprocess.run([str(REPO_ROOT / ".venv-connectors" / "bin" / "python"), str(REPO_ROOT / "examples/tests/_lfc_expect.py"),
+                          "--root", str(tmp_path / "landing"), "--tables", json.dumps([{"table": "pts", "config": {"format": "geojson"}}])],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr[-2000:]
+    got = json.loads(res.stdout)["pts"]
+    assert got["format"] == "geojson_gbx" and got["files"] == {"pts/a.geojson": 2, "pts/b.geojson": 1}
+    names = [c[0] for c in got["columns"]]
+    assert names[0] == "name" and names[-2:] == ["_source_path", "_source_mtime"] and "geom_0" in names
+
+
+# ---- step_unit_tests: gbx:test:connectors --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cmds(it, monkeypatch):
+    """uc.run_cmd faked at the boundary: records each argv; ``results`` maps a label to (rc, output)."""
+    state = {"argv": [], "results": {}}
+
+    def run_cmd(argv, log, label, env=None, echo=True):
+        state["argv"].append(list(argv))
+        rc, out = state["results"].get(label, (0, "ok"))
+        if rc == 0 and "-w" in argv:  # a pip wheel build leaves its wheel in the -w folder
+            dest = Path(argv[argv.index("-w") + 1])
+            name = ("geobrix_lakeflow_connectors-0.1.0-py3-none-any.whl" if label == "connector wheel"
+                    else "lakeflow_community_connectors-0.1.0-py3-none-any.whl")
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / name).write_bytes(label.encode())
+        return rc, out
+
+    monkeypatch.setattr(it.uc, "run_cmd", run_cmd)
+    return state
+
+
+def test_step_unit_tests_runs_gbx_test_connectors_and_records_the_pass_count(it, tmp_path, cmds, monkeypatch):
+    venv = tmp_path / "venv-python"
+    venv.write_text("")
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", venv)
+    cmds["results"]["connector unit tests"] = (0, "...\n======== 60 passed, 3 warnings in 24.96s ========\n")
+    r = wheel_run(it, tmp_path)
+    r.step_unit_tests()
+    assert cmds["argv"] == [["bash", str(it.UNIT_TESTS_CMD), "--log", str(r.run_dir / "unit-tests.log")]]
+    assert it.UNIT_TESTS_CMD.name == "gbx-test-connectors.sh" and it.UNIT_TESTS_CMD.is_file()
+    assert r.checks == [{"name": "unit-tests", "ok": True, "detail": "60 passed, 3 warnings"}]
+
+
+def test_a_failed_unit_test_run_stops_the_run_with_a_fix(it, tmp_path, cmds, monkeypatch):
+    venv = tmp_path / "venv-python"
+    venv.write_text("")
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", venv)
+    cmds["results"]["connector unit tests"] = (1, "FAILED test_x\n===== 2 failed, 58 passed in 3.10s =====\n")
+    r = wheel_run(it, tmp_path)
+    with pytest.raises(it.StepFailed, match=r"connector unit tests failed \(exit 1\).*Fix: run bash scripts/commands/gbx-test-connectors.sh"):
+        r.step_unit_tests()
+    assert r.checks == [{"name": "unit-tests", "ok": False, "detail": "2 failed, 58 passed"}]
+
+
+def test_unit_tests_that_leave_no_connector_venv_stop_the_run(it, tmp_path, cmds, monkeypatch):
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", tmp_path / "no-venv" / "python")
+    cmds["results"]["connector unit tests"] = (0, "== 60 passed in 1.00s ==")
+    with pytest.raises(it.StepFailed, match="no connector venv.*Fix:"):
+        wheel_run(it, tmp_path).step_unit_tests()
+
+
+# ---- step_wheels: the three wheels as BUILD_WHEELS documents them ---------------------------------------------------
+
+
+@pytest.fixture
+def wheels_env(it, tmp_path, cmds, monkeypatch):
+    """A Run at the real HEAD (git archive needs a real commit), with the GeoBrix wheel given and the cache in tmp."""
+    gbx = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    gbx.write_bytes(b"gbx")
+    monkeypatch.setattr(it, "FRAMEWORK_CACHE", tmp_path / "cache")
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", tmp_path / "venv" / "python")
+    monkeypatch.setattr(it.Run, "record_geobrix_wheel", lambda self, w: {})
+    archived = []
+    real_run = subprocess.run
+
+    def spy(argv, *a, **k):  # the real git and tar, with each argv recorded
+        archived.append(list(argv))
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(it, "subprocess", SimpleNamespace(run=spy, PIPE=subprocess.PIPE))
+    r = wheel_run(it, tmp_path, "--geobrix-wheel", str(gbx))
+    return r, cmds, archived, gbx
+
+
+def test_step_wheels_builds_the_framework_and_connector_as_build_wheels_documents(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    commit = it.framework_commit()
+    wheels = r.step_wheels(commit)
+    venv = str(it.CONNECTOR_VENV_PY)
+    fw_dir, out_dir, src = str(it.FRAMEWORK_CACHE / commit), str(r.run_dir / "wheels"), r.run_dir / "src" / it.CONNECTOR_DIR
+    requirement = f"lakeflow-community-connectors @ git+https://github.com/databrickslabs/lakeflow-community-connectors@{commit}"
+    assert cmds["argv"] == [
+        [venv, "-m", "pip", "wheel", "--no-deps", "-w", fw_dir, requirement],
+        [venv, "-m", "pip", "wheel", "--no-deps", "-w", out_dir, str(src)],
+    ]
+    doc = it.doc_constant("BUILD_WHEELS")
+    assert "pip wheel --no-deps -w wheels ./geobrix/connectors/lakeflow" in doc  # the same two builds as the docs
+    assert f'pip wheel --no-deps -w wheels \\\n  "{requirement}"' in doc
+    assert wheels["geobrix"] == gbx
+    assert wheels["framework"].parent == it.FRAMEWORK_CACHE / commit
+    assert wheels["connector"].parent == r.run_dir / "wheels"
+
+
+def test_the_connector_wheel_is_built_from_git_archive_of_the_runs_commit(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    r.step_wheels(it.framework_commit())
+    assert ["git", "-C", str(it.REPO_ROOT), "archive", "--format=tar", r.head, it.CONNECTOR_DIR] in archived
+    # The extracted tree is the commit's, not the working tree's.
+    src = r.run_dir / "src" / it.CONNECTOR_DIR / "pyproject.toml"
+    committed = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{r.head}:{it.CONNECTOR_DIR}/pyproject.toml"],
+                               capture_output=True, text=True, check=True).stdout
+    assert src.read_text() == committed
+
+
+def test_a_cached_framework_wheel_is_not_built_again(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    commit = it.framework_commit()
+    (it.FRAMEWORK_CACHE / commit).mkdir(parents=True)
+    (it.FRAMEWORK_CACHE / commit / "lakeflow_community_connectors-0.1.0-py3-none-any.whl").write_bytes(b"cached")
+    wheels = r.step_wheels(commit)
+    assert [a[-1] for a in cmds["argv"]] == [str(r.run_dir / "src" / it.CONNECTOR_DIR)]
+    assert wheels["framework"].read_bytes() == b"cached"
+
+
+def test_a_failed_wheel_build_stops_the_run_with_a_fix(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    commit = it.framework_commit()
+    cmds["results"]["framework wheel"] = (1, "ERROR: Could not fetch git+https://github.com/...")
+    with pytest.raises(it.StepFailed, match=r"framework wheel build failed \(exit 1\).*Fix: check access to github.com"):
+        r.step_wheels(commit)
+    assert len(cmds["argv"]) == 1  # the connector build does not run
+    cmds["argv"].clear()
+    cmds["results"] = {"connector wheel": (1, "error: invalid pyproject.toml")}
+    with pytest.raises(it.StepFailed, match=r"connector wheel build failed \(exit 1\).*Fix: read .*build-connector.log"):
+        r.step_wheels(commit)
+
+
+# ---- main_root: the main checkout from a linked worktree -----------------------------------------------------------
+
+
+def test_main_root_finds_the_main_checkout_from_a_linked_worktree(it, tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    git(main, "init", "-q", "-b", "main")
+    (main / "a.txt").write_text("a\n")
+    git(main, "add", "a.txt")
+    git(main, "commit", "-q", "-m", "init")
+    wt = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", "--detach", str(wt))
+    assert it.main_root(wt).resolve() == main.resolve()
+    assert it.main_root(main).resolve() == main.resolve()
+    # Untracked artifacts: the worktree's own when present, else the main checkout's.
+    (main / "dist").mkdir()
+    assert it.untracked("dist", wt).resolve() == (main / "dist").resolve()
+    (wt / "dist").mkdir()
+    assert it.untracked("dist", wt) == wt / "dist"
+
+
+def test_main_root_outside_a_repository_is_the_root_itself(it, tmp_path):
+    assert it.main_root(tmp_path) == tmp_path
+
+
+# ---- the per-profile gate target (the keys the UC gate reads) ---------------------------------------------------
+
+
+def test_the_lakeflow_driver_takes_catalog_and_warehouse_from_the_profile_keys(it, monkeypatch, tmp_path):
+    cfg = tmp_path / "c.env"
+    cfg.write_text("GBX_UC_GATE_WAREHOUSE_ID=legacy\nGBX_UC_GATE_WAREHOUSE_ID__hub_ws=hubwh\nGBX_GATE_CATALOG__hub_ws=hub_cat\n")
+    monkeypatch.setattr(it.uc, "CONFIG", cfg)
+    a = it.parse_args(["--profile", "hub-ws"])
+    assert (a.catalog, a.warehouse_id) == ("hub_cat", "hubwh")
+    assert not hasattr(a, "volroot")
+    other = it.parse_args(["--profile", "e2-demo"])
+    assert (other.catalog, other.warehouse_id) == (it.DEFAULT_CATALOG, "legacy")
+    over = it.parse_args(["--profile", "hub-ws", "--catalog", "c", "--warehouse-id", "w"])
+    assert (over.catalog, over.warehouse_id) == ("c", "w")
+
+
+def test_a_catalog_the_workspace_lacks_stops_the_lakeflow_run_before_staging(fake_run, it, monkeypatch):
+    make, ev_path = fake_run
+    monkeypatch.setattr(it.uc, "catalog_problem", lambda *a, **k: "the catalog cat does not exist.\nFix: pass --catalog <name>.")
+    r = make()
+    monkeypatch.setattr(it.Run, "step_stage", lambda self, *a: pytest.fail("a run with no catalog must not stage"))
+    assert r.run() == 1
+    ev = json.loads(ev_path.read_text())
+    bad = [c for c in ev["checks"] if not c["ok"]]
+    assert ev["result"] == "fail" and bad and "Fix:" in bad[0]["detail"] and "catalog" in bad[0]["detail"]
+
+
+def test_a_failed_lakeflow_run_keeps_a_pass_of_the_same_sources(fake_run):
+    make, ev_path = fake_run
+    ev_path.parent.mkdir(parents=True, exist_ok=True)
+    ev_path.write_text(json.dumps({"result": "pass", "sources_hash": "h" * 64, "profile": "other"}))
+    assert make(update_states=("FAILED",)).run() == 1
+    kept = json.loads(ev_path.read_text())
+    assert kept["result"] == "pass" and kept["profile"] == "other"
+    assert json.loads((ev_path.parent / "evidence.p.json").read_text())["result"] == "fail"
+
+
+def test_a_failed_lakeflow_run_replaces_a_pass_of_other_sources(fake_run):
+    make, ev_path = fake_run
+    ev_path.parent.mkdir(parents=True, exist_ok=True)
+    ev_path.write_text(json.dumps({"result": "pass", "sources_hash": "old", "profile": "other"}))
+    assert make(update_states=("FAILED",)).run() == 1
+    assert json.loads(ev_path.read_text())["result"] == "fail"

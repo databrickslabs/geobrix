@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import numpy as np
@@ -11,7 +12,6 @@ import pytest
 
 pyspark = pytest.importorskip("pyspark")
 
-import rasterio  # noqa: E402
 from pyspark.sql import SparkSession  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 
@@ -92,7 +92,7 @@ BBOX = [-103.9, 31.65, -103.4, 32.15]
 
 def _write_cog(path):
     # 64x64 so the encoded file clears the 1 KB COG validity floor.
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -215,9 +215,9 @@ def test_download_marks_missing_invalid(spark, tmp_path):
 
 
 def test_read_enh_uses_raster_gbx(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     d = tmp_path / "emit3"
     d.mkdir()
     _write_cog(str(d / "EMIT_L2B_CH4ENH_002_a.tif"))
@@ -229,9 +229,9 @@ def test_read_enh_uses_raster_gbx(spark, tmp_path):
 
 
 def test_read_plumes_uses_geojson_gbx(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     d = tmp_path / "emit4"
     d.mkdir()
     _write_plm_meta(str(d / "EMIT_L2B_CH4PLMMETA_002_p.json"))
@@ -253,7 +253,7 @@ def test_exports_from_sample():
 
 
 # ---------------------------------------------------------------------------
-# Task 2 wiring test: load_plume_metadata routes through list_files (fail-on-revert)
+# Wiring test: load_plume_metadata routes through list_files (fail-on-revert)
 # ---------------------------------------------------------------------------
 
 

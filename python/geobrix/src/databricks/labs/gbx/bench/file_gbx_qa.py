@@ -7,7 +7,7 @@ Purpose: surprise detection, NOT polished docs numbers. Correctness + graceful/e
 + the open-amortization win are what matter. Each check emits PASS/FAIL + verbatim
 exception text; the lead interprets surprises.
 
-Run via notebooks/tests/run_file_gbx_qa.py (submits as a Databricks notebook job on the
+Run via examples/tests/run_file_gbx_qa.py (submits as a Databricks notebook job on the
 gbx-file-probe-dbr19 cluster).  On the cluster, call ``run_qa(spark, ...)`` directly.
 
 Standing bench discipline:
@@ -22,6 +22,8 @@ import os
 import time
 import traceback
 from typing import Any, Dict, List, Optional
+
+from databricks.labs.gbx._gdal_policy import open_data
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,7 +55,6 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     import tempfile
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_bounds
 
     from databricks.labs.gbx.core.crs import resolve_crs
@@ -76,7 +77,7 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     fd, tmp = tempfile.mkstemp(suffix=".tif")
     os.close(fd)
     try:
-        with rasterio.open(tmp, "w", **profile) as dst:
+        with open_data(tmp, "w", **profile) as dst:
             dst.write(data)
         shutil.copy(tmp, out_path)
     finally:
@@ -107,9 +108,8 @@ def _make_tiny_geojson(out_path: str) -> int:
 
 def _read_raster_pixels(path: str) -> bytes:
     """Read a raster at *path* via rasterio and return band-1 bytes (for checksum)."""
-    import rasterio
 
-    with rasterio.open(path) as ds:
+    with open_data(path) as ds:
         return ds.read(1).tobytes()
 
 
@@ -234,11 +234,12 @@ def _check_raster_reader(
     spark, raster_dir: str, expected_pixel_bytes: bytes
 ) -> Dict[str, Any]:
     """Raster read via raster_gbx datasource: row count + pixel checksum."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     name = "raster_reader_gbx"
     try:
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
         df = (
             spark.read.format("raster_gbx")
             .option("driverName", "GTiff")
@@ -260,11 +261,12 @@ def _check_vector_reader(
     spark, geojson_path: str, expected_count: int
 ) -> Dict[str, Any]:
     """Vector read via shapefile_gbx/geojson_gbx datasource: row count."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     name = "vector_reader_gbx"
     try:
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
         df = spark.read.format("geojson_gbx").load(geojson_path)
         count = df.count()
         note = f"count={count}  expected={expected_count}"
@@ -281,7 +283,6 @@ def _check_vector_reader(
 
 def _build_raster_tile_df(spark, raster_path: str):
     """Build a one-row tile DataFrame from *raster_path* for write tests."""
-    import rasterio
     from pyspark.sql.types import (
         BinaryType,
         IntegerType,
@@ -292,7 +293,7 @@ def _build_raster_tile_df(spark, raster_path: str):
         StructType,
     )
 
-    with rasterio.open(raster_path) as ds:
+    with open_data(raster_path) as ds:
         w, h = ds.width, ds.height
         crs = ds.crs
         from databricks.labs.gbx.core.crs import crs_to_canonical
@@ -534,6 +535,8 @@ def _check_vector_write_modes(
     Arrow IPC scratch fragments are readable by the driver at commit time.
     Using /tmp causes per-executor local isolation that the driver can't read.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     results = []
     for mode in ("fuse", "managed", "external"):
         name = f"vector_write_{mode}"
@@ -547,9 +550,8 @@ def _check_vector_write_modes(
 
         try:
             from databricks.labs.gbx.ds.file_gbx import file_access_tier
-            from databricks.labs.gbx.ds.register import register
 
-            register(spark)
+            gbx_manager.register_sources(spark)
             tier = file_access_tier(spark)
 
             if mode in ("managed", "external") and tier == "fuse":

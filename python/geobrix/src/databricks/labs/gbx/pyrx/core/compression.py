@@ -6,12 +6,13 @@ materialize story is consistent. Mirrors heavy OperatorOptions.appendOptions.
 
 import os
 import warnings
+from typing import Optional
 
 _FLOAT = {"float32", "float64"}
 _SMALL_INT = {"uint8", "int8"}
 
-# Grounded by .superpowers/sdd/2026-09-10-grid-fidelity-stage3/followup-compression-matrix-report.md
-# (full ZSTD level sweep across 11 tile types, rasterio 1.5.0/GDAL 3.12, Darwin arm64).
+# Grounded by a full ZSTD level sweep across 11 tile types (rasterio 1.5.0/GDAL 3.12,
+# Darwin arm64).
 #
 # Key finding: L6 is the universal knee.
 #   - L9 and L12 add nothing over L6 on output size for any tile type tested.
@@ -45,6 +46,26 @@ _AUTO_LADDER = [
 _AUTO_DEFAULT_LEVEL = 6  # used when decoded size is unknown (L6 knee; was 9)
 DEFAULT_COMPRESS = "auto"
 
+# The COG compression profile names a caller may pass to rst_cog_convert and the raster_gbx
+# writer's cog=true path: rio-cogeo 7's `cog_profiles` keys, which those paths validated against
+# (only the name: the creation options come from creation_opts). A local copy, so that the env
+# wheels, which do not ship rio-cogeo, accept the same names; "raw" means no compression.
+COG_PROFILES = frozenset(
+    {
+        "deflate",
+        "jpeg",
+        "lerc",
+        "lerc_deflate",
+        "lerc_zstd",
+        "lzma",
+        "lzw",
+        "packbits",
+        "raw",
+        "webp",
+        "zstd",
+    }
+)
+
 # ZSTD valid level range (rfc 8878 / zstd 1.5.x).
 _ZSTD_MIN_LEVEL = 1
 _ZSTD_MAX_LEVEL = 22
@@ -77,7 +98,8 @@ def auto_level(decoded_bytes) -> int:
     - ``fast``: fixed L1 — highest throughput, ~5–13 % larger output vs L6.
     - ``max``: fixed L9 — heavy-parity ceiling; same output size as L6 on all tile
       types tested; use only when heavy-tier parity is a hard requirement.
-    - An integer string in [1, 22] (e.g. ``"3"``): that fixed level, size-independent.
+    - A plain integer string in [1, 22] (ASCII digits only, e.g. ``"3"``): that fixed level,
+      size-independent. The JVM (``OperatorOptions.engineZstdLevel``) reads the knob the same way.
     - Any other value: emits a ``UserWarning`` and falls back to the ladder.
 
     The knob does **not** affect ``compress='zstd', level=N`` or any other explicit
@@ -98,26 +120,25 @@ def auto_level(decoded_bytes) -> int:
             return 1
         elif key == "max":
             return 9
+        elif key.isascii() and key.isdigit():  # plain digits only, as the JVM reads it
+            lvl = int(key)
+            if _ZSTD_MIN_LEVEL <= lvl <= _ZSTD_MAX_LEVEL:
+                return lvl
+            warnings.warn(
+                f"GBX_ZSTD_LEVEL={raw!r} is out of range "
+                f"[{_ZSTD_MIN_LEVEL}, {_ZSTD_MAX_LEVEL}]; "
+                "falling back to size-adaptive ladder.",
+                UserWarning,
+                stacklevel=2,
+            )
         else:
-            try:
-                lvl = int(key)
-                if _ZSTD_MIN_LEVEL <= lvl <= _ZSTD_MAX_LEVEL:
-                    return lvl
-                warnings.warn(
-                    f"GBX_ZSTD_LEVEL={raw!r} is out of range "
-                    f"[{_ZSTD_MIN_LEVEL}, {_ZSTD_MAX_LEVEL}]; "
-                    "falling back to size-adaptive ladder.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            except ValueError:
-                warnings.warn(
-                    f"GBX_ZSTD_LEVEL={raw!r} is not a recognised value "
-                    "(expected 'default', 'fast', 'max', or an integer 1–22); "
-                    "falling back to size-adaptive ladder.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+            warnings.warn(
+                f"GBX_ZSTD_LEVEL={raw!r} is not a recognised value "
+                "(expected 'default', 'fast', 'max', or an integer 1–22); "
+                "falling back to size-adaptive ladder.",
+                UserWarning,
+                stacklevel=2,
+            )
     # Size-adaptive ladder (default path, or fallback after bad knob value).
     if decoded_bytes is None:
         return _AUTO_DEFAULT_LEVEL
@@ -127,6 +148,16 @@ def auto_level(decoded_bytes) -> int:
     return _AUTO_LADDER[-1][1]  # unreachable: last ceiling is inf
 
 
+# Drivers a tile can be forced to (ds/_write.py) that take no codec options: see creation_opts.
+_NO_CODEC_OPTION_DRIVERS = frozenset({"PNG", "JPEG"})
+# The keys of a profile (or of creation_opts) that choose a codec, its predictor and its level.
+_CODEC_KEYS = ("compress", "predictor", "zstd_level", "zlevel", "LEVEL")
+
+
+def _is_png(driver) -> bool:
+    return str(driver).upper() == "PNG"
+
+
 def creation_opts(
     dtype,
     decoded_bytes=None,
@@ -134,6 +165,7 @@ def creation_opts(
     level=None,
     predictor=None,
     driver="GTiff",
+    nbits=None,
 ) -> dict:
     """Return rasterio creation-options for a raster write.
 
@@ -154,7 +186,9 @@ def creation_opts(
         'zstd' — explicit ZSTD; level defaults to _AUTO_DEFAULT_LEVEL.
         'deflate' — DEFLATE; level (zlevel) defaults to 6.
         'lzw' — LZW; predictor derived from dtype.
-        'none'/'raw' — no compression.
+        'none'/'raw' — no compression, emitted as ``compress=none`` for every driver: the
+        COG driver compresses with LZW when COMPRESS is absent, and a profile copied from a
+        compressed source would keep that source's codec.
         Any other string — passed through as-is (no predictor assumption).
     level:
         Optional level override. Ignored (with UserWarning) when compress='auto'.
@@ -167,11 +201,39 @@ def creation_opts(
         "GTiff" (default) or "COG". Controls compression option names:
         - GTiff ZSTD uses "zstd_level", DEFLATE uses "zlevel"
         - COG ZSTD/DEFLATE both use "LEVEL"
+        - PNG and JPEG take no codec options: the result is empty (PNG keeps "zlevel", its
+          deflate level), so GDAL is not handed an option it logs as not supported.
+
+    nbits:
+        Optional source sample depth (the band's ``NBITS`` metadata), e.g. 15 for
+        Sentinel-2 uint16 data. Copying such a band with a horizontal-differencing
+        predictor (2) fails in GDAL, which supports it only for 8/16/32/64-bit
+        samples, so the samples are then promoted to the dtype's full width
+        (``nbits`` = 16 for uint16) -- lossless, since the values already fit.
 
     Returns
     -------
     dict[str, str] suitable for merging into a rasterio profile.
     """
+    opts = _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver)
+    if str(driver).upper() in _NO_CODEC_OPTION_DRIVERS:
+        # PNG always deflates and JPEG always takes JPEG: they take no COMPRESS or PREDICTOR (or
+        # a level named for a codec), and GDAL logs CPLE_NotSupported for each one it is
+        # handed. Only PNG's own deflate level, ZLEVEL, is an option of theirs.
+        return {k: v for k, v in opts.items() if k == "zlevel" and _is_png(driver)}
+    if (
+        nbits is not None
+        and opts.get("predictor") == "2"
+        and int(nbits) not in (8, 16, 32, 64)
+    ):
+        import numpy as np
+
+        opts["nbits"] = str(np.dtype(str(dtype)).itemsize * 8)
+    return opts
+
+
+def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dict:
+    """Codec / level / predictor keys for creation_opts (see its docstring)."""
     dtype = str(dtype)
     pred = predictor if predictor is not None else predictor_for(dtype)
     is_cog = str(driver).upper() == "COG"
@@ -199,7 +261,7 @@ def creation_opts(
 
     c = str(compress).lower()
     if c in ("none", "raw"):
-        return {}  # no compression keys
+        return {"compress": "none"}  # no level / predictor keys either
 
     if c == "zstd":
         opts = {"compress": "zstd"}
@@ -224,3 +286,252 @@ def creation_opts(
         return opts
     # GDAL-supported name passed through; no predictor assumption for unknown codecs
     return {"compress": c}
+
+
+# GDAL type names -> the numpy names creation_opts takes (GDAL 3.13 calls Byte UInt8 too).
+_GDAL_DTYPES = {
+    "Byte": "uint8",
+    "UInt8": "uint8",
+    "Int8": "int8",
+    "UInt16": "uint16",
+    "Int16": "int16",
+    "UInt32": "uint32",
+    "Int32": "int32",
+    "UInt64": "uint64",
+    "Int64": "int64",
+    "Float32": "float32",
+    "Float64": "float64",
+}
+
+
+# The engine algorithm whose Byte output must not be written tiled and compressed (see engine_creation_options).
+HILLSHADE_ALG = "raster hillshade"
+
+
+def engine_creation_options(
+    gdal_dtype: str,
+    decoded_bytes: int,
+    width: int,
+    height: int,
+    alg: Optional[str] = None,
+    predictor: bool = True,
+    striped: bool = False,
+) -> list:
+    """The `--creation-option` values of a GDAL spec engine output (the `tile` write profile), in order.
+
+    ``predictor=False`` (the `command` write profile) writes ``PREDICTOR=1``: a pipeline's output type is known only after
+    it runs, and a predictor for the input's type could be invalid for it. ``striped=True`` leaves the tiling options out,
+    as for the regular hillshade below (a pipeline with a hillshade step).
+
+    The codec, level and predictor are ``creation_opts(dtype, decoded_bytes, "auto")`` (ZSTD on the size ladder,
+    the dtype's predictor); the tiling is 512-pixel blocks capped to the raster, at least 64, floored to a multiple
+    of 16, and BigTIFF when needed.
+
+    GDAL 3.13.3 defect: ``raster hillshade`` (the regular variant, a Byte output) leaves the NoData neighbours of a
+    NoData cell unmasked, with computed values in them, when its output is a GeoTIFF that is both tiled and
+    compressed. It masks only the cells above and beside the hole, so about 9% of the NoData border of a DEM with
+    voids is wrong. A striped, compressed GeoTIFF (or a tiled, uncompressed one) masks every cell, so for that
+    algorithm the tiling options are left out.
+    """
+    opts = creation_opts(
+        _GDAL_DTYPES.get(gdal_dtype, gdal_dtype.lower()), decoded_bytes, "auto"
+    )
+    out = [
+        f"COMPRESS={opts['compress'].upper()}",
+        f"PREDICTOR={opts['predictor'] if predictor else 1}",
+        f"ZSTD_LEVEL={opts['zstd_level']}",
+    ]
+    if not striped and (
+        alg != HILLSHADE_ALG or gdal_dtype.lower() not in ("byte", "uint8")
+    ):
+        out += _engine_tiling(width, height)
+    return out + ["BIGTIFF=IF_SAFER"]
+
+
+def _engine_tiling(width: int, height: int) -> list:
+    """512-pixel blocks capped to the raster, at least 64, floored to a multiple of 16."""
+    blk = max(64, min(512, int(width), int(height))) // 16 * 16
+    return ["TILED=YES", f"BLOCKXSIZE={blk}", f"BLOCKYSIZE={blk}"]
+
+
+def engine_work_options(width: int, height: int) -> list:
+    """The creation options of a GDAL spec engine work copy that is written one band at a time (the per-band fill) and
+    then copied to the output with the call's own options: uncompressed (``creation_opts`` with ``none``) and
+    band-interleaved. A pixel-interleaved block holds every band, so each band written into a compressed one decodes
+    and encodes the whole block again (and on ``/vsimem`` leaves the old encoding behind): a band-interleaved,
+    uncompressed copy is written once, block by block."""
+    opts = creation_opts("uint8", compress="none")
+    return (
+        [f"COMPRESS={opts['compress'].upper()}", "INTERLEAVE=BAND"]
+        + _engine_tiling(width, height)
+        + ["BIGTIFF=IF_SAFER"]
+    )
+
+
+def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
+    """Copy of *profile* without a YCbCr ``photometric``.
+
+    A JPEG/YCbCr source's profile carries ``photometric="ycbcr"``, which GDAL accepts
+    only together with ``COMPRESS=JPEG``. Rasterio hands out decoded RGB samples, so
+    for any other codec the key is dropped and GDAL picks its RGB default.
+
+    By default the key is always dropped (the writer is about to apply a non-JPEG
+    codec). With ``unless_jpeg=True`` it is kept when the profile's own ``compress``
+    is JPEG (case-insensitive), so a writer that honours a caller-chosen codec calls
+    this AFTER merging the codec options: a JPEG request keeps its YCbCr encoding,
+    any other codec drops it. No other key is touched.
+    """
+    prof = dict(profile)
+    if str(prof.get("photometric", "")).lower() != "ycbcr":
+        return prof
+    if unless_jpeg and str(prof.get("compress", "")).lower() == "jpeg":
+        return prof
+    del prof["photometric"]
+    return prof
+
+
+def drop_stripe_blocks(profile: dict) -> dict:
+    """Copy of *profile* without ``blockxsize`` when it is not tiled.
+
+    A striped GeoTIFF's profile reports its strip width as ``blockxsize`` (the full width)
+    with ``tiled`` False. GDAL refuses that for a new GTiff, ignoring it and logging
+    ``BLOCKXSIZE can only be used with TILED=YES`` for every dataset written. Only that key
+    goes: ``blockysize`` (rows per strip) is valid untiled and stays, so the output is the
+    same as before, without the log record. A tiled profile is returned unchanged.
+    """
+    prof = dict(profile)
+    if not prof.get("tiled"):
+        prof.pop("blockxsize", None)
+    return prof
+
+
+def source_profile(
+    profile: dict, *, unless_jpeg: bool = False, driver: Optional[str] = None
+) -> dict:
+    """The profile of a source dataset, cleaned to be the base of a new GTiff.
+
+    The one place a writer starts from a source's ``profile``: :func:`drop_ycbcr` (a YCbCr
+    ``photometric`` is valid only with JPEG; ``unless_jpeg`` as there) and
+    :func:`drop_stripe_blocks` (the strip width of an untiled source). Every other key is kept,
+    except that for a ``driver`` that takes no codec options (PNG, JPEG; see
+    :func:`creation_opts`) the source's own codec keys go too.
+    """
+    prof = drop_stripe_blocks(drop_ycbcr(profile, unless_jpeg=unless_jpeg))
+    if str(driver).upper() in _NO_CODEC_OPTION_DRIVERS:
+        prof = {k: v for k, v in prof.items() if k not in _CODEC_KEYS}
+    return prof
+
+
+# Keys of a source profile that a write with the COG driver must not inherit: the driver lays the
+# file out and picks the photometric itself, and warns once per key it is handed (TILED,
+# BLOCKXSIZE, BLOCKYSIZE, PHOTOMETRIC); the codec keys are replaced by ``creation_opts(driver="COG")``.
+_COG_OWN_KEYS = (
+    "tiled",
+    "blockxsize",
+    "blockysize",
+    "photometric",
+    "compress",
+    "predictor",
+    "zstd_level",
+    "zlevel",
+    "LEVEL",
+)
+
+
+def cog_profile(profile: dict) -> dict:
+    """Copy of the source *profile* for a write with ``driver="COG"``: without the layout and codec keys
+    of the source (:data:`_COG_OWN_KEYS`). The caller adds ``driver="COG"``, ``blocksize``,
+    ``overview_resampling`` and ``creation_opts(..., driver="COG")``."""
+    return {k: v for k, v in profile.items() if k not in _COG_OWN_KEYS}
+
+
+def match_alpha(dst, alpha_like, all_labels: bool = False) -> None:
+    """Label the bands of the new dataset *dst* alpha exactly where *alpha_like* does.
+
+    *alpha_like* is the ``colorinterp`` of the dataset the pixels come from. GDAL gives a
+    new GTiff its own labels from the band count and type: band 4 of a 4-band ``uint8``
+    raster is alpha, whatever the source was. A non-alpha band 4 (the near-infrared of
+    RGB+NIR) then reads as a transparency mask, and a NoData declared on the raster
+    shadows it (``NodataShadowWarning``). The converse also happens: the alpha band of a
+    16-bit RGBA or a gray+alpha raster is lost. The alpha band is the one the alpha rule
+    names (``_nodata.alpha_index``: the LAST band, when labelled alpha); a band labelled
+    alpha anywhere else is data and is not carried. A band count that differs from
+    *alpha_like* (the caller changed it) is left as GDAL labelled it.
+
+    Nothing else is relabelled, unless ``all_labels``: then every other band takes the
+    source's label as well (gray, undefined, red, green, blue), as the chips of a
+    tessellation do, so RGB and the data bands of a gray+x+alpha or a 16-bit RGBA raster are
+    not left to GDAL's defaults. The rule is ``_nodata.carried_labels``.
+    """
+    from rasterio.enums import ColorInterp
+
+    from databricks.labs.gbx.pyrx.core._nodata import carried_labels
+
+    labels = list(dst.colorinterp)
+    if alpha_like is None or len(alpha_like) != len(labels):
+        return
+    carried = carried_labels(alpha_like, all_labels)
+    want = [
+        (
+            c
+            if c is not None
+            else (ColorInterp.undefined if got == ColorInterp.alpha else got)
+        )
+        for c, got in zip(carried, labels)
+    ]
+    if want != labels:
+        dst.colorinterp = want
+
+
+def internal_mask_env(mask):
+    """The GDAL environment a writer of *mask* (see :func:`write_gtiff`) runs in.
+
+    Without ``GDAL_TIFF_INTERNAL_MASK`` GDAL puts a written mask band in a sidecar file,
+    which a ``MemoryFile`` cannot hold on to. A context manager that does nothing when
+    there is no mask to write.
+    """
+    from contextlib import nullcontext
+
+    import rasterio
+
+    return (
+        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True)
+        if mask is not None
+        else nullcontext()
+    )
+
+
+def write_gtiff(
+    profile: dict, data, alpha_like=None, mask=None, all_labels: bool = False
+) -> bytes:
+    """GTiff bytes of *data* with the canonical creation options for its dtype.
+
+    The single light-tier GTiff writer: every derived raster goes through here so its
+    encoding never inherits the source file's codec (a YCbCr photometric, which only
+    JPEG can carry, is dropped with it). *profile* is not modified.
+    *data* is a ``(bands, rows, cols)`` array matching ``profile['count']``.
+    *alpha_like*, the ``colorinterp`` of the dataset *data* derives from, makes the output
+    label a band alpha exactly where that dataset does (see :func:`match_alpha`);
+    ``all_labels`` also copies the source's other labels band by band.
+    *mask*, a ``(rows, cols)`` uint8 array (255 valid, 0 invalid, as ``read_masks`` returns
+    it), is written as the raster's own per-dataset mask band, inside the file: the
+    source's mask carried over (see ``_nodata.has_own_mask``).
+    """
+    # Lazy: this module is imported by the Spark data-source writers, which must stay
+    # importable where rasterio is absent (the heavy-tier build); numpy likewise above.
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    prof = source_profile(profile)
+    prof["driver"] = "GTiff"
+    dtype = prof.get("dtype", str(np.asarray(data).dtype))
+    decoded = data.nbytes if hasattr(data, "nbytes") else None
+    prof.update(creation_opts(dtype, decoded_bytes=decoded, compress="auto"))
+    with internal_mask_env(mask):
+        with MemoryFile() as mf:
+            with mf.open(**prof) as dst:
+                match_alpha(dst, alpha_like, all_labels=all_labels)
+                dst.write(data)
+                if mask is not None:
+                    dst.write_mask(mask)
+            return mf.read()

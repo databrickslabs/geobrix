@@ -6,10 +6,10 @@ from a Unity Catalog Volume (the same reason ``rst_fromfile`` is lightweight-onl
 so on the heavyweight tier grids must live on a cluster-local path.
 """
 
-import importlib
+import logging
 import os
 import warnings
-from typing import List, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 from databricks.labs.gbx.core import proj_grids
 
@@ -44,21 +44,31 @@ def _warn_if_unusable(d: str) -> None:
 
 
 def _reregister_active_light_tiers(spark) -> None:
-    """Re-run register() for whichever light tiers are already registered so live
-    SQL bindings get fresh closures embedding the current grid dirs."""
+    """Register again the functions this session already has whose light implementation embeds the grid dirs
+    (``factory_args: proj_grid_dirs``), so live SQL bindings get fresh closures with the current dirs. Each name
+    is registered again with the level the session installed it at as its preference: that level is tried first and,
+    when it is unavailable now, the manager falls back as in any registration (one line says so).
+    """
     if spark is None:
         return
-    for modname in (
-        "databricks.labs.gbx.pyrx.functions",
-        "databricks.labs.gbx.pyvx.functions",
-        "databricks.labs.gbx.pygx.functions",
-    ):
-        try:
-            mod = importlib.import_module(modname)
-        except Exception:
-            continue
-        if getattr(mod, "_gbx_registered", False):  # set by register() — Task 4
-            mod.register(spark)
+    from databricks.labs.gbx import _api, manager, manifest
+
+    functions = manifest.load().functions
+    chosen = _api.chosen(spark)
+    names = sorted(
+        n
+        for n in _api._done(spark)
+        if n in functions
+        and functions[n].levels.get("L3", {}).get("factory_args") == "proj_grid_dirs"
+        # a name installed at a level it has no row at (a JAR companion a test put there) is not ours to replace
+        and chosen.get(n, ("L3",))[0] in functions[n].levels
+    )
+    if names:
+        manager.register(
+            spark,
+            only=names,
+            _prefer={n: chosen[n][0] for n in names if n in chosen} or None,
+        )
 
 
 def _warn_heavy_volume_grids(result) -> None:
@@ -71,29 +81,80 @@ def _warn_heavy_volume_grids(result) -> None:
     vol_dirs = [d for d in result if str(d).startswith(_VOLUME_PREFIXES)]
     if vol_dirs:
         warnings.warn(
-            "register_proj_grids: the heavyweight tier reads grid files directly from "
+            "register_proj_grids: the JVM level reads grid files directly from "
             "each worker's local disk and cannot read them from a Unity Catalog Volume "
-            f"({', '.join(vol_dirs)}) — grid-referencing transforms will return NULL on "
-            "the heavyweight tier. Stage the grid files to a cluster-local path (e.g. via "
-            "a cluster init script) and register that path instead; Volume-hosted grids "
-            "are supported on the lightweight tier.",
+            f"({', '.join(vol_dirs)}) — grid-referencing transforms will return NULL at "
+            "the JVM level. Stage the grid files to a cluster-local path (e.g. via "
+            "a cluster init script) and register that path instead; the Python level "
+            "reads Volume-hosted grids.",
             UserWarning,
             stacklevel=4,
         )
 
 
+_LOG = logging.getLogger(__name__)
+_heavy_refusal_logged = False
+
+
+def _is_py4j_refusal(exc: BaseException) -> bool:
+    """A cluster in standard (shared) access mode refuses py4j calls to classes it has not allowed. py4j has no Python
+    class for it: the refusal is a ``Py4JError`` whose text names the JVM's ``py4j.security.Py4JSecurityException``
+    ("... is not whitelisted")."""
+    try:
+        from py4j.protocol import Py4JError
+    except ImportError:  # no py4j, so no py4j refusal
+        return False
+    text = str(exc)
+    return isinstance(exc, Py4JError) and (
+        "Py4JSecurityException" in text or "is not whitelisted" in text
+    )
+
+
 def _apply_heavy(spark, result) -> None:
-    """Set the heavy-tier JVM grid registry if a JVM is present (best-effort)."""
+    """Set the heavy-tier JVM grid registry when this session has a JVM with the GeoBrix JAR.
+
+    Three cases are quiet, by design: no JVM (Spark Connect, Serverless, or no session: ``spark._jvm`` is absent); a
+    JVM without the GeoBrix JAR (a light-only session: py4j resolves the class name to a ``JavaPackage``); and a
+    cluster whose access mode refuses py4j calls to GeoBrix classes (one INFO line says so). In each, the light-tier
+    registration stands. Any other failure raises: a swallowed one once left the JVM without the grids, silently.
+    """
+    global _heavy_refusal_logged
     jvm = getattr(spark, "_jvm", None)
     if jvm is None:
         return
     try:
         reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
-        reg.set(list(result), True)  # push the full de-duped set (idempotent replace)
-    except Exception:
-        return  # heavy classes absent (light-only session) → no-op
+        if type(reg).__name__ == "JavaPackage":
+            return
+        # ProjGridRegistry.set takes a Scala Seq: py4j would hand a Python list over as a java.util.List, which
+        # matches no `set`. Push the full de-duped set (an idempotent replace).
+        reg.set(jvm.org.apache.spark.api.python.PythonUtils.toSeq(list(result)), True)
+    except Exception as exc:
+        if not _is_py4j_refusal(exc):
+            raise
+        if not _heavy_refusal_logged:
+            _heavy_refusal_logged = True
+            _LOG.info(
+                "geobrix: JVM-level PROJ grid registration is unavailable in this cluster's access mode (py4j "
+                "refused the call); the Python level has the grid directories."
+            )
+        return
     # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.
     _warn_heavy_volume_grids(result)
+
+
+def projsync_path() -> Optional[str]:
+    """PROJ's grid downloader, ``projsync``, as the GeoBrix env wheel installs it, or None (no env
+    wheel, or not on Linux x86_64/aarch64).
+
+    Run it to fetch grids from the PROJ CDN (cdn.proj.org, so it needs network access) into a local
+    directory or a Volume, e.g. ``subprocess.run([projsync_path(), "--source-id", "uk_os",
+    "--target-dir", "/Volumes/<catalog>/<schema>/proj-grids"], check=True)``, then register that
+    directory with :func:`register_proj_grids`. ``--list-files`` lists what the CDN offers.
+    """
+    from databricks.labs.gbx import _native
+
+    return _native.projsync_path()
 
 
 def register_proj_grids(
@@ -110,6 +171,11 @@ def register_proj_grids(
     session-start contract in the docs.
     """
     result = proj_grids.set_registered_dirs(dirs, replace=replace)
+    # The driver's own PROJ context takes the union now, as every worker's does on its first UDF: a context built
+    # before this registration keeps its search path, so the environment variable alone would not reach it.
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env(list(result))
     for d in (dirs if not isinstance(dirs, str) else [dirs]):
         _warn_if_unusable(d)
     _reregister_active_light_tiers(spark)

@@ -5,21 +5,21 @@ sidebar_label: LiDAR
 
 # LiDAR Reader — `lidar_gbx`
 
-_Since:_ lightweight `lidar_gbx` **v0.5.2** · _(light-only — no heavyweight tier)_
+_Since:_ `lidar_gbx` **v0.5.2**
 
 Read LAS and LAZ point-cloud files into a Spark DataFrame. The `lidar_gbx` reader
-is a lightweight pure-Python DataSource; it requires no JAR and runs on Serverless,
+is a pure-Python DataSource; it requires no JAR and runs on Serverless,
 standard (shared), and ARM clusters.
 
 To turn the loaded points into raster products — DSM binning, CHM, and isobands — see the
 [LiDAR / Point-Cloud DSM functions](../api/raster-functions#lidar-dsm).
 
-For an end-to-end walkthrough — reading `.laz`, binning ground and all-return points into
-DTM and DSM rasters, and differencing them into a Canopy Height Model — see the
-[Wireless Coverage example](../notebooks/wireless-coverage).
+For an end-to-end walkthrough, see the
+[Wireless Coverage example](../notebooks/wireless-coverage). It reads `.laz`, bins ground and all-return points into
+DTM and DSM rasters, and differences them into a Canopy Height Model.
 
-:::note Lightweight only
-`lidar_gbx` is a Python DataSource with no heavyweight GDAL/JVM counterpart. Register
+:::note Python only, no JAR
+`lidar_gbx` is a Python DataSource with no JVM counterpart. Register
 it with `register(spark)` before use.
 :::
 
@@ -52,6 +52,7 @@ recursively and one partition per file is planned.
 | `decimate` | `"1"` | `points` | Keep every N-th point (e.g. `"10"` = 10 % density). `1` = no decimation. |
 | `chunkSize` | `"1000000"` | `points` | Points read per internal batch (controls per-task memory, not partition count). |
 | `dimensions` | _all_ | `points` | Comma-separated subset of the base point columns to return (e.g. `"x,y,z,classification"`), emitted in schema order. The reader reads only the requested dimensions — plus any needed by `classFilter`/`returnFilter` — so projecting to what you need cuts per-point I/O and memory. Absent = all base columns; an unknown name errors. |
+| `checkHeaderBounds` | `"true"` | `points` | Sets aside points far outside the bounds the file header declares, as `PointOutOfBounds` bad records. The bounds are widened on every side by their largest extent (of x, y and z) plus one scale step, so a header that was not updated after points were added or moved keeps those points, while garbage decoded from damaged LAZ data (which can decode without an error) or garbled point records, which land far away, are caught. `"false"` turns the check off. Applies where bad records are collected: [`read_paths`](../ingestion/read-paths#unreadable-files) with `on_error="skip"` and [`declare_ingest`](../ingestion/auto-loader#unreadable-data) quarantine; a plain read is not checked. |
 
 :::tip Project columns for large point clouds
 For big reads, request only the dimensions you need — e.g. `.option("dimensions", "x,y,z,classification")` — so the reader skips the rest at the source. That is cheaper than loading all base columns and pruning with `.select(...)` afterwards.
@@ -60,7 +61,7 @@ For big reads, request only the dimensions you need — e.g. `.option("dimension
 ## Register
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 
@@ -110,7 +111,7 @@ root
 ### Metadata mode
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 
 register(spark)
 
@@ -152,21 +153,21 @@ ground.select("x", "y", "z").show(5)
 Combine `lidar_gbx` with the `gbx_rst_binpoints_agg` aggregator to grid ground or
 first-return points into a Digital Surface Model:
 
-:::tip Full-density LiDAR? Use the bounded `rx.bin_points_tiled`
+:::tip Full-density LiDAR? Use the bounded `bin_points_tiled`
 `rst_binpoints_agg` realizes a group's points in the worker, so a full-resolution tile of
-millions of returns can exhaust RAM. For that, bin with **`rx.bin_points_tiled(df, x, y, z,
-by=[…], xmin=…, …, width, height, srid, stat)`** — a two-stage native aggregation whose memory
-is the raster grid (W×H), not the point count. Same output for `max`/`min`/`mean`/`count`. See
+millions of returns can exhaust RAM. For that, bin with **`bin_points_tiled(df, x, y, z,
+by=[…], xmin=…, …, width, height, srid, stat)`**, from `databricks.labs.gbx.rasterx.helpers`.
+It is a two-stage native aggregation whose memory is the raster grid (W×H), not the point count.
+The output matches `rst_binpoints_agg` for `max`/`min`/`mean`/`count`. See
 [RasterX › Memory & scale](../api/raster-functions#rst_binpoints_agg) and [Performance](../api/performance).
 :::
 
 ```python
 from pyspark.sql import functions as F
-from databricks.labs.gbx.pyrx import functions as prx
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx.rasterx import functions as prx
+from databricks.labs.gbx import register
 
 register(spark)
-prx.register(spark)
 
 pts = (
     spark.read
@@ -197,8 +198,8 @@ dsm = dsm_bytes.select(
 Serverless:
 
 - **Columnar reads.** Points mode reads each file in vectorized chunks and hands Spark
-  **Arrow record batches** — never one Python object per point — so a full-resolution read
-  (`decimate=1`) avoids per-row conversion overhead that would otherwise stall the session.
+  **Arrow record batches**, never one Python object per point. A full-resolution read
+  (`decimate=1`) therefore avoids per-row conversion overhead that would otherwise stall the session.
   Metadata mode is columnar too.
 - **Bounded per-task memory.** Points are streamed `chunkSize` at a time (default
   `1000000`), so peak memory per task is a single batch — independent of the total file
@@ -209,16 +210,28 @@ Serverless:
   reads every point but emits every N-th — use it for a fast coarse pass, then drop to
   `decimate=1` for the full-resolution product.
 - **Bad nodes are skipped, not fatal.** A 0-byte or unreadable `.las`/`.laz` (for example an
-  empty Entwine Point Tile node from an interrupted download) is skipped with a warning, so
-  one corrupt file cannot fail a distributed read over a whole archive.
+  empty Entwine Point Tile node from an interrupted download) is skipped with a warning.
+  One corrupt file therefore cannot fail a distributed read over a whole archive. The reader sets a LAZ file aside
+  as unreadable before decoding it in two cases. In the first, the chunk table or LASzip record is implausible
+  or cannot be decoded. In the second (point formats with GPS time), the compressed points hold a run of `0xFF`
+  bytes, as erased storage or a failed copy leaves. The decoder's stack overflows on such a run, and no error reaches Python.
+  Setting the file aside avoids ending the worker process. Finding the run reads
+  the compressed points once more, ahead of the decoder.
+  When `on_error` is `skip` or `quarantine`, the reader writes an unreadable-file record. Otherwise it logs a warning and skips the file.
+  These checks do not cover every kind of
+  damage. Other damage inside the compressed points, or a crafted file, can still crash the
+  decoder until `lazrs` releases a fix for it.
+  When `on_error` is `skip` or `quarantine`, a LAZ file whose header declares more points than
+  its chunk table holds is read up to the points the table holds. Any other read of such a file
+  fails.
 - **Parallelism is per file** — one InputPartition per file. A directory of many tiles
-  parallelizes naturally across executors; a handful of very large files limits parallelism
+  parallelizes naturally across executors. A handful of very large files limits parallelism
   to the file count, so split or tile upstream if you need more executors engaged.
 - **Spark Connect–safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and is
   session-free, so it runs unchanged on Serverless, standard, and ARM clusters.
 
 :::note Coordinate reference systems
-The reader extracts the CRS from the LAS/LAZ header using `parse_crs()` and stores it as a canonical string in the `crs` output column (e.g. `"EPSG:27700"`, `"ESRI:54008"`, or WKT for authority-less CRSes). The `srid` column, where present, holds the numeric SRID — `None` when the CRS has no integer authority code. ESRI and OGC authorities are preserved exactly as read from the header. See [Coordinate reference systems](../api/coordinate-reference-systems) for the SRID-vs-CRS-string model.
+The reader extracts the CRS from the LAS/LAZ header using `parse_crs()`. It stores the CRS as a canonical string in the `crs` output column (e.g. `"EPSG:27700"`, `"ESRI:54008"`, or WKT for authority-less CRSes). The `srid` column, where present, holds the numeric SRID — `None` when the CRS has no integer authority code. ESRI and OGC authorities are preserved exactly as read from the header. See [Coordinate reference systems](../api/coordinate-reference-systems) for the SRID-vs-CRS-string model.
 :::
 
 ## Next Steps
@@ -226,3 +239,4 @@ The reader extracts the CRS from the LAS/LAZ header using `parse_crs()` and stor
 - [RasterX Functions — `gbx_rst_binpoints` / `gbx_rst_binpoints_agg`](../api/raster-functions#rst_binpoints)
 - [RasterX Functions — `gbx_rst_chm`](../api/raster-functions#rst_chm)
 - [RasterX Functions — `gbx_rst_isoband`](../api/raster-functions#rst_isoband)
+- [Ingestion Pipelines](../ingestion/overview) — ingest new and changed files incrementally

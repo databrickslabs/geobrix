@@ -1,4 +1,4 @@
-"""Task 1 (RasterX CRS-100): transformer cache + resolve_source_crs.
+"""Transformer cache + resolve_source_crs.
 
 - get_transformer: thread-local, LRU-bounded, canonical-keyed, always_xy.
 - resolve_source_crs: Rule 1 per-geom (embedded wins; single explicit param;

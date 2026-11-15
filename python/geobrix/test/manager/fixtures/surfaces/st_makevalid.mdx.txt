@@ -1,0 +1,12 @@
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_makevalid(geom, [level])` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_makevalid(geom, [level])` | `GEOMETRY` |
+| Python | `vectorx.functions.st_makevalid(geom, level=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `level` | `STRING` | `STRING` | `'linework'` | The repair strategy: `'linework'`, `'structure'` or `'ogc'` (no ring-orientation fix). |

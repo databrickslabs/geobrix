@@ -1,4 +1,4 @@
-"""Task 5: NetCDF writer CRS preservation for non-EPSG CRS.
+"""NetCDF writer CRS preservation for non-EPSG CRS.
 
 Two test levels:
 1. Unit tests of the CF crs_wkt extraction helper (no netCDF4 needed).

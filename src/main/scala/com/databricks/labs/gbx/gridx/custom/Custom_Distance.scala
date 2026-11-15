@@ -41,7 +41,7 @@ case class Custom_Distance(
 
         val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
         GridErrorHandler.safeEval[java.lang.Long](null) {
-            sys.distance(cell1Val.asInstanceOf[Long], cell2Val.asInstanceOf[Long])
+            sys.distance(Custom_GridSpec.asLong(cell1Val, "cellid1"), Custom_GridSpec.asLong(cell2Val, "cellid2"))
         }
     }
 

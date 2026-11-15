@@ -1,7 +1,9 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
-from databricks.labs.gbx.pyrx.ortho import _backproject_image
+from databricks.labs.gbx.rasterx.ortho import _backproject_image
 
 
 def _nadir_case(height_m=40.0, cam_w=64, cam_h=48, f=50.0):
@@ -167,7 +169,7 @@ def test_backproject_returns_none_when_too_low():
 
 
 def test_ortho_canvas_dims():
-    from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+    from databricks.labs.gbx.rasterx.ortho import _ortho_canvas_dims
 
     e0, e1, n0, n1, w, h = _ortho_canvas_dims(0.0, 100.0, 0.0, 50.0, gsd_cm=5.0)
     # 5% margin each side
@@ -177,7 +179,7 @@ def test_ortho_canvas_dims():
 
 
 def test_ortho_canvas_dims_tiny_nonzero():
-    from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+    from databricks.labs.gbx.rasterx.ortho import _ortho_canvas_dims
 
     _, _, _, _, w, h = _ortho_canvas_dims(0.0, 0.0, 0.0, 0.0, gsd_cm=5.0)
     assert w >= 1 and h >= 1
@@ -186,7 +188,7 @@ def test_ortho_canvas_dims_tiny_nonzero():
 def test_sparse_orthomosaic_signature_light_import():
     import inspect
 
-    from databricks.labs.gbx.pyrx import ortho
+    from databricks.labs.gbx.rasterx import ortho
 
     sig = inspect.signature(ortho.sparse_orthomosaic)
     p = sig.parameters
@@ -206,9 +208,109 @@ def test_sparse_orthomosaic_end_to_end(tmp_path):
     # A meaningful end-to-end needs a real posed reconstruction + overlapping imagery,
     # which is impractical to synthesize minimally. Assert the callable + contract here
     # and defer the true end-to-end to the on-cluster nb1a run (documented integration gate).
-    from databricks.labs.gbx.pyrx import ortho
+    from databricks.labs.gbx.rasterx import ortho
 
     assert callable(ortho.sparse_orthomosaic)
     pytest.skip(
         "sparse_orthomosaic end-to-end needs a real reconstruction; validated on-cluster (nb1a)"
     )
+
+
+# --- image_dir on a UC Volume ------------------------------------------------
+
+
+class _Img:
+    def __init__(self, name):
+        self.name = name
+        self.has_pose = True
+        self.camera_id = 1
+
+    def projection_center(self):
+        return np.array([0.0, 0.0, 100.0])
+
+
+class _Rec:
+    points3D = {}  # no points: the canvas comes from the camera centres
+
+    def __init__(self, names):
+        self.images = {i + 1: _Img(n) for i, n in enumerate(names)}
+
+
+def _stub_one_cluster(monkeypatch, names):
+    from databricks.labs.gbx.rasterx import ortho
+
+    monkeypatch.setattr(
+        ortho,
+        "place_clusters_shared_enu",
+        lambda cm: {
+            "T": {0: (1.0, np.eye(3), np.zeros(3))},
+            "aligned": [0],
+            "ref_lat": 40.0,
+            "ref_lon": -105.0,
+        },
+    )
+    monkeypatch.setattr(ortho, "_load_largest_model", lambda d: _Rec(names))
+    return ortho
+
+
+def test_sparse_orthomosaic_raises_when_no_image_file_is_found(tmp_path, monkeypatch):
+    ortho = _stub_one_cluster(monkeypatch, ["G0001.JPG", "G0002.JPG"])
+    with pytest.raises(RuntimeError) as ei:
+        ortho.sparse_orthomosaic(
+            {0: ("sparse", "gps.json")}, f"dbfs:{tmp_path}", tmp_path / "o.tif"
+        )
+    msg = str(ei.value)
+    assert (
+        f"First skipped: {tmp_path}/G0001.JPG -> not found" in msg
+    )  # the local path, scheme gone
+    assert "not found" in msg and "Fix:" in msg
+
+
+def test_sparse_orthomosaic_names_the_first_skip_in_name_order_whatever_finishes_first(
+    tmp_path, monkeypatch
+):
+    """Workers finish in any order; the error still names the first image by name."""
+    import concurrent.futures as cf
+
+    ortho = _stub_one_cluster(monkeypatch, ["G0001.JPG", "G0002.JPG", "G0003.JPG"])
+
+    class _Reversed(cf.ThreadPoolExecutor):
+        def map(self, fn, *iterables, **kw):  # run (and so append) last-to-first
+            return [fn(*a) for a in reversed(list(zip(*iterables)))]
+
+    monkeypatch.setattr(
+        cf, "ThreadPoolExecutor", _Reversed
+    )  # ortho imports it at call time
+    with pytest.raises(RuntimeError) as ei:
+        ortho.sparse_orthomosaic(
+            {0: ("sparse", "gps.json")}, f"dbfs:{tmp_path}", tmp_path / "o.tif"
+        )
+    assert f"First skipped: {tmp_path}/G0001.JPG -> not found" in str(ei.value)
+
+
+def test_sparse_orthomosaic_opens_images_under_a_scheme_qualified_image_dir(
+    tmp_path, monkeypatch
+):
+    """`file:`/`dbfs:` image_dir is a Volume path with its scheme: the files are found (back-projection runs)."""
+    from PIL import Image
+
+    ortho = _stub_one_cluster(monkeypatch, ["G0001.JPG"])
+    Image.new("RGB", (8, 6)).save(tmp_path / "G0001.JPG")
+    cam = SimpleNamespace(width=8, height=6, params=[50.0, 4.0, 3.0, 0.0])
+    _Rec.cameras = {1: cam}
+    _Img.cam_from_world = lambda self: SimpleNamespace(
+        rotation=SimpleNamespace(matrix=lambda: np.eye(3)), translation=np.zeros(3)
+    )
+    called = []
+    monkeypatch.setattr(
+        ortho,
+        "_backproject_image",
+        lambda *a, **k: called.append(1),  # None: nothing placed
+    )
+    with pytest.raises(RuntimeError):
+        ortho.sparse_orthomosaic(
+            {0: ("sparse", "gps.json")}, f"file:{tmp_path}", tmp_path / "o.tif"
+        )
+    assert called == [
+        1
+    ]  # the image was found and read; only the projection was stubbed out

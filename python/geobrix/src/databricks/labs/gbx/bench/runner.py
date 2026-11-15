@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import dataclasses as _dc
+import json
+import os
 import platform
 import statistics
+import threading
 import time
+import weakref
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench import manifest as m
 from databricks.labs.gbx.bench import spec as _spec
 from databricks.labs.gbx.bench import synth as _synth
@@ -43,13 +48,22 @@ def _synthesized_paths(corpus_root, tile_rel_path: str, fn: str) -> List[str]:
     return _synth.synthesize(src, _spec.synth_recipe(fn), out_dir)
 
 
+def p90_index(n: int) -> int:
+    """The index of the 90th percentile in `n` sorted samples."""
+    return max(0, min(n - 1, int(round(0.9 * (n - 1)))))
+
+
 def time_iters(
     fn: Callable[[], None],
     warmup: int,
     measured: int,
     warmup_fn: Callable[[], None] = None,
+    stop: Optional[Callable[[float], bool]] = None,
 ) -> Dict:
     """Run fn warmup+measured times; return ms distribution over measured runs.
+
+    stop (optional): called with each measured iteration's seconds; True ends the measured loop there (the fail-fast
+    early exit of ``levels``), and ``measured_iters`` then counts the iterations that ran.
 
     warmup_fn (optional): a cheaper stand-in run for the warm-up iterations only --
     e.g. the spark-path warm-up exercises one tile per executor slot instead of the
@@ -58,29 +72,92 @@ def time_iters(
     MEASURED iterations always run fn.
     """
     _warm = warmup_fn or fn
+    t_warm = time.perf_counter()
     for _ in range(warmup):
         _warm()
+    warmup_s = (time.perf_counter() - t_warm) if warmup else 0.0
     samples = []
     for _ in range(measured):
         t0 = time.perf_counter()
         fn()
         samples.append((time.perf_counter() - t0) * 1000.0)
+        if stop is not None and stop(samples[-1] / 1000.0):
+            break
+    # each measured iteration, in the order it ran (pooling across runs needs them all)
+    in_order = list(samples)
     samples.sort()
-    p90_idx = max(0, min(len(samples) - 1, int(round(0.9 * (len(samples) - 1)))))
+    p90_idx = p90_index(len(samples))
     total = sum(samples)
     return {
         "warmup_iters": warmup,
-        "measured_iters": measured,
+        "measured_iters": len(samples),
+        "warmup_s": warmup_s,  # wall time of the warmup iterations (0.0 when there are none)
         "iter_median_ms": statistics.median(samples),
         "iter_min_ms": samples[0],
         "iter_p90_ms": samples[p90_idx],
         # total wall clock across the measured iterations + its mean (avg per iter).
         "iter_total_wall_clock_ms": total,
         "avg_wall_clock_ms": (total / len(samples)) if samples else 0.0,
+        "iter_samples_ms": in_order,
     }
 
 
-def capture_env(where: str) -> Dict:
+# session -> the Spark half of the env record that answers the same for the whole session (versions); the capabilities
+# are read again at every row: a probe or a use decides one after the first read, and the row must say what it ran on
+_SPARK_ENV: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_NO_SPARK_ENV = {
+    "env_spark_version": "",
+    "env_pyspark_version": "",
+    "env_dbr_version": "",
+    "env_version": "",
+    "env_caps": "",
+}
+
+
+def _caps_json(report: Dict) -> str:
+    """The capability report as one compact JSON object, ``{"name": "on|off:source"}`` (queryable with from_json)."""
+    return json.dumps(
+        {
+            name: f"{'on' if r['value'] else 'off'}:{r['source']}"
+            for name, r in sorted(report.items())
+        },
+        separators=(",", ":"),
+    )
+
+
+def spark_env(spark=None) -> Dict:
+    """Where the run's Spark is: the SERVER's ``spark.version`` (on Connect, not the client's), the client pyspark, the
+    Databricks runtime (the cluster's runtime key on a classic cluster) and Serverless environment, and what each Spark
+    capability resolved to (``env_caps``, without running a probe). *spark*: the session; None uses the active one if
+    there is one (it never starts a session), else the fields that need a session are "". Never raises: an env record
+    that cannot be read must not stop a run."""
+    from pyspark.sql import SparkSession
+
+    try:
+        if spark is None:
+            spark = SparkSession.getActiveSession()
+        from databricks.labs.gbx.manager import capabilities as caps
+
+        if spark is not None and spark in _SPARK_ENV:
+            out = dict(_SPARK_ENV[spark])
+        else:
+            info = caps.runtime_info(spark)
+            out = {
+                "env_spark_version": info["spark_version"],
+                "env_pyspark_version": info["pyspark_version"],
+                "env_dbr_version": info["dbr_version"],
+                "env_version": info["env_version"],
+            }
+            if spark is not None:
+                _SPARK_ENV[spark] = dict(out)
+        # at call time (the registry caches each decision, so this is cheap)
+        out["env_caps"] = "" if spark is None else _caps_json(caps.report(spark))
+        return out
+    except Exception:  # noqa: BLE001
+        return dict(_NO_SPARK_ENV)
+
+
+def capture_env(where: str, spark=None) -> Dict:
     try:
         import rasterio
 
@@ -104,6 +181,7 @@ def capture_env(where: str) -> Dict:
         "env_gdal_version": str(gdal_version),
         "env_runtime_version": "py" + platform.python_version(),
         "env_where": where,
+        **spark_env(spark),
     }
 
 
@@ -116,6 +194,96 @@ def peak_rss_mb() -> float:
         return (kb / (1024 * 1024)) if platform.system() == "Darwin" else (kb / 1024)
     except Exception:  # noqa: BLE001
         return 0.0
+
+
+class WorkerRssSampler:
+    """Peak summed memory (MB) of the processes whose command line contains ``match``.
+
+    ``peak_rss_mb`` is the RSS of this (notebook) process; the commit of a two-phase
+    vector writer runs in a separate Python worker on the driver node
+    (``python -m pyspark.daemon``), which that number never sees. This polls ``/proc``
+    while the ``with`` block runs, so a bench row can report the memory the commit really
+    used: ``peak_mb`` is the summed resident set (it counts the pages of memory-mapped
+    files the process has touched), ``peak_anon_mb`` the summed anonymous part (heap and
+    buffers, the part that does not shrink under memory pressure).
+
+    Both are PROPORTIONAL (``Pss`` / ``Pss_Anon`` of ``smaps_rollup``): a page that
+    several processes map counts ``1/n`` in each, so the copy-on-write pages the daemon
+    shares with its forked workers are counted once in the sum, not once per process (the
+    plain ``VmRSS`` / ``RssAnon`` sum counted them in every worker). A kernel without
+    ``smaps_rollup`` (before 4.14) falls back to ``VmRSS`` / ``RssAnon``, which overstate.
+    Linux only: elsewhere both stay 0.0.
+    """
+
+    def __init__(self, match: str = "pyspark.daemon", interval_s: float = 0.25):
+        self._match = match.encode()
+        self._interval = interval_s
+        self._stop = threading.Event()
+        self._thread = None
+        self.peak_mb = 0.0
+        self.peak_anon_mb = 0.0
+
+    @staticmethod
+    def _kb_fields(path, wanted):
+        """``{field: kB}`` for the ``wanted`` fields of a ``/proc`` file (``Name:  N kB``)."""
+        found = {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                key = line.split(":", 1)[0]
+                if key in wanted:
+                    found[key] = int(line.split()[1])
+        return found
+
+    def _process_kb(self, pid):
+        """(resident kB, anonymous kB) of one process: proportional when the kernel says."""
+        try:
+            got = self._kb_fields(f"/proc/{pid}/smaps_rollup", ("Pss", "Pss_Anon"))
+            if len(got) == 2:
+                return got["Pss"], got["Pss_Anon"]
+        except OSError:
+            pass  # no smaps_rollup (an old kernel), or not ours to read
+        got = self._kb_fields(f"/proc/{pid}/status", ("VmRSS", "RssAnon"))
+        return got.get("VmRSS", 0), got.get("RssAnon", 0)
+
+    def _sample_mb(self):
+        """(resident MB, anonymous MB) summed over the matching processes now."""
+        rss_kb = anon_kb = 0
+        try:
+            pids = [p for p in os.listdir("/proc") if p.isdigit()]
+        except OSError:
+            return 0.0, 0.0
+        for pid in pids:
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                    if self._match not in fh.read():
+                        continue
+                rss, anon = self._process_kb(pid)
+            except (OSError, ValueError):
+                continue  # the process ended between listing and reading
+            rss_kb += rss
+            anon_kb += anon
+        return rss_kb / 1024, anon_kb / 1024
+
+    def _take(self) -> None:
+        rss, anon = self._sample_mb()
+        self.peak_mb = max(self.peak_mb, rss)
+        self.peak_anon_mb = max(self.peak_anon_mb, anon)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._take()
+            self._stop.wait(self._interval)
+
+    def __enter__(self) -> "WorkerRssSampler":
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        self._take()
 
 
 def _mpix(tile_px: int, bands: int, rows: int) -> float:
@@ -642,7 +810,6 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
     aligns with the heavy tier). Returns ``(df, extent_tuple)`` where df has columns
     (geom_wkb BINARY, value DOUBLE) and extent is (xmin,ymin,xmax,ymax,w,h,srid).
     """
-    import rasterio
     from pyspark.sql.types import BinaryType, DoubleType, StructField, StructType
 
     geom_corpus = _load_geometry_corpus(root)
@@ -660,7 +827,7 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
     src_rel = gset.source_tile
     from databricks.labs.gbx.core.crs import authority_srid_of
 
-    with rasterio.open(root / src_rel) as ds:
+    with open_data(root / src_rel) as ds:
         left, bottom, right, top = ds.bounds
         epsg = authority_srid_of(ds.crs)
         extent = (
@@ -711,15 +878,17 @@ def _h3_aggregate_df(spark, fs):
     The fixed CONSISTENCY group is the deterministic H3 cell set from
     ``spec.h3_rasterize_cells()`` (the res-9 NYC cell grid-disk'd to k=10 -- the
     SAME recipe the Scala BenchDispatch h3Aggregate branch generates, so both
-    tiers burn an identical cell set). ``value`` is NULL on every row -> the
-    presence-mask burn (1.0). The explicit grid rides in ``fs.args`` (passed to
+    tiers burn an identical cell set). ``value`` is NULL on every row; the heavy tier
+    burns the presence mask (1.0) from it, and the light col_fn does not pass this
+    column at all (it passes an omitted value): a typed all-null column is data to
+    the light tier and burns NaN. The explicit grid rides in ``fs.args`` (passed to
     both tiers identically), not in this DataFrame. Returns a df with columns
     (cellid LONG, value DOUBLE).
     """
     from pyspark.sql.types import DoubleType, LongType, StructField, StructType
 
     cells = _spec.h3_rasterize_cells()
-    # value=None on every row -> presence mask (heavy + light both burn 1.0).
+    # value=None on every row -> presence mask for heavy (light omits the value).
     rows = [(int(c), None) for c in cells]
     schema = StructType(
         [
@@ -735,10 +904,12 @@ def _grid_aggregate_df(spark, fs):
 
     Two families ride input_kind == "grid_aggregate":
 
-    RASTERIZE aggs (rst_{quadbin,bng}_rasterize_agg): stream (cellid, value) rows
-    from a fixed deterministic cell set and use the 2-arg auto-derive overload (the
-    grid is derived from the cell set). ``value`` is NULL on every row ->
-    presence-mask burn (1.0).
+    RASTERIZE aggs (rst_{quadbin,bng,custom}_rasterize_agg): stream (cellid, value) rows
+    from a fixed deterministic cell set and use the auto-derive overload (the raster
+    grid is derived from the cell set; the custom one also gets its grid struct from
+    the spec's col_fn). ``value`` is NULL on every row ->
+    presence-mask burn (1.0) for heavy; the light col_fn omits the value instead
+    (a typed all-null column burns NaN there).
 
     CELLFILL aggs ({h3,quadbin,bng,custom}_cellfill): stream the fixed cellfill
     corpus, which REUSES the rasterize cell set but NULLs a deterministic subset of
@@ -776,6 +947,8 @@ def _grid_aggregate_df(spark, fs):
                 else _spec.quadbin_cellfill_cells()
             )
             rows = [(int(c), v) for c, v in cells]
+        elif fs.name == "rst_custom_rasterize_agg":
+            rows = [(int(c), None) for c in _spec.custom_rasterize_cells()]
         else:  # rst_quadbin_rasterize_agg
             rows = [(int(c), None) for c in _spec.quadbin_rasterize_cells()]
     schema = StructType(
@@ -1082,6 +1255,11 @@ def _run_aggregate(  # noqa: C901
         )
         _warm_scaled = _warm_keys.crossJoin(F.broadcast(group_df))
         try:
+            _assert_lightweight(
+                fs,
+                scaled,
+                lambda d: d.groupBy("key").agg(_agg_col(d).alias("out")),
+            )
 
             def job(_df=scaled):
                 _df.groupBy("key").agg(_agg_col(_df).alias("out")).write.format(
@@ -1132,6 +1310,8 @@ def _explain_spark_path(
 
     from pyspark.sql import functions as F
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     for _fs in fnspecs:
         if "spark-path" not in _fs.modes:
             continue
@@ -1162,9 +1342,10 @@ def _explain_spark_path(
                 # UDTF grid fn: the spark-path is a SQL LATERAL join, not a scalar
                 # column, so build + explain the LATERAL plan (the scalar col_fn
                 # would raise NotImplementedError). Register the light UDTF first.
-                from databricks.labs.gbx.pyrx import functions as _prx_reg
 
-                _prx_reg.register(spark, only=[_fs.sql_name])
+                gbx_manager.register_family(
+                    spark, ("gbx_rst_", "gbx_pmtiles_"), only=[_fs.sql_name], level="L3"
+                )
                 _ps = (
                     partition_size
                     if (partition_size and partition_size > 0)
@@ -1531,7 +1712,7 @@ def _run_sp_creation(
     """Time rst_fromfile virtual-tile CREATION over the binaryFile `path` column.
 
     The binaryFile DataFrame ``raw`` carries a ``path`` URI column; this leg times
-    ``prx.rst_fromfile(F.col("path"), "GTiff")`` at each row-count ladder point and
+    ``rx.rst_fromfile(F.col("path"), "GTiff")`` at each row-count ladder point and
     emits rows with ``input_tile="virtual"``, ``output_disposition="deferred"``.
     Runs only when ``input_tile == "virtual"`` and ``rst_fromfile`` is among the
     selected fn names (gated in ``run_spark_path``).
@@ -1539,7 +1720,7 @@ def _run_sp_creation(
     import math as _math
 
     from databricks.labs.gbx.bench.spec import REGISTRY
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     fs = REGISTRY["rst_fromfile"]
     path_df = raw.select(F.col("path"))
@@ -1555,7 +1736,7 @@ def _run_sp_creation(
         try:
 
             def job(_df=df):
-                c = prx.rst_fromfile(F.col("path"), "GTiff")
+                c = rx.rst_fromfile(F.col("path"), "GTiff")
                 _df.select(c.alias("out")).write.format("noop").mode("overwrite").save()
 
             stats = time_iters(job, warmup, measured)
@@ -1564,6 +1745,27 @@ def _run_sp_creation(
             r = _sp_scalar_error_row(fs, run_id, pool, n, env, warmup, e)
         rows.append(_dc.replace(r, input_tile="virtual", output_disposition="deferred"))
     return rows
+
+
+def _assert_lightweight(fs, df, build) -> None:
+    """Refuse to time ``build(df)`` unless its plan runs the LIGHTWEIGHT implementation of ``fs``.
+
+    The general function harness times the lightweight tier (every row it writes says so),
+    through the Column API or by SQL name. Both tiers register the same ``gbx_*`` names and
+    the later registration replaces the earlier, so a heavyweight function registered after
+    the lightweight ones would be timed and recorded as lightweight. ``TierResolutionError``
+    (a ``BaseException``) gets past the per-function error rows and stops the run. The
+    heavyweight tier's timings come from ``HeavyRunner`` (Scala), which has no such check yet.
+
+    The plan is read over an EMPTY DataFrame of ``df``'s schema, not over ``df``: the corpus
+    input is cached and built by a Python UDF, whose node is part of the printed plan of
+    anything selected from it and would make every plan read as lightweight.
+    """
+    from databricks.labs.gbx.bench.readers import _assert_tier
+
+    _assert_tier(
+        "lightweight", fs.name, build(df.sparkSession.createDataFrame([], df.schema))
+    )
 
 
 def _run_sp_scalar_fn(
@@ -1621,6 +1823,14 @@ def _run_sp_scalar_fn(
         # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
         df = _src.repartition(max(1, _parts), F.rand())
         try:
+
+            _assert_lightweight(
+                fs,
+                df,
+                lambda d: d.select(
+                    fs.col_fn(input_col_fn(fs.name, _kind, d), fs.args).alias("out")
+                ),
+            )
 
             def job(_df=df, _fs=fs, _k=_kind):
                 c = _fs.col_fn(input_col_fn(_fs.name, _k, _df), _fs.args)
@@ -1736,6 +1946,8 @@ def run_spark_path(  # noqa: C901
     import math
 
     from pyspark.sql import functions as F
+
+    from databricks.labs.gbx import manager as gbx_manager
 
     root = Path(corpus_root)
     env = capture_env(where)
@@ -1968,6 +2180,20 @@ def run_spark_path(  # noqa: C901
                 f"[bench] loaded geometry_set '{gset_name}' with {len(geoms)} unique geometries"
             )
 
+    # The generated API registers a name at the level the manager picks on first use, which can be a JVM
+    # companion: pin the light level for the functions timed here (the plan check in _assert_lightweight
+    # would otherwise be the only thing between a light timing and a heavy one).
+    from databricks.labs.gbx.bench.spec import pin_light_level
+
+    pin_light_level(
+        spark,
+        [
+            f.sql_name
+            for f in fnspecs
+            if "spark-path" in f.modes and f.sql_name.startswith("gbx_rst_")
+        ],
+    )
+
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,
     # no timing / no Delta write (delegated to _explain_spark_path).
     if explain_only:
@@ -2005,9 +2231,13 @@ def run_spark_path(  # noqa: C901
         and not getattr(f, "geometry_set", None)
     ]
     if _udtf_fns:
-        from databricks.labs.gbx.pyrx import functions as _prx_reg
 
-        _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
+        gbx_manager.register_family(
+            spark,
+            ("gbx_rst_", "gbx_pmtiles_"),
+            only=[f.sql_name for f in _udtf_fns],
+            level="L3",
+        )
 
     # geometry_scalar / geometry_aggregate fns AND geometry-input UDTFs call
     # registered gbx_ SQL UDFs/UDTFs; register them in this session or every
@@ -2030,13 +2260,18 @@ def run_spark_path(  # noqa: C901
     _geom_pyrx = [f for f in _geom_fns if f.sql_name.startswith("gbx_rst_")]
     _geom_pyvx = [f for f in _geom_fns if not f.sql_name.startswith("gbx_rst_")]
     if _geom_pyrx:
-        from databricks.labs.gbx.pyrx import functions as _prx_reg
 
-        _prx_reg.register(spark, only=[f.sql_name for f in _geom_pyrx])
+        gbx_manager.register_family(
+            spark,
+            ("gbx_rst_", "gbx_pmtiles_"),
+            only=[f.sql_name for f in _geom_pyrx],
+            level="L3",
+        )
     if _geom_pyvx:
-        from databricks.labs.gbx.pyvx import functions as _pyvx_reg
 
-        _pyvx_reg.register(spark, only=[f.sql_name for f in _geom_pyvx])
+        gbx_manager.register_family(
+            spark, ("gbx_st_",), only=[f.sql_name for f in _geom_pyvx], level="L3"
+        )
 
     # grid_aggregate cellfill fns (h3/quadbin/bng/custom_cellfill) call
     # call_function("gbx_<grid>_cellfill", ...) and require the pygx UDAFs to be
@@ -2051,9 +2286,13 @@ def run_spark_path(  # noqa: C901
         and not f.sql_name.startswith("gbx_rst_")
     ]
     if _cellfill_fns:
-        from databricks.labs.gbx.pygx import functions as _pygx_reg
 
-        _pygx_reg.register(spark, only=[f.sql_name for f in _cellfill_fns])
+        gbx_manager.register_family(
+            spark,
+            ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"),
+            only=[f.sql_name for f in _cellfill_fns],
+            level="L3",
+        )
 
     # Spark warm-up: one throwaway job so JVM/Spark spin-up isn't charged to the first
     # timed cell (delegated to _spark_path_warmup).

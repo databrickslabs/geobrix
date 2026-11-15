@@ -15,7 +15,7 @@ Tested by: docs/tests-dbr/python/limitations/test_examples.py
 CONVERT_TO_DATABRICKS_GEOMETRY_WORKAROUND = """from pyspark.sql.functions import expr
 
 # Read with GeoBrix
-df = spark.read.format("shapefile_ogr").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
+df = spark.read.format("shapefile_gbx").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
 
 # Convert to Databricks built-in GEOMETRY type
 geometry_df = df.select(
@@ -60,7 +60,7 @@ def convert_to_databricks_geometry_workaround(spark, path):
     Run the workaround: read shapefile with GeoBrix, convert to GEOMETRY, compute area.
     Used by test_examples.py to validate the documented snippet.
     """
-    df = spark.read.format("shapefile_ogr").load(path)
+    df = spark.read.format("shapefile_gbx").load(path)
     geometry_df = df.select("*", expr("st_geomfromwkb(geom_0)").alias("geometry"))
     result = geometry_df.select("geometry", expr("st_area(geometry)").alias("area"))
     return result

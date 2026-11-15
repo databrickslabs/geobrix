@@ -1,8 +1,8 @@
 import os
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import numpy as np
-import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core import cog as gbxcog
@@ -26,7 +26,7 @@ def _write_src(path, w=512, h=512):
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w))
 
 
@@ -423,8 +423,42 @@ def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
     os.remove(path)
 
 
+def test_stage_local_fallback_copy_carries_the_sidecars_and_remove_takes_them(
+    tmp_path, monkeypatch
+):
+    """The copy fallback stages the sidecars (an .aux.xml with its NoData) under the staged name's prefix, so GDAL opens
+    the copy as it opens the source; an .ovr stays behind; ``remove_staged`` removes the file and the sidecars.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx.core import preparer as m
+    from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
+
+    root = tmp_path / "root"
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(root))
+    f = tmp_path / "src.tif"
+    _write_src(str(f))
+    (tmp_path / "src.tif.aux.xml").write_text(
+        '<PAMDataset><PAMRasterBand band="1"><NoDataValue>7</NoDataValue>'
+        "</PAMRasterBand></PAMDataset>"
+    )
+    (tmp_path / "src.tif.ovr").write_bytes(b"o" * 64)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)
+    monkeypatch.setenv("GBX_FORCE_STAGE", "1")
+
+    path, is_temp = m._stage_local_if_needed(str(f))
+    assert is_temp is True
+    names = sorted(os.listdir(root))
+    assert len(names) == 2 and not any(n.endswith(".ovr") for n in names)
+    assert os.path.exists(path + ".aux.xml")
+    with _env.open_raster(path) as ds:
+        assert ds.nodata == 7.0  # the staged copy reads the sidecar
+    remove_staged(path)
+    assert os.listdir(root) == []
+
+
 # ---------------------------------------------------------------------------
-# Task 4: GBX_STAGE_MAX_BYTES guard
+# GBX_STAGE_MAX_BYTES guard
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +481,7 @@ def test_stage_local_respects_max_bytes(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 2 wiring tests: _collect_sources delegates to list_files (fail-on-revert)
+# Wiring tests: _collect_sources delegates to list_files (fail-on-revert)
 # ---------------------------------------------------------------------------
 
 
@@ -478,3 +512,37 @@ def test_collect_sources_nonrecursive_calls_list_files_with_recursive_false(tmp_
     mock_lf.assert_called()
     _args, kw = mock_lf.call_args
     assert kw.get("recursive", True) is False
+
+
+def test_cog_convert_file_handles_odd_nbits_source(tmp_path):
+    """A uint16 source tagged NBITS=15 converts to a valid COG with identical
+    pixels (it used to fail: PREDICTOR=2 with a 15-bit sample depth)."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    from .conftest import cog_errors
+
+    src, dst = str(tmp_path / "s15.tif"), str(tmp_path / "out.tif")
+    data = (np.arange(64 * 64, dtype=np.uint16).reshape(1, 64, 64) % 30000).astype(
+        np.uint16
+    )
+    with open_raster(
+        src,
+        "w",
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32618",
+        transform=from_origin(0, 0, 10, 10),
+        nbits=15,
+    ) as ds:
+        ds.write(data)
+    cog_convert_file(src, dst, compression="DEFLATE")
+    assert not cog_errors(dst, strict=False)
+    with rasterio.open(dst) as out:
+        assert np.array_equal(out.read(), data)

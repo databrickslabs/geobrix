@@ -1,4 +1,4 @@
-"""netcdf_gbx vector mode: DSG points, or any 2-D field coerced to per-cell points.
+"""netcdf_gbx vector mode: CF DSG points, profiles and trajectories, or any 2-D field coerced to per-cell points.
 
 Output schema mirrors the light vector reader convention: attribute columns (one
 per requested variable, typed) then geom_0 (plain WKB) + geom_0_srid +
@@ -12,7 +12,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
-from databricks.labs.gbx.ds import _listing, _netcdf
+from databricks.labs.gbx.ds import _listing, _netcdf, _quarantine
 
 
 class _NcFilePartition(InputPartition):
@@ -44,10 +44,10 @@ class NetcdfVectorReader(DataSourceReader):
             )
         fields: List[StructField] = []
         with _netcdf.open_dataset(members[0], self.group) as ds:
+            # The decoded dtype is known without reading the data (``.values`` would
+            # read and decode every selected variable in full just for its type).
             for name in self._variables(ds):
-                fields.append(
-                    StructField(name, _netcdf.np_to_spark(ds[name].values.dtype), True)
-                )
+                fields.append(StructField(name, _netcdf.spark_type_of(ds[name]), True))
         fields.append(StructField("geom_0", BinaryType(), True))
         fields.append(StructField("geom_0_srid", StringType(), True))
         fields.append(StructField("geom_0_srid_proj", StringType(), True))
@@ -59,13 +59,35 @@ class NetcdfVectorReader(DataSourceReader):
     def read(self, partition: "_NcFilePartition") -> Iterator[Tuple]:
         import shapely
 
+        if _listing.is_empty_plan(partition):
+            return
+
+        # With read_paths' on_error="skip" (a hook on the reader) a truncated
+        # classic file is a bad record instead of rows of zeros.
+        hook = _quarantine.hook_of(self)
+        if hook is not None:
+            short = _netcdf.classic_truncation(partition.file_path)
+            if short is not None:
+                hook(None, _quarantine.RECORDS_NOT_READ, short)
+                return
+
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
             variables = self._variables(ds)
             if not variables:
                 return
-            lon, lat, attrs, srid = _netcdf.point_arrays(ds, variables)
-        wkb = shapely.to_wkb(shapely.points(lon, lat))
+            kinds = [_netcdf.column_kind(ds[name]) for name in variables]
+            layout = _netcdf.dsg_layout(ds)
+            if layout is not None:  # a CF DSG file: its points carry the altitude as Z
+                lon, lat, z, attrs, srid = _netcdf.dsg_arrays(ds, layout, variables)
+            else:
+                lon, lat, attrs, srid = _netcdf.point_arrays(ds, variables)
+                z = None
+        points = shapely.points(lon, lat) if z is None else shapely.points(lon, lat, z)
+        wkb = shapely.to_wkb(points, flavor="iso")
         proj = f"EPSG:{srid}"
         for i in range(len(lon)):
-            row = tuple(attrs[name][i].item() for name in variables)
+            row = tuple(
+                _netcdf.cell_value(kind, attrs[name][i])
+                for name, kind in zip(variables, kinds)
+            )
             yield row + (bytes(wkb[i]), srid, proj)

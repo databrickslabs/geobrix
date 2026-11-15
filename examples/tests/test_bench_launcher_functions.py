@@ -1,0 +1,449 @@
+"""The bench launcher stops on a mistyped ``bng_*`` name before it submits anything.
+
+The on-cluster notebook rejects such a name too, but only after the job has started. Pure: the
+launcher reads the leg table and the registry as text. Run:
+  gbx:test:notebooks --path test_bench_launcher_functions.py
+"""
+
+import os
+import re
+
+import pytest
+import push_and_run_bench_on_cluster as launcher
+
+
+def test_a_mistyped_bng_name_is_refused_and_every_real_one_is_not():
+    # names the bench knows: a leg (bng_kringexplode), a registered function (bng_cellfill)
+    assert launcher._unknown_bng_names("bng_kringexplode,bng_cellfill,rst_width") == []
+    assert launcher._unknown_bng_names("bng_kringexplod,rst_width,bng_nope") == [
+        "bng_kringexplod",
+        "bng_nope",
+    ]
+    # a list typed with spaces after the commas is the same list
+    assert launcher._unknown_bng_names("rst_width, bng_nope , bng_cellfill") == [
+        "bng_nope"
+    ]
+    assert launcher._function_names(" rst_width, bng_nope ,, ") == [
+        "rst_width",
+        "bng_nope",
+    ]
+
+    # every leg the bench can run is read from the table (a reformatted table would flag them all)
+    readers = (launcher._BENCH_SRC / "readers.py").read_text()
+    legs = [n[len("run_") :] for n in re.findall(r"^def (run_bng_\w+)\(", readers, re.M)]
+    assert len(legs) >= 20 and launcher._unknown_bng_names(",".join(legs)) == []
+
+
+def test_the_bench_installs_the_env_wheel_of_the_clusters_runtime():
+    # DBR 17.3 / 18 run the env5 wheel, DBR 19 the env6 wheel (the other family's refuses to import)
+    for key, env in (("17.3.x-scala2.13", 5), ("18.x-aarch64-scala2.13", 5), ("19.x-scala2.13", 6),
+                     ("19.x-cpu-ml-scala2.13", 6)):  # fmt: skip
+        assert launcher.env_of_runtime(key) == env, key
+
+
+# ---- run hardening: the preflight, the smoke verdict and the watchdog wiring (no workspace)
+
+import io
+import json
+import types
+
+import _preflight
+import _run_watchdog
+
+WHEEL = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def test_the_preflight_refuses_a_spec_without_the_wheel_a_wrong_family_and_a_staged_wheel_that_is_not_the_build(tmp_path):
+    assert _preflight.check_env_spec(_preflight.serverless_dependencies(WHEEL), WHEEL, 6) == []
+    assert "does not name the wheel" in _preflight.check_env_spec(["markdown"], WHEEL, 6)[0]
+    assert "+env6 family" in _preflight.check_env_spec([WHEEL], WHEEL, 5)[0]
+    # the staged bytes against the local build
+    (tmp_path / "dist" / "env6").mkdir(parents=True)
+    built = tmp_path / "dist" / "env6" / "geobrix-0.6.0+env6-py3-none-any.whl"
+    built.write_bytes(b"the build")
+    sha = _preflight.file_sha256(built)
+    local = _preflight.local_wheel(tmp_path, built.name)
+    assert _preflight.check_wheel(local, sha, WHEEL) == []
+    assert "not the local build" in _preflight.check_wheel(local, "0" * 64, WHEEL)[0]
+    assert "no local build" in _preflight.check_wheel(None, sha, WHEEL)[0]
+
+
+def test_a_plain_staged_wheel_is_checked_when_dist_has_it_and_skipped_with_a_reason_when_not(tmp_path, capsys):
+    """A wheel without +env<N> has no env family to look up: it is not a launch failure by itself."""
+    plain = "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+
+    class Files:
+        @staticmethod
+        def download(path):
+            return types.SimpleNamespace(contents=io.BytesIO(b"the build"))
+
+    w = types.SimpleNamespace(files=Files)
+    assert _preflight.wheel_problems(w, plain, tmp_path) == []  # nothing in dist/: skipped, and says why
+    assert "no +env<N> in the name" in capsys.readouterr().out
+    (tmp_path / "dist").mkdir()
+    built = tmp_path / "dist" / "geobrix-0.6.0-py3-none-any.whl"
+    built.write_bytes(b"the build")
+    assert _preflight.wheel_problems(w, plain, tmp_path) == []  # in dist/: the bytes are compared
+    built.write_bytes(b"another build")
+    assert "not the local build" in _preflight.wheel_problems(w, plain, tmp_path)[0]
+
+
+def run_outcome(payload, result="SUCCESS"):
+    state = types.SimpleNamespace(life_cycle_state="TERMINATED", result_state=result, state_message="")
+    return launcher.Outcome(run=types.SimpleNamespace(state=state), payload=json.dumps(payload))
+
+
+def test_a_smoke_is_clean_only_when_the_import_check_passes_and_no_form_failed():
+    ok = {"import_check": {"ok": True, "version": "0.6.0", "arch": "x86_64"}, "forms": [{"fn": "f"}], "errors": []}
+    assert launcher.smoke_problems(run_outcome(ok), require_forms=True) == []
+    bad = launcher.smoke_problems(
+        run_outcome({**ok, "import_check": {"ok": False, "error": "ModuleNotFoundError: databricks.labs"}}),
+        require_forms=True,
+    )
+    assert "worker-side import check failed" in bad[0] and "databricks.labs" in bad[0]
+    err = {"fn": "gbx_bng", "level": "L4", "form": "uc-scalar", "failure": "UDF_USER_CODE_ERROR"}
+    failed = launcher.smoke_problems(run_outcome({**ok, "errors": [err]}), require_forms=True)
+    assert "gbx_bng L4/uc-scalar failed" in failed[0]
+    assert launcher.smoke_problems(run_outcome({**ok, "errors": [err]}), require_forms=True, allow_errors=True) == []
+    assert launcher.smoke_problems(run_outcome({**ok, "forms": []}), require_forms=True)  # nothing ran
+    assert launcher.smoke_problems(run_outcome({}), require_forms=True)  # no exit payload
+
+
+def test_a_run_whose_heartbeat_names_a_stuck_form_is_cancelled_by_the_launcher_and_reported(capsys):
+    cancelled = []
+    stuck = {"seq": 1, "state": "running", "form": "gbx_bng:L4:uc-scalar", "form_elapsed_s": 0.0,
+             "stack": ["File levels_forms.py, line 470, in uc_scalar"]}  # fmt: skip
+
+    class Files:
+        @staticmethod
+        def download(path):
+            return types.SimpleNamespace(contents=types.SimpleNamespace(read=lambda: json.dumps(stuck).encode()))
+
+    class Jobs:
+        state = ("RUNNING", "")
+
+        def get_run(self, run_id):
+            life = types.SimpleNamespace(value=self.state[0])
+            return types.SimpleNamespace(state=types.SimpleNamespace(life_cycle_state=life, result_state=None), tasks=[])
+
+        def cancel_run(self, run_id):
+            cancelled.append(run_id)
+            self.state = ("TERMINATED", "CANCELED")
+
+        def export_run(self, **kw):
+            raise RuntimeError("no export in the fake")
+
+    w = types.SimpleNamespace(jobs=Jobs(), files=Files)
+    out = launcher.watch_to_end(w, 77, hb_path="/Volumes/x/heartbeat.json", form_cap_s=0.05, stale_s=60, poll_secs=0.02)
+    text = capsys.readouterr().out
+    assert cancelled == [77] and out.stall is not None and out.run is None
+    assert "STALLED: gbx_bng:L4:uc-scalar after" in text and "uc_scalar" in text
+    assert _run_watchdog.EXIT_STALLED == 3
+
+
+# ---- the smoke stage as the launcher runs it: a bad smoke blocks the real run
+
+
+class SmokeWorkspace:
+    """A workspace whose smoke run ends with ``payload`` as the notebook's exit value."""
+
+    def __init__(self, payload):
+        life = types.SimpleNamespace(value="TERMINATED")
+        state = types.SimpleNamespace(life_cycle_state=life, result_state=types.SimpleNamespace(value="SUCCESS"), state_message="")
+        run = types.SimpleNamespace(state=state, tasks=[types.SimpleNamespace(run_id=5)])
+        out = types.SimpleNamespace(notebook_output=types.SimpleNamespace(result=json.dumps(payload)))
+        self.jobs = types.SimpleNamespace(get_run=lambda rid: run, get_run_output=lambda rid: out)
+        self.files = types.SimpleNamespace(delete=lambda p: None, download=lambda p: (_ for _ in ()).throw(FileNotFoundError(p)))
+
+
+CLEAN = {"import_check": {"ok": True, "version": "0.6.0", "arch": "x86_64"}, "forms": [{"fn": "f", "level": "L3", "form": "c0", "status": "ok", "tasks": 8, "median_s": 1.0}], "errors": []}  # fmt: skip
+BAD = {**CLEAN, "errors": [{"fn": "gbx_st_makevalid", "level": "L4", "form": "uc-scalar", "failure": "ISOLATED_COMMAND_EXEC_ERROR: pip install returned 1"}]}  # fmt: skip
+
+
+def smoke_stage(payload, capsys, **over):
+    submitted = []
+
+    def submit(path, name, timeout_s):
+        submitted.append((path, name, timeout_s))
+        return 11
+
+    kw = dict(
+        do_smoke=True, no_smoke=False, smoke_only=False, smoke_path="/nb/smoke", run_id="r1", out_dir="/Volumes/x/r1",
+        smoke_rows=16, smoke_timeout_min=15, form_cap_s=900.0, stale_s=300.0, token="tok", levels_mvp="S", allow_errors=False,
+    )  # fmt: skip
+    kw.update(over)
+    rc = launcher.run_smoke_stage(SmokeWorkspace(payload), submit, **kw)
+    cap = capsys.readouterr()
+    return rc, submitted, cap.out, cap.err
+
+
+def test_a_smoke_with_a_failed_form_blocks_the_real_run_with_exit_4_and_names_the_failure(capsys):
+    rc, submitted, out, err = smoke_stage(BAD, capsys)
+    assert rc == launcher.EXIT_SMOKE_FAILED == 4
+    assert [s[1] for s in submitted] == ["geobrix-bench-r1-smoke"]  # only the smoke was submitted
+    assert submitted[0][2] == 15 * 60  # with its own time limit
+    assert "SMOKE STAGE FAILED: nothing else is submitted" in err
+    assert "gbx_st_makevalid L4/uc-scalar failed" in err and "pip install returned 1" in err
+
+
+def test_a_clean_smoke_lets_the_real_run_go_on_and_smoke_only_stops_there(capsys):
+    rc, submitted, out, _ = smoke_stage(CLEAN, capsys)
+    assert rc is None and len(submitted) == 1 and "SMOKE STAGE CLEAN" in out
+    rc, submitted, out, _ = smoke_stage(CLEAN, capsys, smoke_only=True)
+    assert rc == 0 and "the real run is not submitted" in out
+    rc, submitted, out, _ = smoke_stage(BAD, capsys, allow_errors=True)  # --smoke-allow-errors
+    assert rc is None
+
+
+def test_no_smoke_submits_no_smoke_run_and_logs_that_it_was_skipped(capsys):
+    rc, submitted, out, _ = smoke_stage(BAD, capsys, do_smoke=False, no_smoke=True)
+    assert rc is None and submitted == []
+    assert "SMOKE STAGE SKIPPED (--no-smoke)" in out
+
+
+# ---- the time limits are refused at argument-parse time
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--timeout-min", "0"), ("--timeout-min", "-5"), ("--timeout-min", "abc"), ("--timeout-min", "1.5"),
+     ("--smoke-timeout-min", "0"), ("--smoke-timeout-min", "-1"), ("--smoke-timeout-min", "x")],
+)  # fmt: skip
+def test_a_time_limit_that_is_not_a_positive_whole_number_of_minutes_is_refused_before_any_work(
+    flag, value, monkeypatch, capsys
+):
+    monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", flag, value])
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert flag in err and "whole number of minutes" in err and err.count("\n") == 1
+
+
+def test_the_default_se_ladder_is_refused_up_front_with_the_scales_that_fit(monkeypatch, capsys):
+    """SE builds 4 MiB DEM tiles on the client: only 1x fits under the 64 MiB cap, so 1,4,16 can never pass."""
+    pytest.importorskip("pyspark")  # the check reads the form table (levels_forms), which imports pyspark
+    base = ["push_and_run_bench_on_cluster.py", "--purpose", "argument check", "--levels", "SE"]
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    monkeypatch.setattr(launcher.sys, "argv", base)
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--levels-scales" in err and "SE" in err and "1,4,16" in err and "--levels-scales 1" in err
+    assert launcher.levels_scales_problem("SE", (1,), launcher.TESTS_DIR.parent.parent) is None  # 1x fits
+    assert launcher.levels_scales_problem("S", (1, 4, 16), launcher.TESTS_DIR.parent.parent) is None  # other sets are fine
+
+
+def test_a_set_with_its_own_ladder_gets_it_when_levels_scales_is_not_given():
+    """IO times 1,4,10; "not given" (None) must not become 1,4,16 on the way to the preflight."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.effective_levels_scales("IO", None, root) == (1, 4, 10)
+    assert launcher.effective_levels_scales("H", None, root) == (1, 4, 16)
+    assert launcher.effective_levels_scales("IO", (1, 4, 16), root) == (1, 4, 16)  # asked for: kept exactly
+
+
+def _no_work(monkeypatch, *argv):
+    """argv for a launch that must stop at an argument check before any work; it carries the --purpose a launch on
+    compute requires, so the check under test is the one that answers."""
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", "--purpose", "argument check", *argv])
+
+
+def test_a_launch_on_compute_without_a_purpose_is_refused_before_any_work(monkeypatch, capsys):
+    """Every launch on compute says what it is for (it heads the notebook and names the job run); only a dry run may not."""
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    for argv in (["--levels", "S"], ["--levels", "S", "--purpose", "  "]):
+        monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", *argv])
+        assert launcher.main() == 2
+        err = capsys.readouterr().err
+        assert "--purpose" in err and "required" in err
+
+
+def test_a_set_without_a_form_table_is_not_a_scales_problem():
+    """--levels IO has no entry in the form table: the scales check has nothing to judge (it crashed with a KeyError)."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.levels_scales_problem("IO", (1, 4, 16), root) is None
+    from databricks.labs.gbx.bench import preflight
+
+    assert preflight.client_cap_problems("IO", (1, 4, 16)) == []
+
+
+def test_the_scales_check_judges_only_the_forms_levels_forms_selects(monkeypatch, capsys):
+    """SE's 512 and 1024 inputs pass the cap at 4x; the 256 form alone fits, so a launch that keeps only it goes on."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.levels_scales_problem("SE", (1, 4), root) is not None  # every form: refused
+    assert launcher.levels_scales_problem("SE", (1, 4), root, ("engine-c0@256",)) is None
+    assert launcher.levels_scales_problem("SE", (1, 4), root, ("engine-c0@1024",)) is not None
+
+
+def test_a_levels_io_launch_passes_the_preflight_without_starting_spark(monkeypatch):
+    """IO has no form table: the probe has nothing to run (it raised a KeyError that refused every --levels IO launch)."""
+    pytest.importorskip("pyspark")
+    sys_path_root = launcher.TESTS_DIR.parent.parent
+    import _preflight
+
+    monkeypatch.syspath_prepend(str(sys_path_root / "python/geobrix/src"))
+    assert _preflight.probe_problems("IO", (1, 4, 16), sys_path_root) == []
+
+
+def test_an_unknown_levels_set_is_a_launch_problem_not_a_pass(monkeypatch):
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    import _preflight
+
+    monkeypatch.syspath_prepend(str(root / "python/geobrix/src"))
+    got = _preflight.probe_problems("XYZ", (1,), root)
+    assert len(got) == 1 and "XYZ" in got[0]
+    assert "XYZ" in launcher.levels_scales_problem("XYZ", (1,), root)
+
+
+def test_the_probe_workers_import_the_launch_checkout_not_the_installed_copy(monkeypatch, tmp_path):
+    """A launch from a clean worktree must probe that tree's code: the workers read PYTHONPATH, not the driver's sys.path."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    import _preflight
+    from pyspark.sql import SparkSession
+
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    class _Builder:
+        def master(self, *_a):
+            seen["pythonpath"] = os.environ.get("PYTHONPATH", "")
+            raise _Stop()
+
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    monkeypatch.setattr(SparkSession, "builder", _Builder())
+    monkeypatch.syspath_prepend(str(root / "python/geobrix/src"))
+    with pytest.raises(_Stop):
+        _preflight.probe_problems("JV", (1,), tmp_path, forms=("gbx_rst_crs:c0@n",))
+    assert seen["pythonpath"].split(os.pathsep) == [str(tmp_path / "python/geobrix/src"), "/elsewhere"]
+
+
+def test_a_levels_forms_typo_is_refused_at_argument_time_with_exit_2(monkeypatch, capsys):
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.levels_forms_problem("SE", ("engine-c0@256",), root) is None
+    assert launcher.levels_forms_problem("SE", (), root) is None
+    msg = launcher.levels_forms_problem("SE", ("engine-c0@256", "tday@256"), root)
+    assert "tday@256" in msg and "engine-c0@256," not in msg.split("(the forms")[0]
+    io = launcher.levels_forms_problem("IO", ("x",), root)  # IO has forms now: the message lists them, floor included
+    assert "x" in io and "d-py" in io and "floor" in io
+    _no_work(monkeypatch, "--levels", "SE", "--levels-scales", "1", "--levels-forms", "tday@256")
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--levels-forms" in err and "tday@256" in err
+
+
+def test_a_form_cap_ceiling_below_the_1x_cap_is_refused_with_exit_2(monkeypatch, capsys):
+    _no_work(monkeypatch, "--form-cap-min", "15", "--form-cap-max-min", "10")
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--form-cap-max-min" in err and "--form-cap-min" in err and "below" in err
+
+
+def test_the_levels_run_gets_the_same_default_time_limit_as_any_other(monkeypatch):
+    assert launcher.DEFAULT_RUN_TIMEOUT_MIN == 360
+
+
+def test_a_run_keeps_its_notebook_and_records_its_hold_for_the_sweep(capsys):
+    """The run page opens the notebook: it stays, held 60 min (24 h after a failure, for a repair run)."""
+    import _workspace_sweep
+
+    deleted = []
+
+    class Workspace:
+        def delete(self, path, recursive=False):
+            deleted.append(path)
+
+    class W:
+        workspace = Workspace()
+
+    launcher._release_notebook(W(), "/nb/failed", succeeded=False)
+    launcher._release_notebook(W(), "/nb/ok")
+    assert deleted == []
+    out = capsys.readouterr().out
+    assert "/nb/failed for 24 h" in out and "/nb/ok for 60 min" in out
+    held = _workspace_sweep.load_ledger(None)
+    assert held["/nb/failed"]["keep_until"] - held["/nb/ok"]["keep_until"] > 22 * 3600
+
+
+class _ExportWorkspace:
+    """A Jobs API whose export_run answers (or fails) as told, and records what it was asked."""
+
+    def __init__(self, views=None, error=None):
+        self.asked = []
+        self._views, self._error = views, error
+        self.jobs = self
+
+    def export_run(self, run_id, views_to_export=None):
+        self.asked.append((run_id, getattr(views_to_export, "value", views_to_export)))
+        if self._error:
+            raise self._error
+        return types.SimpleNamespace(views=self._views)
+
+
+def _run_with_task(task_run_id=77):
+    return types.SimpleNamespace(run_id=11, tasks=[types.SimpleNamespace(run_id=task_run_id)])
+
+
+def test_the_executed_notebook_is_saved_under_the_run_id_before_it_is_deleted(tmp_path, capsys):
+    w = _ExportWorkspace(views=[types.SimpleNamespace(content="<html>[LEVELS IO] form 1/1 DONE</html>")])
+    path = launcher._save_run_output(w, _run_with_task(77), "r-abc", tmp_path)
+    assert path == tmp_path / "test-logs" / "bench" / "r-abc" / "notebook-output.html"
+    assert "form 1/1 DONE" in path.read_text()
+    assert w.asked == [(77, "CODE")]  # the TASK run id: a job run's own id cannot be exported
+    assert str(path) in capsys.readouterr().out
+
+
+def test_a_failed_export_says_why_and_never_fails_the_run(tmp_path, capsys):
+    w = _ExportWorkspace(error=RuntimeError("Notebook has been removed"))
+    assert launcher._save_run_output(w, _run_with_task(), "r-abc", tmp_path) is None
+    assert "Notebook has been removed" in capsys.readouterr().err
+    assert not (tmp_path / "test-logs" / "bench" / "r-abc" / "notebook-output.html").exists()
+
+
+def test_a_run_with_no_exported_view_saves_nothing_and_says_so(tmp_path, capsys):
+    w = _ExportWorkspace(views=[])
+    assert launcher._save_run_output(w, _run_with_task(), "r-abc", tmp_path) is None
+    assert "no view" in capsys.readouterr().err
+
+
+def test_the_launch_exports_the_notebook_before_it_releases_it():
+    import inspect
+
+    src = inspect.getsource(launcher._main)  # main() only leases and gives back; _main is the launch
+    assert src.index("_save_run_output(") < src.rindex("_release_notebook(w, notebook_path")
+
+
+def test_with_jar_needs_a_job_cluster_made_for_the_run(monkeypatch, capsys):
+    """--with-jar installs the JAR on a --new-cluster job cluster; an existing cluster has its libraries already."""
+    _no_work(monkeypatch, "--profile", "p", "--existing-cluster-id", "0101-x", "--levels", "raster-accessor", "--levels-only", "--with-jar")
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--with-jar" in err and "--new-cluster" in err
+
+
+def test_a_family_with_no_forms_is_not_an_accepted_levels_set(monkeypatch, capsys):
+    """`--levels web-tiles` (pending) and the light-only families have no forms: they are refused here with exit 2, not
+    started and failed on the cluster after the cold start."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    sets = launcher.levels_set_names(root)
+    assert "raster-aggregate" in sets and "S" in sets
+    assert "web-tiles" not in sets
+    _no_work(monkeypatch, "--levels", "web-tiles", "--levels-scales", "1")
+    assert launcher.main() == 2
+    assert "--levels must be one of" in capsys.readouterr().err
+
+
+def test_a_smoke_form_with_no_task_count_prints_a_dash_not_a_crash_or_a_zero(capsys):
+    payload = {**CLEAN, "forms": [{**CLEAN["forms"][0], "tasks": None}]}
+    rc, submitted, out, _ = smoke_stage(payload, capsys)
+    assert rc is None
+    row = next(ln for ln in out.splitlines() if ln.split()[:1] == ["f"])
+    assert row.split()[3:5] == ["ok", "-"], row  # status, then the task count: unknown
+    assert "run on 1-2 Spark tasks" not in out

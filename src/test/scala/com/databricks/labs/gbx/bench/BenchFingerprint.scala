@@ -50,44 +50,6 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
-  /** Fingerprint a COLLECTION of output tiles (bucket C, group C4 tiling fns).
-    *
-    * Mirrors python bench/fingerprint.py `fingerprint_collection`: records the tile
-    * COUNT plus the agg stats POOLED over every tile's valid (non-nodata) pixels
-    * across all bands. Pooling is ORDER-INDEPENDENT, so heavy and light may emit
-    * tiles in any order and still agree; the comparator compares `count` exactly. */
-  def ofCollection(tiles: Seq[Dataset]): String = {
-    val pooled = scala.collection.mutable.ArrayBuffer.empty[Double]
-    tiles.foreach { ds =>
-      val w = ds.GetRasterXSize()
-      val h = ds.GetRasterYSize()
-      for (bi <- 1 to ds.GetRasterCount()) {
-        val band = ds.GetRasterBand(bi)
-        val buf = Array.ofDim[Double](w * h)
-        band.ReadRaster(0, 0, w, h, buf)
-        val nod = BandAccessors.getNoDataValue(band)
-        val valid = if (nod.isNaN) buf else buf.filterNot(_ == nod)
-        pooled ++= valid
-        band.delete()
-      }
-    }
-    val n = mapper.createObjectNode()
-    n.put("kind", "raster_collection")
-    n.put("count", tiles.length)
-    val agg: ObjectNode = n.putObject("agg")
-    if (pooled.isEmpty) {
-      agg.putNull("min"); agg.putNull("max"); agg.putNull("mean"); agg.putNull("std")
-    } else {
-      val mean = pooled.sum / pooled.length
-      val variance = pooled.map(x => (x - mean) * (x - mean)).sum / pooled.length
-      agg.put("min", pooled.min)
-      agg.put("max", pooled.max)
-      agg.put("mean", mean)
-      agg.put("std", math.sqrt(variance))
-    }
-    mapper.writeValueAsString(n)
-  }
-
   /** Write min/max/mean/std (population) of `vals` into `node`; nulls when empty.
     * Shared by every stats-bearing kind so the JSON shape matches python `_stat`. */
   private def putStats(node: ObjectNode, vals: Seq[Double]): Unit = {
@@ -130,7 +92,7 @@ object BenchFingerprint {
   }
 
   /** Count-only string-cell-id dggs_grid fingerprint for BNG tessellation (no
-    * per-cell measure); the string analogue of [[ofDggsGridIds]]. */
+    * per-cell measure): an EMPTY `agg`, matching the python tessellate path's `agg == {}`. */
   def ofDggsGridStrIds(ids: Seq[String]): String = dggsGridStrJson(ids, None)
 
   /** Fingerprint a `gbx_<grid>_cellfill` output (H3/quadbin/custom: LONG cell ids).
@@ -167,18 +129,8 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
-  /** Count-only dggs_grid fingerprint for tessellation (no per-cell measure).
-    *
-    * `RST_H3_Tessellate` yields one Dataset per cell with NO scalar measure, so
-    * the fingerprint records only the cell COUNT + sorted-id hash and emits an
-    * EMPTY `agg` object -- matching the python tessellate path, which fingerprints
-    * `[(cellid, bytes)]` and produces `agg == {}` (no measures). Passing 0.0
-    * measures instead would yield a non-empty heavy agg ({min:0,...}) that
-    * disagrees with the light `{}`, so tessellation must use this id-only form. */
-  def ofDggsGridIds(ids: Seq[Long]): String = dggsGridJson(ids, None)
-
   /** Shared dggs_grid JSON builder: cell COUNT, sha256 over SORTED signed-int64
-    * cell ids, the sorted ids, and the agg. `vals == None` (tessellation) emits an
+    * cell ids, the sorted ids, and the agg. `vals == None` emits an
     * EMPTY agg object to mirror python's `agg == {}` when there are no measures;
     * `Some(vals)` runs `putStats` (which itself emits nulls only when vals empty). */
   private def dggsGridJson(ids: Seq[Long], vals: Option[Seq[Double]]): String = {
@@ -197,7 +149,7 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
-  /** Fingerprint a vector-feature output (bucket B vector fns: contour, polygonize).
+  /** Fingerprint a vector-feature output (bucket B vector fns: isoband).
     *
     * Mirrors python `fingerprint_vector`: `features` is a set of `(geometry, attr)`
     * pairs. Records the feature COUNT, the total `measure` (JTS `getLength` for line

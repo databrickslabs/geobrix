@@ -233,27 +233,127 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
         succeed
     }
 
-    test("GDALTranslate should use ZSTD+PREDICTOR for float datasets (new standard)") {
+    // The Zarr driver has no DEFLATE (the heavyweight default codec) and no PREDICTOR; its zlib codec is ZLIB, and its
+    // levels are ZLIB_LEVEL / ZSTD_LEVEL. Which codecs it has depends on the GDAL build, so the driver is asked.
+    private def zarrCommand(writeOptions: Map[String, String]): String = {
+        assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
+        OperatorOptions.appendOptions("gdal_translate", writeOptions + ("format" -> "Zarr"), ds)
+    }
+
+    test("appendOptions maps the default DEFLATE to the Zarr driver's ZLIB, with its level and no predictor") {
+        val cmd = zarrCommand(Map.empty)
+        cmd should include("-of Zarr")
+        cmd should include("-co COMPRESS=ZLIB")
+        cmd should include("-co ZLIB_LEVEL=6")
+        cmd should not include "DEFLATE"
+        cmd should not include "PREDICTOR"
+        cmd should not include "ZLEVEL"
+
+        val explicit = zarrCommand(Map("compression" -> "deflate", "zlevel" -> "3"))
+        explicit should include("-co COMPRESS=ZLIB")
+        explicit should include("-co ZLIB_LEVEL=3")
+    }
+
+    test("appendOptions keeps ZSTD for the Zarr driver, with its level and no predictor") {
+        val cmd = zarrCommand(Map("compression" -> "ZSTD"))
+        cmd should include("-co COMPRESS=ZSTD")
+        cmd should include("-co ZSTD_LEVEL=9")
+        cmd should not include "PREDICTOR"
+        zarrCommand(Map("compression" -> "ZSTD", "zstd_level" -> "3")) should include("-co ZSTD_LEVEL=3")
+    }
+
+    test("appendOptions passes the other Zarr codecs through, and keeps SRC_METHOD for a raster without georeferencing") {
+        for (codec <- Seq("NONE", "ZLIB", "GZIP", "LZMA")) {
+            val cmd = zarrCommand(Map("compression" -> codec))
+            withClue(s"$codec: ") { cmd should include(s"-co COMPRESS=$codec") }
+        }
+        val noGeoRef = zarrCommand(Map("missingGeoRef" -> "true"))
+        noGeoRef should include("SRC_METHOD=NO_GEOTRANSFORM")
+        noGeoRef should include("-co COMPRESS=ZLIB")
+    }
+
+    test("appendOptions refuses a codec the Zarr driver lacks and names the ones it has") {
+        for (codec <- Seq("LZW", "JPEG")) {
+            val e = intercept[IllegalArgumentException](zarrCommand(Map("compression" -> codec)))
+            withClue(s"$codec: ${e.getMessage}: ") {
+                e.getMessage should (include(codec) and include("Zarr") and include("NONE") and include("ZLIB") and include("ZSTD"))
+                // DEFLATE is accepted and written as ZLIB, so the message says so.
+                e.getMessage should include("DEFLATE")
+            }
+        }
+    }
+
+    test("appendOptions applies the Zarr codec rules whatever the case of the format name") {
+        // GDAL looks drivers up case-insensitively, so "zarr" is a Zarr output like "Zarr".
+        // (zarrCommand pins the format to "Zarr", so the command is built here.)
+        def cmdFor(writeOptions: Map[String, String]): String =
+            OperatorOptions.appendOptions("gdal_translate", writeOptions, ds)
+        for (format <- Seq("zarr", "ZARR")) {
+            withClue(s"$format: ") {
+                val cmd = cmdFor(Map("format" -> format))
+                cmd should include("-co COMPRESS=ZLIB")
+                cmd should not include "DEFLATE"
+                cmd should not include "PREDICTOR"
+                val e = intercept[IllegalArgumentException](cmdFor(Map("format" -> format, "compression" -> "LZW")))
+                e.getMessage should include("Zarr output does not support compression 'LZW'")
+                cmdFor(Map("format" -> format, "missingGeoRef" -> "true")) should include("SRC_METHOD=NO_GEOTRANSFORM")
+            }
+        }
+    }
+
+    test("appendOptions does not check the Zarr codec for a command that adds no codec flags") {
+        // The codec flags are built lazily: gdalbuildvrt returns the command as it is, so a codec the Zarr driver
+        // refuses must not fail it. Reverting coComp/cos to eager vals makes this throw.
+        val vrt = "gdalbuildvrt /vsimem/out.vrt /vsimem/in.tif"
+        OperatorOptions.appendOptions(vrt, Map("format" -> "Zarr", "compression" -> "LZW"), ds) shouldBe vrt
+        OperatorOptions.appendOptions("gdal_translate", Map("format" -> "VRT", "compression" -> "LZW"), ds) shouldBe "gdal_translate"
+    }
+
+    test("appendOptions leaves the GTiff and COG codecs alone") {
+        OperatorOptions.appendOptions("gdal_translate", Map("format" -> "GTiff"), ds) should include("-co COMPRESS=DEFLATE")
+        OperatorOptions.appendOptions("gdal_translate", Map("format" -> "COG"), ds) should include("-co COMPRESS=DEFLATE")
+        // LZW is a TIFF codec; only the Zarr driver refuses it.
+        OperatorOptions.appendOptions("gdal_translate", Map("compression" -> "LZW"), ds) should include("-co COMPRESS=LZW")
+    }
+
+    test("GDALTranslate writes a Zarr store with default options, and the store holds the source's pixels") {
+        assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
+        for (compression <- Seq(None, Some("ZSTD"), Some("NONE"))) {
+            val outputPath = s"/vsimem/translated_default_${compression.getOrElse("default")}.zarr"
+            val options = Map("format" -> "Zarr") ++ compression.map("compression" -> _)
+            val (resultDs, metadata) = GDALTranslate.executeTranslate(outputPath, ds, "gdal_translate", options)
+            try {
+                withClue(s"${compression.getOrElse("default")}: ${metadata("last_error")}: ") { resultDs should not be null }
+                resultDs.GetDriver().getShortName shouldBe "Zarr"
+                resultDs.GetRasterBand(1).Checksum() shouldBe ds.GetRasterBand(1).Checksum()
+            } finally {
+                if (resultDs != null) resultDs.delete()
+                gdal.RmdirRecursive(outputPath)
+            }
+        }
+    }
+
+    test("GDALTranslate should use DEFLATE+PREDICTOR for float datasets by default") {
         // Create a Float32 dataset
         val driver = gdal.GetDriverByName("MEM")
         val floatDs = driver.Create("/vsimem/float.tif", 100, 100, 1, gdalconstConstants.GDT_Float32)
         val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, -1.0)
         floatDs.SetGeoTransform(gt)
 
-        val outputPath = "/vsimem/translated_float_zstd.tif"
+        val outputPath = "/vsimem/translated_float_deflate.tif"
         val command = "gdal_translate"
-        // Heavy tier now defaults to ZSTD+predictor for all outputs; float -> PREDICTOR=3
+        // Heavy tier defaults to DEFLATE+predictor for all outputs (baseline TIFF, previewable); float -> PREDICTOR=3
         val (resultDs, metadata) = GDALTranslate.executeTranslate(
             outputPath,
             floatDs,
             command,
-            Map.empty  // No compression specified -> default is now ZSTD
+            Map.empty  // No compression specified -> default is DEFLATE
         )
 
         resultDs should not be null
-        // Default (no compression specified) now uses ZSTD with PREDICTOR=3 for float
+        // Default (no compression specified) uses DEFLATE with PREDICTOR=3 for float
         metadata should contain key "last_command"
-        metadata("last_command") should include("COMPRESS=ZSTD")
+        metadata("last_command") should include("COMPRESS=DEFLATE")
         metadata("last_command") should include("PREDICTOR=3")
 
         gdal.Unlink(outputPath)
@@ -287,7 +387,7 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("appendOptions derives predictor from the --type=<X> equals form (gdal_calc) (#82)") {
-        // The repo's gdal_calc callers (SpectralIndexSpec, RST_Threshold) emit the equals
+        // gdal_calc callers emit the equals
         // form "--type=Float32", not the space form. Exact-token matching missed it, so the
         // gdal_calc path fell back to the input band types. Here a Byte output on a Float
         // input must still yield PREDICTOR=1 (not 3) via the "--type=Byte" token.

@@ -1,5 +1,6 @@
 package docs.tests.scala.packages
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
@@ -46,15 +47,15 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         import com.databricks.labs.gbx.rasterx.{functions => rx}
 
         // Register functions
-        rx.register(spark)
+        TestL1.installAll(spark)
 
         // The documentation shows this pattern:
-        // val rasterDf = spark.read.format("gdal").load("/path/to/geotiffs")
+        // val rasterDf = spark.read.format("binaryFile").load("/path/to/geotiffs").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
         // val metadataDf = rasterDf.select(
         //   col("path"),
-        //   rx.rst_width(col("tile")).alias("width"),
-        //   rx.rst_height(col("tile")).alias("height"),
-        //   rx.rst_numbands(col("tile")).alias("num_bands")
+        //   call_function("gbx_rst_width", col("tile")).alias("width"),
+        //   call_function("gbx_rst_height", col("tile")).alias("height"),
+        //   call_function("gbx_rst_numbands", col("tile")).alias("num_bands")
         // )
         // metadataDf.show()
 
@@ -67,9 +68,7 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         
         // Verify the functions used in the example are accessible
         noException should be thrownBy {
-            val _ = rx.rst_width _
-            val _ = rx.rst_height _
-            val _ = rx.rst_numbands _
+            val _ = rx.rst_boundingbox _
         }
     }
 
@@ -77,7 +76,6 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         // Verify the import pattern from docs works
         noException should be thrownBy {
             import com.databricks.labs.gbx.rasterx.{functions => rx}
-            val _ = rx.register _
         }
     }
 }

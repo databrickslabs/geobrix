@@ -1,9 +1,18 @@
+import math
+import warnings
+
 import numpy as np
+import pytest
 import rasterio
+from rasterio.enums import ColorInterp
+from rasterio.errors import NodataShadowWarning
 from rasterio.io import MemoryFile
+from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _nodata as nd
+
+from . import _alpha_layouts as al
 
 
 def _tile(arr, nodata):
@@ -65,3 +74,339 @@ def test_emit_writes_nodata_at_invalid_and_nonfinite():
         assert r[0, 1] == -9999.0
         assert r[1, 1] == -9999.0
         assert r[0, 0] == 1.0
+
+
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [
+        ("uint8", 0.0),
+        ("int8", 0.0),
+        ("uint16", 65535.0),
+        ("int16", -32768.0),
+        ("uint32", 4294967294.0),
+        ("int32", -2147483648.0),
+        ("float32", float(np.finfo(np.float32).min)),
+        ("float64", float(np.finfo(np.float64).min)),
+        ("int64", 0.0),
+    ],
+)
+def test_fallback_nodata_matches_heavy_getNoDataConstant(dtype, expected):
+    v = nd.fallback_nodata(dtype)
+    assert v == expected and not math.isnan(v)
+    assert nd.nodata_fits_dtype(v, dtype)
+
+
+def _mask_kind_tile(kind):
+    """4x4 GTiff: ``plain``, ``masked`` (internal per-dataset mask), ``masked-nodata``
+    (the mask and NoData 7), or ``rgba`` (an alpha band)."""
+    rgba = kind == "rgba"
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=4 if rgba else 1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(10, 50, 0.5, 0.5),
+        nodata=7 if kind == "masked-nodata" else None,
+    )
+    if rgba:
+        profile.update(photometric="RGB", alpha="YES")
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(np.full((profile["count"], 4, 4), 9, dtype="uint8"))
+                if kind.startswith("masked"):
+                    dst.write_mask(np.eye(4, dtype="uint8") * 255)
+            return mf.read()
+
+
+@pytest.mark.parametrize(
+    "kind,alpha,own_mask",
+    [
+        ("plain", False, False),
+        ("masked", False, True),
+        ("masked-nodata", False, True),
+        ("rgba", True, False),
+    ],
+)
+def test_has_alpha_and_has_own_mask(kind, alpha, own_mask):
+    with MemoryFile(_mask_kind_tile(kind)) as mf, mf.open() as ds:
+        assert nd.has_alpha(ds) is alpha
+        assert nd.has_own_mask(ds) is own_mask
+
+
+def _valid_mask_tile(kind):
+    """4x4 uint8, four bands, rows: 0 = colour 7 with band 4 = 0, 1 = colour 0 with band 4
+    = 255, 2 = every band 0, 3 = colour 7 with band 4 = 255. ``kind``: ``rgba`` (alpha band,
+    no NoData), ``rgba-nodata`` (NoData 0 declared over it), ``rgb-nir`` (band 4 is not
+    alpha, NoData 0) or ``plain`` (band 4 is not alpha, no NoData)."""
+    data = np.full((4, 4, 4), 7, dtype="uint8")
+    data[3] = 255
+    data[3, 0] = 0
+    data[:3, 1] = 0
+    data[:, 2] = 0
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(10, 50, 0.5, 0.5),
+        photometric="RGB",
+        nodata=0 if kind in ("rgba-nodata", "rgb-nir") else None,
+    )
+    if kind.startswith("rgba"):
+        profile["alpha"] = "YES"
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data)
+            if kind in ("rgb-nir", "plain"):
+                dst.colorinterp = (
+                    ColorInterp.red,
+                    ColorInterp.green,
+                    ColorInterp.blue,
+                    ColorInterp.undefined,
+                )
+        return mf.read()
+
+
+@pytest.mark.parametrize(
+    "kind,valid_rows",
+    [
+        (
+            "rgba",
+            (1, 3),
+        ),  # alpha decides: opaque rows, however dark; a transparent row is not
+        (
+            "rgba-nodata",
+            (3,),
+        ),  # alpha 0 is transparent AND colour 0 is NoData: both must say valid
+        ("rgb-nir", (0, 1, 3)),  # band 4 is data: valid when any band is
+        ("plain", (0, 1, 2, 3)),  # nothing is masked
+    ],
+)
+def test_valid_mask_is_alpha_aware_and_any_band_otherwise(kind, valid_rows):
+    with warnings.catch_warnings():
+        # a NoData beside the alpha band (rgba-nodata) shadows it in GDAL's masks; the alpha values are
+        # read here, so the warning is not raised
+        warnings.simplefilter("error", NodataShadowWarning)
+        with MemoryFile(_valid_mask_tile(kind)) as mf, mf.open() as ds:
+            got = nd.valid_mask(ds)
+            windowed = nd.valid_mask(ds, window=Window(1, 1, 3, 3))
+            nd.band_valid_mask(ds, 1)
+    assert got.shape == (4, 4) and got.dtype == bool
+    assert [bool(r.all()) for r in got] == [i in valid_rows for i in range(4)]
+    assert not (got.any(axis=1) != got.all(axis=1)).any()
+    assert (windowed == got[1:, 1:]).all()
+
+
+def test_valid_mask_recognises_a_nan_nodata():
+    a = np.array([[1.0, np.nan], [np.nan, 2.0]])
+    with MemoryFile(_tile(a, float("nan"))) as mf, mf.open() as ds:
+        assert nd.valid_mask(ds).tolist() == [[True, False], [False, True]]
+
+
+@pytest.mark.parametrize("kind", ["masked", "masked-nodata"])
+def test_valid_mask_honours_a_sources_own_mask_band(kind):
+    """The mask band of a source (not an alpha band) is the validity: the diagonal."""
+    with MemoryFile(_mask_kind_tile(kind)) as mf, mf.open() as ds:
+        assert nd.has_own_mask(ds)  # the premise
+        assert (nd.valid_mask(ds) == np.eye(4, dtype=bool)).all()
+        assert (
+            nd.valid_mask(ds, window=Window(1, 0, 3, 2))
+            == np.eye(4, dtype=bool)[:2, 1:]
+        ).all()
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_the_alpha_band_is_the_last_band_labelled_alpha(name):
+    """Only the LAST band, and only when it is labelled alpha, is the alpha band (as
+    gdalwarp reads a source): an alpha label on any other band is ordinary data."""
+    with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ds:
+        want = al.LAYOUTS[name][1]
+        assert nd.has_alpha(ds) is want
+        assert nd.alpha_index(ds.colorinterp) == (ds.count - 1 if want else None)
+
+
+@pytest.mark.parametrize(
+    "name,nodata,valid_rows",
+    [(n, None, (1, 3)) for n in al.LAST_ALPHA]  # opaque rows, however dark
+    + [(n, 0, (3,)) for n in al.LAST_ALPHA]  # and a colour of 0 is NoData
+    + [(n, None, (0, 1, 2, 3)) for n in al.NOT_ALPHA]  # nothing is masked
+    + [(n, 0, (0, 1, 3)) for n in al.NOT_ALPHA],  # valid when any band is
+)
+def test_valid_mask_applies_the_alpha_band_at_every_band_count(
+    name, nodata, valid_rows
+):
+    """GDAL derives a mask from alpha only for 2- and 4-band rasters, so the rule is
+    applied here for every band count: a pixel is valid only when its alpha is not 0 and
+    a data band is valid (any band, by its own NoData or mask)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NodataShadowWarning)
+        with MemoryFile(al.layout_bytes(name, nodata=nodata)) as mf, mf.open() as ds:
+            got = nd.valid_mask(ds)
+            windowed = nd.valid_mask(ds, window=Window(1, 1, 3, 3))
+    assert [bool(r.all()) for r in got] == [i in valid_rows for i in range(4)], name
+    assert not (got.any(axis=1) != got.all(axis=1)).any()
+    assert (windowed == got[1:, 1:]).all()
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_read_valid_judges_a_band_by_the_alpha_band_beside_its_own_mask(name):
+    """``read_valid`` is a band's float64 data with its validity by the rule of both tiers: opaque
+    where the raster has an alpha band (also at 3 bands, where GDAL's own mask ignores it).
+    """
+    with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ds:
+        data, valid = nd.read_valid(ds, 1)
+        raw = ds.read(1)
+    assert data.dtype == np.float64 and (data == raw).all()
+    rows = (1, 3) if al.LAYOUTS[name][1] else (0, 1, 2, 3)  # the pattern's opaque rows
+    assert [bool(r.all()) for r in valid] == [i in rows for i in range(4)], name
+
+
+@pytest.mark.parametrize(
+    "name,all_labels,want",
+    [
+        ("rgba", False, [None, None, None, ColorInterp.alpha]),
+        ("rgba_x", False, [None, None, None, ColorInterp.undefined, None]),
+        ("rgb_nir", False, [None, None, None, None]),
+        (
+            "rgba",
+            True,
+            [
+                *(ColorInterp.red, ColorInterp.green, ColorInterp.blue),
+                ColorInterp.alpha,
+            ],
+        ),
+        (
+            "rgba_x",
+            True,
+            [
+                *(ColorInterp.red, ColorInterp.green, ColorInterp.blue),
+                *([ColorInterp.undefined] * 2),
+            ],
+        ),
+        (
+            "gray_x_alpha",
+            True,
+            [ColorInterp.gray, ColorInterp.undefined, ColorInterp.alpha],
+        ),
+    ],
+)
+def test_carried_labels_copy_alpha_only_from_the_alpha_band(name, all_labels, want):
+    """The copy rule of the light tier: alpha only on the alpha band, an alpha label anywhere else
+    is data (undefined), and with ``all_labels`` the plain colour labels are copied too.
+    """
+    assert nd.carried_labels(al.LAYOUTS[name][0], all_labels) == want
+
+
+def test_valid_mask_of_a_raster_that_is_only_an_alpha_band():
+    """With no data band to mask, the alpha band decides: valid where it is not 0."""
+    data = np.array([[[0, 255], [7, 0]]], dtype="uint8")
+    prof = dict(
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=1,
+        dtype="uint8",
+        photometric="MINISBLACK",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.colorinterp = (ColorInterp.alpha,)
+            dst.write(data)
+        raw = mf.read()
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        assert nd.has_alpha(ds)
+        assert nd.valid_mask(ds).tolist() == [[False, True], [True, False]]
+
+
+_CI = ColorInterp
+
+
+@pytest.mark.parametrize(
+    "name,indexes,want",
+    [
+        ("rgba", [1, 2, 3, 4], [_CI.red, _CI.green, _CI.blue, _CI.alpha]),
+        ("rgba", [1, 4], [_CI.red, _CI.alpha]),
+        ("rgba", [3, 2], [_CI.blue, _CI.green]),
+        ("rgba", [4], [_CI.undefined]),  # a lone alpha band is selected for its values
+        ("rgba", [4, 1], [_CI.undefined, _CI.red]),  # alpha must be selected LAST
+        ("rgba", [4, 4], [_CI.undefined, _CI.undefined]),
+        ("rgba_x", [1, 2, 3, 4], [_CI.red, _CI.green, _CI.blue, _CI.undefined]),
+        ("rgba_x", [4, 5], [_CI.undefined, _CI.undefined]),  # not the last band: data
+        ("gray_x_alpha", [1, 3], [_CI.gray, _CI.alpha]),
+        ("gray_x_alpha", [2, 3], [_CI.undefined, _CI.alpha]),
+        ("gray_x_alpha", [3, 1], [_CI.undefined, _CI.gray]),
+        ("gray_alpha", [2, 1], [_CI.undefined, _CI.gray]),
+        ("rgb_nir", [4, 1], [_CI.undefined, _CI.red]),
+    ],
+)
+def test_a_band_subset_keeps_the_alpha_label_only_last_and_beside_a_data_band(
+    name, indexes, want
+):
+    labels = al.LAYOUTS[name][0]
+    assert nd.subset_colorinterp(labels, indexes) == want
+    assert nd.subset_colorinterp(list(labels), tuple(indexes)) == want  # any sequence
+
+
+@pytest.mark.parametrize(
+    "value,dtype,fits",
+    [
+        (0, "uint8", True),
+        (255, "uint8", True),
+        (256, "uint8", False),
+        (-1, "uint8", False),
+        (-128, "int8", True),
+        (-129, "int8", False),
+        (127, "int8", True),
+        (128, "int8", False),
+        (32767, "int16", True),
+        (32768, "int16", False),
+        (-32768, "int16", True),
+        (-32769, "int16", False),
+        (4294967295, "uint32", True),
+        (4294967296, "uint32", False),
+        (-999999.0, "float32", True),  # a float band takes any value
+        (1e300, "float64", True),
+        (float("nan"), "float32", True),
+        (-1, "no-such-dtype", True),  # an unknown dtype blocks nothing
+    ],
+)
+def test_nodata_fits_dtype_checks_the_integer_range_only(value, dtype, fits):
+    assert nd.nodata_fits_dtype(value, dtype) is fits
+
+
+@pytest.mark.parametrize("nodata", [None, 0])
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_a_band_is_valid_by_its_own_mask_and_the_alpha_band_beside_it(name, nodata):
+    """``band_valid_mask`` and ``opaque_mask`` on the layout pattern (row 0: data 7, alpha 0;
+    row 1: data 0, alpha 255; row 2: all 0; row 3: data 7, alpha 255): a data band is also
+    judged by the alpha band; the alpha band by its own mask only."""
+    alpha_last = al.LAYOUTS[name][1]
+    window = Window(1, 1, 3, 3)
+    with MemoryFile(al.layout_bytes(name, nodata=nodata)) as mf, mf.open() as ds:
+        count = ds.count
+        opaque = nd.opaque_mask(ds)
+        opaque_w = nd.opaque_mask(ds, window=window)
+        data = nd.band_valid_mask(ds, 1)
+        data_w = nd.band_valid_mask(ds, 1, window=window)
+        last = nd.band_valid_mask(ds, count)
+        last_w = nd.band_valid_mask(ds, count, window=window)
+    rows = lambda m: [bool(r.all()) for r in m]  # noqa: E731
+    if alpha_last:
+        assert opaque.dtype == bool and rows(opaque) == [False, True, False, True]
+        assert (opaque_w == opaque[1:, 1:]).all()
+        assert rows(data) == (
+            [False, False, False, True] if nodata == 0 else rows(opaque)
+        )
+        # the alpha band: its own mask (NoData 0 hides its zeros), not the alpha rule
+        assert rows(last) == ([False, True, False, True] if nodata == 0 else [True] * 4)
+    else:
+        assert opaque is None and opaque_w is None
+        assert rows(data) == ([True, False, False, True] if nodata == 0 else [True] * 4)
+        assert rows(last) == ([False, True, False, True] if nodata == 0 else [True] * 4)
+    assert data.shape == (4, 4) and data_w.shape == (3, 3) and last_w.shape == (3, 3)
+    assert (data_w == data[1:, 1:]).all() and (last_w == last[1:, 1:]).all()

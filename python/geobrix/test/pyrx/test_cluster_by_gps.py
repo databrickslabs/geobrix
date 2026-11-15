@@ -10,7 +10,7 @@ import math
 
 import pandas as pd
 
-from databricks.labs.gbx.pyrx.imagery import cluster_by_gps
+from databricks.labs.gbx.rasterx.imagery import cluster_by_gps
 
 
 def _grid_df(

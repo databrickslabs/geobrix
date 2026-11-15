@@ -1,10 +1,10 @@
-"""Task 5 (SDD — Phase A/B native mini-COG mosaic): VRT expansion in the reader.
+"""VRT expansion in the reader.
 
 Tests that raster_gbx (and cog_gbx) detect a .vrt path at load time, parse the
 VRT XML to enumerate member mini-COG paths, and emit one whole-file virtual tile
 row per member — so all downstream rst_* ops work per-tile UNCHANGED.
 
-Pure Python (no JAR, no osgeo).
+Pure Python (no JAR).
 
 Coverage:
   1. raster_gbx reads a persisted mosaic.vrt → row count == member count.
@@ -12,7 +12,6 @@ Coverage:
   3. rst_avg(col("tile")) returns non-null values for each row (rst_* unchanged proof).
   4. A minted VRT (absolute SourceFilename paths, from mint_vrt) also expands correctly.
   5. cog_gbx reads the same .vrt → same row count (write→read round-trip).
-  6. No osgeo import in raster.py (light-tier compliance).
   7. Loading the mosaic DIRECTORY must not double-count the VRT + tiles.
   8. _parse_vrt_members uses the hardened defusedxml parser.
   9. Quadbin mosaic.vrt expansion surfaces cellid + gridSystem in tile.metadata.
@@ -27,19 +26,18 @@ Run (in Docker):
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import pathlib
+from test._volume_safe import open_raster
 
 import numpy as np
-import rasterio
 from pyspark.sql.functions import col
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.cog_writer import CogGbxWriter, parse_mosaic_options
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
-from databricks.labs.gbx.pyrx.functions import rst_avg
+from databricks.labs.gbx.rasterx.functions import rst_avg
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,7 +70,7 @@ def _write_src(
     data = (np.arange(w * h, dtype=np.uint32).reshape(1, h, w) + 1).astype(dtype)
     data = data % max(np.iinfo(dtype).max, 1)
     data[data == 0] = 1  # no all-zero tiles (avoid NoData pruning side-effects)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -104,7 +102,7 @@ def _write_tile(
     ) % np.iinfo(dtype).max
     # Guarantee no all-zero rows (NoData pruning should not silence any tile)
     data[data == 0] = 1
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -292,22 +290,6 @@ def test_vrt_cog_gbx_reads_vrt(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. No osgeo import in raster.py (light-tier compliance)
-# ---------------------------------------------------------------------------
-
-
-def test_vrt_no_osgeo_in_raster_py():
-    """raster.py must not import osgeo — light-tier / Serverless compliance."""
-    import re
-
-    spec = importlib.util.find_spec("databricks.labs.gbx.ds.raster")
-    assert spec is not None, "ds.raster module not found"
-    src_text = pathlib.Path(spec.origin).read_text(encoding="utf-8")
-    osgeo_imports = re.findall(r"^(?:import|from)\s+osgeo\b.*$", src_text, re.MULTILINE)
-    assert not osgeo_imports, f"raster.py must not import osgeo: {osgeo_imports}"
-
-
-# ---------------------------------------------------------------------------
 # 7. FIX 5 — loading the mosaic DIRECTORY must not double-count the VRT + tiles
 # ---------------------------------------------------------------------------
 
@@ -342,7 +324,7 @@ def test_dir_load_excludes_vrt(spark, tmp_path):
 def test_parse_vrt_members_uses_defusedxml(tmp_path):
     """External VRT parsing must be entity-hardened (defusedxml), not raw stdlib.
 
-    defusedxml is declared in the [light-base] extra so production installs get
+    defusedxml is declared in the base dependencies (and the env wheels' core.txt) so production installs get
     it; the fallback to stdlib xml.etree exists only for resilience.  A VRT that
     declares an XML entity must be REJECTED (defusedxml raises) rather than
     expanded — proof the hardened parser is active.
@@ -382,7 +364,7 @@ def test_parse_vrt_members_uses_defusedxml(tmp_path):
 
 # ---------------------------------------------------------------------------
 # 9-11. Quadbin VRT expansion surfaces cellid + gridSystem in tile.metadata
-#       (Task 5 — Phase B quadbin mini-COG mosaic reader)
+#       (quadbin mini-COG mosaic reader)
 # ---------------------------------------------------------------------------
 
 
@@ -404,11 +386,11 @@ def _write_qb_src(path: str) -> None:
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     data[data == 0] = 1
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
-def _build_quadbin_mosaic_for_t5(base_dir: pathlib.Path):
+def _build_quadbin_mosaic(base_dir: pathlib.Path):
     """Build a quadbin mini-COG mosaic; return (vrt_path, member_paths).
 
     Uses gridSystem='quadbin', gridResolution=12 so ≥2 cells are produced and
@@ -439,13 +421,13 @@ def _build_quadbin_mosaic_for_t5(base_dir: pathlib.Path):
 def test_vrt_quadbin_cellid_in_metadata(spark, tmp_path):
     """Expanding a quadbin mosaic.vrt surfaces cellid and gridSystem in tile.metadata.
 
-    Each member was written with GBX_CELLID and GBX_GRIDSYSTEM='quadbin' COG tags
-    (Task 3).  The VRT expansion must read those tags and propagate them into the
+    Each member was written with GBX_CELLID and GBX_GRIDSYSTEM='quadbin' COG tags.
+    The VRT expansion must read those tags and propagate them into the
     virtual tile row's metadata dict so downstream ops can dispatch by cell.
     """
     base_dir = tmp_path / "t9_qb"
     base_dir.mkdir()
-    vrt_path, members = _build_quadbin_mosaic_for_t5(base_dir)
+    vrt_path, members = _build_quadbin_mosaic(base_dir)
 
     spark.dataSource.register(RasterGbxDataSource)
     rows = spark.read.format("raster_gbx").load(vrt_path).collect()
@@ -500,7 +482,7 @@ def test_vrt_cog_gbx_quadbin_cellid(spark, tmp_path):
     """
     base_dir = tmp_path / "t11_cog"
     base_dir.mkdir()
-    vrt_path, members = _build_quadbin_mosaic_for_t5(base_dir)
+    vrt_path, members = _build_quadbin_mosaic(base_dir)
 
     spark.dataSource.register(CogGbxDataSource)
     rows = spark.read.format("cog_gbx").load(vrt_path).collect()

@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.gridx.custom
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
+import com.databricks.labs.gbx.gridx.grid.GeomDilation
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
@@ -38,9 +39,12 @@ case class Custom_KRing(
         if (gridVal == null) return null
 
         val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
-        val k   = Custom_GridSpec.asInt(kExpr.eval(input), "k")                    // PARAMETER
+        val kVal = kExpr.eval(input)
+        if (kVal == null) return null
+        val k   = Custom_GridSpec.asInt(kVal, "k")                                  // PARAMETER
+        GeomDilation.requireK(k)                                                    // PARAMETER: a negative k raises, never a NULL
         GridErrorHandler.safeEval[ArrayData](null) {
-            val cell = cellVal.asInstanceOf[Long]
+            val cell = Custom_GridSpec.asLong(cellVal, "cell")
             val cells: Seq[Long] = sys.kRing(cell, k)
             ArrayData.toArrayData(cells.toArray)
         }

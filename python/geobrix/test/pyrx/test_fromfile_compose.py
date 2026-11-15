@@ -1,4 +1,4 @@
-"""Task 8: rst_fromfile composes the file_gbx core (byte-identical behavior)."""
+"""rst_fromfile composes the file_gbx core (byte-identical behavior)."""
 
 from unittest.mock import patch
 

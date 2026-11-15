@@ -12,10 +12,8 @@ page claims, not merely that pyrx runs.
 # ---------------------------------------------------------------------------
 
 REGISTER = """# Register the GeoBrix lightweight (pyrx) functions once per session
-import databricks.labs.gbx.pyrx.functions as rx
-import databricks.labs.gbx.ds.register as gbx_readers
-gbx_readers.register(spark)  # raster_gbx and other lightweight data sources
-rx.register(spark)            # gbx_rst_* SQL functions"""
+from databricks.labs.gbx import register
+register(spark)  # gbx_* SQL functions and the raster_gbx family of data sources"""
 
 WARP_RASTERIO = """# Single-node rasterio: reproject one file to EPSG:3857
 import rasterio
@@ -25,10 +23,10 @@ with rasterio.open("in.tif") as src:
         src.crs, "EPSG:3857", src.width, src.height, *src.bounds)
     # ...write a reprojected file, one machine, one file at a time"""
 
-WARP_PYRX = """# GeoBrix pyrx: reproject a whole DataFrame of tiles, distributed
-import databricks.labs.gbx.pyrx.functions as rx
+WARP_PYRX = """# GeoBrix: reproject a whole DataFrame of tiles, distributed
+from databricks.labs.gbx.rasterx import functions as rx
 df2 = df.withColumn("tile", rx.rst_transform("tile", 3857))
-# rst_transform runs rasterio.warp on each tile in an Arrow UDF across the cluster"""
+# rst_transform runs GDAL's raster reproject on each tile in an Arrow UDF across the cluster"""
 
 CLIP_RASTERIO = """# Single-node rasterio: clip one raster to a geometry
 import rasterio
@@ -36,8 +34,8 @@ from rasterio.mask import mask as rio_mask
 with rasterio.open("in.tif") as src:
     out, out_transform = rio_mask(src, [geom], crop=True)"""
 
-CLIP_PYRX = """# GeoBrix pyrx: clip every tile to a geometry, distributed
-import databricks.labs.gbx.pyrx.functions as rx
+CLIP_PYRX = """# GeoBrix: clip every tile to a geometry, distributed
+from databricks.labs.gbx.rasterx import functions as rx
 from pyspark.sql import functions as f
 # clip_geom column holds WKB/WKT geometry; third arg controls border pixel inclusion
 df2 = df.withColumn("tile", rx.rst_clip("tile", "clip_geom", f.lit(False)))"""
@@ -49,9 +47,9 @@ with rasterio.open("in.tif") as src:
     nir = src.read(2).astype("float32")
     ndvi = (nir - red) / (nir + red)"""
 
-NDVI_PYRX = """# GeoBrix pyrx: NDVI across a DataFrame of tiles, distributed
-import databricks.labs.gbx.pyrx.functions as rx
-# rst_ndvi(tile, red_band, nir_band) — band indices are 1-based
+NDVI_PYRX = """# GeoBrix: NDVI across a DataFrame of tiles, distributed
+from databricks.labs.gbx.rasterx import functions as rx
+# rst_ndvi(tile, red_idx, nir_idx) — band indices are 1-based
 df2 = df.withColumn("tile", rx.rst_ndvi("tile", 1, 2))"""
 
 
@@ -61,10 +59,8 @@ df2 = df.withColumn("tile", rx.rst_ndvi("tile", 1, 2))"""
 
 def _register(spark):
     """Register the lightweight data sources and pyrx SQL functions."""
-    from databricks.labs.gbx.ds.register import register as ds_register
-    import databricks.labs.gbx.pyrx.functions as rx
-    ds_register(spark)
-    rx.register(spark)
+    from databricks.labs import gbx
+    gbx.register(spark)
 
 
 def _one_tile_df(spark, src_path):
@@ -100,7 +96,7 @@ def warp_both(spark, src_path):
     from rasterio.transform import array_bounds
     from rasterio.io import MemoryFile
     from pyspark.sql import functions as F
-    import databricks.labs.gbx.pyrx.functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
 
     _register(spark)
 
@@ -118,7 +114,7 @@ def warp_both(spark, src_path):
     # pyrx side: distributed Arrow UDF; collect the result tile in one Spark action
     df = (
         _one_tile_df(spark, src_path)
-        .withColumn("tile", rx.rst_transform("tile", 3857))
+        .withColumn("tile", rx_api.rst_transform("tile", 3857))
     )
     tile_bytes = bytes(
         df.select(F.col("tile.raster").alias("r")).first()["r"]
@@ -154,7 +150,7 @@ def ndvi_both(spark, src_path):
     import numpy as np
     import rasterio
     from rasterio.io import MemoryFile
-    import databricks.labs.gbx.pyrx.functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
 
     _register(spark)
 
@@ -169,7 +165,7 @@ def ndvi_both(spark, src_path):
     # rst_ndvi(tile, red_band, nir_band): band1=red, band2=nir
     df = (
         _one_tile_df(spark, src_path)
-        .withColumn("tile", rx.rst_ndvi("tile", 1, 2))
+        .withColumn("tile", rx_api.rst_ndvi("tile", 1, 2))
     )
     tile_bytes = bytes(
         df.selectExpr("tile.raster AS r").collect()[0]["r"]

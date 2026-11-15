@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:bench:heavyweight — run the heavyweight (Scala/JNI) benchmark in the geobrix-dev container.
+# gbx:bench:heavyweight — run the heavyweight (Scala/JNI) benchmark in the dev container.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -18,7 +18,7 @@ LOG_PATH=""
 show_help() {
     show_banner "gbx:bench:heavyweight"
     cat <<'EOF'
-Run the heavyweight (Scala/JNI RasterX) benchmark in the geobrix-dev container.
+Run the heavyweight (Scala/JNI RasterX) benchmark in the dev container.
 Reads the corpus from the container mount, writes a heavyweight JSONL shard.
 
 Usage: bash scripts/commands/gbx-bench-heavyweight.sh [options]
@@ -35,6 +35,8 @@ Options:
   --warmup <n>        Warmup iters (default 2)
   --measured <n>      Measured iters (default 5)
   --log <path>        Tee output under test-logs/
+  --no-wait           Fail at once (exit 75) if another test run holds the container lock,
+                      instead of waiting for it
   --help, -h          Show help
 EOF
 }
@@ -50,6 +52,7 @@ while [[ $# -gt 0 ]]; do case $1 in
     --warmup) WARMUP="$2"; shift 2 ;;
     --measured) MEASURED="$2"; shift 2 ;;
     --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+    --no-wait) GBX_LOCK_NO_WAIT=true; shift ;;
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
@@ -59,6 +62,7 @@ show_banner "gbx:bench:heavyweight"
 validate_set "$SET" || exit 1
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 [[ -z "$OUT" ]] && OUT="/root/geobrix/test-logs/bench/${RUN_ID}/heavyweight.jsonl"
 
@@ -86,7 +90,7 @@ MVN="mvn test -PskipScoverage -DskipTests=false \
     -Dgbx.bench.functions='$FUNCTIONS' -Dgbx.bench.modes='$MODES' \
     -Dgbx.bench.rowCounts='$ROW_COUNTS' -Dgbx.bench.warmup='$WARMUP' -Dgbx.bench.measured='$MEASURED'"
 
-docker exec geobrix-dev /bin/bash -c "$DOCKER_MAVEN_ENV && cd /root/geobrix && $MVN"
+docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$DOCKER_MAVEN_ENV && cd /root/geobrix && $MVN"
 EXIT_CODE=$?
 HOST_OUT="${OUT/\/root\/geobrix\//$PROJECT_ROOT/}"
 if [[ $EXIT_CODE -eq 0 ]]; then

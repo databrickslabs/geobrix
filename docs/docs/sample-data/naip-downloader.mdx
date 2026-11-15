@@ -5,7 +5,7 @@ title: NAIP Aerial Imagery Downloader
 
 ## NAIP Aerial Imagery Downloader
 
-`NaipDownloader` fetches **NAIP (National Agriculture Imagery Program)** aerial photography for any US bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the GeoTIFFs into a Unity Catalog Volume.
+`NaipDownloader` fetches **NAIP (National Agriculture Imagery Program)** aerial photography for any US bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API. It stages the GeoTIFFs into a Unity Catalog Volume.
 
 NAIP provides 1-metre-resolution, four-band (RGB + NIR) aerial imagery covering the continental United States. Vintages are available from approximately 2010 onward, with new acquisitions every 2–3 years per state.
 
@@ -26,7 +26,7 @@ NAIP provides 1-metre-resolution, four-band (RGB + NIR) aerial imagery covering 
 
 2. **`download(bbox, out_dir, year="latest", ...)`** — selects a vintage from the search results, then fans out the per-quad downloads as parallel Spark tasks via `StacClient.download()`. Downloads are windowed and decimated to the AOI bounding box so only the relevant pixels of each quad are stored. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
 
-3. **`read(out_dir)`** — loads the staged GeoTIFFs from `out_dir` into a Spark tile DataFrame using the `raster_gbx` data source (the light-tier pyrx raster reader). Returns a DataFrame with a `tile` struct column ready for GeoBrix RasterX functions.
+3. **`read(out_dir)`** — loads the staged GeoTIFFs from `out_dir` into a Spark tile DataFrame using the `raster_gbx` data source (the GeoBrix raster reader). Returns a DataFrame with a `tile` struct column ready for GeoBrix RasterX functions.
 
 ---
 
@@ -97,7 +97,7 @@ download_naip_aoi(
 
 ## Copy-Paste Example
 
-The example below downloads the latest NAIP imagery for a San Francisco AOI into a UC Volume, then reads the tiles into a Spark DataFrame for analysis.
+The example below downloads the latest NAIP imagery for a San Francisco AOI into a UC Volume. It then reads the tiles into a Spark DataFrame for analysis.
 
 ```python
 # Install dependencies if not already present
@@ -179,4 +179,4 @@ NAIP covers only the **continental United States**. For imagery outside the US, 
 
 ## Notebook Reference
 
-`NaipDownloader` is used in the [Helios NB-02 notebook](../notebooks/helios) to stage NAIP aerial imagery for San Francisco as the raster layer in a multi-scale tiling and visualization workflow.
+`NaipDownloader` is used in the [Helios NB-02 notebook](../notebooks/helios) to stage NAIP aerial imagery for San Francisco. The imagery is the raster layer in a multi-scale tiling and visualization workflow.

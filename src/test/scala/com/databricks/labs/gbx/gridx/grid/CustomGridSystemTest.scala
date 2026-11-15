@@ -79,6 +79,33 @@ class CustomGridSystemTest extends AnyFunSuite with Matchers {
         ring should contain(center)
     }
 
+    // the 10 x 10 cells at res 0 run from position 0 to 9 on each axis
+    private def pos(id: Long): (Long, Long) = {
+        val p = g.getCellPosition(id)
+        (g.getCellPositionX(p, 0), g.getCellPositionY(p, 0))
+    }
+
+    test("kRing at the east edge holds only the cells that exist, none wrapped into the next row") {
+        val east = g.pointToCellID(95.0, 55.0, 0) // (9, 5)
+        val ring = g.kRing(east, 1)
+        ring.map(pos).toSet shouldBe (for (x <- 8L to 9L; y <- 4L to 6L) yield (x, y)).toSet
+        ring should have size 6
+    }
+
+    test("kRing at the north edge names no cell outside the grid") {
+        val north = g.pointToCellID(55.0, 95.0, 0) // (5, 9)
+        val ring = g.kRing(north, 1)
+        ring.map(pos).toSet shouldBe (for (x <- 4L to 6L; y <- 8L to 9L) yield (x, y)).toSet
+        ring.foreach(c => g.getCellPosition(c) should be < 100L)
+    }
+
+    test("kRing and kLoop at the north-east corner hold the four and three cells of the grid") {
+        val corner = g.pointToCellID(95.0, 95.0, 0) // (9, 9)
+        g.kRing(corner, 1).map(pos).toSet shouldBe Set((8L, 8L), (8L, 9L), (9L, 8L), (9L, 9L))
+        g.kLoop(corner, 1).map(pos).toSet shouldBe Set((8L, 8L), (8L, 9L), (9L, 8L))
+        g.kLoop(corner, 2).map(pos).toSet shouldBe Set((7L, 7L), (7L, 8L), (7L, 9L), (8L, 7L), (9L, 7L))
+    }
+
     test("pointToCellID rejects a NaN X coordinate via the NaN guard") {
         val ex = the[IllegalStateException] thrownBy g.pointToCellID(Double.NaN, 5.0, 0)
         ex.getMessage should include("NaN coordinates are not supported")

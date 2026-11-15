@@ -33,8 +33,10 @@ def _open_rgb(width, height, data, nodata=None):
 @pytest.fixture
 def synthetic_rgb_tile():
     """64x64 RGB tile -- exactly one tile_px=64 chip, so a fake segmenter that draws
-    the same per-chip objects every call is not duplicated across chips."""
-    data = np.zeros((3, 64, 64), dtype="uint8")
+    the same per-chip objects every call is not duplicated across chips. Filled with a
+    non-zero gray: with no NoData declared, segment_raster reads an all-zero pixel as
+    NoData, so an all-black tile would mask away every object."""
+    data = np.full((3, 64, 64), 128, dtype="uint8")
     mf = _open_rgb(64, 64, data)
     with mf:
         with mf.open() as ds:
@@ -134,3 +136,54 @@ def _two_color_objects(image):
     m[np.all(image == [255, 0, 0], axis=-1)] = 1
     m[np.all(image == [0, 255, 0], axis=-1)] = 2
     return m
+
+
+def _painted_tile(width, height, paints, fill=128, nodata=None, alpha=None):
+    """An open in-memory RGB (or RGBA, with ``alpha``: an HxW uint8 array) GTiff
+    MemoryFile of ``fill`` gray with each ``(rows, cols, rgb)`` slice of ``paints``
+    painted in. 1 m pixels in EPSG:32633, so pixel counts are square meters."""
+    bands = 3 if alpha is None else 4
+    data = np.full((bands, height, width), fill, dtype="uint8")
+    for rows, cols, rgb in paints:
+        for b, v in enumerate(rgb):
+            data[b, rows, cols] = v
+    if alpha is not None:
+        data[3] = alpha
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=bands,
+        dtype="uint8",
+        crs=_CRS,
+        transform=from_origin(0, height, 1, 1),
+        nodata=nodata,
+    )
+    if alpha is not None:
+        profile["photometric"] = "RGB"
+        profile["alpha"] = "YES"
+    mf = MemoryFile()
+    with mf.open(**profile) as dst:
+        dst.write(data)
+    return mf
+
+
+RED, GREEN = (255, 0, 0), (0, 255, 0)
+
+
+@pytest.fixture
+def painted_tile():
+    """Factory fixture: ``painted_tile(width, height, paints, **kw)`` -> an open dataset
+    (see _painted_tile); every MemoryFile it opens is closed at teardown."""
+    opened = []
+
+    def _make(width, height, paints, **kw):
+        mf = _painted_tile(width, height, paints, **kw)
+        ds = mf.open()
+        opened.append((mf, ds))
+        return ds
+
+    yield _make
+    for mf, ds in opened:
+        ds.close()
+        mf.close()

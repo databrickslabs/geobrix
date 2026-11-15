@@ -304,6 +304,40 @@ def test_commit_merge_overlap_drop_end_to_end(tmp_path):
     assert (c0).exists() and (c1).exists()  # keepParts retained
 
 
+def test_commit_merge_refuses_a_laz_part_the_decoder_must_not_get(
+    tmp_path, monkeypatch
+):
+    """A post-hoc merge folds files this job did not write: a LAZ part with a garbled chunk
+    count is refused by name, before laspy builds a decoder for it (a decoder that reserves
+    memory for that count can end the process)."""
+    import struct
+
+    import laspy
+
+    ok = tmp_path / "d_all_0.las"
+    _write_laz(ok, [1, 2], [0, 0], [0, 0])
+    bad = tmp_path / "d_all_1.laz"
+    _write_laz(bad, [3, 4], [0, 0], [0, 0])
+    with open(bad, "r+b") as fh:  # chunk table: version u32, then the chunk count u32
+        start = laspy.LasHeader.read_from(fh).offset_to_point_data
+        fh.seek(start)
+        (table_at,) = struct.unpack("<q", fh.read(8))
+        fh.seek(table_at + 4)
+        fh.write(struct.pack("<I", 0x7FFFFFFF))
+
+    def decoder_reached(*a, **k):
+        raise AssertionError("laspy opened a part that check_laz refused")
+
+    monkeypatch.setattr(laspy, "open", decoder_reached)
+    monkeypatch.setattr(laspy, "read", decoder_reached)
+    w = LidarGbxWriter(
+        {"path": str(tmp_path), "merge": "true", "fileName": "m"}, _XYZ, overwrite=False
+    )
+    with pytest.raises(ValueError, match=r"d_all_1\.laz: not read, .*chunk"):
+        w.commit([])
+    assert ok.exists() and bad.exists()  # nothing merged, nothing removed
+
+
 def test_commit_merge_empty_unify_does_not_publish(tmp_path, monkeypatch):
     # If a unify drops everything, publish must not emit a 0-point file; parts kept.
     from databricks.labs.gbx.ds import _write_lidar as W

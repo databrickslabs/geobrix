@@ -15,10 +15,10 @@ import gzip
 import io
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from databricks.labs.gbx import _osgeo
 from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 try:
@@ -133,6 +133,13 @@ def _path_exists_for_skip(path: Path | str) -> tuple[bool, Optional[float]]:
         raise
 
 
+def _already_here(label: str, size_mb: Optional[float]) -> str:
+    """The line a step prints for a file it leaves alone. A file that is present but whose size
+    cannot be read (a FUSE mount) is still present: it is skipped, the size left out."""
+    size = "" if size_mb is None else f" {size_mb:.1f} MB"
+    return f"⏭️  {label}:{size} (already exists)"
+
+
 def _copy_final_to_volumes(
     temp_file: Path,
     volumes_subpath: Path,
@@ -154,8 +161,8 @@ def _copy_final_to_volumes(
     """
     dest = Path(volumes_subpath)
     exists_skip, size_mb = _path_exists_for_skip(dest)
-    if exists_skip and size_mb is not None:
-        print(f"⏭️  {description}: {size_mb:.1f} MB (already exists)")
+    if exists_skip:
+        print(_already_here(description, size_mb))
         return dest
     # On cluster, /Volumes/... is FUSE-mounted; use pathlib + shutil (no SDK).
     _ensure_dir(dest.parent, volume_root=volume_root)
@@ -163,6 +170,21 @@ def _copy_final_to_volumes(
     size_mb = dest.stat().st_size / (1024 * 1024)
     print(f"✅ {description}: {size_mb:.1f} MB")
     return dest
+
+
+# Socrata (NYC Open Data) answers `$limit` rows and nothing more, with no continuation
+# marker: `$limit=250` on the 262-row Neighborhood Tabulation Areas dataset silently
+# dropped 12 areas. SODA 2.1 allows up to 50,000 rows per request, far above any
+# dataset in the bundle, so request that instead of a tuned count.
+_SOCRATA_MAX_ROWS = 50000
+
+
+def _socrata_geojson_url(dataset_id: str) -> str:
+    """NYC Open Data GeoJSON URL for ``dataset_id`` returning every row (up to 50,000)."""
+    return (
+        f"https://data.cityofnewyork.us/resource/{dataset_id}.geojson"
+        f"?$limit={_SOCRATA_MAX_ROWS}"
+    )
 
 
 def download_to_path(
@@ -256,12 +278,15 @@ def _create_synthetic_dem_geotiff(
     out_path: Path, minx: float, miny: float, maxx: float, maxy: float
 ) -> bool:
     """Create a small synthetic DEM GeoTIFF (single band, WGS84). Used when .hgt is not supported by GDAL.
-    Fills with an elevation gradient (0–100 m) so the raster is human-viewable."""
-    try:
-        import numpy as np
-        from osgeo import gdal, osr
-    except ImportError:
-        return False
+    Fills with an elevation gradient (0–100 m) so the raster is human-viewable.
+
+    The bundle's GDAL steps read and write files by path only, sharing nothing with rasterio, so
+    they take another GDAL's osgeo too (``same_libgdal=False``: the dev container's system one).
+    Raises ``OsgeoUnavailable`` (its message ends with the fix) where osgeo does not import.
+    """
+    import numpy as np
+
+    gdal, _ogr, osr, _array = _osgeo.bindings("the synthetic DEM", same_libgdal=False)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     w, h = 64, 64
     res_x = (maxx - minx) / w
@@ -286,26 +311,18 @@ def _create_synthetic_dem_geotiff(
 def _scale_raster_to_viewable_byte(raster_path: Path) -> Optional[Path]:
     """Write a separate Byte 0-255 GeoTIFF for human viewing; keep the original .tif unchanged.
     Uses -scale with no src range so GDAL stretches actual min/max to 0-255 (viewable in QGIS etc.).
+    Raises ``OsgeoUnavailable`` (its message ends with the fix) where osgeo does not import.
     """
-    if not shutil.which("gdal_translate") or not raster_path.exists():
+    if not raster_path.exists():
         return None
+    gdal = _osgeo.bindings("the viewable Byte copy", same_libgdal=False).gdal
     out_path = raster_path.parent / (raster_path.stem + "_byte.tif")
     try:
         # -scale with no args: compute src min/max from raster, map to 0-255 (avoids black clips)
-        rc = subprocess.run(
-            [
-                "gdal_translate",
-                "-q",
-                "-ot",
-                "Byte",
-                "-scale",
-                str(raster_path),
-                str(out_path),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if rc.returncode == 0 and out_path.exists():
+        gdal.Translate(
+            str(out_path), str(raster_path), outputType=gdal.GDT_Byte, scaleParams=[[]]
+        ).Close()
+        if out_path.exists():
             return out_path
     except Exception:
         pass
@@ -334,14 +351,20 @@ def srtm_hgt_to_geotiff(
 
     Returns:
         True if tif_path was written successfully.
-    """
-    import subprocess
 
+    Raises:
+        OsgeoUnavailable: GDAL's Python bindings do not import here (the message ends with the
+            fix); the bundles record it under the dataset's name.
+    """
+    gdal = _osgeo.bindings("srtm_hgt_to_geotiff", same_libgdal=False).gdal
     tif_path.parent.mkdir(parents=True, exist_ok=True)
-    # Try gdal_translate .hgt -> .tif (requires GDAL built with SRTMHGT)
-    cmd = ["gdal_translate", "-q", "-of", "GTiff", str(hgt_path), str(tif_path)]
-    rc = subprocess.run(cmd, capture_output=True, text=True)
-    if rc.returncode == 0 and tif_path.exists():
+    # .hgt -> .tif (requires GDAL built with SRTMHGT)
+    try:
+        gdal.Translate(str(tif_path), str(hgt_path), format="GTiff").Close()
+        translated = True
+    except RuntimeError:
+        translated = False
+    if translated and tif_path.exists():
         if not quiet:
             size_mb = tif_path.stat().st_size / (1024 * 1024)
             print(f"✅ {description}: {size_mb:.1f} MB (GeoTIFF)")
@@ -359,11 +382,169 @@ def _bundle_debug(msg: str) -> None:
         print(f"[bundle] {msg}", flush=True)
 
 
+_NYC_FILEGDB_ZIP = "nyc/filegdb/NYC_Sample.gdb.zip"
+_NYC_FILEGDB_DIR = "NYC_Sample.gdb"
+
+# Feature classes of the NYC sample File Geodatabase, built from layers the bundle
+# already holds: (feature class, source under the bundle, promote polygons to multi,
+# ((FileGDB field, source column, "str" | "int" | "float"), ...), row limit).
+_NYC_FILEGDB_LAYERS = (
+    (
+        "NYC_Boroughs",
+        "nyc/boroughs/nyc_boroughs.geojson",
+        True,
+        (("BORO_NAME", "boroname", "str"), ("BORO_CODE", "borocode", "str")),
+        None,
+    ),
+    (
+        "NYC_TaxiZones",
+        "nyc/taxi-zones/nyc_taxi_zones.geojson",
+        True,
+        (("ZONE_NAME", "zone", "str"), ("LOCATION_ID", "locationid", "int")),
+        None,
+    ),
+    (
+        "NYC_Parks",
+        "nyc/parks/nyc_parks.shp.zip",
+        True,  # the parks layer mixes Polygon and MultiPolygon
+        (
+            ("PARK_NAME", "name311", "str"),
+            ("ACRES", "acres", "float"),
+            ("BOROUGH", "borough", "str"),
+        ),
+        500,
+    ),
+    (
+        "NYC_SubwayStations",
+        "nyc/subway/nyc_subway.shp.zip",
+        False,
+        (("STATION_NAME", "stop_name", "str"), ("LINE", "line", "str")),
+        None,
+    ),
+)
+
+
+def _fgdb_column(series, kind: str):
+    """Convert a source column to the dtype of its FileGDB field; missing values stay null."""
+    import pandas as pd
+
+    if kind == "str":
+        return series.map(lambda v: None if pd.isna(v) else str(v))
+    numeric = pd.to_numeric(series, errors="coerce")
+    if kind == "int" and not numeric.isna().any():
+        return numeric.astype("int32")
+    return numeric.astype("float64")
+
+
+def _nyc_filegdb_read(base: Path, rel: str, columns, limit):
+    """Read one NYC source layer and project it to its FileGDB fields (geometry kept)."""
+    import geopandas as gpd
+
+    src = base / rel
+    uri = "zip://" + src.resolve().as_posix() if rel.endswith(".zip") else str(src)
+    gdf = gpd.read_file(uri, engine="pyogrio")
+    absent = [col for _, col, _ in columns if col not in gdf.columns]
+    if absent:
+        raise RuntimeError(f"{rel} has no column {', '.join(absent)}")
+    if limit:
+        gdf = gdf.head(limit)
+    return gpd.GeoDataFrame(
+        {field: _fgdb_column(gdf[col], kind) for field, col, kind in columns},
+        geometry=gdf.geometry.values,
+        crs=gdf.crs,
+    )
+
+
+def _write_nyc_filegdb(gdb_path: Path, base: Path) -> List[str]:
+    """Write NYC_Sample.gdb at gdb_path from the NYC layers under base.
+
+    Goes through geopandas / pyogrio (OpenFileGDB, GDAL 3.6+, bundled in the pyogrio
+    wheel), the same writer path as ``file_gdb_gbx``; it needs no GDAL Python bindings.
+    Returns the feature classes written.
+    """
+    written: List[str] = []
+    for name, rel, promote, columns, limit in _NYC_FILEGDB_LAYERS:
+        layer = _nyc_filegdb_read(base, rel, columns, limit)
+        layer.to_file(
+            str(gdb_path),
+            layer=name,
+            driver="OpenFileGDB",
+            engine="pyogrio",
+            promote_to_multi=True if promote else None,
+        )
+        written.append(name)
+        print(f"  ✅ FileGDB {name}: {len(layer)} features")
+    return written
+
+
+def _nyc_filegdb_complete(zip_path: Path) -> bool:
+    """True when the zip opens as a File Geodatabase that holds all four NYC feature classes."""
+    try:
+        import pyogrio
+
+        found = {
+            str(row[0])
+            for row in pyogrio.list_layers(
+                "/vsizip/" + Path(zip_path).as_posix() + "/" + _NYC_FILEGDB_DIR
+            )
+        }
+    except Exception:
+        return False
+    return {spec[0] for spec in _NYC_FILEGDB_LAYERS} <= found
+
+
+def _stage_nyc_filegdb(
+    base: Path, tmp: Path, *, volume_root: Optional[Path] = None
+) -> Optional[Path]:
+    """Build nyc/filegdb/NYC_Sample.gdb.zip from the bundle's NYC layers and copy it under base.
+
+    The zip is written only when all four feature classes were built: a missing source
+    layer or column raises RuntimeError and leaves no zip. An existing zip is skipped only
+    if it is complete (holds all four feature classes); an incomplete one is replaced.
+    Needs geopandas and pyogrio (ImportError otherwise); no GDAL Python bindings.
+    """
+    base = Path(base)
+    dest = base / _NYC_FILEGDB_ZIP
+    # A file that is present but whose size cannot be read (a FUSE mount) is still present.
+    existing, size_mb = _path_exists_for_skip(dest)
+    if existing and _nyc_filegdb_complete(dest):
+        size = "" if size_mb is None else f" {size_mb:.1f} MB"
+        print(f"⏭️  NYC FileGDB:{size} (already exists)")
+        return dest
+    missing = [
+        rel
+        for _, rel, _, _, _ in _NYC_FILEGDB_LAYERS
+        if not _path_exists_for_skip(base / rel)[0]
+    ]
+    if missing:
+        raise RuntimeError(
+            "NYC FileGDB needs all four source layers; missing: " + ", ".join(missing)
+        )
+    from databricks.labs.gbx.ds.vector import _zip_gdb_bundle
+
+    print("⬇️  Building NYC FileGDB...")
+    work = Path(tmp) / "nyc_filegdb_build"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    try:
+        _write_nyc_filegdb(work / _NYC_FILEGDB_DIR, base)
+        built = work / (_NYC_FILEGDB_DIR + ".zip")
+        _zip_gdb_bundle(str(work / _NYC_FILEGDB_DIR), str(built))
+        if existing:
+            print("  ⚠️  replacing the incomplete NYC FileGDB")
+            dest.unlink()
+        return _copy_final_to_volumes(
+            built, dest, "NYC FileGDB", volume_root=volume_root
+        )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def run_essential_bundle(  # noqa: C901
     volumes_path: str,
     temp_dir: Optional[str] = None,
 ) -> dict:
-    """Download the Essential sample-data bundle (~355 MB) to a Volumes path.
+    """Download the Essential sample-data bundle (~536 MB) to a Volumes path.
 
     Fetches NYC and London vector data (GeoJSON), Sentinel-2 raster (red band),
     and SRTM elevation for both regions. All interim work (downloads, decompression)
@@ -423,8 +604,8 @@ def run_essential_bundle(  # noqa: C901
     ) -> Optional[Path]:
         out = vol(f"{subfolder}/{filename}")
         exists_skip, size_mb = _path_exists_for_skip(out)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  Sentinel-2 {region_name}: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here(f"Sentinel-2 {region_name}", size_mb))
             return out
         if not pystac_client or not planetary_computer:
             raise RuntimeError(
@@ -460,7 +641,12 @@ def run_essential_bundle(  # noqa: C901
             tmp_file, out, f"Sentinel-2 {region_name}", volume_root=volume_root
         )
         # Generate separate _byte.tif for human viewing; tests use the original .tif
-        byte_path = _scale_raster_to_viewable_byte(tmp_file)
+        try:
+            byte_path = _scale_raster_to_viewable_byte(tmp_file)
+        except _osgeo.OsgeoUnavailable as e:
+            errors.append((f"Sentinel-2 {region_name} (viewable)", str(e)))
+            print(f"⚠️  Sentinel-2 {region_name} (viewable) failed: {e}")
+            byte_path = None
         if byte_path is not None:
             out_byte = out.parent / (out.stem + "_byte.tif")
             _copy_final_to_volumes(
@@ -476,13 +662,13 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol_dir_resolve("nyc/taxi-zones") / "nyc_taxi_zones.geojson"
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Taxi Zones: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Taxi Zones", size_mb))
         else:
             print("⬇️  Downloading NYC Taxi Zones...")
             t = tmp_dir_resolve("nyc", "taxi-zones") / "nyc_taxi_zones.geojson"
             download_to_path(
-                "https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=300",
+                _socrata_geojson_url("8meu-9t5y"),
                 t,
                 "NYC Taxi Zones",
                 skip_if_exists=False,
@@ -499,13 +685,13 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("nyc/boroughs/nyc_boroughs.geojson")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Boroughs: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Boroughs", size_mb))
         else:
             print("⬇️  Downloading NYC Boroughs...")
             t = tmp_path("nyc", "boroughs", "nyc_boroughs.geojson")
             download_to_path(
-                "https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=10",
+                _socrata_geojson_url("gthc-hcne"),
                 t,
                 "NYC Boroughs",
                 skip_if_exists=False,
@@ -521,8 +707,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("london/postcodes/london_postcodes.geojson")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  London Postcodes: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("London Postcodes", size_mb))
         else:
             print("⬇️  Downloading London Postcodes...")
             t = tmp_path("london", "postcodes", "london_postcodes.geojson")
@@ -559,8 +745,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("nyc/elevation/srtm_n40w074.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  SRTM NYC: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("SRTM NYC", size_mb))
         else:
             print("⬇️  Downloading SRTM NYC...")
             t_hgt = tmp_path("nyc", "elevation", "srtm_n40w074.hgt")
@@ -581,8 +767,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("london/elevation/srtm_n51w001.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  SRTM London: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("SRTM London", size_mb))
         else:
             print("⬇️  Downloading SRTM London...")
             t_hgt = tmp_path("london", "elevation", "srtm_n51w001.hgt")
@@ -627,13 +813,16 @@ def run_complete_bundle(  # noqa: C901
     volumes_path: str,
     temp_dir: Optional[str] = None,
 ) -> dict:
-    """Download the Complete sample-data bundle additions (~440 MB more).
+    """Download the Complete sample-data bundle additions (~147 MB more).
 
     Run after run_essential_bundle. Adds NYC neighborhoods, extra SRTM tile,
     London boroughs (GeoJSON), HRRR weather (GRIB2), NYC parks and subway
-    shapefiles (delivered as single zips per dataset), and a multi-layer
-    GeoPackage. All interim work (unzipping, GPKG build) uses temp_dir;
-    only final assets are written to volumes_path. Skips if already present.
+    shapefiles (delivered as single zips per dataset), a multi-layer
+    GeoPackage, and a multi-feature-class File Geodatabase
+    (nyc/filegdb/NYC_Sample.gdb.zip, written only when all four of its feature
+    classes could be built). All interim work (unzipping, GPKG and FileGDB
+    build) uses temp_dir; only final assets are written to volumes_path.
+    Skips if already present.
 
     Args:
         volumes_path: Base path (same as used for Essential bundle).
@@ -646,7 +835,8 @@ def run_complete_bundle(  # noqa: C901
         - "total_size_mb": total size in MB of those files.
 
     Requires:
-        requests. For London boroughs and GeoPackage: geopandas.
+        requests. For London boroughs and GeoPackage: geopandas. For the File
+        Geodatabase: geopandas and pyogrio (OpenFileGDB writer, GDAL 3.6+).
     """
     import zipfile
     from datetime import datetime, timedelta, timezone
@@ -670,13 +860,13 @@ def run_complete_bundle(  # noqa: C901
     try:
         dest = vol("nyc/neighborhoods/nyc_nta.geojson")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Neighborhoods: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Neighborhoods", size_mb))
         else:
             print("⬇️  Downloading NYC Neighborhoods...")
             t = tmp_path("nyc", "neighborhoods", "nyc_nta.geojson")
             download_to_path(
-                "https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=250",
+                _socrata_geojson_url("9nt8-h7nd"),
                 t,
                 "NYC Neighborhoods",
                 skip_if_exists=False,
@@ -693,8 +883,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         dest = vol("nyc/elevation/srtm_n40w073.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  SRTM NYC East: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("SRTM NYC East", size_mb))
         else:
             print("⬇️  Downloading SRTM NYC East...")
             t_hgt = tmp_path("nyc", "elevation", "srtm_n40w073.hgt")
@@ -714,8 +904,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         out_geojson = vol("london/boroughs/london_boroughs.geojson")
         exists_skip, size_mb = _path_exists_for_skip(out_geojson)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  London Boroughs: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("London Boroughs", size_mb))
         else:
             print("⬇️  Downloading London Boroughs...")
             url = "https://data.london.gov.uk/download/statistical-gis-boundary-files-london/9ba8c833-6370-4b11-abdc-314aa020d5e0/statistical-gis-boundaries-london.zip"
@@ -787,8 +977,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         parks_zip_dest = vol("nyc/parks/nyc_parks.shp.zip")
         exists_skip, size_mb = _path_exists_for_skip(parks_zip_dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Parks: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Parks", size_mb))
         else:
             print("⬇️  Downloading NYC Parks...")
             url = "https://data.cityofnewyork.us/api/geospatial/enfh-gkve?method=export&format=Shapefile"
@@ -829,8 +1019,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         subway_zip_dest = vol("nyc/subway/nyc_subway.shp.zip")
         exists_skip, size_mb = _path_exists_for_skip(subway_zip_dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Subway: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Subway", size_mb))
         else:
             print("⬇️  Downloading NYC Subway...")
             url = "https://data.ny.gov/api/geospatial/i9wp-a4ja?method=export&format=Shapefile"
@@ -868,8 +1058,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         gpkg_dest = vol("nyc/geopackage/nyc_complete.gpkg")
         exists_skip, size_mb = _path_exists_for_skip(gpkg_dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  Multi-Layer GeoPackage: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("Multi-Layer GeoPackage", size_mb))
         else:
             print("⬇️  Building Multi-Layer GeoPackage...")
             import geopandas as gpd
@@ -910,6 +1100,14 @@ def run_complete_bundle(  # noqa: C901
     except Exception as e:
         errors.append(("GeoPackage", str(e)))
         print(f"⚠️  GeoPackage failed: {e}")
+
+    try:
+        _stage_nyc_filegdb(base, tmp, volume_root=volume_root)
+    except ImportError as e:
+        errors.append(("FileGDB", f"geopandas and pyogrio required: {e}"))
+    except Exception as e:
+        errors.append(("FileGDB", str(e)))
+        print(f"⚠️  FileGDB failed: {e}")
 
     try:
         file_count = sum(1 for _ in base.rglob("*") if _.is_file())

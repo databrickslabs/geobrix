@@ -38,7 +38,7 @@ gdalwarp -t_srs EPSG:4326 /Volumes/main/default/geobrix_samples/geobrix-examples
 gdal_translate -co TILED=YES -co COMPRESS=LZW -co COPY_SRC_OVERVIEWS=YES \\
   /Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif /tmp/output_cog.tif
 
-# 3. Then load with GeoBrix: spark.read.format("gdal").load("/tmp/output_cog.tif")"""
+# 3. Then load with GeoBrix: spark.read.format("raster_gbx").load("/tmp/output_cog.tif")"""
 
 preprocessing_cli_output = """Step 1 — gdalwarp:
 Creating output file that is 10980P x 10980L.
@@ -173,7 +173,7 @@ def gdal_cli_in_spark_udfs(spark):
 
     # Sample-data Volumes path (same as prior CLI examples)
     raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     processed = rasters.withColumn(
         "hillshade",
         apply_gdal_operation("tile", lit("hillshade"))

@@ -1,3 +1,5 @@
+import dataclasses
+import os
 import time
 
 import pytest
@@ -61,6 +63,98 @@ def test_capture_env_has_required_fields():
     ):
         assert k in env
     assert env["env_where"] == "venv"
+
+
+def _ok_row_fields():
+    """A value for every ResultRow field that has no default (the env record supplies the rest)."""
+    required = [
+        f
+        for f in dataclasses.fields(rn.ResultRow)
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+    ]
+    return {f.name: (0 if f.type in ("int", "float") else "") for f in required}
+
+
+class _Session:
+    """A session as `spark_env` reads it: the server's version and conf."""
+
+    def __init__(self, version="4.3.0"):
+        self.version = version
+
+        class _Conf:
+            @staticmethod
+            def get(key):
+                if key == "spark.databricks.clusterUsageTags.sparkVersion":
+                    return "19.x-snapshot-scala2.13"
+                raise KeyError(key)
+
+        self.conf = _Conf()
+
+
+def test_capture_env_records_the_spark_the_run_is_on(monkeypatch):
+    """The server's Spark version (not the client's), the runtime, the Serverless env and the capability report ride in
+    the env record, so no row is unattributable to 4.2 or 4.3. Without a session they are the empty string.
+    """
+    import json
+
+    from databricks.labs.gbx.manager import capabilities
+
+    monkeypatch.setattr(capabilities, "_has_arrow_eval", lambda name: True)
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    monkeypatch.setenv("GBX_CAP_ARROW_GROUPED_AGG_ITER", "1")
+    env = rn.capture_env("cluster", _Session("4.3.0"))
+    assert env["env_spark_version"] == "4.3.0"
+    assert env["env_pyspark_version"]  # the client's, whatever it is
+    assert env["env_dbr_version"] == "19.x-snapshot-scala2.13"
+    assert env["env_version"] == "6"
+    caps = json.loads(env["env_caps"])
+    assert caps["arrow_grouped_agg_iter"] == "on:override"
+    assert caps["arrow_grouped_agg"] == "off:default"
+    assert caps["udtf_table_partition_ok"] == "off:unprobed"  # a report starts no probe
+    # an older server: the same override is refused, and the record says off
+    with pytest.warns(RuntimeWarning):
+        old = rn.capture_env("cluster", _Session("4.1.0"))
+    assert json.loads(old["env_caps"])["arrow_grouped_agg_iter"].startswith("off:")
+    row = rn.ResultRow(**{**_ok_row_fields(), **env})  # `**env` builds a row
+    assert row.env_spark_version == "4.3.0"
+
+
+def test_env_caps_are_read_at_each_call_not_frozen_at_the_first_read(monkeypatch):
+    """A probe or a first use decides a capability after the session's env was first read: the next row must say so."""
+    import json
+
+    from databricks.labs.gbx.manager import capabilities
+
+    seen = {"caps": {"a": {"value": False, "source": "unprobed"}}, "info": 0}
+    real_info = capabilities.runtime_info
+
+    def info(spark):
+        seen["info"] += 1
+        return real_info(spark)
+
+    monkeypatch.setattr(capabilities, "runtime_info", info)
+    monkeypatch.setattr(capabilities, "report", lambda spark: seen["caps"])
+    session = _Session("4.3.0")
+    first = rn.spark_env(session)
+    assert json.loads(first["env_caps"]) == {"a": "off:unprobed"}
+    seen["caps"] = {
+        "a": {"value": True, "source": "probe"}
+    }  # decided after the first read
+    again = rn.spark_env(session)
+    assert json.loads(again["env_caps"]) == {"a": "on:probe"}
+    assert (
+        again["env_spark_version"] == "4.3.0" and seen["info"] == 1
+    )  # the versions are read once
+
+
+def test_capture_env_never_raises_when_the_session_cannot_say():
+    class Broken:
+        @property
+        def version(self):
+            raise RuntimeError("connection lost")
+
+    env = rn.capture_env("venv", Broken())
+    assert env["env_where"] == "venv" and env["env_spark_version"] == ""
 
 
 def test_run_pure_core_produces_ok_rows(tmp_path):
@@ -205,58 +299,8 @@ def test_run_spark_path_produces_ok_rows(tmp_path, spark):
     assert sorted({r.rows for r in rows}) == [2, 4]
 
 
-def test_run_pure_core_emits_per_fn_progress(tmp_path, capsys):
-    # Per-function progress lines must be printed to stdout as each fn finishes:
-    # leg header "[bench] lightweight pure-core: N fn(s) to run", then per-fn
-    # "[i/N] fn_name  lightweight pure-core  <ms>  <status>" for each fn.
-    corpus = dg.generate_corpus(
-        out_dir=tmp_path,
-        seed=11,
-        tile_px=[32],
-        bands=[1],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=2,
-        row_tile_px=32,
-        row_bands=1,
-        row_dtype="float32",
-    )
-    fns = s.select(functions=["rst_width", "rst_avg"])
-    rows = rn.run_pure_core(
-        corpus_root=tmp_path,
-        corpus=corpus,
-        fnspecs=fns,
-        run_id="prog-test",
-        warmup=1,
-        measured=1,
-        where="venv",
-    )
-    out = capsys.readouterr().out
-    lines = out.splitlines()
-    # Leg header is the first line.
-    assert any("[bench] lightweight pure-core:" in ln for ln in lines)
-    # One progress line per fn (2 fns).
-    fn_lines = [
-        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
-    ]
-    assert len(fn_lines) == 2
-    # Each progress line contains "i/N", the fn name, tier+mode, and a status.
-    for i, fn_name in enumerate(["rst_width", "rst_avg"], 1):
-        matching = [ln for ln in fn_lines if fn_name in ln]
-        assert matching, f"no progress line for {fn_name}"
-        pl = matching[0]
-        # i/N prefix
-        assert f"[{i}/2]" in pl or f"/{2}]" in pl
-        assert "lightweight pure-core" in pl
-        assert "ok" in pl or "error" in pl or "na_by_design" in pl
-    # Result rows are unaffected.
-    assert rows and all(r.fn in {"rst_width", "rst_avg"} for r in rows)
-
-
-def test_run_pure_core_progress_on_error_fn(tmp_path, capsys, monkeypatch):
-    # When a fn raises, its progress line must still be printed with status=error,
-    # and the remaining fns must still run (the loop continues).
+def test_run_pure_core_an_error_fn_does_not_stop_the_loop(tmp_path, monkeypatch):
+    # When a fn raises it gets an error row, and the remaining fns still run.
     corpus = dg.generate_corpus(
         out_dir=tmp_path,
         seed=13,
@@ -293,64 +337,9 @@ def test_run_pure_core_progress_on_error_fn(tmp_path, capsys, monkeypatch):
         measured=1,
         where="venv",
     )
-    out = capsys.readouterr().out
-    lines = out.splitlines()
-    fn_lines = [
-        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
-    ]
-    # Both fns produce a progress line.
-    assert len(fn_lines) == 2
-    err_lines = [ln for ln in fn_lines if "rst_width" in ln]
-    assert err_lines and "error" in err_lines[0]
-    ok_lines = [ln for ln in fn_lines if "rst_avg" in ln]
-    assert ok_lines and "ok" in ok_lines[0]
     # Error rows present for rst_width; ok rows present for rst_avg.
     assert any(r.fn == "rst_width" and r.status == "error" for r in rows)
     assert any(r.fn == "rst_avg" and r.status == "ok" for r in rows)
-
-
-def test_run_spark_path_emits_per_fn_progress(tmp_path, spark, capsys):
-    # Per-function progress lines for spark-path:
-    # leg header "[bench] lightweight spark-path: N fn(s) to run", then per-fn line.
-    corpus = dg.generate_corpus(
-        out_dir=tmp_path,
-        seed=17,
-        tile_px=[32],
-        bands=[1],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=4,
-        row_tile_px=32,
-        row_bands=1,
-        row_dtype="float32",
-    )
-    fns = s.select(functions=["rst_width"])
-    rows = rn.run_spark_path(
-        spark=spark,
-        corpus_root=tmp_path,
-        corpus=corpus,
-        fnspecs=fns,
-        run_id="sp-prog",
-        row_counts=[2, 4],
-        warmup=1,
-        measured=1,
-        where="venv",
-    )
-    out = capsys.readouterr().out
-    lines = out.splitlines()
-    assert any("[bench] lightweight spark-path:" in ln for ln in lines)
-    fn_lines = [
-        ln for ln in lines if "lightweight spark-path" in ln and "[bench]" not in ln
-    ]
-    assert len(fn_lines) == 1
-    line = fn_lines[0]
-    assert "[1/1]" in line
-    assert "rst_width" in line
-    assert "lightweight spark-path" in line
-    assert "ok" in line or "error" in line
-    # Result rows unaffected.
-    assert rows and all(r.fn == "rst_width" for r in rows)
 
 
 def test_emit_explain_prints_and_writes_file(tmp_path, spark, capsys):
@@ -544,6 +533,90 @@ def test_run_spark_path_tile_aggregators_produce_raster_fingerprints(tmp_path, s
         assert fp.get(2), f"{name} has no consistency fingerprint at N=2"
         parsed = json.loads(fp[2])
         assert parsed["kind"] == "raster", (name, parsed.get("kind"))
+
+
+def test_the_general_harness_refuses_to_time_a_plan_that_is_not_lightweight(
+    tmp_path, spark
+):
+    """The harness records every spark-path row as lightweight. A Column whose plan holds no
+    Python node (what a heavyweight function registered under the same SQL name plans as) is
+    refused, on the scalar path and the aggregate path, by the run-stopping tier error.
+    """
+    import dataclasses
+
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import readers as rd
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=8,
+        tile_px=[32],
+        bands=[2],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=2,
+        row_dtype="float32",
+    )
+    (scalar,) = s.select(functions=["rst_width"])
+    (agg,) = s.select(functions=["rst_merge_agg"])
+    not_light = [
+        dataclasses.replace(scalar, col_fn=lambda t, a: F.length(t["raster"])),
+        dataclasses.replace(agg, col_fn=lambda t, a: F.first(t)),
+    ]
+    for fs in not_light:
+        with pytest.raises(rd.TierResolutionError, match="heavyweight implementation"):
+            rn.run_spark_path(
+                spark=spark,
+                corpus_root=tmp_path,
+                corpus=corpus,
+                fnspecs=[fs],
+                run_id="t",
+                row_counts=[2],
+                warmup=0,
+                measured=1,
+                where="venv",
+            )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "rst_h3_rasterize_agg",
+        "rst_quadbin_rasterize_agg",
+        "rst_bng_rasterize_agg",
+        "rst_custom_rasterize_agg",
+    ],
+)
+def test_the_bench_rasterize_input_is_the_presence_mask(spark, name):
+    """The bench times the presence mask: its light col_fn passes the value OMITTED. The
+    streamed value column is typed and all null, which the light tier reads as data and burns
+    as NaN (only an omitted value burns 1.0), so passing that column would give the light tier
+    a NaN fingerprint against the heavyweight tier's 1.0."""
+    import numpy as np
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import _serde
+
+    (fs,) = s.select(functions=[name])
+    build = (
+        rn._h3_aggregate_df
+        if fs.input_kind == "h3_aggregate"
+        else rn._grid_aggregate_df
+    )
+    df = build(spark, fs).withColumn("key", F.lit(0))
+    out = (
+        df.groupBy("key")
+        .agg(fs.col_fn(df["cellid"], df["value"], fs.args).alias("out"))
+        .collect()[0]["out"]
+    )
+    with _serde.open_tile(bytes(out["raster"])) as ds:
+        pixels = ds.read(1)
+        burned = pixels[pixels != ds.nodata]
+    assert burned.size and np.all(burned == 1.0), np.unique(burned)
 
 
 def test_run_aggregate_passes_minimal_warmup_fn(tmp_path, spark, monkeypatch):
@@ -845,49 +918,15 @@ def test_build_input_tile_virtual_no_silent_fallback(monkeypatch):
         rn._build_input_tile("/any.tif", b"", 0, "virtual")
 
 
-def test_run_spark_path_accepts_input_tile_kwarg():
-    import inspect
-
-    assert "input_tile" in inspect.signature(rn.run_spark_path).parameters
-
-
-def test_disposition_accessor_uses_classifier():
+def test_disposition_from_the_classifier_and_the_output_tile():
     assert rn._disposition_of(s.REGISTRY["rst_avg"], None) == "materialized"
     assert rn._disposition_of(s.REGISTRY["rst_width"], None) == "deferred"
-
-
-def test_disposition_tile_returning_from_output_tile():
     assert (
         rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": b"xx"}) == "materialized"
     )
     assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": None}) == "deferred"
     # no sample available -> "na" (not a crash)
     assert rn._disposition_of(s.REGISTRY["rst_slope"], None) == "na"
-
-
-def test_pure_core_parity_slope_width(tmp_path):
-    from databricks.labs.gbx.bench import datagen as dg
-    from databricks.labs.gbx.bench import runner as rn
-    from databricks.labs.gbx.bench import spec as s
-
-    corpus = dg.generate_corpus(
-        out_dir=tmp_path,
-        seed=9,
-        tile_px=[64],
-        bands=[1],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=1,
-        row_tile_px=64,
-        row_bands=1,
-        row_dtype="float32",
-    )
-    fns = s.select(functions=["rst_slope", "rst_width"])
-    res = rn.run_pure_core_parity(tmp_path, corpus, fns)
-    assert res, "expected parity rows"
-    for name, px, ok, mat, virt in res:
-        assert ok, f"{name}@{px}: virtual != materialized ({mat} vs {virt})"
 
 
 def test_pure_core_parity_full_tile_set(tmp_path):
@@ -939,21 +978,6 @@ def test_pure_core_parity_full_tile_set(tmp_path):
     assert not bad, f"virtual!=materialized divergences: {bad}"
 
 
-def test_creation_microleg_defined():
-    from databricks.labs.gbx.bench import runner as rn
-
-    assert hasattr(rn, "_run_sp_creation")
-
-
-def test_rst_fromfile_column_builds():
-    from pyspark.sql import functions as F
-
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    c = prx.rst_fromfile(F.col("path"), "GTiff")
-    assert c is not None
-
-
 def test_spark_virtual_leg_smoke(spark, tmp_path):
     from databricks.labs.gbx.bench import datagen as dg
     from databricks.labs.gbx.bench import runner as rn
@@ -985,3 +1009,106 @@ def test_spark_virtual_leg_smoke(spark, tmp_path):
     assert disp.get("rst_avg") == "materialized"
     assert disp.get("rst_fromfile") == "deferred"  # creation micro-leg
     assert all(r.per_tile_avg_s >= 0 for r in ok)
+
+
+@pytest.mark.skipif(
+    not os.path.isdir("/proc"), reason="the sampler reads /proc (Linux)"
+)
+def test_worker_rss_sampler_reports_the_peak_of_matching_processes():
+    """The sampler sums the RSS of processes whose command line contains the marker and
+    keeps the peak, so a short-lived allocation inside a Python worker is still seen."""
+    import subprocess
+    import sys
+
+    marker = "gbx-rss-sampler-marker"
+    code = "import sys, time; b = bytearray(160 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096]); time.sleep(2.5)"
+    proc = subprocess.Popen([sys.executable, "-c", code, marker])
+    try:
+        with rn.WorkerRssSampler(match=marker, interval_s=0.05) as seen:
+            time.sleep(1.8)
+        none = rn.WorkerRssSampler(match="gbx-no-such-process-marker")
+        with none:
+            time.sleep(0.2)
+    finally:
+        proc.kill()
+        proc.wait()
+    assert seen.peak_mb >= 100, seen.peak_mb
+    assert (
+        seen.peak_anon_mb >= 100
+    ), seen.peak_anon_mb  # the bytearray is heap, not a file
+    assert none.peak_mb == 0.0 and none.peak_anon_mb == 0.0
+
+
+@pytest.mark.skipif(
+    not os.path.exists("/proc/self/smaps_rollup"),
+    reason="the sampler reads smaps_rollup (Linux 4.14+)",
+)
+def test_worker_rss_sampler_counts_pages_shared_with_forked_workers_once():
+    """The daemon forks its workers, which share its copy-on-write pages: summing each
+    process's own RSS counted a 200 MB parent four times (one parent, three forks), the
+    proportional sum counts it about once."""
+    import subprocess
+    import sys
+
+    marker = "gbx-rss-fork-marker"
+    code = (
+        "import os, time\n"
+        "b = bytearray(200 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096])\n"
+        "for _ in range(3):\n"
+        "    if os.fork() == 0:\n"
+        "        time.sleep(2.5)\n"
+        "        os._exit(0)\n"
+        "time.sleep(2.5)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code, marker])
+    try:
+        with rn.WorkerRssSampler(match=marker, interval_s=0.05) as seen:
+            time.sleep(1.8)
+    finally:
+        proc.kill()
+        proc.wait()
+    assert 150 <= seen.peak_anon_mb < 400, seen.peak_anon_mb  # four counts is 800+
+
+
+@pytest.mark.parametrize(
+    "smaps, want",
+    [
+        (
+            {"Pss": 120, "Pss_Anon": 80},
+            (120, 80),
+        ),  # proportional, when the kernel has both
+        (OSError("no smaps_rollup"), (300, 200)),  # an old kernel, or not ours to read
+        ({"Pss": 120}, (300, 200)),  # no Pss_Anon: not proportional, so the plain sums
+    ],
+    ids=["proportional", "no-smaps-rollup", "pss-without-anon"],
+)
+def test_process_kb_uses_the_resident_set_when_smaps_rollup_cannot_say(
+    monkeypatch, smaps, want
+):
+    """Which fields one process is read from: Pss / Pss_Anon when smaps_rollup gives both,
+    else VmRSS / RssAnon of /proc/<pid>/status."""
+
+    def fields(path, wanted):
+        if path.endswith("smaps_rollup"):
+            if isinstance(smaps, OSError):
+                raise smaps
+            return dict(smaps)
+        return {"VmRSS": 300, "RssAnon": 200}
+
+    monkeypatch.setattr(rn.WorkerRssSampler, "_kb_fields", staticmethod(fields))
+    assert rn.WorkerRssSampler()._process_kb(1234) == want
+
+
+def test_time_iters_keeps_each_measured_sample_in_run_order():
+    """Pooling iterations across runs needs every sample, not only the median, min and p90."""
+    waits = iter([0.004, 0.0, 0.002])
+
+    def fn():
+        time.sleep(next(waits))
+
+    stats = rn.time_iters(fn, warmup=0, measured=3)
+    s = stats["iter_samples_ms"]
+    assert len(s) == 3 and s[0] > s[2] > s[1]
+    assert min(s) == stats["iter_min_ms"] and sum(s) == pytest.approx(
+        stats["iter_total_wall_clock_ms"]
+    )

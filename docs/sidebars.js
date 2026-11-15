@@ -16,11 +16,38 @@ const sidebars = {
   // By default, Docusaurus generates a sidebar from the docs folder structure
   tutorialSidebar: [
     'intro',
-    'installation',
+    {
+      type: 'category',
+      label: 'Installation',
+      collapsed: true,
+      link: { type: 'doc', id: 'installation' },
+      items: [
+        'installation/dcs',
+      ],
+    },
     'quick-start',
     'databricks-spatial',
     'serverless-and-memory',
-    'release-notes',
+    {
+      type: 'category',
+      label: 'Release Notes',
+      collapsed: true,
+      link: { type: 'doc', id: 'release-notes' },
+      items: [
+        {
+          type: 'category',
+          label: '0.6.0',
+          collapsed: false,
+          items: [
+            'release-notes/0-6/new',
+            'release-notes/0-6/changes',
+            'release-notes/0-6/breaking',
+            'migration-0-6',
+          ],
+        },
+        'release-notes-0-5-and-earlier',
+      ],
+    },
     {
       type: 'category',
       label: 'Examples',
@@ -39,6 +66,8 @@ const sidebars = {
             'notebooks/helios',
             'notebooks/vapor-eyes',
             'notebooks/orthomosaic',
+            'notebooks/zarr-weather-features',
+            'notebooks/zarr-size-ladder',
           ],
         },
         {
@@ -49,6 +78,7 @@ const sidebars = {
             'examples/genie-map',
           ],
         },
+        'examples/uc-functions',
       ],
     },
     {
@@ -72,11 +102,31 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Ingestion Pipelines',
+      collapsed: true,
+      link: { type: 'doc', id: 'ingestion/overview' },
+      items: [
+        'ingestion/lakeflow-connector',
+        'ingestion/lakeflow-sdp',
+        'ingestion/auto-loader',
+        'ingestion/read-paths',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },
       items: [
+        'choosing-a-format',
         'common-functions',
+        {
+          type: 'category',
+          label: 'GDAL drivers as provided',
+          collapsed: true,
+          link: { type: 'doc', id: 'gdal-drivers' },
+          items: ['gdal-drivers/vector', 'gdal-drivers/raster', 'gdal-drivers/other'],
+        },
         {
           type: 'category',
           label: 'Readers',
@@ -84,7 +134,7 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb', 'readers/lidar', 'readers/exif'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/zarr', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb', 'readers/lidar', 'readers/exif'] },
             'readers/file',
           ],
         },
@@ -95,7 +145,7 @@ const sidebars = {
           items: [
             'writers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['writers/raster', 'writers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/cog', 'writers/netcdf', 'writers/lidar', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/cog', 'writers/netcdf', 'writers/zarr', 'writers/lidar', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
             'writers/file',
           ],
         },
@@ -108,9 +158,12 @@ const sidebars = {
       items: [
         'api/overview',
         'api/execution-tiers',
+        'api/jar-functions',
         'api/coordinate-reference-systems',
         'api/error-handling',
         'api/language-bindings',
+        'api/availability',
+        'api/uc-functions',
         {
           type: 'category',
           label: 'RasterX',
@@ -154,6 +207,21 @@ const sidebars = {
           ],
         },
         { type: 'doc', id: 'api/pmtiles-functions', label: 'PMTiles' },
+        { type: 'doc', id: 'api/general-functions', label: 'General' },
+        {
+          type: 'category',
+          label: 'Zarr',
+          collapsed: true,
+          link: { type: 'doc', id: 'api/zarr-functions' },
+          items: [
+            'api/zarr-stores',
+            'api/zarr-registered-stores',
+            'api/zarr-transactions',
+            'api/zarr-versions',
+            'api/zarr-lifecycle',
+            'api/zarr-performance',
+          ],
+        },
         { type: 'doc', id: 'api/stac', label: 'STAC' },
         {
           type: 'category',

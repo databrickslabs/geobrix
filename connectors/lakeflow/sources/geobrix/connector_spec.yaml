@@ -1,0 +1,39 @@
+# GeoBrix Lakeflow Connect Specification
+# This file defines the connector specification including connection parameters
+# and external options allowlist.
+
+# ============================================================================
+# Connection Parameters
+# These are provided when creating the Unity Catalog connection.
+# ============================================================================
+display_name: GeoBrix
+# Reads geospatial files on Unity Catalog Volumes: vector (GeoPackage, GeoJSON,
+# GeoJSONSeq, Shapefile, File Geodatabase), LiDAR (LAS/LAZ), EXIF (JPEG), raster
+# (GeoTIFF, COG), NetCDF, and PMTiles archives.
+connection:
+  parameters:
+    - name: root_path
+      type: string
+      required: false
+      description: >
+        Optional root path in UC Volumes (e.g., /Volumes/catalog/schema/volume/prefix).
+        When provided, enables file discovery and an in-root path guard.
+        When omitted, list_tables() returns an empty list.
+
+# ============================================================================
+# External Options Allowlist
+# These table-specific options must be included in the externalOptionsAllowList
+# parameter of the UC connection to allow them to be passed through.
+#
+#   path, file_glob              every table
+#   format                       every table; a reader name with the _gbx suffix
+#                                optional, any case: vector, gpkg, geojson,
+#                                geojsonl, shapefile, file_gdb, lidar, exif,
+#                                raster, gtiff, cog, netcdf, pmtiles
+#   layer, where, bbox,          vector, gpkg, geojson, geojsonl, shapefile and
+#   chunk_size                   file_gdb tables only
+#   mode                         lidar, exif and netcdf tables only
+#
+# An option set on a table whose reader does not take it fails the table.
+# ============================================================================
+external_options_allowlist: "path,format,layer,where,bbox,chunk_size,file_glob,mode"

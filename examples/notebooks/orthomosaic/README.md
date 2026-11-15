@@ -1,0 +1,98 @@
+# Orthomosaic Photogrammetry Example Series
+
+Drone imagery → georeferenced RGB orthomosaic (+ COG + PMTiles) → segmented object
+polygons. Sparse SfM runs on Serverless environment 5 (CPU); an optional dense MVS pass
+(`01b`) and the GeoSAM segmentation capstone (`03_segment`) run on the Serverless GPU AI
+Runtime.
+
+## Executed output — Old Orchard drone survey
+
+These screenshots are pulled from the executed notebook series, run over the Old Orchard GoPro survey
+(~170 overlapping, GPS-tagged frames) that the committed notebooks download by default.
+
+The raw inputs: an evenly spaced contact sheet of the unstitched frames that SfM must align and stitch:
+
+![Contact sheet of 24 evenly spaced raw drone frames from the Old Orchard survey: unstitched, GPS-only, with a pink color cast (Part 1a).](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/orthomosaic/ortho-raw-inputs.png)
+
+After reconstruction, Part 2 color-corrects the orthomosaic with a per-band percentile stretch, uncorrected on the left and corrected on the right:
+
+![Before and after color correction of the georeferenced orthomosaic: the uncorrected mosaic carries the cameras' pink cast; the percentile-stretched mosaic shows natural field, orchard-row, and road contrast (Part 2).](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/orthomosaic/ortho-color-before-after.png)
+
+The published PMTiles archive rendered in the notebook, the same tiles a web map serves:
+
+![In-notebook preview of the published PMTiles orthomosaic: a top-down view of the field, orchard rows, buildings, and road (Part 2).](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/orthomosaic/ortho-pmtiles-preview.png)
+
+Finally, the capstone classifies the whole scene into contiguous land-cover regions (vegetation, bare, impervious, dark) with `rst_land_cover`, spectral thresholds beside k-means:
+
+![Land cover over the orthomosaic: spectral fixed-threshold classification (87 regions) beside k-means classification (53 regions), with a vegetation / bare / impervious / dark legend (Part 3).](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/orthomosaic/ortho-land-cover.png)
+
+## Chain
+
+| Notebook | Input | Output | Purpose |
+|---|---|---|---|
+| `config_nb` | — | functions, config | Shared imports, parameters, SfM helpers |
+| `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → sparse SfM → ortho |
+| `01b_sfm_orthomosaic_gpu` (optional) | `01a` sparse model | `orthomosaic_dense.tif`, `dsm_dense.tif`, `dense_merged.laz` (+ sharded `dense_<grp>_<cid>.laz` parts) | GPU dense MVS: patch_match_stereo → fusion → georef |
+| `02_publish` | `orthomosaic.tif` | `orthomosaic_corrected.tif`, `orthomosaic_cog.tif`, `orthomosaic.pmtiles` | Publish: color correction → COG (`cog_gbx`) → PMTiles (`gbx_rst_xyzpyramid` + `pmtiles_gbx`) |
+| `03_segment` (optional) | `orthomosaic_cog.tif` | polygon `DataFrame` (`label`, `geom` WKB, `score`); a served Unity Gateway endpoint | GeoSAM segmentation via `gbx.models`: in-notebook GPU `segment_raster`, then upsize to a served GPU Model Serving endpoint |
+| `monitor` | `output_dir/sparse/` | — | Optional live SfM progress watcher |
+
+## Dependencies
+
+Installed by the `config_nb` `%pip` cell:
+
+```
+geobrix[vizx]      (the env5 wheel)
+pycolmap==4.2.1    (a separate step; pycolmap-cuda12 for the GPU pass)
+```
+
+The env5 wheel carries `rasterio` and `pmtiles`; `pycolmap` installs after it.
+
+The wheel is fetched from:
+```
+/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl
+```
+
+`01b_sfm_orthomosaic_gpu` installs the env6 wheel (with `pycolmap-cuda12`) instead, because it runs on the GPU runtime.
+
+`03_segment` takes the series' catalog, schema and output paths from `%run ./config_nb`, and installs its own dependencies —
+`geobrix[vizx]` (the env6 wheel, with the GeoSAM GPU packages as a separate step) — since it needs the GeoSAM GPU model deps
+(`torch`, `segment-geospatial`), not `photogrammetry`.
+
+## Runtime
+
+**Serverless environment 5.** `config_nb`, `01a_sfm_orthomosaic`, `02_publish`, and
+`monitor` run on the **CPU** flavor. The optional `01b_sfm_orthomosaic_gpu` (dense MVS)
+and `03_segment` (GeoSAM) steps run on the **Serverless GPU AI Runtime**
+(GPU-attached; `pycolmap-cuda12` for `01b`, `torch`/CUDA 12 for `03_segment`).
+`01b_sfm_orthomosaic_gpu` and `03_segment` use **environment 6** and the env6 wheel: the UDF workers of the GPU runtime
+run environment 6, and an env wheel refuses to import on the other environment. Compute-intensive steps on the CPU path:
+
+| Step | Typical runtime (Old Orchard, ~170 images) |
+|---|---|
+| `exif_gbx` extraction | < 1 min |
+| Distributed feature extraction | 5–10 min |
+| Distributed pair matching | 3–8 min |
+| Incremental mapping (pycolmap) | 10–20 min |
+| Orthomosaic projection | 2–5 min |
+
+Adjust `MAX_ORTHO_WORKERS` and `GSD_CM` (config) to trade speed against resolution.
+
+## Sparse vs dense reconstruction
+
+`01a` runs **sparse SfM** (pycolmap `incremental_mapping`): features, matches, and camera
+poses are recovered, and the orthomosaic is assembled by back-projecting each registered
+JPEG onto the estimated ground plane and blending overlapping contributions.
+
+`01b` (optional) adds **dense MVS** — COLMAP `patch_match_stereo` + stereo fusion on the
+**Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12), scheduled across the node's
+GPUs by `dense_mvs_pool` — producing a dense orthomosaic, DSM, and LAZ point cloud
+(per-cluster and merged). `02_publish` uses the dense orthomosaic when present, else the
+sparse one. The sparse ortho suits GSD estimation, visual inspection, and tile serving;
+the dense pass adds fidelity for measurement workflows.
+
+## Group-key seam
+
+`config_nb` exposes `GROUP_KEY_COL` (default `"_group"`, constant single group).  Change
+it to a real metadata column (e.g. a `"flight_date"` column derived from `timestamp`) to
+run the SfM + ortho pipeline once per flight automatically.

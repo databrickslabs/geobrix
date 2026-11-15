@@ -21,7 +21,6 @@ MULTIBAND     rgb_nir_small.tif — 3 bands (red/NIR/green), 8x8 pixels, EPSG:43
                per-band metadata tags. Regenerate with make_multiband_fixture().
 DEM           dem_small.tif — 64x64 Float32, EPSG:32618, real elevation
                variation (~0-311m). Regenerate with make_dem_fixture().
-COLOR_TABLE   elevation.clr — gdaldem color ramp for rst_color_relief.
 NETCDF        prAdjust_day_HadGEM2-CC_*.nc — two subdatasets (time_bnds,
                prAdjust); used by rst_subdatasets / rst_getsubdataset.
 """
@@ -29,6 +28,9 @@ NETCDF        prAdjust_day_HadGEM2-CC_*.nc — two subdatasets (time_bnds,
 from pathlib import Path
 import sys
 import os
+from databricks.labs.gbx.gridx.bng import functions as bx
+from databricks.labs.gbx.gridx.custom import functions as cx
+from databricks.labs.gbx.gridx.quadbin import functions as qx
 
 # ---------------------------------------------------------------------------
 # Path constants (relative paths are relative to repo root)
@@ -37,7 +39,6 @@ import os
 # Repo-root-relative paths for committed fixtures
 MULTIBAND = "src/test/resources/binary/geotiff-small/rgb_nir_small.tif"
 DEM = "src/test/resources/binary/elevation/dem_small.tif"
-COLOR_TABLE = "src/test/resources/binary/elevation/elevation.clr"
 SINGLE_BAND = "src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif"
 
 # Long filename committed under netcdf-CMIP5/
@@ -79,12 +80,6 @@ def dem_path() -> Path:
     return repo_root / DEM
 
 
-def color_table_path() -> Path:
-    """Absolute path to the committed gdaldem color table."""
-    repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
-    return repo_root / COLOR_TABLE
-
-
 def multiband_path() -> Path:
     """Absolute path to the committed multiband GeoTIFF."""
     repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
@@ -113,12 +108,12 @@ def single_band_tile_df(spark):
     most accessor and tile-ops examples).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
 
@@ -130,12 +125,12 @@ def multiband_tile_df(spark):
     Used by band-math, rst_numbands, and rst_bandmetadata examples.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(multiband_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
 
@@ -147,12 +142,12 @@ def dem_tile_df(spark):
     Used by terrain function examples (slope, aspect, hillshade, …).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(dem_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
 
@@ -164,12 +159,12 @@ def netcdf_tile_df(spark):
     Used only by rst_subdatasets and rst_getsubdataset examples.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(netcdf_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("netCDF")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("netCDF")).alias("tile")
     )
 
 
@@ -246,7 +241,7 @@ def netcdf_tile_df_heavy(spark):
 # ---------------------------------------------------------------------------
 
 # view name -> tile-df builder, one mapping per tier. The builder loads the same
-# committed fixture the documented named reader would (gtiff_gbx/gtiff_gdal etc.).
+# committed fixture the documented named reader would (gtiff_gbx etc.).
 _SETUP_VIEWS_LIGHT = {
     "rasters": single_band_tile_df,
     "multiband_rasters": multiband_tile_df,
@@ -397,31 +392,6 @@ def make_dem_fixture(path: "str | Path | None" = None) -> Path:
     return dest
 
 
-def make_color_table(path: "str | Path | None" = None) -> Path:
-    """(Re)generate the committed gdaldem color table (elevation.clr).
-
-    An elevation ramp spanning the DEM fixture's 0-311 m range, consumed by
-    rst_color_relief. gdaldem format: ``elevation R G B`` per line, ``nv`` for
-    the NoData color.
-    """
-    repo_root = Path(__file__).parents[4]
-    dest = Path(path) if path else repo_root / COLOR_TABLE
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    ramp = (
-        "0 34 139 34\n"
-        "50 50 205 50\n"
-        "100 34 139 34\n"
-        "150 144 238 144\n"
-        "200 255 255 0\n"
-        "250 255 200 0\n"
-        "300 210 105 30\n"
-        "311 255 255 255\n"
-        "nv 0 0 0"
-    )
-    dest.write_text(ramp)
-    return dest
-
-
 def make_single_band_fixture(path: "str | Path | None" = None) -> Path:
     """(Re)generate the committed single-band fixture (nyc_sentinel2_red_small.tif).
 
@@ -490,21 +460,21 @@ def multi_band_tiles_df(spark):
     The returned DataFrame has columns: tile, band_index (1/2/3), region (='R1').
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(multiband_path())
     binary_df = spark.read.format("binaryFile").load(path)
     mb_df = binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("mb_tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("mb_tile")
     )
     # Produce 3 rows: one per band extracted from the multi-band tile
-    b1 = mb_df.select(rx.rst_band("mb_tile", f.lit(1)).alias("tile")).withColumn(
+    b1 = mb_df.select(rx_api.rst_band("mb_tile", f.lit(1)).alias("tile")).withColumn(
         "band_index", f.lit(1)
     )
-    b2 = mb_df.select(rx.rst_band("mb_tile", f.lit(2)).alias("tile")).withColumn(
+    b2 = mb_df.select(rx_api.rst_band("mb_tile", f.lit(2)).alias("tile")).withColumn(
         "band_index", f.lit(2)
     )
-    b3 = mb_df.select(rx.rst_band("mb_tile", f.lit(3)).alias("tile")).withColumn(
+    b3 = mb_df.select(rx_api.rst_band("mb_tile", f.lit(3)).alias("tile")).withColumn(
         "band_index", f.lit(3)
     )
     return b1.union(b2).union(b3).withColumn("region", f.lit("R1"))
@@ -757,8 +727,18 @@ _SETUP_VIEWS_VECTORX_HEAVY = {
 # Two views used by the coverage SQL examples.
 # ``coverage_parcels`` — valid coverage (2 adjacent squares sharing an edge).
 # ``coverage_overlap`` — invalid coverage (2 overlapping squares).
-# Both views have schema (cov_id INT, geom STRING).
+# Both views have schema (cov_id INT, geom STRING, geom_wkb BINARY).
 # ---------------------------------------------------------------------------
+
+
+def _coverage_df(spark, wkts):
+    """``(cov_id INT, geom STRING, geom_wkb BINARY)`` rows of one coverage group."""
+    from shapely import from_wkt  # noqa: PLC0415
+
+    return spark.createDataFrame(
+        [(1, w, bytearray(from_wkt(w).wkb)) for w in wkts],
+        "cov_id INT, geom STRING, geom_wkb BINARY",
+    )
 
 
 def coverage_parcels_df(spark):
@@ -769,13 +749,16 @@ def coverage_parcels_df(spark):
     - polygon 2: [5,10]×[0,5]
     Both belong to ``cov_id=1`` so a GROUP BY collects them as one group.
     Expected result: ``gbx_st_coverageisvalid(..., 0.0)`` → ``true``.
+
+    ``geom`` is WKT; ``geom_wkb`` is the same polygon as WKB, the input of the
+    ``*_array`` coverage functions.
     """
-    return spark.createDataFrame(
+    return _coverage_df(
+        spark,
         [
-            (1, "POLYGON((0 0, 5 0, 5 5, 0 5, 0 0))"),
-            (1, "POLYGON((5 0, 10 0, 10 5, 5 5, 5 0))"),
+            "POLYGON((0 0, 5 0, 5 5, 0 5, 0 0))",
+            "POLYGON((5 0, 10 0, 10 5, 5 5, 5 0))",
         ],
-        ["cov_id", "geom"],
     )
 
 
@@ -788,13 +771,15 @@ def coverage_overlap_df(spark):
     Both belong to ``cov_id=1``.
     Expected result: ``gbx_st_coverageinvalidedges(..., 0.0)`` → non-empty BINARY
     (the boundary segments in the overlap zone).
+
+    ``geom`` is WKT; ``geom_wkb`` is the same polygon as WKB.
     """
-    return spark.createDataFrame(
+    return _coverage_df(
+        spark,
         [
-            (1, "POLYGON((0 0, 6 0, 6 6, 0 6, 0 0))"),
-            (1, "POLYGON((4 4, 10 4, 10 10, 4 10, 4 4))"),
+            "POLYGON((0 0, 6 0, 6 6, 0 6, 0 0))",
+            "POLYGON((4 4, 10 4, 10 10, 4 10, 4 4))",
         ],
-        ["cov_id", "geom"],
     )
 
 
@@ -943,13 +928,13 @@ def bng_chips_df(spark):
     Backs: ``bng_cellintersection``, ``bng_cellunion``,
     ``bng_cellintersection_agg``, ``bng_cellunion_agg``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     geom_df = spark.sql(f"SELECT '{_BNG_POLYGON_WKT}' AS geom")
     return geom_df.select(
-        f.explode(gx.bng_tessellate(f.col("geom"), f.lit(_BNG_RESOLUTION))).alias(
+        f.explode(bx.bng_tessellate(f.col("geom"), f.lit(_BNG_RESOLUTION))).alias(
             "chip"
         )
     )
@@ -997,14 +982,14 @@ def quadbin_cell_pairs_df(spark):
 
     Backs: ``quadbin_distance``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     base = spark.sql("SELECT 1 AS dummy")
     return base.select(
-        gx.quadbin_pointascell(f.lit(0.0), f.lit(0.0), f.lit(10)).alias("cell1"),
-        gx.quadbin_pointascell(f.lit(0.0), f.lit(0.1), f.lit(10)).alias("cell2"),
+        qx.quadbin_pointascell(f.lit(0.0), f.lit(0.0), f.lit(10)).alias("cell1"),
+        qx.quadbin_pointascell(f.lit(0.0), f.lit(0.1), f.lit(10)).alias("cell2"),
     )
 
 
@@ -1039,13 +1024,13 @@ def quadbin_kring_cells_df(spark):
 
     Backs: ``quadbin_cellunion_agg``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     cell_df = spark.sql(f"SELECT {_QUADBIN_CELL_SF_Z10}L AS cell")
     return cell_df.select(
-        f.explode(gx.quadbin_kring(f.col("cell"), f.lit(1))).alias("cell")
+        f.explode(qx.quadbin_kring(f.col("cell"), f.lit(1))).alias("cell")
     )
 
 
@@ -1074,13 +1059,13 @@ def custom_grid_df(spark):
 
     Backs: all 7 ``custom_*`` functions.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     base_df = spark.sql("SELECT 1 AS dummy")
     grid_df = base_df.select(
-        gx.custom_grid(
+        cx.custom_grid(
             f.lit(0),
             f.lit(1000000),
             f.lit(0),
@@ -1093,7 +1078,7 @@ def custom_grid_df(spark):
     )
     return grid_df.select(
         f.col("grid"),
-        gx.custom_pointascell(f.lit(_BNG_POINT_WKT), f.col("grid"), f.lit(5)).alias(
+        cx.custom_pointascell(f.lit(_BNG_POINT_WKT), f.col("grid"), f.lit(5)).alias(
             "cell"
         ),
         f.lit(_BNG_POINT_WKT).alias("point"),

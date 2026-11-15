@@ -20,7 +20,7 @@ from databricks.labs.gbx.ds.file_gbx import StageTooLargeError  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _is_fuse_path  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _probe_direct_open  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file, remove_staged
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -45,7 +45,7 @@ def _resolve_cog_compression(
 ) -> str:
     """Resolve the final compression string for cog_convert_file.
 
-    ``compress`` is the canonical kwarg (Task 5 surface); ``compression`` is the
+    ``compress`` is the canonical kwarg; ``compression`` is the
     legacy kwarg kept as a deprecated alias.  When both are supplied, ``compress``
     wins.  When compress='auto', resolves to 'ZSTD' — the spec ZSTD baseline
     applies to all COG outputs.
@@ -72,7 +72,7 @@ def prepare_cog(
     skip_if_exists: bool = True,
     out_name: Optional[str] = None,
     bigtiff: str = "YES",
-    # Task 5: unified compression surface. ``compress`` is the canonical kwarg.
+    # Unified compression surface. ``compress`` is the canonical kwarg.
     # ``compression`` is the deprecated alias; when both are given, ``compress`` wins.
     # compress='auto' resolves to 'ZSTD' (the spec ZSTD baseline).
     compress: Optional[str] = None,
@@ -100,7 +100,7 @@ def prepare_cog(
     ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option; outputs
     larger than ~4 GiB MUST be BigTIFF (see ``cog_convert_file``).
 
-    ``compress`` (Task 5): unified compression option — "auto" | "zstd" |
+    ``compress``: unified compression option — "auto" | "zstd" |
     "deflate" | "lzw" | "none". Deprecated alias: ``compression``. When both
     are set, ``compress`` wins.
     """
@@ -249,7 +249,7 @@ def prepare_cogs(
     extensions=DEFAULT_RASTER_EXTS,
     verbose: bool = True,
     bigtiff: str = "YES",
-    # Task 5: unified compression surface. ``compress`` is the canonical kwarg.
+    # Unified compression surface. ``compress`` is the canonical kwarg.
     # ``compression`` is the deprecated alias; when both are given, ``compress`` wins.
     compress: Optional[str] = None,
     compress_level: Optional[int] = None,
@@ -264,7 +264,7 @@ def prepare_cogs(
     ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option applied to
     every output; outputs larger than ~4 GiB MUST be BigTIFF.
 
-    ``compress`` (Task 5): unified compression option — "auto" | "zstd" |
+    ``compress``: unified compression option — "auto" | "zstd" |
     "deflate" | "lzw" | "none". Deprecated alias: ``compression``. When both
     are set, ``compress`` wins.
     """
@@ -306,8 +306,8 @@ def prepare_cogs(
                         predictor=predictor,
                     )
                 finally:
-                    if is_temp and os.path.exists(local_src):
-                        os.remove(local_src)
+                    if is_temp:
+                        remove_staged(local_src)
         f_elapsed = round(time.time() - f_t0, 2)
         rss = _peak_rss_mib()
         peak = max(peak, rss)

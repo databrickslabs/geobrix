@@ -4,7 +4,7 @@ title: Setup
 ---
 
 import NotebookPreview from '@site/src/components/NotebookPreview';
-import setupNotebook from '!!raw-loader!../../../notebooks/sample-data/setup_sample_data.ipynb';
+import setupNotebook from '!!raw-loader!../../../examples/sample-data/setup_sample_data.ipynb';
 
 ## Overview
 
@@ -18,7 +18,7 @@ Use the **notebook** below on a Databricks cluster to download the Essential and
 :::
 
 :::tip Databricks vs local use
-This configuration is intended for use with [Databricks Unity Catalog volumes](https://docs.databricks.com/aws/en/volumes/). The path format `/Volumes/<catalog>/<schema>/<volume>/...` can also be mimicked for local development—for example, use a local path such as `./Volumes/main/default/geobrix_samples/geobrix-examples` and set the base path to that so the same code and examples work outside Databricks.
+This configuration is intended for use with [Databricks Unity Catalog volumes](https://docs.databricks.com/aws/en/volumes/).
 :::
 
 ---
@@ -28,7 +28,7 @@ This configuration is intended for use with [Databricks Unity Catalog volumes](h
 Run the cells in order. The notebook uses `databricks.labs.gbx.sample` (included in the GeoBrix package): `get_volumes_path`, `run_essential_bundle`, and `run_complete_bundle`. Skips datasets that already exist; uses a temp directory for interim downloads; copies only final files to the Volume.
 
 :::tip Download notebook
-**[setup_sample_data.ipynb](https://github.com/databrickslabs/geobrix/blob/main/notebooks/sample-data/setup_sample_data.ipynb)** — download and import into your Databricks workspace to run the setup.
+**[setup_sample_data.ipynb](https://github.com/databrickslabs/geobrix/blob/main/examples/sample-data/setup_sample_data.ipynb)** — download and import into your Databricks workspace to run the setup.
 :::
 
 <NotebookPreview notebookJson={setupNotebook} showOutputs={false} />
@@ -54,6 +54,7 @@ After running the notebook, the Volume (or your configured base path) contains t
 | Complete | NYC Parks | `nyc/parks/nyc_parks.shp.zip` | 2.1 MB | **Shapefile** (zip) — vector polygons; overlay, area stats. Driver: ESRI Shapefile (use `/vsizip/` path) |
 | Complete | NYC Subway | `nyc/subway/nyc_subway.shp.zip` | 0.1 MB | **Shapefile** (zip) — vector points (stations); proximity, routing. Driver: ESRI Shapefile (use `/vsizip/` path) |
 | Complete | Multi-Layer GeoPackage | `nyc/geopackage/nyc_complete.gpkg` | 7.0 MB | **GeoPackage** — multi-layer vector (boroughs, zones, parks, subway); single-file DB. Driver: GPKG |
+| Complete | NYC File Geodatabase | `nyc/filegdb/NYC_Sample.gdb.zip` | 1.0 MB | **FileGDB** (zip) — boroughs, taxi zones, parks, subway stations as feature classes. Driver: OpenFileGDB |
 | Complete | London Boroughs | `london/boroughs/london_boroughs.geojson` | 1.9 MB | **GeoJSON** — vector boundaries; joins, overlay. Driver: GeoJSON |
 
 Exact sizes may vary slightly; the HRRR filename date reflects the run date at download time.

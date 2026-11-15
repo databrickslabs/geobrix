@@ -1,7 +1,7 @@
 """
 Tests for the light (pmtiles) tier per-function pmtiles_agg example.
 
-Ensures pmtiles_agg_python_light_example in pmtiles_functions_python_light.py
+Ensures pmtiles_agg_python_example in pmtiles_functions_python_light.py
 executes and produces a valid PMTile v3 binary blob.
 """
 import struct
@@ -29,12 +29,12 @@ def _validate_pmtile(blob, name):
 def test_pmtiles_agg_python_light_example(spark):
     """pmtiles_agg (light tier) returns a valid PMTile v3 BINARY blob with 9 tiles."""
     assert pmtiles_light_examples is not None
-    result = pmtiles_light_examples.pmtiles_agg_python_light_example(spark)
-    _validate_pmtile(result, "pmtiles_agg_python_light")
+    result = pmtiles_light_examples.pmtiles_agg_python_example(spark)
+    _validate_pmtile(result, "pmtiles_agg_python")
 
 
 def test_pmtiles_agg_python_light_example_output_constant_exists():
-    """pmtiles_agg_python_light_example_output constant is defined and non-empty."""
+    """pmtiles_agg_python_example_output constant is defined and non-empty."""
     assert pmtiles_light_examples is not None
-    assert hasattr(pmtiles_light_examples, "pmtiles_agg_python_light_example_output")
-    assert pmtiles_light_examples.pmtiles_agg_python_light_example_output.strip()
+    assert hasattr(pmtiles_light_examples, "pmtiles_agg_python_example_output")
+    assert pmtiles_light_examples.pmtiles_agg_python_example_output.strip()

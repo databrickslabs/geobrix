@@ -1,0 +1,564 @@
+"""The single registrar: each SQL name gets one implementation level, chosen here."""
+
+from __future__ import annotations
+
+import contextlib
+import importlib
+import importlib.util
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from databricks.labs.gbx import manifest
+from databricks.labs.gbx.manager import capabilities, levels, messages
+from databricks.labs.gbx.manager.levels import Choice
+
+
+class RegisterResult(Dict[str, Choice]):
+    """What ``register`` returns: the level chosen for each name, as a plain ``dict`` (same keys, values and
+    iteration), that shows itself as a one-line summary. A notebook cell that ends in ``gbx.register(spark)``
+    displays the return value; a line per function is noise. ``notes`` are the lines register said (the
+    names it skipped, the levels it fell back from)."""
+
+    _MAX_NOTES = 1  # notes shown after the summary line; the rest are counted
+
+    def __init__(self, *args, notes: Optional[List[str]] = None, label=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.notes: List[str] = list(notes or [])
+        self.label: Optional[str] = label
+
+    def __reduce__(self):
+        return (_rebuild_result, (dict(self), self.notes, self.label))
+
+    def __copy__(self):
+        return _rebuild_result(dict(self), self.notes, self.label)
+
+    def summary(self) -> str:
+        from databricks.labs.gbx import __version__
+
+        if self.label is not None:
+            return f"GeoBrix {__version__}: {self.label}"
+        n = len(self)
+        by_level: Dict[str, int] = {}
+        for choice in self.values():
+            by_level[choice.level] = by_level.get(choice.level, 0) + 1
+        levels_ = ", ".join(
+            f"{lv} {c}"
+            for lv, c in sorted(by_level.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        head = f"GeoBrix {__version__}: {n} function{'' if n == 1 else 's'} registered"
+        return f"{head} ({levels_})" if levels_ else head
+
+    def _note_lines(self) -> List[str]:
+        shown = self.notes[: self._MAX_NOTES]
+        rest = len(self.notes) - len(shown)
+        if rest:
+            shown.append(f"... and {rest} more note{'' if rest == 1 else 's'}")
+        return shown
+
+    def __repr__(self) -> str:
+        return "\n".join([self.summary(), *self._note_lines()])
+
+    def _repr_html_(self) -> str:
+        import html
+
+        return "<br>".join(
+            html.escape(x) for x in [self.summary(), *self._note_lines()]
+        )
+
+    def _repr_pretty_(self, p, cycle) -> None:
+        p.text("RegisterResult(...)" if cycle else repr(self))
+
+
+def _rebuild_result(items, notes, label):
+    return RegisterResult(items, notes=notes, label=label)
+
+
+def _active():
+    from pyspark.sql import SparkSession
+
+    return SparkSession.builder.getOrCreate()
+
+
+def register(
+    spark=None,
+    target: str = "session",
+    *,
+    only: Optional[Iterable[str]] = None,
+    catalog: Optional[str] = None,
+    schema: Optional[str] = None,
+    _levels: Optional[Dict[str, Tuple[str, str]]] = None,
+    _prefer: Optional[Dict[str, str]] = None,
+) -> Dict[str, Choice]:
+    """Register GeoBrix SQL functions on the best level this session offers.
+
+    The return value is a ``dict`` (name -> ``Choice``) that displays as a one-line summary.
+
+    With no ``only`` it registers every GeoBrix SQL function and the light data sources (``raster_gbx`` and
+    the others). ``target='uc'`` verifies the Unity Catalog functions instead of registering session ones.
+    ``only`` limits the names (SQL names or short names, e.g. ``bng_eastnorthasbng``).
+    Returns the level chosen for each name. A name no level can serve here is skipped (one line
+    says why) and the others still register. A reason that several names share prints once, with a count.
+    ``_levels`` forces a level and is for tests. ``_prefer`` (name -> level) tries that level first and falls back
+    as usual when it is unavailable; it is how a name is registered again at the level it already has.
+
+    A generator (a function that returns many rows per input) is a table function: call it as
+    ``FROM t, LATERAL gbx_...(args)``. That form works at every level. The select-list form
+    (``SELECT gbx_...(args)``, and ``LATERAL VIEW``) exists only where the Catalyst generator is
+    installed (L1, dedicated clusters): a light generator is a Python table function, which Spark
+    does not resolve there, and the light tier has never offered that form.
+    """
+    if target not in ("session", "uc"):
+        raise ValueError(f"target must be 'session' or 'uc' (got {target!r})")
+    # A catalog or schema name is checked first: a bad one fails before any session function is created.
+    from databricks.labs.gbx.uc import ddl
+
+    for kind, value in (("catalog", catalog), ("schema", schema)):
+        if value is not None:
+            ddl.quote_ident(kind, value)
+    spark = spark if spark is not None else _active()
+    messages.reminder(spark)
+    man = manifest.load()
+
+    def norm(n: str) -> str:
+        n = n.lower()
+        return n if n.startswith("gbx_") else f"gbx_{n}"
+
+    requested = None if only is None else [norm(n) for n in only]
+    if requested is None:
+        names = list(man.functions)
+    else:
+        unknown = [n for n in requested if n not in man.functions]
+        if unknown:
+            raise ValueError(f"register(only=...) got unknown name(s): {unknown}")
+        names = requested
+    if target == "uc":
+        from databricks.labs.gbx import uc
+
+        uc.verify(
+            spark,
+            catalog,
+            schema,
+            [n for n in names if "L4" in man.functions[n].levels],
+        )
+        return RegisterResult(label="Unity Catalog functions verified")
+    overrides = _levels or {}
+    prefer = _prefer or {}
+    if overrides or only is None:
+        # a forced level, or a full registration, may follow a JAR staged since the last call; the per-name first-use
+        # registrations of the Python API (`only=[name]`) keep the session's probes
+        capabilities.forget(spark)
+    need_jvm = any("L1" in man.functions[n].levels for n in names)
+    caps = capabilities.detect(spark, need_jvm)
+    out = RegisterResult()
+    lines: List[Tuple[str, str]] = []
+    chosen = []
+    for n in names:
+        fn = man.functions[n]
+        try:
+            choice = levels.select(fn, caps, overrides.get(n), prefer.get(n))
+        except levels.NoLevelAvailable as exc:
+            # The rest still register; the skipped name is reported once.
+            why = "; ".join(r.removeprefix("geobrix: ") for r in exc.reasons)
+            lines.append((n, f"geobrix: {n} not registered ({why})"))
+            continue
+        chosen.append((n, fn, choice))
+    installed = _each(
+        spark,
+        [(fn, choice, n in overrides) for n, fn, choice in chosen],
+        lambda item: _install_one(spark, caps, *item),
+        prepare=lambda item: _warm_imports(item[0]),
+    )
+    for (n, _fn, _choice), (done, said) in zip(chosen, installed):
+        out[n] = done
+        lines.extend(said)
+    if only is None:
+        try:
+            register_sources(spark)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the functions are registered; this failure is a line like any other
+            why = (
+                f"{type(exc).__name__}: {str(exc).splitlines()[0][:160]}"
+                if str(exc)
+                else type(exc).__name__
+            )
+            lines.append(
+                (
+                    "data sources",
+                    f"geobrix: data sources not registered ({why})",
+                )
+            )
+    out.notes = messages.say_grouped(spark, lines)
+    if catalog is not None and schema is not None:
+        _warn_uc_version(spark, catalog, schema)
+    from databricks.labs.gbx import _api
+
+    _api.mark_registered(spark, out.keys(), out)
+    return out
+
+
+WORKERS_ENV = "GBX_REGISTER_WORKERS"
+_CONNECT_WORKERS = 8
+
+
+def _workers(spark, items: int) -> int:
+    """How many threads install the functions of one ``register``. On Spark Connect every registration is a network
+    round trip (a full registration makes about 300), so they overlap; on a classic session a call is a local py4j
+    call and nothing is gained. ``GBX_REGISTER_WORKERS`` sets the number (``1`` installs one after the other).
+    """
+    from databricks.labs.gbx.manager import capabilities
+
+    raw = os.environ.get(WORKERS_ENV, "").strip()
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            n = 0
+        if n >= 1:
+            return min(n, max(items, 1))
+    return min(_CONNECT_WORKERS, max(items, 1)) if capabilities.is_connect(spark) else 1
+
+
+def _each(spark, items: list, work, prepare=None) -> list:
+    """``[work(item) for item in items]``, the calls overlapped when the session is remote (see ``_workers``). The
+    results come back in the order of ``items``; when several calls fail, the first failure in that order is raised
+    after every call has finished, as the one-after-the-other loop would have raised it. ``prepare(item)`` runs for
+    each item first, one after the other, only when the calls overlap (the imports they would make, so that threads
+    never meet in an import).
+    """
+    workers = _workers(spark, len(items))
+    if workers <= 1 or len(items) <= 1:
+        return [work(i) for i in items]
+    if prepare is not None:
+        for i in items:
+            prepare(i)
+    work = _carrying_thread_context(spark, work)
+    with ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="gbx-register"
+    ) as pool:
+        futures = [pool.submit(work, i) for i in items]
+        results, first = [], None
+        for f in futures:
+            try:
+                results.append(f.result())
+            except BaseException as exc:  # noqa: BLE001 - re-raised below, in order
+                results.append(None)
+                first = first or exc
+    if first is not None:
+        raise first
+    return results
+
+
+def _carrying_thread_context(spark, work):
+    """``work`` run on a worker thread with the calling thread's Spark Connect user-context extensions.
+
+    Lakeflow tags each dataset function's requests with a thread-local ``PipelineAnalysisContext``. A request from a
+    worker thread would not carry it, so each worker adds the same extensions for its call and removes them after.
+    """
+    from databricks.labs.gbx import _api
+
+    exts = _api.thread_extensions(spark)
+    if not exts:
+        return work
+    client = _api._client(spark)
+
+    def carried(item):
+        ids = [client.add_threadlocal_user_context_extension(e) for e in exts]
+        try:
+            return work(item)
+        finally:
+            for i in ids:
+                client.remove_user_context_extension(i)
+
+    return carried
+
+
+def _warm_imports(fn) -> None:
+    """Import the modules the light level of ``fn`` resolves, ignoring a failure (the install reports it)."""
+    spec = fn.levels.get("L3") or {}
+    refs = [spec.get(k) for k in ("callable", "factory", "udtf", "file_ref")]
+    refs += list((spec.get("variants") or {}).values())
+    for ref in refs:
+        if isinstance(ref, str) and ":" in ref:
+            try:
+                importlib.import_module(ref.partition(":")[0])
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _install_one(spark, caps, fn, choice: Choice, forced: bool):
+    """``_install`` with its own lines: (the choice it made, the lines it has to say)."""
+    said: List[Tuple[str, str]] = []
+    return _install(spark, fn, choice, caps, forced=forced, lines=said), said
+
+
+def _warn_uc_version(spark, catalog: str, schema: str) -> None:
+    """Say once when the GeoBrix functions of a Unity Catalog schema were created by another wheel version.
+
+    The session functions just registered shadow the schema's, so a user who reads unqualified ``gbx_`` names gets the
+    session ones: the line tells them the schema is behind (or ahead of) this wheel. A schema that cannot be read is
+    one line too, never a failed ``register``.
+    """
+    from databricks.labs.gbx import __version__
+    from databricks.labs.gbx.uc import ddl
+
+    qc = ddl.quote_ident("catalog", catalog)  # already checked by register
+    wheel = __version__.split("+", 1)[0]
+    try:
+        rows = spark.sql(
+            f"SELECT routine_name, comment FROM {qc}.information_schema.routines "
+            f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())} AND routine_name LIKE 'gbx!_%' ESCAPE '!'"
+        ).collect()
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - an advisory check must not fail the registration it follows
+        messages.say(
+            spark,
+            f"geobrix: Unity Catalog schema {catalog}.{schema} was not checked ({type(exc).__name__}); "
+            "the version of its GeoBrix functions is unknown",
+        )
+        return
+    # the product functions only: the private (gbx__) and probe (gbx_probe_) names are not versioned with the wheel
+    product = [
+        r
+        for r in rows
+        if not r["routine_name"].lower().startswith(("gbx_probe_", "gbx__"))
+    ]
+    have = sorted(
+        {v for v in (ddl.version_of_comment(r["comment"]) for r in product) if v}
+    )
+    other = [v for v in have if v != wheel]
+    if other:
+        messages.say(
+            spark,
+            f"geobrix: Unity Catalog schema {catalog}.{schema} has geobrix {', '.join(other)}, this wheel is {wheel}; "
+            "unqualified gbx_ names resolve to the session functions (re-run gbx.uc.install to update UC)",
+        )
+
+
+def manifest_names(prefix: str = "gbx_") -> List[str]:
+    """Every SQL name starting with ``prefix`` that the manager serves (every manifest row)."""
+    return sorted(
+        n for n, f in manifest.load().functions.items() if n.startswith(prefix)
+    )
+
+
+def _format_name(name: str) -> str:
+    """``raster``, ``RASTER`` and ``raster_gbx`` all name ``raster_gbx``."""
+    n = name.strip().lower()
+    return n if n.endswith("_gbx") else f"{n}_gbx"
+
+
+def register_sources(spark=None, only: Optional[Iterable[str]] = None) -> List[str]:
+    """Register the light data sources (``raster_gbx``, ``gtiff_gbx`` and the others) and no functions.
+
+    The sources are the manifest's ``datasources`` rows with ``impl: python``. ``register(spark)`` does this as its
+    last step; call this when a session needs only the readers and writers. ``only`` limits the formats
+    (``raster_gbx`` or ``raster``, any case; ``[]`` registers nothing); an unrecognized format raises ``ValueError``
+    that lists the close matches. Each source goes in through the driver's remote-path switch, which the readers
+    carry into their planning. Returns the registered format names.
+    """
+    import difflib
+
+    from databricks.labs.gbx import _gdal_policy
+
+    spark = spark if spark is not None else _active()
+    by_name = {src.name(): src for src in manifest.datasource_classes()}
+    if only is None:
+        selected = list(by_name)
+    else:
+        requested = [(orig, _format_name(orig)) for orig in only]
+        unknown = [(orig, norm) for orig, norm in requested if norm not in by_name]
+        if unknown:
+            lines = []
+            for orig, norm in unknown:
+                near = difflib.get_close_matches(norm, by_name, n=3)
+                lines.append(
+                    f"  {orig!r}"
+                    + (f" -> did you mean: {', '.join(near)}?" if near else "")
+                )
+            raise ValueError(
+                "register(only=...) got unrecognized data source name(s):\n"
+                + "\n".join(lines)
+                + "\nPass a registerable format name (or its short form)."
+            )
+        selected = list(dict.fromkeys(n for _o, n in requested))
+    # each reader carries the driver's remote-path switch into its planning (the workers never read it)
+    allowed = _gdal_policy.driver_switch()
+    # ... and the driver's read cap (64 MiB on Serverless, the classic 256 MiB elsewhere, standard access mode included),
+    # which a planner process without a session could not tell
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+    cap = report_detected_cap(spark)
+    _each(
+        spark,
+        selected,
+        lambda name: spark.dataSource.register(
+            _gdal_policy.carrying_source(by_name[name], allowed, cap)
+        ),
+    )
+    return selected
+
+
+def names_at_level(prefixes: Iterable[str], level: str) -> list:
+    """The names under ``prefixes`` that have a row at ``level``: the ``only=`` a pinned leg passes to
+    ``register_family`` when it wants "every function of these prefixes that has this level" (a bench or parity
+    leg over a whole family, where some names exist at L3 only)."""
+    man = manifest.load()
+    prefixes = (prefixes,) if isinstance(prefixes, str) else tuple(prefixes)
+    return [
+        n
+        for n, f in man.functions.items()
+        if n.startswith(prefixes) and level in f.levels
+    ]
+
+
+def register_family(
+    spark,
+    prefixes: Iterable[str],
+    *,
+    only: Optional[Iterable[str]] = None,
+    level: Optional[str] = None,
+) -> Dict[str, Choice]:
+    """Register the names under ``prefixes`` (``('gbx_rst_',)``, ``('gbx_bng_', 'gbx_h3_')``), or ``only``, and
+    nothing else: the part of a session a test, a bench leg or a self-check needs. ``level`` ('L1' or 'L3')
+    forces that level for them, so a test can compare two levels; without it the manager chooses, as in
+    ``register(spark)``. With ``level``, a name that has no row at that level raises ``ValueError`` naming the names
+    (with ``only`` or without), so a leg pinned to a level can never fall back to another one without saying so.
+    """
+    man = manifest.load()
+    prefixes = (prefixes,) if isinstance(prefixes, str) else tuple(prefixes)
+    if only is None:
+        names = [n for n in man.functions if n.startswith(prefixes)]
+    else:
+        names = [n if n.lower().startswith("gbx_") else f"gbx_{n}" for n in only]
+        names = [n.lower() for n in names]
+    if level is not None:
+        missing = sorted(
+            n
+            for n in names
+            if n not in man.functions or level not in man.functions[n].levels
+        )
+        if missing:
+            raise ValueError(
+                f"register_family(level={level!r}): {len(missing)} name(s) have no {level} row in the manifest: "
+                f"{', '.join(missing)}. Fix: pass only= with names that have {level} rows, or drop level= to let "
+                f"the manager choose."
+            )
+    forced = None if level is None else {n: (level, "-") for n in names}
+    return register(spark, only=names, _levels=forced) if names else RegisterResult()
+
+
+@contextlib.contextmanager
+def _light_deps(fn):
+    """Installing the light level imports its modules. Where a third-party package they need is missing, say which
+    function family cannot be served, which package is absent, and what to do, instead of the bare import error.
+    """
+    try:
+        yield
+    except ModuleNotFoundError as exc:
+        pkg = (exc.name or "").split(".")[0]
+        if (
+            not pkg or pkg == "databricks"
+        ):  # not a missing dependency: a defect in our own import chain
+            raise
+        try:
+            absent = importlib.util.find_spec(pkg) is None
+        except (
+            ImportError,
+            ValueError,
+        ):  # a package that cannot even be probed is not "not installed"
+            absent = False
+        if (
+            not absent
+        ):  # installed: the error is its own (a missing submodule), so say it as it is
+            raise
+        raise ImportError(
+            f"geobrix: the Python level needs {pkg}, which is not installed ({fn.sql_name}, a "
+            f"{fn.family} function, runs at that level here). Fix: install the geobrix env wheel for this runtime, "
+            f"or pip install {pkg}."
+        ) from exc
+
+
+def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
+    """Install ``fn`` at ``choice``; each line it has to say goes into ``lines`` as (name, line)."""
+    from databricks.labs.gbx.manager import l3
+
+    reasons = list(choice.reasons)
+    level = choice.level
+    spec = fn.levels.get(level, {})
+    if spec.get("engine") and choice.variant not in levels.ENGINE_L3:
+        why = levels.engine_unavailable(fn, level, caps)
+        if why:
+            lines.append(
+                (
+                    fn.sql_name,
+                    f"geobrix: {fn.sql_name} runs without the GDAL spec engine at the {levels.NAMES[level]} level ({why})",
+                )
+            )
+    if level == "L0":
+        from databricks.labs.gbx.manager import sqlwrap
+
+        try:
+            # a function of this name that an earlier install made as a UDF cannot be replaced by a SQL function
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
+            spark.sql(sqlwrap.sql_kernel(fn))
+            why = None
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the engine's refusal is the reason a lower level serves
+            why = f"{type(exc).__name__}: {str(exc).splitlines()[0][:160] if str(exc) else ''}"
+        if why is None:
+            for r in reasons:
+                lines.append(
+                    (fn.sql_name, f"{r}; using the {levels.NAMES[level]} level")
+                )
+            return choice
+        if forced:
+            raise RuntimeError(f"{fn.sql_name}: forced {level} failed: {why}")
+        if "L3" not in fn.levels:
+            raise RuntimeError(
+                f"{fn.sql_name}: the SQL expression level failed and there is no other level: {why}"
+            )
+        reasons.append(f"geobrix: {levels.NAMES[level]} level unavailable: {why}")
+        level = "L3"
+    if level == "L1":
+        from databricks.labs.gbx.manager import jvm
+
+        why = jvm.install_l1(spark, fn, caps)
+        if why is None:
+            for r in reasons:
+                lines.append(
+                    (fn.sql_name, f"{r}; using the {levels.NAMES[level]} level")
+                )
+            return choice
+        if forced:
+            raise RuntimeError(f"{fn.sql_name}: forced {level} failed: {why}")
+        reasons.append(f"geobrix: {levels.NAMES[level]} level unavailable: {why}")
+        level = "L3"
+    l3_spec = fn.levels["L3"]
+    on_engine = (forced and choice.variant in levels.ENGINE_L3) or (
+        not forced
+        and l3_spec.get("engine")
+        and levels.engine_unavailable(fn, "L3", caps) is None
+    )
+    if on_engine:
+        form = choice.variant if choice.variant in levels.ENGINE_L3 else levels.ENGINE
+        with _light_deps(fn):
+            variant = l3.register_l3_engine(spark, fn, form)
+        for r in reasons:
+            lines.append((fn.sql_name, f"{r}; using the {levels.NAMES['L3']} level"))
+        return Choice("L3", variant, tuple(reasons))
+    variant, skip = (
+        (choice.variant, None)
+        if forced and choice.variant != "-"
+        else l3.l3_variant(fn)
+    )
+    with _light_deps(fn):
+        l3.register_l3(spark, fn, variant)
+    for r in reasons:
+        lines.append((fn.sql_name, f"{r}; using the {levels.NAMES['L3']} level"))
+    if skip:
+        lines.append((fn.sql_name, skip))
+    return Choice("L3", variant, tuple(reasons))

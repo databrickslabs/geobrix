@@ -12,7 +12,11 @@ import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.ogr.{Geometry => OGRGeometry}
 import org.gdal.osr.CoordinateTransformation
-import org.locationtech.jts.geom.{Geometry => JTSGeometry}
+import org.locationtech.jts.geom.impl.CoordinateArraySequence
+import org.locationtech.jts.geom.{
+    Coordinate, CoordinateSequence, GeometryCollection, LinearRing, LineString, MultiLineString, MultiPoint,
+    MultiPolygon, Point, Polygon, Geometry => JTSGeometry
+}
 
 import scala.util.Try
 import scala.util.control.NonFatal
@@ -27,7 +31,7 @@ import scala.util.control.NonFatal
   *
   * GDAL/PROJ config child — [[ExpressionConfigExpr]] is injected as a trailing, non-user
   * child (mirroring the raster expressions, e.g.
-  * [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]). Its base64-serialized
+  * [[com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox]]). Its base64-serialized
   * [[ExpressionConfig]] carries the driver-registered custom PROJ grid dirs
   * (`spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS`, folded by [[ExpressionConfig.apply]] from
   * `ProjGridRegistry`) to executors. `evalSqlWithConf` runs `GDALManager.init` with it so the
@@ -115,11 +119,11 @@ object ST_TransformCrs extends WithExpressionInfo {
       * then delegates to the 2-arg [[evalSql]]. `GDALManager.init` is idempotent per JVM and
       * `configureGDAL` prepends any registered custom PROJ grid dirs to the in-JVM PROJ search
       * path, so a grid-requiring CRS resolves even when nothing else in the session initialized
-      * GDAL. Mirrors [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]'s
-      * `eval(row, crs, conf)`. `conf` is the base64 config literal — never user-supplied, never
-      * null (propagateNull short-circuits before this runs). */
+      * GDAL. Mirrors the raster expressions' `eval(row, ..., conf)`. `conf` is the base64 config literal — never user-supplied, never
+      * null (propagateNull short-circuits before this runs). This runs once per ROW, so the config is decoded
+      * once per JVM ([[ExpressionConfig.fromUtf8]]), not per row: the decode was ~1 ms against a ~10 us transform. */
     def evalSqlWithConf(geom: Any, targetCrs: UTF8String, conf: UTF8String): Array[Byte] = {
-        GDALManager.init(ExpressionConfig.fromB64(conf.toString))
+        GDALManager.init(ExpressionConfig.fromUtf8(conf))
         evalSql(geom, targetCrs)
     }
 
@@ -158,7 +162,7 @@ object ST_TransformCrs3 extends WithExpressionInfo {
     def evalSqlWithConf(
         geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String, conf: UTF8String
     ): Array[Byte] = {
-        GDALManager.init(ExpressionConfig.fromB64(conf.toString))
+        GDALManager.init(ExpressionConfig.fromUtf8(conf))
         evalSql(geom, targetCrs, sourceCrs)
     }
 
@@ -236,7 +240,7 @@ private[expressions] object TransformCrsCore {
         // ControlThrowable, which NonFatal excludes, so the early NullOut exits are unaffected.
         try {
             val plan = SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
-            val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
+            val gProj = if (plan.identity) g else transformKeepingZ(g, plan.transformation)
 
             // Non-finite guard: mirrors light's _has_nonfinite_xy. Catches the case where the
             // transform *returns* a non-finite ordinate rather than throwing.
@@ -269,6 +273,68 @@ private[expressions] object TransformCrsCore {
         }
     }
 
+    /** Reprojection that keeps every Z the geometry has.
+      *
+      * A geometry whose Z is uniform (all vertices or none) goes through [[transformWithCachedCT]]
+      * unchanged. A partial-Z geometry cannot go to OGR in 3D (OGR refuses a NaN Z), so X and Y of every
+      * vertex are reprojected without a Z, and the vertices that have a Z are then reprojected as 3D
+      * points, and those vertices take X, Y and Z from that result. A vertex without a Z stays NaN: a missing Z is
+      * never filled in, and a Z that exists is never dropped. The lightweight level follows the same rule. */
+    private[expressions] def transformKeepingZ(
+        g: JTSGeometry, ct: CoordinateTransformation
+    ): JTSGeometry = {
+        val gProj = transformWithCachedCT(g, ct)
+        val in = g.getCoordinates
+        val hasZ = in.map(c => java.lang.Double.isFinite(c.z))
+        if (!hasZ.exists(identity) || hasZ.forall(identity)) return gProj
+
+        // A vertex with a Z takes X, Y and Z from the 3D transform: for a pair that moves the height
+        // (geocentric, ellipsoidal or vertical), Z changes X and Y too. The others keep the 2D result.
+        val flat = gProj.getCoordinates
+        val xOut = flat.map(_.x)
+        val yOut = flat.map(_.y)
+        val zOut = Array.fill(in.length)(Double.NaN)
+        val withZ = in.zip(hasZ).collect { case (c, true) => JTS.point(c.copy()) }
+        val moved = transformWithCachedCT(JTS.multiPoint(withZ.toArray[JTSGeometry]), ct).getCoordinates
+        var k = 0
+        for (i <- in.indices if hasZ(i)) {
+            xOut(i) = moved(k).x; yOut(i) = moved(k).y; zOut(i) = moved(k).z; k += 1
+        }
+
+        // The reprojected geometry is XY only: rebuild it with the Z carried through, in the same
+        // vertex order the input was read in. An EMPTY part has no vertex and is kept as it is
+        // (JTS's GeometryEditor would drop it from a collection).
+        var next = 0
+        val gf = gProj.getFactory
+        def seq(s: CoordinateSequence): CoordinateSequence = {
+            val cs = Array.tabulate(s.size)(i => new Coordinate(xOut(next + i), yOut(next + i), zOut(next + i)))
+            next += s.size
+            new CoordinateArraySequence(cs, 3)
+        }
+        def rebuild(p: JTSGeometry): JTSGeometry = p match {
+            case e if e.isEmpty => e
+            case pt: Point => gf.createPoint(seq(pt.getCoordinateSequence))
+            case r: LinearRing => gf.createLinearRing(seq(r.getCoordinateSequence))
+            case l: LineString => gf.createLineString(seq(l.getCoordinateSequence))
+            case poly: Polygon =>
+                val shell = rebuild(poly.getExteriorRing).asInstanceOf[LinearRing]
+                val holes = Array.tabulate(poly.getNumInteriorRing)(i =>
+                    rebuild(poly.getInteriorRingN(i)).asInstanceOf[LinearRing])
+                gf.createPolygon(shell, holes)
+            case c: GeometryCollection =>
+                val parts = Array.tabulate(c.getNumGeometries)(i => rebuild(c.getGeometryN(i)))
+                c match {
+                    case _: MultiPoint => gf.createMultiPoint(parts.map(_.asInstanceOf[Point]))
+                    case _: MultiLineString => gf.createMultiLineString(parts.map(_.asInstanceOf[LineString]))
+                    case _: MultiPolygon => gf.createMultiPolygon(parts.map(_.asInstanceOf[Polygon]))
+                    case _ => gf.createGeometryCollection(parts)
+                }
+        }
+        val out = rebuild(gProj)
+        out.setSRID(gProj.getSRID)
+        out
+    }
+
     /** Z-aware OGR reprojection through a cache-owned CoordinateTransformation.
       *
       * The CT carries OAMS_TRADITIONAL_GIS_ORDER on both ends (baked in at construction by
@@ -282,6 +348,11 @@ private[expressions] object TransformCrsCore {
     private[expressions] def transformWithCachedCT(
         g: JTSGeometry, ct: CoordinateTransformation
     ): JTSGeometry = {
+        if (g.isEmpty) return g.copy()
+        g match {
+            case c: GeometryCollection if hasEmptyPart(c) => return transformAroundEmpty(c, ct)
+            case _ =>
+        }
         val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKBForOGR(g))  // safe for OGR: all-or-nothing Z
         try {
             ogrGeom.Transform(ct)
@@ -289,5 +360,31 @@ private[expressions] object TransformCrsCore {
         } finally {
             ogrGeom.delete()
         }
+    }
+
+    /** True when ``c`` holds an EMPTY geometry at any depth. */
+    private def hasEmptyPart(c: GeometryCollection): Boolean =
+        (0 until c.getNumGeometries).exists { i =>
+            c.getGeometryN(i) match {
+                case inner: GeometryCollection => inner.isEmpty || hasEmptyPart(inner)
+                case other => other.isEmpty
+            }
+        }
+
+    /** Reprojects the parts of a collection that hold coordinates and leaves an EMPTY part as the same
+      * EMPTY geometry. JTS writes an EMPTY point as a point at NaN, which OGR refuses, so an EMPTY part is
+      * never handed to it (otherwise the whole collection would read as NULL). The collection keeps its
+      * type and the order of its parts. */
+    private def transformAroundEmpty(c: GeometryCollection, ct: CoordinateTransformation): JTSGeometry = {
+        val parts = Array.tabulate(c.getNumGeometries)(i => transformWithCachedCT(c.getGeometryN(i), ct))
+        val gf = c.getFactory
+        val out = c match {
+            case _: MultiPoint => gf.createMultiPoint(parts.map(_.asInstanceOf[Point]))
+            case _: MultiLineString => gf.createMultiLineString(parts.map(_.asInstanceOf[LineString]))
+            case _: MultiPolygon => gf.createMultiPolygon(parts.map(_.asInstanceOf[Polygon]))
+            case _ => gf.createGeometryCollection(parts)
+        }
+        out.setSRID(c.getSRID)
+        out
     }
 }

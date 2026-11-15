@@ -6,15 +6,15 @@ title: Virtual Tiles
 
 # Virtual Tiles
 
-Reading a multi-gigabyte raster the naïve way pulls the whole image into memory —
-and fanning it into pieces multiplies that cost until an executor runs out of
-memory. GeoBrix avoids this with **virtual tiles**: each row of the DataFrame
-carries a *reference* to a window of a raster — a path plus a pixel window —
+Reading a multi-gigabyte raster the naïve way pulls the whole image into memory.
+Fanning it into pieces multiplies that cost until an executor runs out of
+memory. GeoBrix avoids this with **virtual tiles**. Each row of the DataFrame
+carries a *reference* to a window of a raster (a path plus a pixel window)
 instead of the pixels themselves. Pixels are read lazily, one window at a time,
 only when an operation actually needs them.
 
-This page explains the virtual-tile model, why it dissolves the
-ingest-memory problem, and how tiles move between **virtual** (bytes-free) and
+This page explains the virtual-tile model and why it dissolves the
+ingest-memory problem. It also explains how tiles move between **virtual** (bytes-free) and
 **materialized** (bytes-in-hand) states across the read → operate → write
 lifecycle.
 
@@ -23,13 +23,13 @@ lifecycle.
 ## What a virtual tile is
 
 Every GeoBrix raster tile is one typed struct — the **v2 tile struct** — shared
-by both execution tiers:
+by every implementation level:
 
 ```
 struct<
-  cellid: bigint,                       -- grid cell id (nullable)
+  cellid: bigint,                       -- grid cell id (-1 when not tessellated)
   raster: binary,                       -- the raster payload (NULL when virtual)
-  path: string,                         -- source path (set when virtual)
+  path: string,                         -- source path (virtual) or provenance (materialized)
   window: struct<col_off,row_off,width,height>,  -- the pixel window
   clip_polygon: binary,                 -- optional clip geometry (WKB)
   clip_crs: string,                     -- CRS for clip_polygon
@@ -53,9 +53,9 @@ depending on the tile's state, and this is the key to reasoning about them:
 
 - On a **materialized** tile they are **provenance** — a record of what has
   *already been applied* to produce the bytes in `raster`.
-- On a **virtual** tile they are **instructions** — pending operations that are
-  applied when the tile is read (staged from `path`, the `window` extracted, the
-  clip and CRS applied), producing the pixels on demand.
+- On a **virtual** tile they are **instructions**. The tile applies them
+  when it is read (staged from `path`, the `window` extracted, the
+  clip and CRS applied). This produces the pixels on demand.
 
 ## Why it matters
 
@@ -65,10 +65,10 @@ Carrying references instead of pixels is what makes large-raster ingest scale:
   four-integer window). The materialized bytes it stands in for are **148–527 KB**
   per tile — so virtual rows are on the order of **1,400–5,000× smaller**. At
   ingest you hold N tiny descriptor rows instead of hundreds of MiB of encoded
-  tiles, and the accumulation that causes Serverless out-of-memory failures
+  tiles. The accumulation that causes Serverless out-of-memory failures
   simply does not happen.
-- **Windowed, parallel reads.** Readers fan a source out across the cluster — one
-  window per tile, one tile per task — and each window is a small ranged read
+- **Windowed, parallel reads.** Readers fan a source out across the cluster, with one
+  window per tile and one tile per task. Each window is a small ranged read
   against a [Cloud-Optimized GeoTIFF](./large-rasters#raster-formats-striped-tiled-and-cog).
   No executor ever holds the whole image, and there is no driver-side `collect`.
 - **Lazy composition.** Deferrable operations chain on virtual tiles without ever
@@ -82,16 +82,17 @@ demand — expressed as a Spark DataFrame.
 
 The diagram above traces the four stages:
 
-1. **Source.** Striped GeoTIFFs, tiled GeoTIFFs, COGs, NetCDFs, and tabular
-   tile-struct columns are all usable **as-is**. File formats can *optionally* be
+1. **Source.** Striped GeoTIFFs, tiled GeoTIFFs, COGs, NetCDFs, [Zarr stores](#zarr-tiles),
+   and tabular tile-struct columns are all usable **as-is**. File formats can *optionally* be
    standardized into COGs first with
-   [`prepare_cogs`](./large-rasters#prepare_cogs--driver-orchestrated-preparation),
-   which makes windowed reads cheap (a striped source can inflate a single window
-   ~570× versus a clean tiled block). Optimization is a choice, not a gate.
-2. **Distributed load.** A reader (`cog_gbx`, `gdal`, `netcdf_gbx`, …) partitions
-   the source across executors and emits tile rows — the lightweight raster readers
-   (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) emit **virtual tiles by default**;
-   pass `.option("virtualTiles", "false")` to get materialized bytes instead. Selection
+   [`prepare_cogs`](./large-rasters#prepare_cogs--driver-orchestrated-preparation).
+   This makes windowed reads cheap, because a striped source can inflate a single window
+   ~570× versus a clean tiled block. Optimization is a choice, not a gate.
+2. **Distributed load.** A reader (`cog_gbx`, `raster_gbx`, `netcdf_gbx`, `gbx_zarr_read`, …) splits
+   the source across executors and emits tile rows. The raster readers
+   (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) emit **virtual tiles by default**.
+   Pass `.option("virtualTiles", "false")` to get materialized bytes instead (for
+   `gbx_zarr_read`, `virtual_tiles=False`). Selection
    options (`tileSize`, `overlapPercent`, `clipPolygons`, …) shape the windowing.
 3. **Operate.** Any `rst_*` function accepts either a virtual or a materialized
    tile. The output shape is your choice — see below.
@@ -102,7 +103,7 @@ The diagram above traces the four stages:
 
 FILE is a [Databricks data type](https://docs.databricks.com/aws/en/pyspark/reference/file-type) that provides **governed access to files on compute without a FUSE mount**. GeoBrix detects FILE availability and uses it when present. If FILE is not available, virtual tiles work via the FUSE path unchanged.
 
-When FILE is available (Databricks Runtime 19 dedicated clusters), GeoBrix:
+When FILE is available (Databricks Runtime 19 dedicated clusters and Serverless, in a workspace with the File type preview), GeoBrix:
 
 - Stamps each virtual tile row with a `path_mode` field: `"external"` or `"managed"` (see [Tile Structure](./tile-structure)).
 - Opens the file via `fref.open()` (byte-range stream) rather than through the FUSE mount.
@@ -112,17 +113,16 @@ When FILE is available (Databricks Runtime 19 dedicated clusters), GeoBrix:
 
 ### Read performance with FILE
 
-The decisive factor for virtual-tile read performance is **open amortization** — opening a source raster once and reading many windows from that handle, rather than once per tile. Under the grouped executor pattern (per-partition LRU of open stream handles), byte-range stream reads are **10–290× faster** than FUSE for windowed COG reads. Without amortization (per-tile-open), the per-open cost of a stream scales with file size and can become prohibitive. See [Virtual tile read performance](./performance#virtual-tile-read-performance) for the full benchmark data, handling rules, and write-layout guidance.
+The decisive factor for virtual-tile read performance is **open amortization**. It means opening a source raster once and reading many windows from that handle, rather than once per tile. Under the grouped executor pattern (per-partition LRU of open stream handles), byte-range stream reads are **10–290× faster** than FUSE for windowed COG reads. Without amortization (per-tile-open), the per-open cost of a stream scales with file size and can become prohibitive. See [Virtual tile read performance](./performance#virtual-tile-read-performance) for the full benchmark data, handling rules, and write-layout guidance.
 
 ### Supported environments
 
-- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE engages where the runtime feature-detect succeeds. Where it does not, tiles use FUSE automatically.
-- **Databricks Runtime 19 on Serverless:** coming soon.
-- **Local development, CI, Serverless Compute (today), DBR 17/18:** virtual tiles use the traditional FUSE + rasterio path — correct and unchanged.
+- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config) **and Serverless**, in a workspace with the File type preview. FILE engages where the runtime feature-detect succeeds. Where it does not, tiles use FUSE automatically. The default `file_mode` is `fuse`; `"auto"` and `"external"` opt in to FILE.
+- **Local development, CI, DBR 17/18, and compute in a workspace without the preview:** virtual tiles use the traditional FUSE + rasterio path — correct and unchanged.
 
 ## Reader selection surface
 
-The lightweight readers expose the windowing surface as read options:
+The raster readers expose the windowing surface as read options:
 
 - **`virtualTiles`** — emit bytes-free virtual tiles (`true`, the default) or
   materialized tiles (`false`).
@@ -137,22 +137,67 @@ does not duplicate them.
 
 :::tip Many-file directories
 When a directory contains thousands of small tiles, loading it with `.load(dir)`
-incurs planning overhead even with virtual tiles: the reader still walks the directory
+incurs planning overhead even with virtual tiles. The reader still walks the directory
 and opens each header to compute `window` dimensions. Measured on a 10,002-file corpus,
 a pre-computed manifest drops plan time from **1.357 s to 0.037 s — about 37× faster**.
-Use the `manifest` or `tilesTable` reader option to supply pre-computed tile paths and
-windows, reducing planning to a single file or table read regardless of tile count.
+Use the `manifest` reader option, or read a tile index with `read_tiles_table`, to supply
+pre-computed tile paths and windows. This reduces planning to a single file or table read regardless
+of tile count.
 See [Raster Reader performance](../readers/raster#loading-many-small-files) and
 [Benchmarking → Reader plan-time listing](./benchmarking#reader-plan-time-listing).
 :::
 
+## Zarr tiles
+
+A [Zarr](./zarr-stores) store is the first **N-dimensional** format with virtual tiles. A GeoTIFF is one
+picture. A Zarr variable is a cube (`time` by `latitude` by `longitude`, say), so a tile is a window of one
+2-D plane of it. [`gbx_zarr_read(..., output="tiles")`](../readers/zarr#output-geobrix-tiles) cuts every
+selected latitude-longitude plane of a variable into windows (one inner chunk each by default). Each
+position along the other dimensions makes its own tile. The tile names that position in its `sliceDims` metadata, as the
+NetCDF reader names it. `band_dim` stacks one dimension as the bands of a tile instead. By default the tiles
+are virtual: `raster` is `NULL`, `path` is the store and `window` is the cells of the plane. Every
+Python `rst_*` function opens such a tile on demand and reads only the chunks its window touches. A
+header function such as `rst_crs` or `rst_width` reads no chunk at all.
+
+- **A Zarr tile is self-contained.** The tile's `metadata` carries what a task needs to read the window.
+  That is the array's metadata (`zarr_meta`) and the directory the storage objects are under (`zarr_root`).
+  It also carries the storage objects the window touches (`zarr_refs`). Each is a file, an offset and a
+  length taken from the manifest at the version the read was pinned to.
+  A task that opens the tile has no Spark session and no manifest table. A table
+  of tiles can therefore be saved and read back by other jobs. Its keys are listed in
+  [Zarr tile metadata](./tile-structure#zarr-tile-metadata).
+- **Chunks are read through the Volume mount.** A task resolves the tile's files under `zarr_root` on the
+  file system, so the store has to stay on a Volume. The `path_mode` value is `NULL`, because FILE references are not
+  used to open a Zarr tile. GeoBrix reads, registers and creates stores only at a Volume path (or another
+  mounted file system). No tile is made for a store at a cloud URL. The functions `gbx_zarr_read`, `gbx_zarr_register`
+  and `gbx_zarr_write` refuse one such as `s3://bucket/era5.zarr` with a `ZarrUnsupported` whose fix says
+  to pass the store's `/Volumes/<catalog>/<schema>/<volume>/...` path. For a store with a manifest table, a
+  file that the tile names and that has gone missing raises `ZarrStoreDrift`. Vacuum deletes the files of
+  versions older than the store's `retain` period, so
+  [tag](./zarr-versions) the version that a saved table of tiles points at.
+- **`access="direct"` needs `virtual_tiles=False`.** A virtual tile is opened later, in another job and
+  without the credentials of the call that made it. Therefore `gbx_zarr_read` refuses `access="direct"` with
+  virtual tiles and raises `ZarrAccessUnavailable`. Read the tiles now with `virtual_tiles=False` to use
+  direct access, or leave `access` at `"auto"` or `"fuse"`. See [Access](../readers/zarr#access).
+- **The JVM level reads materialized tiles only.** In SQL, GeoBrix sends a virtual Zarr tile to the
+  Python level, like any other virtual tile. `virtual_tiles=False` reads each tile as the read runs and holds its pixels as GeoTIFF bytes (its
+  `driver` and `format` are then `GTiff`) that both tiers accept. Keep the windows small, because it costs the
+  read up front and the memory of the pixels. See
+  [Materialize for the JVM level](../readers/zarr#materialize-for-the-jvm-level).
+
+Zarr tiles are a Python-level capability of Databricks Runtime 19 and Serverless environment 6, installed
+with the env6 wheel's `[zarr]` extra. The [Zarr Reader](../readers/zarr#virtual-tiles-and-the-rst_-functions)
+shows them in use, and [Zarr Stores](./zarr-stores) and its topic pages explain versions, tags and retention.
+
 ## Operating on tiles: your choice of output
 
-Every lightweight tile-returning `rst_*` function takes three optional
+Every Python tile-returning `rst_*` function takes three optional
 force-output parameters:
 
 - **`virtualize_dir`** — write the produced tile to a durable path and hand back a
-  **virtual** row (bytes-free), so a chain stays light after a pixel-producing op.
+  **virtual** row (bytes-free), so a chain stays bytes-free after a pixel-producing op.
+  The row's `window` is the full extent of the file written, so it reads back the
+  pixels that were produced.
 - **`virtualize_prefix`** — an optional filename prefix to deconflict outputs.
 - **`materialize`** — force raster bytes into the row.
 
@@ -161,12 +206,21 @@ pixel-producing operations materialize — but you can always ask for the other.
 For the full rule (which operations are free on virtual tiles and which
 materialize), see the
 [Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice) on
-the Execution Tiers page.
+the Surfaces & Levels page.
+
+A table of virtual tiles is tiny (each row is a path), so Spark reads it in a single task. A pixel-producing
+operation over it runs one tile at a time. It holds every output of the batch in that task's memory, and
+Serverless stops at 1 GB.
+
+Spread the table over several tasks first, so each task holds only its own outputs. Call
+`repartition(n, "tile.path", "tile.window")` on it, with `n` set to the row count you already have,
+divided by about 4. Name the key columns: a bare `repartition(n)` is coalesced by AQE, so Serverless would
+run the tiles in a few tasks. Hashing gives no exact split, so expect up to about four tiles in a partition.
 
 ### Instructions that stay virtual
 
 A few cheap, common operations record an **instruction** on a virtual tile instead
-of reading pixels — the tile stays bytes-free and the instruction is applied on the
+of reading pixels. The tile stays bytes-free, and the instruction is applied on the
 next read (alongside the window and any clip/reproject):
 
 - `rst_initnodata` — set the NoData value
@@ -177,19 +231,18 @@ They accumulate: chain them on a virtual tile and all apply together when the ti
 finally read (e.g. at tessellation). Pass `materialize=True` (or `virtualize_dir`) to
 apply them immediately and produce bytes.
 
-## Tiers: light tiles vs. heavy tiles
+A source's own mask band (not an alpha band), as JPEG-compressed imagery often has, is
+read with the window. A virtual tile therefore reads exactly as a tile of the file's bytes does:
+the masked pixels are invalid. Where `rst_initnodata` stamps a NoData on such a tile, the
+masked pixels take it. An internal mask band is carried wherever the file is read. An
+external `.msk` sidecar file is not carried when the source is copied to local disk first
+or read through a FileRef stream. Prefer an internal mask.
 
-**The lightweight tier is for light (virtual) raster tiles; the heavyweight tier
-is for heavy (binary) raster tiles.**
+## Virtual tiles and the JVM level
 
-- The **lightweight tier** (`pyrx`) generates and operates on virtual tiles, and
-  materializes them on demand. Virtual tiles are a lightweight-tier capability.
-- The **heavyweight tier** (`rasterx`) accepts both v1 and v2 **materialized**
-  tiles as input and always emits the v2 tile struct. It operates only on
-  materialized tiles: a virtual tile passed to a heavyweight function raises a
-  clear error telling you to materialize it first (call the lightweight function
-  with `materialize=True`, or write it out and read it back). Writing is itself a
-  materialization boundary.
+The Python level generates and operates on virtual tiles, and materializes them on demand.
+
+The JVM level (a dedicated cluster with the JAR) accepts both v1 and v2 **materialized** tiles and always emits the v2 tile struct. In SQL, GeoBrix sends a virtual tile to the Python implementation.
 
 ## See also
 
@@ -197,8 +250,10 @@ is for heavy (binary) raster tiles.**
   `cog_gbx` `driverMode`) and the format/memory details behind windowed reads.
 - [VRT & Mosaics](./vrt-mosaic) — a `.vrt` index over mini-COG tiles expands into
   one virtual tile row per member; `rst_*` functions run per-tile unchanged.
-- [Execution Tiers](./execution-tiers) — the full virtual↔materialized taxonomy
-  and the light→heavy bridge.
+- [Surfaces & Levels](./execution-tiers) — the full virtual↔materialized taxonomy
+  and the JVM level.
 - [COG reader (`cog_gbx`)](../readers/cog) and [Readers overview](../readers/overview)
   — the windowed-read option reference.
+- [Zarr Reader](../readers/zarr) and [Zarr Stores](./zarr-stores) — tiles cut from N-dimensional
+  Zarr cubes.
 - [Writers overview](../writers/overview) — persisting tiles to files.

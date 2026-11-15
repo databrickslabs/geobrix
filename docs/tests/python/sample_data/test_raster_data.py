@@ -19,6 +19,8 @@ _RASTER_CONSTANTS = [
     ("USAGE_SRTM_LONDON", "london-elevation"),
     ("DOWNLOAD_HRRR_NYC", "grib2"),
     ("USAGE_HRRR_NYC", "hrrr-weather"),
+    ("GENERATE_ERA5_ZARR", "write_era5_cube"),
+    ("USAGE_ERA5_ZARR", "era5_like_v3.zarr"),
 ]
 
 _RASTER_OUTPUT_CONSTANTS = [
@@ -42,3 +44,33 @@ def test_raster_output_constant_exists_and_contains_key(const_name, key):
     val = getattr(raster_data, const_name)
     assert isinstance(val, str), f"{const_name} should be str"
     assert key in val, f"{const_name} should contain '{key}'"
+
+
+# The Zarr weather cube snippets run for real: the first writes the cube (into a temporary
+# directory in place of the Volume), the second reads it back with a Spark session.
+_CANONICAL_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+
+
+def test_the_generate_snippet_writes_the_cube(tmp_path):
+    pytest.importorskip("zarr")
+    pytest.importorskip("xarray")
+    exec(raster_data.GENERATE_ERA5_ZARR.replace(_CANONICAL_BASE, str(tmp_path)), {})
+    written = sorted(p.name for p in (tmp_path / "global" / "era5-weather").iterdir())
+    assert written == ["era5_like_v2.zarr", "era5_like_v3.zarr"]
+
+
+def test_the_usage_snippet_reads_the_cube(spark, tmp_path):
+    pytest.importorskip("zarr")
+    pytest.importorskip("xarray")
+    exec(raster_data.GENERATE_ERA5_ZARR.replace(_CANONICAL_BASE, str(tmp_path)), {})
+    scope = {"spark": spark}
+    exec(raster_data.USAGE_ERA5_ZARR.replace(_CANONICAL_BASE, str(tmp_path)), scope)
+    table = scope["gbx_zarr_read"](
+        spark,
+        scope["cube"],
+        variables=["t2m"],
+        isel={"time": 0},
+        output="table",
+    )
+    assert table.columns == ["time", "latitude", "longitude", "t2m"]
+    assert table.count() == 181 * 360

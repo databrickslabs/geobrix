@@ -104,19 +104,18 @@ export default function Home() {
           <div className="container">
             <div className="row">
               <div className="col col--8 col--offset-2 text--center">
-                <h2>Start lightweight — the recommended raster tier</h2>
+                <h2>Start with the env wheel — every function, everywhere</h2>
                 <p>
-                  The lightweight tier (pyrx) runs the full GeoBrix raster API on pure Python + rasterio:
-                  a single wheel, no JAR and no init script, and it works everywhere — serverless,
-                  standard/shared clusters, ARM, and Lakeflow declarative pipelines. VectorX is
-                  likewise available lightweight (pyvx), as is all of GridX — BNG, quadbin, and
-                  custom grids (pygx). The heavyweight Scala/GDAL tier is there when you need full
-                  GDAL/OGR.
+                  One env wheel runs the full GeoBrix API at the Python level: RasterX, VectorX
+                  and all of GridX (BNG, H3, quadbin and custom grids). It needs no JAR and no init
+                  script, and it works everywhere — Serverless, standard clusters, ARM and Lakeflow
+                  declarative pipelines. On a dedicated cluster, the GeoBrix JAR adds a faster JVM
+                  level for some functions, and GeoBrix picks it for you.
                 </p>
                 <Link
                   className="button button--primary button--md"
                   to="/docs/api/execution-tiers">
-                  Compare Execution Tiers →
+                  Surfaces & Levels →
                 </Link>
               </div>
             </div>
@@ -131,13 +130,14 @@ export default function Home() {
                 <p>Get up and running with GeoBrix in minutes:</p>
                 <pre>
                   <code>
-{`# Install the lightweight wheel (single library, no JAR, no GDAL)
-# Stage the wheel on a Unity Catalog Volume, then install the quoted PEP 508 named form:
-%pip install --quiet "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+{`# Install the env wheel for your runtime (one library, its own GDAL, no init script)
+# Stage it on a Unity Catalog Volume, then install the quoted PEP 508 named form:
+%pip install --quiet "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 
 # Import and register functions
-from databricks.labs.gbx.pyrx import functions as rx
-rx.register(spark)
+from databricks.labs import gbx
+from databricks.labs.gbx.rasterx import functions as rx
+gbx.register(spark)
 
 # Read and process geospatial data
 rasters = (spark.read.format("binaryFile").load("/data/rasters")

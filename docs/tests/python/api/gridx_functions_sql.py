@@ -104,32 +104,30 @@ SELECT gbx_bng_kloop('TQ3080', 1) AS kloop;
 
 
 def bng_kringexplode_sql_example():
-    """Explode k-ring into one row per cell via SQL LATERAL.
+    """Explode k-ring into one row per cell.
 
-    SQL LATERAL is the canonical invocation for both tiers: the light UDTF
-    (``gbx_bng_kringexplode``) and the heavy CollectionGenerator both accept
-    this form.  Returns 9 rows (center TQ3080 + 8 neighbours) at k=1.
+    A table function, called as ``FROM t, LATERAL gbx_bng_kringexplode(...)`` -- see the Python
+    (light) tab.  Returns 9 rows (center TQ3080 + 8 neighbours) at k=1.
     Each row carries a single ``cellid STRING`` column.
     """
     return """
-SELECT t.*
-FROM (SELECT 'TQ3080' AS cellid) src,
-LATERAL gbx_bng_kringexplode(src.cellid, 1) t;
+SELECT t.cellid
+FROM (SELECT 'TQ3080' AS cell) src,
+LATERAL gbx_bng_kringexplode(src.cell, 1) t;
 """
 
 
 def bng_kloopexplode_sql_example():
-    """Explode k-loop (hollow ring) into one row per cell via SQL LATERAL.
+    """Explode k-loop (hollow ring) into one row per cell.
 
-    SQL LATERAL is the canonical invocation for both tiers: the light UDTF
-    (``gbx_bng_kloopexplode``) and the heavy CollectionGenerator both accept
-    this form.  Returns 8 rows (centre excluded) at k=1.
+    A table function, called as ``FROM t, LATERAL gbx_bng_kloopexplode(...)`` -- see the Python
+    (light) tab.  Returns 8 rows (centre excluded) at k=1.
     Each row carries a single ``cellid STRING`` column.
     """
     return """
-SELECT t.*
-FROM (SELECT 'TQ3080' AS cellid) src,
-LATERAL gbx_bng_kloopexplode(src.cellid, 1) t;
+SELECT t.cellid
+FROM (SELECT 'TQ3080' AS cell) src,
+LATERAL gbx_bng_kloopexplode(src.cell, 1) t;
 """
 
 
@@ -167,32 +165,33 @@ SELECT gbx_bng_geomkloop(
 
 
 def bng_geomkringexplode_sql_example():
-    """Explode geometry k-ring into one row per cell via SQL LATERAL.
+    """Explode geometry k-ring into one row per cell.
 
-    SQL LATERAL is the canonical invocation for both tiers.  Geometry
-    MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  At res=3 (1km) with k=1, the boundary-out band of the
-    3km × 3km polygon expands by one ring to 24 cells (interior centre not filled).
-    The optional mode parameter controls boundary classification (default 'boundary-out').
+    A table function, called as ``FROM t, LATERAL gbx_bng_geomkringexplode(...)`` -- see the Python (light)
+    tab.  Geometry MUST be in EPSG:27700 (BNG eastings/northings) -- WGS84
+    lon/lat yields empty results.  At res=3 (1km) with k=1, the boundary-out
+    band of the 3km x 3km polygon expands by one ring to 24 cells (interior
+    centre not filled).  The optional mode parameter controls boundary
+    classification (default 'boundary-out').
     """
     return """
-SELECT t.*
+SELECT t.cellid
 FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src,
 LATERAL gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t;
 """
 
 
 def bng_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (hollow ring) into one row per cell via SQL LATERAL.
+    """Explode geometry k-loop (hollow ring) into one row per cell.
 
-    SQL LATERAL is the canonical invocation for both tiers.  Geometry
-    MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  At res=3 (1km) with k=1, the outer hollow ring
-    of the 3km × 3km polygon polyfill contains 16 cells.
-    The optional mode parameter controls boundary classification (default 'boundary-out').
+    A table function, called as ``FROM t, LATERAL gbx_bng_geomkloopexplode(...)`` -- see the Python (light)
+    tab.  Geometry MUST be in EPSG:27700 (BNG eastings/northings) -- WGS84
+    lon/lat yields empty results.  At res=3 (1km) with k=1, the outer hollow
+    ring of the 3km x 3km polygon polyfill contains 16 cells.  The optional
+    mode parameter controls boundary classification (default 'boundary-out').
     """
     return """
-SELECT t.*
+SELECT t.cellid
 FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src,
 LATERAL gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t;
 """
@@ -232,20 +231,18 @@ SELECT gbx_bng_tessellate(
 
 
 def bng_tessellateexplode_sql_example():
-    """Explode tessellation into one row per chip via SQL LATERAL (light-tier form).
+    """Explode tessellation into one row per chip.
 
-    SQL LATERAL is the canonical invocation for both tiers.  Geometry
-    MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  The lightweight UDTF returns three columns per row:
-    ``cellid STRING``, ``core BOOLEAN``, ``chip BINARY`` — 9 rows for
-    the 3km × 3km BNG polygon at 1km resolution.
-
-    Note: the heavyweight CollectionGenerator has an ``elementSchema`` bug
-    (only ``cellid`` is visible via heavy SQL LATERAL); the light form
-    correctly exposes all three fields and is shown here.
+    A table function, called as ``FROM t, LATERAL gbx_bng_tessellateexplode(...)`` -- see the Python (light)
+    tab.  Geometry MUST be in EPSG:27700 (BNG eastings/northings) -- WGS84
+    lon/lat yields empty results.  Both tiers return three columns per row:
+    ``cellid STRING``, ``core BOOLEAN``, ``chip BINARY`` (WKB) -- 9 rows for
+    the 3km x 3km BNG polygon at 1km resolution.  The optional third argument,
+    ``keep_core_geom`` (default false), keeps the cell geometry as the chip of
+    core cells; by default their chip is NULL.
     """
     return """
-SELECT t.*
+SELECT t.cellid, t.core, t.chip
 FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src,
 LATERAL gbx_bng_tessellateexplode(src.geom, 3) t;
 """
@@ -361,9 +358,9 @@ bng_aswkt_sql_example_output = """
 +----------------------------------------------------------+
 |wkt_geom                                                  |
 +----------------------------------------------------------+
-|POLYGON ((531000 180000, 531000 181000, 530000 181000, ...|
+|POLYGON ((530000 180000, 531000 180000, 531000 181000, ...|
 +----------------------------------------------------------+
-POLYGON ((531000 180000, 531000 181000, 530000 181000, 530000 180000, 531000 180000))
+POLYGON ((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))
 """
 
 bng_cellarea_sql_example_output = """
@@ -449,6 +446,39 @@ bng_kloop_sql_example_output = """
 ... (8 cells: hollow ring at k=1, center TQ3080 excluded)
 """
 
+bng_kringexplode_sql_example_output = """
++------+
+|cellid|
++------+
+|TQ3080|
+|TQ2979|
+|TQ2981|
+|TQ3181|
+|TQ3179|
+|TQ2980|
+|TQ3180|
+|TQ3081|
+|TQ3079|
++------+
+... (9 rows: center TQ3080 plus its 8 neighbours at k=1)
+"""
+
+bng_kloopexplode_sql_example_output = """
++------+
+|cellid|
++------+
+|TQ2979|
+|TQ2981|
+|TQ3181|
+|TQ3179|
+|TQ2980|
+|TQ3180|
+|TQ3081|
+|TQ3079|
++------+
+... (8 rows: hollow ring at k=1, center TQ3080 excluded)
+"""
+
 bng_geomkring_sql_example_output = """
 +-----------------------------+
 |kring                        |
@@ -485,6 +515,23 @@ bng_tessellate_sql_example_output = """
 ... (9 chips; TQ3080 is core (core=true, chip=null); border cells carry WKB clip geometry)
 """
 
+
+bng_tessellateexplode_sql_example_output = """
++------+-----+--------------------------------------------------------+
+|cellid|core |chip                                                    |
++------+-----+--------------------------------------------------------+
+|TQ3080|true |NULL                                                    |
+|TQ2979|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 2C A0 ...]|
+|TQ3179|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 3C 40 ...]|
+|TQ3181|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 3C 40 ...]|
+|TQ2981|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 2C A0 ...]|
+|TQ3079|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 34 70 ...]|
+|TQ2980|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 24 D0 ...]|
+|TQ3081|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 34 70 ...]|
+|TQ3180|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 3C 40 ...]|
++------+-----+--------------------------------------------------------+
+... (9 rows: TQ3080 is core (core=true, chip=null); border cells carry a WKB clip polygon, cut here)
+"""
 
 bng_cellintersection_agg_sql_example_output = """
 # Heavyweight SQL (active tier = heavy/Scala) — STRUCT<cellid, core, chip>:
@@ -634,26 +681,28 @@ SELECT gbx_quadbin_geomkloop(
 
 
 def quadbin_geomkringexplode_sql_example():
-    """Explode geometry k-ring into one row per BIGINT cell via SQL LATERAL.
+    """Explode geometry k-ring into one row per BIGINT cell.
 
-    SQL LATERAL is the canonical invocation. At zoom=12 with k=1, the
-    covering polyfill of the NYC box expands outward by one ring.
+    A table function, called as ``FROM t, LATERAL gbx_quadbin_geomkringexplode(...)`` -- see the
+    Python (light) tab.  At zoom=12 with k=1, the covering polyfill of the NYC
+    box expands outward by one ring; each row carries one ``cellid BIGINT``.
     """
     return """
-SELECT t.*
+SELECT t.cellid
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src,
 LATERAL gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t;
 """
 
 
 def quadbin_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (hollow ring) into one row per BIGINT cell via SQL LATERAL.
+    """Explode geometry k-loop (hollow ring) into one row per BIGINT cell.
 
-    SQL LATERAL is the canonical invocation. At zoom=12 with k=1, returns
-    the hollow outer ring cells of the NYC box polyfill.
+    A table function, called as ``FROM t, LATERAL gbx_quadbin_geomkloopexplode(...)`` -- see the
+    Python (light) tab.  At zoom=12 with k=1, returns the hollow outer ring
+    cells of the NYC box polyfill, one ``cellid BIGINT`` per row.
     """
     return """
-SELECT t.*
+SELECT t.cellid
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src,
 LATERAL gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t;
 """
@@ -689,17 +738,22 @@ def quadbin_cellunion_agg_sql_example():
     """Aggregate quadbin cells per group into a single MultiPolygon EWKB.
 
     Inline subquery generates 9 cells (k=1 kring around the SF z10 cell) under
-    a single region key, then dissolves them.  Uses the canonical SF z10 fixture
+    a single region key, then dissolves them.  The ring is built in a subquery
+    and exploded as a column: Spark refuses a SQL function directly under ``explode``.  Uses the canonical SF z10 fixture
     cell (lon=-122.4194, lat=37.7749, zoom=10 → 5233961839712272383) — same
     input as the Python and Scala tabs.  The first ``gbx_quadbin_`` token is
     ``gbx_quadbin_cellunion_agg`` so DESCRIBE FUNCTION extracts this example.
     Both light and heavy tiers return BINARY EWKB (SRID 4326).
     """
     return """
+-- Spark refuses a SQL function directly under explode, so the ring is built in a
+-- subquery and the column is exploded.
 SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage
 FROM (
-  SELECT 'R1' AS region,
-         explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1)) AS cell
+  SELECT 'R1' AS region, explode(ring) AS cell
+  FROM (
+    SELECT gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS ring
+  )
 ) t
 GROUP BY region;
 """
@@ -926,11 +980,11 @@ custom_cellaswkb_sql_example_output = """
 """
 
 custom_cellaswkt_sql_example_output = """
-+----------------------------------------------------------------------------------------------------+
-|wkt                                                                                                 |
-+----------------------------------------------------------------------------------------------------+
-|POLYGON ((530031.25 180000, 530031.25 180031.25, 530000 180031.25, 530000 180000, 530031.25 180000))|
-+----------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------+
+|wkt                                                                                              |
++-------------------------------------------------------------------------------------------------+
+|POLYGON ((530000 180000, 530031.25 180000, 530031.25 180031.25, 530000 180031.25, 530000 180000))|
++-------------------------------------------------------------------------------------------------+
 """
 
 custom_centroid_sql_example_output = """
@@ -1012,30 +1066,38 @@ SELECT gbx_custom_geomkloop(
 
 
 def custom_geomkringexplode_sql_example():
-    """Explode geometry k-ring (custom grid) into one row per BIGINT cell via SQL LATERAL.
+    """Explode geometry k-ring (custom grid) into one row per BIGINT cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation.  At res=0 with k=1, the covering
-    polyfill of the box expands outward by one ring; each cell emitted as a row.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_custom_geomkringexplode(...)`` -- see the
+    Python (light) tab.  At res=0 with k=1, the covering polyfill of the box
+    expands outward by one ring; each cell is emitted as a row.
     """
     return """
-SELECT t.*
+-- heavyweight tier
+SELECT t.cellid
 FROM (SELECT 'POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))' AS geom,
-             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src,
-LATERAL gbx_custom_geomkringexplode(src.geom, src.grid, 0, 1, 'boundary-out') t;
+             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src
+LATERAL VIEW gbx_custom_geomkringexplode(src.geom, src.grid, 0, 1, 'boundary-out') t AS cellid;
 """
 
 
 def custom_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (custom grid hollow ring) into one row per BIGINT cell.
+    """Explode geometry k-loop (custom grid hollow ring) into one row per BIGINT cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation.  At res=0, k=1, returns the hollow
-    outer ring cells surrounding the geometry's polyfill.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_custom_geomkloopexplode(...)`` -- see the
+    Python (light) tab.  At res=0, k=1, returns the hollow outer ring cells
+    surrounding the geometry's polyfill.
     """
     return """
-SELECT t.*
+-- heavyweight tier
+SELECT t.cellid
 FROM (SELECT 'POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))' AS geom,
-             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src,
-LATERAL gbx_custom_geomkloopexplode(src.geom, src.grid, 0, 1, 'boundary-out') t;
+             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src
+LATERAL VIEW gbx_custom_geomkloopexplode(src.geom, src.grid, 0, 1, 'boundary-out') t AS cellid;
 """
 
 
@@ -1122,25 +1184,29 @@ def quadbin_cellfill_sql_example():
     """Fill NULL Quadbin cells from valid ring-1 neighbours using mean interpolation.
 
     The first sub-select contributes the London z=10 center cell with value NULL;
-    the UNION adds its ring-1 neighbours (via ``gbx_quadbin_kring``) with value 5.0.
+    the UNION adds its 8 ring-1 neighbours (``gbx_quadbin_kloop``) with value 5.0.
     With k=1 and method='mean' the NULL center is filled with 5.0.
+    The ring is built in a CTE and exploded as a column: Spark refuses a SQL
+    function directly under ``explode`` (``UNSUPPORTED_SQL_UDF_USAGE``).
 
     ``gbx_quadbin_cellfill`` is a grouped aggregator: the call must appear inside a
     GROUP BY query.  Cell IDs are BIGINT.  Returns BINARY (light) or
     ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> (heavy).
     """
     return """
+-- The London z=10 cell has no value; its 8 ring-1 neighbours (kloop) carry 5.0.
+-- Spark refuses a SQL function directly under explode, so the ring is built in a
+-- CTE first and the column is exploded.
+WITH r AS (
+  SELECT gbx_quadbin_pointascell(-0.1, 51.5, 10) AS centre,
+         gbx_quadbin_kloop(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1) AS around
+)
 SELECT region,
        gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0) AS filled
 FROM (
-  SELECT 1 AS region,
-         gbx_quadbin_pointascell(-0.1, 51.5, 10) AS cellid,
-         CAST(NULL AS DOUBLE) AS value
+  SELECT 1 AS region, centre AS cellid, CAST(NULL AS DOUBLE) AS value FROM r
   UNION ALL
-  SELECT 1 AS region, cell AS cellid, 5.0 AS value
-  FROM (
-    SELECT explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1)) AS cell
-  )
+  SELECT 1 AS region, explode(around) AS cellid, 5.0 AS value FROM r
 ) t
 GROUP BY region;
 """
@@ -1152,7 +1218,7 @@ quadbin_cellfill_sql_example_output = """
 +------+--------+
 |1     |[binary]|
 +------+--------+
-... (BINARY — decoded: London z10 center cell filled to 5.0; ring-1 neighbours unchanged)
+... (BINARY — decoded: 9 cells; the London z10 center cell is filled to 5.0, the 8 ring-1 neighbours stay 5.0)
 """
 
 
@@ -1279,11 +1345,13 @@ SELECT gbx_h3_geomkloop(
 def h3_geomkringexplode_sql_example():
     """Explode geometry-aware H3 k-ring into one row per cell via SQL LATERAL.
 
-    Each row yields one BIGINT H3 cell id.  SQL LATERAL is the only invocation
-    path for this streaming UDTF (no Python Column form).  Self-contained:
-    no Databricks product functions required.
+    The H3 geometry-aware functions exist in the lightweight tier only, where
+    they are table functions: ``FROM t, LATERAL f(...)`` is their one SQL form
+    (there is no Python Column form).  Each row yields one BIGINT H3 cell id.
+    Self-contained: no Databricks product functions required.
     """
     return """
+-- Python level only (H3 geometry-aware functions have no JVM implementation)
 SELECT t.*
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))' AS geom) src,
 LATERAL gbx_h3_geomkringexplode(src.geom, 9, 1, 'boundary-out') t;
@@ -1293,10 +1361,11 @@ LATERAL gbx_h3_geomkringexplode(src.geom, 9, 1, 'boundary-out') t;
 def h3_geomkloopexplode_sql_example():
     """Explode geometry-aware H3 k-loop (hollow ring) into one row per cell via SQL LATERAL.
 
-    Each row yields one BIGINT H3 cell id at exactly k steps.  SQL LATERAL is the
-    only invocation path for this streaming UDTF (no Python Column form).
+    Python level only (a table function, called with ``FROM t, LATERAL f(...)``;
+    no Python Column form).  Each row yields one BIGINT H3 cell id at exactly k steps.
     """
     return """
+-- Python level only (H3 geometry-aware functions have no JVM implementation)
 SELECT t.*
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))' AS geom) src,
 LATERAL gbx_h3_geomkloopexplode(src.geom, 9, 1, 'boundary-out') t;
@@ -1388,4 +1457,207 @@ bng_geomkloopexplode_sql_example_output = """
 |...(STRING)|
 +-----------+
 ... (one row per STRING BNG cell ID in the k=1 hollow outer ring)
+"""
+
+
+# ============================================================================
+# Array forms of the cell aggregates — one array per group instead of a GROUP BY
+# aggregate.  ``collect_list(struct(...))`` builds the array; the answer is the
+# aggregate's answer over the same cells or chips.
+# ============================================================================
+
+
+def bng_cellfill_array_sql_example():
+    """Fill NULL BNG cells from an array of (cellid, value) structs.
+
+    The same cells as ``gbx_bng_cellfill``: London 100 m cell TQ300800 (NULL, to
+    be filled) surrounded by four ring-1 neighbours each with value 5.0.
+    ``collect_list(struct(cellid, value))`` gathers each group's cells into one
+    array.  With k=1 and method='mean' the NULL cell takes the mean of its
+    neighbours (5.0).  Returns ``array<struct<cellid:string,value:double>>`` in
+    ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_bng_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 'TQ300800', CAST(NULL AS DOUBLE)),
+    (1, 'TQ299800', 5.0),
+    (1, 'TQ301800', 5.0),
+    (1, 'TQ300799', 5.0),
+    (1, 'TQ300801', 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+bng_cellfill_array_sql_example_output = """
++------+-------------------------------------------------------------------------------------+
+|region|filled                                                                               |
++------+-------------------------------------------------------------------------------------+
+|1     |[{TQ299800, 5.0}, {TQ300799, 5.0}, {TQ300800, 5.0}, {TQ300801, 5.0}, {TQ301800, 5.0}]|
++------+-------------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL cell TQ300800 is filled to 5.0)
+"""
+
+
+def quadbin_cellfill_array_sql_example():
+    """Fill NULL Quadbin cells from an array of (cellid, value) structs.
+
+    The London z=10 cell 5234158540624494591 is NULL and two ring-1 neighbours
+    carry 5.0.  ``collect_list(struct(cellid, value))`` gathers the cells into one
+    array, and with k=1 and method='mean' the NULL cell takes 5.0.  Returns
+    ``array<struct<cellid:bigint,value:double>>`` in ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_quadbin_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 5234158540624494591L, CAST(NULL AS DOUBLE)),
+    (1, 5234158544919461887L, 5.0),
+    (1, 5234158536329527295L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+quadbin_cellfill_array_sql_example_output = """
++------+------------------------------------------------------------------------------------+
+|region|filled                                                                              |
++------+------------------------------------------------------------------------------------+
+|1     |[{5234158536329527295, 5.0}, {5234158540624494591, 5.0}, {5234158544919461887, 5.0}]|
++------+------------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the London z10 center cell is filled to 5.0)
+"""
+
+
+def custom_cellfill_array_sql_example():
+    """Fill NULL custom-grid cells from an array of (cellid, value) structs.
+
+    Center cell 216172782113787048 is NULL and two ring-1 neighbours carry 5.0.
+    The grid struct comes from ``gbx_custom_grid``.  With k=1 and method='mean'
+    the NULL cell takes 5.0.  Returns ``array<struct<cellid:bigint,value:double>>``
+    in ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_custom_cellfill_array(
+         collect_list(struct(cellid, value)),
+         gbx_custom_grid(0, 1000000, 0, 1000000, 2, 100000, 100000, 27700),
+         1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 216172782113787048L, CAST(NULL AS DOUBLE)),
+    (1, 216172782113786967L, 5.0),
+    (1, 216172782113787127L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+custom_cellfill_array_sql_example_output = """
++------+---------------------------------------------------------------------------------+
+|region|filled                                                                           |
++------+---------------------------------------------------------------------------------+
+|1     |[{216172782113786967, 5.0}, {216172782113787048, 5.0}, {216172782113787127, 5.0}]|
++------+---------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL center cell is filled to 5.0)
+"""
+
+
+def h3_cellfill_array_sql_example():
+    """Fill NULL H3 cells from an array of (cellid, value) structs.
+
+    London res-8 center cell 612934495919669247 is NULL and two ring-1 neighbours
+    carry 5.0.  With k=1 and method='mean' the NULL cell takes 5.0.  Returns
+    ``array<struct<cellid:bigint,value:double>>`` in ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_h3_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 612934495919669247L, CAST(NULL AS DOUBLE)),
+    (1, 612934495863046143L, 5.0),
+    (1, 612934495900794879L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+h3_cellfill_array_sql_example_output = """
++------+---------------------------------------------------------------------------------+
+|region|filled                                                                           |
++------+---------------------------------------------------------------------------------+
+|1     |[{612934495863046143, 5.0}, {612934495900794879, 5.0}, {612934495919669247, 5.0}]|
++------+---------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL center cell is filled to 5.0)
+"""
+
+
+def bng_cellintersection_array_sql_example():
+    """Intersect the chips of one BNG cell, gathered into an array.
+
+    Two polygons each cover part of cell TQ3080: x 530000-530600 and x 530400-531000.
+    ``gbx_bng_tessellate`` clips each to a chip of TQ3080, and ``collect_list`` gathers
+    the chips into one array.  ``gbx_bng_cellintersection_array`` returns their
+    intersection as WKB: the strip x 530400-530600.  Chips of more than one cell give NULL.
+    """
+    return """
+SELECT gbx_bng_cellintersection_array(collect_list(t.chip)) AS common_chip
+FROM (
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))', 3
+  )) AS chip
+  UNION ALL
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))', 3
+  )) AS chip
+) t
+WHERE t.chip.cellid = 'TQ3080';
+"""
+
+
+bng_cellintersection_array_sql_example_output = """
++-----------+
+|common_chip|
++-----------+
+|[binary]   |
++-----------+
+... (BINARY — WKB of the strip x 530400-530600 of cell TQ3080, in EPSG:27700)
+"""
+
+
+def bng_cellunion_array_sql_example():
+    """Union the chips of one BNG cell, gathered into an array.
+
+    Two polygons each cover part of cell TQ3080: x 530000-530600 and x 530400-531000.
+    ``gbx_bng_tessellate`` clips each to a chip of TQ3080, and ``collect_list`` gathers
+    the chips into one array.  ``gbx_bng_cellunion_array`` returns their union as WKB:
+    the whole cell.  Chips of more than one cell give NULL.
+    """
+    return """
+SELECT gbx_bng_cellunion_array(collect_list(t.chip)) AS union_chip
+FROM (
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))', 3
+  )) AS chip
+  UNION ALL
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))', 3
+  )) AS chip
+) t
+WHERE t.chip.cellid = 'TQ3080';
+"""
+
+
+bng_cellunion_array_sql_example_output = """
++----------+
+|union_chip|
++----------+
+|[binary]  |
++----------+
+... (BINARY — WKB of the union, the whole cell TQ3080 (x 530000-531000), in EPSG:27700)
 """

@@ -1,4 +1,4 @@
-"""Task 10 (RasterX CRS-100, Group G): VizX CRS consistency.
+"""VizX CRS consistency.
 
 _resolve_plot_crs routes the basemap CRS through the shared canonical authority
 and honours a `crs` override for a CRS-less raster, never erroring on absent CRS.

@@ -1,7 +1,7 @@
 """Tests for lidar_gbx DataSource — points mode (chunk-iterated, filters).
 
-Task 3 of the v0.5.2 LiDAR feature: one row per point with optional
-class/return/decimate filters and .las/.laz parity.
+One row per point with optional class/return/decimate filters and .las/.laz
+parity.
 """
 
 import numpy as np

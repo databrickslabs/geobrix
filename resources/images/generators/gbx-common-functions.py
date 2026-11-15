@@ -183,7 +183,7 @@ def render():
     parts.append(text(PAD, PAD + 30, "GeoBrix · GBX Common Functions",
                       size=28, weight=800, fill=C_INK))
     parts.append(text(PAD, PAD + 56,
-                      "One shared file-access base under every lightweight reader and writer.",
+                      "One shared file-access base under every *_gbx reader and writer.",
                       size=13.5, fill=C_MUTED))
     # Legend (top-right)
     lx = CANVAS_W - PAD - 360
@@ -225,7 +225,7 @@ def render():
                  border=ACCENT_WRITE, mono_font=True, h=21, size=11)
     parts.append(wc)
     parts.append(text(bx2 + 12, wy_box + 48, "df, target, *, file_mode=", size=10, weight=500, fill=C_MUTED))
-    parts.append(mono(bx2 + 12 + 124, wy_box + 48, '"auto"', size=10, weight=700, fill=ACCENT_WRITE))
+    parts.append(mono(bx2 + 12 + 124, wy_box + 48, '"fuse"', size=10, weight=700, fill=ACCENT_WRITE))
     parts.append(text(bx2 + 12, wy_box + 65, "returns None (writes Delta table)", size=10, weight=500, fill=C_MUTED_2))
 
     # --- NO-GATING callout ---
@@ -361,7 +361,7 @@ def render():
 
     # ---- Footer ----
     parts.append(text(PAD, canvas_h - 12,
-                      "databrickslabs/geobrix  ·  lightweight tier  ·  file_gbx common functions",
+                      "databrickslabs/geobrix  ·  Python level  ·  file_gbx common functions",
                       size=11, fill=C_MUTED_3))
     parts.append(text(CANVAS_W - PAD, canvas_h - 12, "docs/common-functions",
                       size=11, fill=C_MUTED_3, anchor="end"))

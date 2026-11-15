@@ -2,59 +2,60 @@
 sidebar_position: 1
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Readers Overview
 
 GeoBrix provides Spark readers for geospatial file formats.
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pyrx)">
+:::tip Keeping a table in sync with a landing folder?
+See [Ingestion Pipelines](../ingestion/overview): a Lakeflow connector, Auto Loader pipelines and
+`read_paths` read only the new and changed files with these readers, and track what changed.
+:::
 
-The lightweight tier ships native Python DataSource V2 readers — no JAR, no init script.
+GeoBrix ships native Python DataSource V2 readers. They need no JAR.
 
 :::tip Distributed readers, virtual tiles by default
-These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers): work is
-partitioned and read in parallel across the cluster — vector readers slice features by `chunkSize`,
-raster readers split large files by `sizeInMB` — returning a distributed DataFrame with no driver-side
+These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers). Work is
+partitioned and read in parallel across the cluster. Vector readers read each file in its own task
+and stream it in batches of `chunkSize` features (memory follows `chunkSize`, not file size). Raster
+readers split large files by `sizeInMB`. The result is a distributed DataFrame with no driver-side
 `collect`. Raster readers load **virtual tiles** by default — bytes-free `(path, window)` refs that read
 pixels lazily, so a multi-gigabyte raster fans into tiles without OOM (`.option("virtualTiles", "false")`
 for materialized reads). See **[Virtual Tiles](../api/virtual-tiles)**.
 :::
 
 :::note Register first
-Unlike the heavyweight readers (auto-discovered from the JAR), the lightweight Python
-DataSources are **not** auto-registered — call `register(spark)` once per session before
-using any `*_gbx` format:
+The Python DataSources are **not** auto-registered. Call `register(spark)` once per session
+before you use any `*_gbx` format:
 
 ```python
-from databricks.labs.gbx.ds.register import register
-register(spark)
+from databricks.labs.gbx import register
+
+register(spark)   # every gbx_* function and every *_gbx reader and writer
 ```
 
-To register only the formats this session uses, pass `only=` (by format name, with or without the `_gbx` suffix):
+The call registers all readers and writers. There is no call that registers only some of them.
+:::
 
-```python
-register(spark, only=["raster_gbx", "gtiff_gbx"])
+:::tip Which formats can this runtime read and write?
+Call [`gbx_drivers()`](../api/general-functions#drivers) in SQL, or `drivers()` in Python, to list the drivers of the current environment. Each row says whether the driver reads, writes and is allowed by GeoBrix. It also says if the driver works as shipped, and what it still needs. Use `kind` (`'raster'` or `'vector'`) to keep one kind. The `tested` column marks the drivers that GeoBrix's driver tests cover, and `guidance` points to a built-in reader where one exists. The result reflects the environment as it runs now, so adding or removing packages changes it. See the [drivers in the env wheel](../gdal-drivers) for the shipped list.
+
+```sql
+SELECT driver, description, requires FROM gbx_drivers() WHERE write AND allowed
 ```
-
-An unrecognized format raises `ValueError`.
 :::
 
 :::tip On Serverless, read from a FILE-column table
-The **Delta-scan FILE-column-table read path** is the recommended read path on Serverless: a `tilesTable`
-(raster) or `vector_file_read(table)` (vector) scans the Delta table and resolves FILE references without
-per-tile opens — measured at **~1.8–2 s** for 1,000 raster tiles or 100k vector features on both
-Serverless and classic clusters.
+The **Delta-scan FILE-column-table read path** is the recommended read path on Serverless. A tile index read
+with `read_tiles_table` (raster) or `vector_file_read(table)` (vector) scans the Delta table and resolves FILE references in the scan, with
+no per-tile open.
 
-The `raster_gbx` **directory DataSource path** incurs a per-tile open and is **~16–17× slower on Serverless**
-(~30 s vs. ~2 s per 1,000 tiles). When running on Serverless, write your rasters or vectors to a FILE-column
+The `raster_gbx` **directory DataSource path** pays its own file open on the worker for each tile. On Serverless,
+each open is a Volume round trip. Write your rasters or vectors to a FILE-column
 table first, then read from that table rather than the directory directly.
 
-All tile reads are size-gated by a **connect-aware cap** (64 MiB on Serverless / Spark Connect, 256 MiB on
-classic; override with `GBX_STREAM_MAX_BYTES`). Files under the cap stream in full; files over the cap open
-lazily so reads never load an unbounded tile into executor memory. See [Serverless & Memory](../serverless-and-memory)
+All tile reads are size-gated by a **connect-aware cap**. The cap is 64 MiB on Serverless and 256 MiB on
+classic compute in dedicated and standard access mode; override it with `GBX_STREAM_MAX_BYTES`. Files under the cap stream in full. Files over the cap open
+lazily, so reads never load an unbounded tile into executor memory. See [Serverless & Memory](../serverless-and-memory)
 for the full guide including write-path safety and caveats.
 
 See the full [capability tiers & read-options matrix](../readers-writers#capability-tiers).
@@ -69,9 +70,10 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [COG Reader](./cog) | `cog_gbx` | Pure-Python cloud-optimized GeoTIFF reader — windowed/overview-aware reads |
 | [NetCDF Reader](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF reader — CF grids (raster) or CF-DSG points (vector) |
 | [File Reader](./file) | `file_gbx` | Pure-Python file lister — enumerates matching paths as rows (read-only) |
+| [Zarr Reader](./zarr) | `zarr_gbx` | Pure-Python reader for Zarr v2 and v3 stores (no JAR): blocks, a table of cells or GeoBrix tiles, by label or position; `gbx_zarr_read` adds versions and sampling |
 | [PMTiles Reader](./pmtiles) | `pmtiles_gbx` | Pure-Python PMTiles reader — mosaic pyramid from rasters (`source="raster"`) or tiles from an archive (`source="archive"`) |
-| [LiDAR Reader](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud reader (light-only; no heavyweight tier) |
-| [EXIF/GPS Reader](./exif) | `exif_gbx` | Pure-Python EXIF/GPS telemetry reader for drone/camera images (light-only; no heavyweight tier) |
+| [LiDAR Reader](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud reader (no JAR) |
+| [EXIF/GPS Reader](./exif) | `exif_gbx` | Pure-Python EXIF/GPS telemetry reader for drone/camera images (no JAR) |
 | [Vector Reader](./vector) | `vector_gbx` | Pure-Python catch-all vector reader (pyogrio; same OGR schema) |
 | [Shapefile Reader](./shapefile) | `shapefile_gbx` | Pure-Python Shapefile reader (preset OGR driver) |
 | [GeoJSON Reader](./geojson) | `geojson_gbx` | Pure-Python GeoJSON reader (preset OGR driver) |
@@ -83,10 +85,10 @@ See the [Raster Reader](./raster) page for full raster usage/options, and the ve
 reader pages for the OGR `(geom_0, geom_0_srid, geom_0_srid_proj, …attributes)` schema.
 
 :::note `.limit()` and filters are not pushed into the reader — use the function layer for a bounded scan
-The lightweight DataSource readers **enumerate the entire source at planning time**, regardless of a
+The `*_gbx` DataSource readers **enumerate the entire source at planning time**, regardless of a
 downstream `.limit(N)`, `WHERE`, or column projection. Spark 4.0.0's Python DataSource API exposes no
-limit/filter **pushdown** hook, so `spark.read.format("raster_gbx").load(dir).limit(10)` still lists —
-and plans a partition for — *every* file under `dir`, then discards all but 10 rows afterward. The
+limit/filter **pushdown** hook. A call such as `spark.read.format("raster_gbx").load(dir).limit(10)` therefore still lists,
+and plans a partition for, *every* file under `dir`. It then discards all but 10 rows afterward. The
 listing is a fast, stat-free directory walk, so this is cheap for typical directories; on a very large
 directory, every file is still planned.
 
@@ -104,13 +106,14 @@ See **[GBX Common Functions](../common-functions)**.
 
 ### FILE-column-table reads {#file-column-table-reads}
 
-Both the raster and vector light-tier readers can read directly from a FILE-column Delta table
-(a table whose rows carry FILE references to geospatial files) in addition to Volume paths.
+Both the raster and vector readers can read directly from a FILE-column Delta table
+in addition to Volume paths. Such a table has rows that carry FILE references to geospatial files.
 Both auto-order by the resolved source path by default. The ordering effect differs by format:
 
-- **Raster (`tilesTable`)** — a single GeoTIFF can produce many tile rows; auto-ordering
-  groups those tiles together so each executor opens the source file once and reads all its
-  windows, amortizing the open cost. See [Raster Reader → tilesTable auto-order](./raster#tiles-table-auto-order).
+- **Raster (`read_tiles_table`, `manifest`)** — a single GeoTIFF can produce many tile rows.
+  Auto-ordering puts those tiles next to each other (in a `manifest` read, in adjacent partitions;
+  in `read_tiles_table`, inside each task). A worker therefore opens the source file once for the windows
+  it reads, amortizing the open cost. See [Raster Reader → tile index auto-order](./raster#tiles-table-auto-order).
 - **Vector (`vector_file_read`)** — one vector file maps to exactly one table row (one FILE
   ref). Every source opens exactly once regardless of row order, so auto-ordering is a
   **deterministic, cross-format-consistent default**, not a throughput lever. See
@@ -123,210 +126,5 @@ redundant sort step.
 
 ## Benchmarks
 
-Each `*_gbx` lightweight reader corresponds to a `*_ogr` (or `gdal`/`gtiff_gdal`) heavyweight
-counterpart. The generic `vector_gbx` catch-all reader pairs with the heavyweight `ogr` generic
-OGR reader; named readers such as `shapefile_gbx` pair with `shapefile_ogr`, and so on.
-
-Both tiers are benchmarked on the same cluster, same source file, same row counts. Parity
-(row-count equality between the two tiers) is a hard gate — a mismatch fails the run
-immediately. Per-format timing results are published on the [Benchmarking](../api/benchmarking)
-page; the vector-reader comparison table is in the **Results — vector readers** section (timing
-figures will be filled in once a controlled cluster run is completed).
-
-For the full methodology, raster-function results, and the PMTiles writer comparison, see the
-[Benchmarking](../api/benchmarking) page.
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (rasterx)">
-
-Heavyweight readers are implemented as Spark DataSource V2 connectors backed by GDAL (raster) and OGR (vector). They are registered automatically when the GeoBrix JAR is on the classpath — no additional configuration needed.
-
-## Available Readers
-
-### Raster Readers (GDAL-based)
-
-| Reader | Format Name | Description |
-|--------|-------------|-------------|
-| [Raster Reader](./raster) | `gdal` / `gtiff_gdal` | GDAL-backed raster readers (generic and GeoTIFF named) |
-| [NetCDF Reader](./netcdf) | `netcdf_gdal` | GDAL-backed named reader for NetCDF grids (raster) |
-
-### Vector Readers (OGR-based)
-
-| Reader | Format Name | Description |
-|--------|-------------|-------------|
-| [Vector Reader](./vector) | `ogr` | Generic reader for any OGR-supported vector format |
-| [Shapefile Reader](./shapefile) | `shapefile_ogr` | Named reader for ESRI Shapefiles |
-| [GeoJSON Reader](./geojson) | `geojson_ogr` | Named reader for GeoJSON/GeoJSONSeq |
-| [GeoPackage Reader](./geopackage) | `gpkg_ogr` | Named reader for GeoPackage |
-| [FileGDB Reader](./filegdb) | `file_gdb_ogr` | Named reader for ESRI File Geodatabase |
-| [NetCDF Reader](./netcdf) | `netcdf_ogr` | OGR-backed named reader for NetCDF as vector features (CF-DSG points) |
-
-## Basic Usage
-
-All readers follow the same pattern:
-
-```python
-# Python
-df = spark.read.format("<reader_name>").load("/path/to/file")
-
-# Scala
-val df = spark.read.format("<reader_name>").load("/path/to/file")
-```
-
-```sql
--- SQL
-SELECT * FROM <reader_name>.`/path/to/file`;
-```
-
-### Examples
-
-**Raster (GeoTIFF)**:
-```python
-df = spark.read.format("gtiff_gdal").load("/path/to/raster.tif")
-```
-
-**Vector (Shapefile)**:
-```python
-df = spark.read.format("shapefile_ogr").load("/path/to/data.shp")
-```
-
-**Generic (any format)**:
-```python
-# Generic GDAL for rasters
-df = spark.read.format("gdal").option("driver", "NetCDF").load("/path/to/data.nc")
-
-# Generic OGR for vectors
-df = spark.read.format("ogr").option("driverName", "KML").load("/path/to/data.kml")
-```
-
-## Output Schemas
-
-### Raster Output
-
-_Produces the standard `tile` format used by GeoBrix APIs._
-
-```
-root
- |-- tile: struct
-     |-- cellid: bigint (grid cell ID, nullable)
-     |-- raster: binary (raster file content)
-     |-- metadata: map<string,string> (driver, extension, etc.)
-```
-
-See [Tile Structure](../api/tile-structure) for detailed field descriptions.
-
-### Vector Output
-
-_Output will vary, depending on format / driver conventions._
-
-```
-root
- |-- geom_0: binary (geometry in WKB format)
- |-- geom_0_srid: integer (spatial reference ID)
- |-- geom_0_srid_proj: string (projection definition)
- |-- <attribute_columns>: various (feature attributes)
-```
-
-## Path Types
-
-All readers support:
-- **Single file**: `/path/to/file.tif`
-- **Directory**: `/path/to/directory/`
-- **Wildcard**: `/path/to/*.tif`
-- **Cloud storage**: `s3://bucket/path`, `abfss://...`, `gs://bucket/path`
-- **Unity Catalog Volumes**: `/Volumes/catalog/schema/volume/path`
-
-## Common Options
-
-### Raster Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `driver` | Auto-detect | GDAL driver name (e.g., "GTiff", "NetCDF") |
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split (one tile per file); positive MB value splits large files |
-| `filterRegex` | `".*"` | Filter files by regex pattern |
-
-### Vector Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `driverName` | Auto-detect | OGR driver name (e.g., "ESRI Shapefile") |
-| `chunkSize` | `"10000"` | Records per chunk for parallel reading |
-| `layerName` | `""` | Layer name for multi-layer formats |
-| `layerN` | `"0"` | Layer index for multi-layer formats |
-| `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text) |
-
-## Reader Types Explained
-
-**Generic Readers** (`gdal`, `ogr`):
-- Work with any format supported by GDAL/OGR
-- Require `driver` or `driverName` option for non-standard formats
-- Use when format doesn't have a named reader
-
-**Named Readers** (`gtiff_gdal`, `shapefile_ogr`, etc.):
-- Preset the driver option for common formats
-- Cleaner syntax, no driver option needed
-- Recommended for supported formats
-
-**Example**:
-```python
-# Named reader (cleaner)
-df = spark.read.format("gtiff_gdal").load("/path/to/file.tif")
-
-# Generic reader (more verbose, same result)
-df = spark.read.format("gdal").option("driver", "GTiff").load("/path/to/file.tif")
-```
-
-## Performance Tips
-
-1. **Use appropriate split size for rasters**:
-   ```python
-   df = spark.read.format("gdal").option("sizeInMB", "32").load("/path")
-   ```
-
-2. **Use chunk size for vectors**:
-   ```python
-   df = spark.read.format("ogr").option("chunkSize", "50000").load("/path")
-   ```
-
-3. **Filter files with regex**:
-   ```python
-   df = spark.read.format("gdal").option("filterRegex", ".*_2024.*\\.tif").load("/path")
-   ```
-
-4. **Write data after read to a table (avoid repeat loading from file)**:
-   ```python
-   df = spark.read.format("shapefile_ogr").load("/path").write.saveAsTable(...)
-   ```
-
-## Reader Types Correspondence
-
-Each lightweight `*_gbx` reader maps directly to a heavyweight counterpart: `gtiff_gbx` ↔
-`gtiff_gdal`, `shapefile_gbx` ↔ `shapefile_ogr`, `geojson_gbx` ↔ `geojson_ogr`, `gpkg_gbx`
-↔ `gpkg_ogr`, `file_gdb_gbx` ↔ `file_gdb_ogr`. The **generic catch-all** pair is `vector_gbx`
-(lightweight) ↔ `ogr` (heavyweight), used for any OGR-supported format without a named reader.
-
-## Benchmarks
-
-Each heavyweight reader is benchmarked against its `*_gbx` lightweight counterpart on the same
-cluster, same source file, same row counts. Parity (row-count equality between the two tiers)
-is a hard gate — a mismatch fails the run immediately. Per-format timing results are published
-on the [Benchmarking](../api/benchmarking) page; the vector-reader comparison table is in the
-**Results — vector readers** section (timing figures will be filled in once a controlled
-cluster run is completed).
-
-For the full methodology, raster-function results, and the PMTiles writer comparison, see the
-[Benchmarking](../api/benchmarking) page.
-
-## Next Steps
-
-- [Raster Reader](./raster) - Generic and GeoTIFF raster readers
-- [GeoTIFF Reader](./geotiff) - Named GeoTIFF reader
-- [Vector Reader](./vector) - Generic vector reader
-- [Shapefile Reader](./shapefile) - Named Shapefile reader
-- [GeoJSON Reader](./geojson) - Named GeoJSON reader
-- [GeoPackage Reader](./geopackage) - Named GeoPackage reader
-- [FileGDB Reader](./filegdb) - Named File Geodatabase reader
-
-</TabItem>
-</Tabs>
+Per-format timing results are published on the [Benchmarking](../api/benchmarking) page, with the methodology, the
+raster-function results and the PMTiles writer comparison.

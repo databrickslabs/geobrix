@@ -1,4 +1,5 @@
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ def test_materialize_true_forces_bytes(tmp_path):
         transform=rasterio.transform.from_origin(10, 50, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
     vt = VirtualTile(cellid=7, path=p, window=(0, 0, 8, 8))
     out = ot.shape_output(vt, materialize=True)
@@ -75,7 +76,7 @@ def test_materialize_stamps_tile_byte_size(tmp_path):
         transform=rasterio.transform.from_origin(10, 50, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
     vt = VirtualTile(cellid=7, path=p, window=(0, 0, 8, 8))
     out = ot.shape_output(vt, materialize=True)
@@ -99,3 +100,145 @@ def test_virtualize_dir_stamps_path_file_size(tmp_path):
     actual_file_size = os.path.getsize(out.path)
     assert path_file_size == actual_file_size
     assert path_file_size > 0
+
+
+def _pixels(tile):
+    with ot.open_tile(tile) as ds:
+        return ds.read(), ds.transform, ds.crs
+
+
+def test_virtualize_dir_windowed_part_opens_to_its_own_pixels(tmp_path):
+    """A materialized part cut from a parent carries ``window`` = its position in
+    the PARENT. The file written by ``virtualize_dir`` holds only the part, so the
+    virtual tile must open to the part's pixels, not to a parent-sized offset
+    inside the part's file.
+    """
+    part = make_geotiff_bytes(width=16, height=8, epsg=3857)
+    vt = VirtualTile(cellid=5, raster=part, window=(32, 24, 16, 8))
+    want_px, want_tf, want_crs = _pixels(vt)
+
+    out = ot.shape_output(vt, virtualize_dir=str(tmp_path))
+
+    assert out.raster is None and out.is_virtual()
+    got_px, got_tf, got_crs = _pixels(out)
+    assert got_px.shape == want_px.shape
+    assert np.array_equal(got_px, want_px)
+    assert got_tf == want_tf and got_crs == want_crs
+    # The window addresses the written file, whose origin is its own corner.
+    assert out.window == (0, 0, 16, 8)
+    # Distinct parts of one cellid still get distinct files.
+    other = VirtualTile(cellid=5, raster=part, window=(0, 0, 16, 8))
+    out2 = ot.shape_output(other, virtualize_dir=str(tmp_path))
+    assert out2.path != out.path
+
+
+def test_virtualize_dir_part_with_source_path_provenance(tmp_path):
+    """A materialized tile that keeps its source ``path`` (whole-input retile
+    output) is rewritten to the new file, not left pointing at the source."""
+    src = tmp_path / "src.tif"
+    src.write_bytes(make_geotiff_bytes(width=40, height=40, epsg=4326))
+    part = make_geotiff_bytes(width=10, height=6, epsg=3857)
+    vt = VirtualTile(cellid=2, raster=part, path=str(src), window=(12, 20, 10, 6))
+    want_px, _, want_crs = _pixels(vt)
+
+    out = ot.shape_output(vt, virtualize_dir=str(tmp_path / "out"))
+
+    assert out.path != str(src) and os.path.dirname(out.path) == str(tmp_path / "out")
+    got_px, _, got_crs = _pixels(out)
+    assert np.array_equal(got_px, want_px) and got_crs == want_crs
+
+
+def test_virtualize_dir_resets_the_provenance_already_baked_into_the_bytes(tmp_path):
+    """A materialized tile's ``clip_polygon`` / ``clip_crs`` / ``crs`` record what was
+    already applied to make its bytes; on the virtual tile that points at the written
+    file they would be instructions, applied a second time on every read. The written
+    file is read as is."""
+    import shapely
+    from shapely.geometry import box
+
+    bytes_ = make_geotiff_bytes(width=4, height=3, epsg=4326)
+    # provenance that would change the pixels if it were applied again
+    vt = VirtualTile(
+        cellid=4,
+        raster=bytes_,
+        clip_polygon=shapely.to_wkb(box(10.0, 49.0, 11.0, 50.0)),
+        clip_crs="EPSG:4326",
+        crs="EPSG:3857",
+    )
+    want_px, want_tf, want_crs = _pixels(vt)
+    assert want_px.shape == (1, 3, 4), "bytes tiles are read as they are"
+
+    out = ot.shape_output(vt, virtualize_dir=str(tmp_path))
+
+    assert out.is_virtual()
+    assert out.clip_polygon is None and out.clip_crs is None and out.crs is None
+    got_px, got_tf, got_crs = _pixels(out)
+    assert got_px.shape == want_px.shape and np.array_equal(got_px, want_px)
+    assert got_tf == want_tf and got_crs == want_crs
+
+
+def test_virtualize_dir_writes_a_result_over_the_read_cap(tmp_path):
+    """The size of the written file is a header read: a merge result larger than the read cap is still written (the
+    gate judges the members that are decoded, not this)."""
+    from databricks.labs.gbx import _gdal_policy
+
+    vt = VirtualTile(cellid=3, raster=make_geotiff_bytes(width=64, height=64))
+    with _gdal_policy.carried(None, 1024):
+        out = ot.shape_output(vt, virtualize_dir=str(tmp_path))
+    assert out.is_virtual() and os.path.exists(out.path)
+
+
+def _px(path):
+    with rasterio.open(path) as ds:
+        return ds.read()
+
+
+def test_virtualize_dir_names_two_same_size_results_apart(tmp_path):
+    """Two results of one cell and size in one directory are two files: the name carries the cell and the size, which
+    tell them apart for nothing, so a random id does (the second used to overwrite the first).
+    """
+    first = ot.shape_output(
+        VirtualTile(cellid=0, raster=make_geotiff_bytes(width=4, height=3)),
+        virtualize_dir=str(tmp_path),
+    )
+    second = ot.shape_output(
+        VirtualTile(cellid=0, raster=make_geotiff_bytes(width=4, height=3, count=2)),
+        virtualize_dir=str(tmp_path),
+    )
+    assert first.path != second.path
+    assert len(list(tmp_path.glob("*.tif"))) == 2
+    assert _px(first.path).shape[0] == 1 and _px(second.path).shape[0] == 2
+
+
+def test_virtualize_dir_name_keeps_prefix_cell_and_size(tmp_path):
+    out = ot.shape_output(
+        VirtualTile(cellid=5, raster=make_geotiff_bytes(width=4, height=3)),
+        virtualize_dir=str(tmp_path),
+        virtualize_prefix="run1",
+    )
+    name = os.path.basename(out.path)
+    assert name.startswith("run1_5_0_0_4_3_") and name.endswith(".tif")
+
+
+def _two_stacks(values):
+    import numpy as np  # noqa: F811
+
+    from .test_core_agg import _ras
+
+    return [
+        {"cellid": 0, "raster": _ras(np.full((2, 2), v)), "path": None} for v in values
+    ]
+
+
+@pytest.mark.parametrize("udf_name", ["_combineavg_v2_udf", "_frombands_v2_udf"])
+def test_array_builders_force_output_two_same_size_results_apart(tmp_path, udf_name):
+    """combineavg and frombands name the file by their members' cell (equal here) and the result's size: two results of
+    one size in one directory must be two files."""
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    fn = getattr(fx, udf_name).func
+    first = fn(_two_stacks([1, 2]), str(tmp_path), "pre", False)
+    second = fn(_two_stacks([7, 9]), str(tmp_path), "pre", False)
+    assert first["path"] != second["path"]
+    assert len(list(tmp_path.glob("pre_*.tif"))) == 2
+    assert not np.array_equal(_px(first["path"]), _px(second["path"]))

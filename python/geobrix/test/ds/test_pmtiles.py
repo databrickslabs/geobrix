@@ -3,8 +3,6 @@ import os
 
 from pmtiles.reader import MmapSource, Reader
 
-from databricks.labs.gbx.ds.register import register
-
 PNG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -23,7 +21,9 @@ def _read_tile(path, z, x, y):
 
 
 def test_single_archive(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "world.pmtiles")
     tiles = [(6, 32, 21), (6, 33, 21), (7, 64, 42)]
     _rows(spark, tiles).write.format("pmtiles_gbx").mode("overwrite").option(
@@ -35,7 +35,9 @@ def test_single_archive(spark, tmp_path):
 
 
 def test_sharded_with_overview_and_catalog(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "tileset_out")
     tiles = [(6, 32, 21), (8, 130, 85), (3, 4, 2)]  # body, body(same parent), overview
     _rows(spark, tiles).write.format("pmtiles_gbx").mode("overwrite").save(out)
@@ -59,7 +61,9 @@ def test_sharded_with_overview_and_catalog(spark, tmp_path):
 def test_adaptive_sharding_option(spark, tmp_path):
     """targetTilesPerShard (camelCase option) must reach the writer despite
     PySpark lowercasing option keys, and subdivide dense cells to deeper shards."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "adaptive_out")
     # 4 z8 tiles under one z6 parent (6,32,21), in distinct z7 children.
     tiles = [(8, 128, 84), (8, 129, 84), (8, 130, 86), (8, 131, 86)]
@@ -90,7 +94,9 @@ def test_append_mode_rejected(spark, tmp_path):
     write with mode('append') -- the writer detects the existing target and rejects.
     The stem path 'appendme' resolves to 'appendme.pmtiles' (single-archive).
     """
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     import pytest
 
     stem = str(tmp_path / "appendme")

@@ -6,7 +6,6 @@ MIGRATIONS=(
     "geobrix-system-deps:geobrix-checkpoint:system-deps"
     "geobrix-hadoop-builder:geobrix-checkpoint:hadoop-builder"
     "geobrix-gdal-builder:geobrix-checkpoint:gdal-builder"
-    "geobrix-pdal-builder:geobrix-checkpoint:pdal-builder"
     "geobrix-final:geobrix-checkpoint:final"
 )
 

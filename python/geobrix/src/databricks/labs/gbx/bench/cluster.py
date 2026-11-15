@@ -67,6 +67,34 @@ ORDER = [
     "launched_tasks",
     "slots_available",
     "chunk_size",
+    # Levels leg: the level/form/compute timed, then the attribution split.
+    "level",
+    "form",
+    "compute",
+    "ser_sent_bytes",
+    "ser_recv_bytes",
+    "py_eval_s",
+    "py_eval_frac",
+    "native_s",
+    "shuffle_bytes",
+    "spill_bytes",
+    "peak_exec_mem_bytes",
+    "gc_s",
+    "py_worker_rss_mb",
+    "failure_mode",
+    "setup_s",
+    "warmup_s",
+    "run_mode",
+    "concurrent",
+    "cluster_id",
+    "part",
+    # Spark provenance (mergeSchema adds these to an existing table; older rows read NULL).
+    "env_spark_version",
+    "env_pyspark_version",
+    "env_dbr_version",
+    "env_version",
+    "env_caps",
+    "path",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -78,33 +106,53 @@ if set(ORDER) != _RR_FIELDS:
     )
 
 
+def _spark_schema():
+    """The Delta schema of ``ORDER``, from the ResultRow field types (Optional[X] -> X, nullable).
+
+    Typed explicitly because inference from pandas turns an int column holding None into
+    doubles and an all-None column into ``void``, which Delta refuses to append.
+    """
+    import typing
+
+    from pyspark.sql import types as T
+
+    spark_types = {str: T.StringType, int: T.LongType, float: T.DoubleType}
+    hints = typing.get_type_hints(ResultRow)
+    fields = []
+    for name in ORDER:
+        base = next(
+            (a for a in typing.get_args(hints[name]) if a is not type(None)),
+            hints[name],
+        )
+        fields.append(T.StructField(name, spark_types[base](), True))
+    return T.StructType(fields), {
+        f.name: {T.StringType: str, T.LongType: int, T.DoubleType: float}[
+            type(f.dataType)
+        ]
+        for f in fields
+    }
+
+
 def rows_to_dataframe(rows: List[ResultRow], spark, where: str = "cluster"):
     """Build a Spark DataFrame from ResultRows, re-tagging env_where (e.g. 'cluster').
 
     Columns are emitted in the explicit ``ORDER`` (not dataclass field order) so the
     Delta table column layout is the human-readable grouping, with the per-iter
-    distribution (iter_*) trailing.
+    distribution (iter_*) trailing. Column types come from the ResultRow field types, so
+    a field that is None in every row of a batch (a metric the session cannot report)
+    is still a nullable Long/Double column that appends to the existing table.
 
-    Optional[str] fields (e.g. ``split_strategy``) that are all-None in the batch
-    must be explicitly typed as StringType; Spark/pandas cannot infer the type of an
-    all-None column. The pandas column is filled with empty string before creating the
-    DataFrame so the inference path works; the value is preserved as-is for non-None
-    rows (the actual strategy label), and the empty string is a safe sentinel for rows
-    where the field is not applicable (all non-large-raster profiles).
+    ``split_strategy`` (the one Optional[str]) keeps its older convention: None is
+    written as the empty string.
     """
-    import pandas as pd
-
-    _OPTIONAL_STR_FIELDS = {"split_strategy"}
-
-    retagged = [replace(r, env_where=where) for r in rows]
-    records = [asdict(r) for r in retagged]
-    # Fill all-None optional-str columns so pandas can infer "object" (string) dtype.
-    for field in _OPTIONAL_STR_FIELDS:
-        if all(rec.get(field) is None for rec in records):
-            for rec in records:
-                rec[field] = ""
-    df = spark.createDataFrame(pd.DataFrame(records))
-    return df.select(*ORDER)
+    schema, cast = _spark_schema()
+    data = []
+    for r in rows:
+        rec = asdict(replace(r, env_where=where))
+        if rec.get("split_strategy") is None:
+            rec["split_strategy"] = ""
+        data.append(tuple(None if rec[c] is None else cast[c](rec[c]) for c in ORDER))
+    return spark.createDataFrame(data, schema)
 
 
 def to_delta(rows: List[ResultRow], spark, table: str, where: str = "cluster") -> int:
@@ -151,13 +199,143 @@ def _cell(source: str, kind: str = "code", collapsed: bool = False) -> dict:
     meta = {}
     if collapsed:
         meta = {"jupyter": {"source_hidden": True}, "collapsed": True}
-    return {
+    cell = {
         "cell_type": kind,
         "metadata": meta,
         "outputs": [],
         "execution_count": None,
         "source": source.splitlines(keepends=True),
     }
+    if kind != "code":  # nbformat: only a code cell has outputs and an execution count
+        del cell["outputs"], cell["execution_count"]
+    return cell
+
+
+def _minutes(x) -> str:
+    try:
+        return f"{float(x):g}"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _plain(text) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _csv_of(cfg: dict, key: str) -> list:
+    return [x.strip() for x in str(cfg.get(key, "") or "").split(",") if x.strip()]
+
+
+def _levels_plan(cfg: dict, compute: str):
+    """(functions, forms, scales) of the levels leg this notebook times on `compute`; None where the form table cannot load."""
+    try:
+        from databricks.labs.gbx.bench import levels as _lv
+        from databricks.labs.gbx.bench import levels_forms as _lf
+
+        mvp = cfg["levels_mvp"]
+        forms = [
+            f
+            for f in _lf.select_forms(mvp, tuple(cfg.get("levels_forms") or ()))
+            if compute in f.computes
+        ]
+        return (
+            sorted({f.fn for f in forms}),
+            len(forms),
+            _lv.ladder(mvp, cfg.get("levels_scales")),
+        )
+    except Exception:  # noqa: BLE001 - the header never stops a launch
+        return None
+
+
+def bench_header(cfg: dict, info: dict) -> str:
+    """The one short markdown cell a runner notebook starts with: what is tested and why, the expected output, the expected
+    time, and how it is watched. `cfg` is the notebook's config; `info` carries what the launcher knows around it:
+    purpose, sha, profile, compute, typical (a prior comparable run's wall, or "" for none), ceiling_min (the launcher
+    watchdog's), pool, smoke (True for the smoke notebook).
+    """
+    run_id = cfg["run_id"]
+    smoke = bool(info.get("smoke"))
+    compute = info.get("compute") or (
+        "serverless" if cfg.get("serverless") else "dedicated"
+    )
+    rung = float(cfg.get("rung_cap_s", 1200)) / 60.0
+    setup = float(cfg.get("setup_cap_s", 600)) / 60.0
+    out = ""
+    legs, bound_min = [], None
+    plan = _levels_plan(cfg, compute) if cfg.get("levels_mvp") else None
+    if cfg.get("levels_mvp"):
+        mvp = cfg["levels_mvp"]
+        if plan:
+            fns, nforms, scales = plan
+            names = ", ".join(fns[:3]) + (f" +{len(fns) - 3}" if len(fns) > 3 else "")
+            sc = "1 scale (smoke rows)" if smoke else "/".join(f"{x}x" for x in scales)
+            legs.append(
+                f"levels `{mvp}`: {len(fns)} function(s) ({names}), {nforms} forms at {sc} on {compute}"
+            )
+            out = f"{nforms} forms x {1 if smoke else len(scales)} scale(s) = {nforms * (1 if smoke else len(scales))} rows"
+            if not smoke:
+                bound_min = nforms * len(scales) * (rung + setup)
+        else:
+            legs.append(f"levels `{mvp}` on {compute}")
+    if cfg.get("zarr_ladder"):
+        rungs, fams, cases = (
+            _csv_of(cfg, "zarr_ladder"),
+            _csv_of(cfg, "zarr_ladder_family"),
+            _csv_of(cfg, "zarr_ladder_cases"),
+        )
+        legs.append(
+            f"Zarr size ladder: rungs {', '.join(rungs)}, families {', '.join(fams)}, cases {', '.join(cases) or 'ladder cases'}"
+        )
+        out = (
+            out
+            or f"{len(rungs) * len(fams) * max(len(cases), 1)} ladder rows (rung x family x case)"
+        )
+        out += (
+            f"; metrics in `{cfg.get('zarr_ladder_scratch', '')}`"
+            if cfg.get("zarr_ladder_scratch")
+            else ""
+        )
+    elif cfg.get("zarr_only") or cfg.get("benchmark_zarr"):
+        legs.append(f"Zarr cases {', '.join(_csv_of(cfg, 'zarr_cases'))}")
+    if not legs:
+        tiers = "+".join(
+            t
+            for t, on in (
+                ("light", cfg.get("lightweight")),
+                ("heavy", cfg.get("heavyweight")),
+            )
+            if on
+        )
+        legs.append(
+            f"function benchmark ({tiers or 'no tier'}): {cfg.get('functions') or 'set ' + str(cfg.get('set', 'core'))}, modes {cfg.get('modes')}, rows {cfg.get('row_counts')}"
+        )
+    purpose = _plain(info.get("purpose")) or "(no purpose given)"
+    typical = _plain(info.get("typical")) or "no prior run"
+    if smoke:
+        timing = "~2-3 min (worker import check, then each form once)"
+    else:
+        bound = f"{bound_min:.0f} min" if bound_min else "see the caps"
+        timing = f"~{typical} (last comparable run) / at most {bound} (rungs x (rung cap + setup cap)); smoke 2-3 min before it"
+    ff = cfg.get("fail_fast", True)
+    watch = (
+        f"fail-fast ON (rung cap {rung:g} min, setup cap {setup:g} min, bar {cfg.get('bar_factor', 1.5):g}, "
+        f"warmup skip > {cfg.get('warmup_skip_s', 120):g} s, escalate 60 s)"
+        if ff
+        else "fail-fast OFF"
+    )
+    where = f"pool `{info['pool']}` cluster" if info.get("pool") else compute
+    lines = [
+        f"## {run_id}{' (smoke)' if smoke else ''}",
+        f"- **Testing:** {'; '.join(legs)} - **why:** {purpose}",
+        f"- **Expected output:** rows in `{cfg.get('table')}` where run_id='{run_id}'"
+        + (f" ({out})" if out else "")
+        + "; verdict per form: linear / over-bar / skipped"
+        + (" - the smoke gates the real run" if smoke else ""),
+        f"- **Expected time:** {timing}",
+        f"- **Monitoring:** {watch}; heartbeat `{cfg.get('out_dir')}/heartbeat.json`; launcher watchdog ceiling "
+        f"{_minutes(info.get('ceiling_min'))} min; cancel: `databricks --profile {info.get('profile') or '<profile>'} jobs cancel-run <run id>`; on {where}, mode {cfg.get('run_mode', 'isolate')}, git {info.get('sha') or '?'}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 _PREAMBLE = """import json
@@ -242,7 +420,7 @@ LIGHTWEIGHT, HEAVYWEIGHT = {lightweight!r}, {heavyweight!r}
 # they can be harvested after the run. Diagnostic only -- no rows are produced.
 EXPLAIN_ONLY = {explain_only!r}
 EXPLAIN_DIR = OUT + "/explain"
-# --benchmark-readers: also run the reader benchmark (raster_gbx vs gdal) on the cluster.
+# --benchmark-readers: also run the reader benchmark (raster_gbx) on the cluster.
 # --readers-only: ONLY run the reader benchmark, skip all fn benchmarks.
 BENCHMARK_READERS = {benchmark_readers!r}
 READERS_ONLY = {readers_only!r}
@@ -250,11 +428,11 @@ READERS_ONLY = {readers_only!r}
 # --pmtiles-only: ONLY run the pmtiles benchmark, skip all fn benchmarks.
 BENCHMARK_PMTILES = {benchmark_pmtiles!r}
 PMTILES_ONLY = {pmtiles_only!r}
-# --benchmark-vector: also run the vector reader benchmark (light *_gbx vs heavy *_ogr).
+# --benchmark-vector: also run the vector reader benchmark (the light *_gbx readers and writers).
 # --vector-only: ONLY run the vector reader benchmark, skip all fn benchmarks.
 BENCHMARK_VECTOR = {benchmark_vector!r}
 VECTOR_ONLY = {vector_only!r}
-# --benchmark-mvt: also run the st_asmvt benchmark (light pyvx vs heavy vectorx).
+# --benchmark-mvt: also run the st_asmvt benchmark (light pyvx; there is no heavy level).
 # --mvt-only: ONLY run the MVT benchmark, skip all fn benchmarks.
 BENCHMARK_MVT = {benchmark_mvt!r}
 MVT_ONLY = {mvt_only!r}
@@ -266,7 +444,7 @@ PMTILES_AGG_ONLY = {pmtiles_agg_only!r}
 # --vector-tin-only: ONLY run the TIN + legacy benchmark, skip all fn benchmarks.
 BENCHMARK_VECTOR_TIN = {benchmark_vector_tin!r}
 VECTOR_TIN_ONLY = {vector_tin_only!r}
-# --benchmark-grid-quadbin: also run the quadbin grid benchmark (light pygx vs heavy gridx.quadbin).
+# --benchmark-grid-quadbin: also run the quadbin grid benchmark (the lightweight level only).
 # --grid-quadbin-only: ONLY run the quadbin grid benchmark, skip all fn benchmarks.
 BENCHMARK_GRID_QUADBIN = {benchmark_grid_quadbin!r}
 GRID_QUADBIN_ONLY = {grid_quadbin_only!r}
@@ -282,8 +460,8 @@ GRID_CUSTOM_ONLY = {grid_custom_only!r}
 # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
 BENCHMARK_FANOUT = {benchmark_fanout!r}
 FANOUT_ONLY = {fanout_only!r}
-# --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx vs heavy
-# netcdf_gdal) over the same staged .nc granule pool at {{CORPUS}}/netcdf.
+# --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx)
+# over the staged .nc granule pool at {{CORPUS}}/netcdf.
 # --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
 # The corpus is staged separately (real S5P L2 CH4 granules via TropomiDownloader);
 # the bench SKIPS CLEANLY when the pool is empty/missing.
@@ -336,6 +514,44 @@ INPUT_TILE = {input_tile!r}
 # CORPUS + "/bench-corpus-cog-multiwindow". Skips cleanly when the manifest is absent.
 BENCHMARK_GROUPED_FILE = {benchmark_grouped_file!r}
 GROUPED_FILE_ONLY = {grouped_file_only!r}
+# --levels <S|G|A|H|IO>: also run the levels leg for one set of functions (S session functions,
+# G generators, A aggregates, H DataFrame helpers; IO has no forms yet): every form of the set at
+# each execution level the compute offers, with the attribution split. --levels-only: ONLY run it.
+# --levels-uc <catalog.schema>: where the L4 (Unity Catalog) functions live; without it the L4
+# forms record a skipped row. The leg reads its tile inputs from {{CORPUS}}/rows.
+LEVELS_MVP = {levels_mvp!r}
+LEVELS_ONLY = {levels_only!r}
+LEVELS_UC = {levels_uc!r}
+# --levels-scales <csv>: the multiples of each form's base row count the leg times (None: the set's own ladder, 1,4,16 unless it has one).
+LEVELS_SCALES = {levels_scales!r}
+# --levels-forms <csv>: time only the forms with these names (the `form` column); empty runs them all.
+LEVELS_FORMS = {levels_forms!r}
+# Liveness (see bench/liveness.py): the heartbeat file the launcher's watchdog reads, and the stall cap of the
+# driver stack dump. SMOKE: run only the smoke stage (the worker import check, then every form of the levels
+# set once at SMOKE_ROWS rows) and exit. INJECT_STALL (seconds, test only): a form that sleeps on the driver.
+HEARTBEAT_SECS = {heartbeat_secs}
+LAUNCH_TOKEN = {launch_token!r}
+STALL_CAP_S = {stall_cap_s}
+# Fail fast (see levels.run_mvp): rungs run breadth first, a rung projected past RUNG_CAP_S is skipped, a rung past its
+# deadline is interrupted and recorded over-bar, a setup past SETUP_CAP_S is stopped. BAR_FACTOR is the linearity gate.
+FAIL_FAST = {fail_fast!r}
+BAR_FACTOR = {bar_factor}
+RUNG_CAP_S = {rung_cap_s}
+SETUP_CAP_S = {setup_cap_s}
+# A rung whose projected run is over WARMUP_SKIP_S seconds runs its measured iterations cold (0 keeps every warmup).
+WARMUP_SKIP_S = {warmup_skip_s}
+# How the run was set up, written on every levels row (see ResultRow): isolate = timing-grade, explore = parts may share a cluster.
+RUN_MODE = {run_mode!r}
+CONCURRENT = {concurrent}
+PART = {part!r}
+EXCLUSIVE = {exclusive!r}  # the cluster is this run's alone (pool lease, job cluster): an unresponsive rung may cancel every job on it
+try:  # the cluster this driver runs on ("" on Serverless, which has no cluster id to read)
+    CLUSTER_ID = spark.conf.get("spark.databricks.clusterUsageTags.clusterId")
+except Exception:
+    CLUSTER_ID = ""
+SMOKE = {smoke!r}
+SMOKE_ROWS = {smoke_rows}
+INJECT_STALL = {inject_stall}
 MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-multiwindow")
 # --file-matrix: sweep file_mode in ("fuse","external","managed") for GeoTIFF + GeoPackage reads.
 # --file-matrix-only: ONLY run the FILE matrix, skip all fn benchmarks.
@@ -458,7 +674,7 @@ _READER_ONLY = (
     or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
     or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY or GROUPED_FILE_ONLY
     or FILE_MATRIX_ONLY or GPKG_CHUNKSIZE_ONLY or LAYOUT_SWEEP_ONLY or LAYOUT_SCAN_ONLY
-    or VECTOR_TABLE_READ_ONLY or RASTER_DECODE_READ_ONLY
+    or VECTOR_TABLE_READ_ONLY or RASTER_DECODE_READ_ONLY or LEVELS_ONLY
 )
 corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
 # Function-bench summaries annotate results with the row-pool size; reader-only runs have no
@@ -482,6 +698,20 @@ if _redo_names:
 _PC_EXP = len([f for f in fnspecs if "pure-core" in f.modes])
 _SP_EXP = len([f for f in fnspecs if "spark-path" in f.modes])
 lw, hw, all_rows = [], [], []
+"""
+
+# The driver's liveness, started right after the sink is defined (so a hang in any later cell is seen): a stack
+# dump to stderr at the stall cap (plain Python, not Spark conf), and the heartbeat file the launcher watches.
+_LIVENESS = """
+import faulthandler as _fh, sys as _sys
+try:
+    _fh.dump_traceback_later(STALL_CAP_S, repeat=True, file=_sys.stderr)
+except Exception as _e:  # a stderr with no file descriptor: the heartbeat's own stack still names the stall
+    print("faulthandler stall dump not armed:", _e)
+from databricks.labs.gbx.bench import liveness as _live
+HEARTBEAT = _live.Heartbeat(OUT + "/heartbeat.json", HEARTBEAT_SECS, phase="smoke" if SMOKE else "run",
+                            token=LAUNCH_TOKEN).start()
+print("heartbeat:", OUT + "/heartbeat.json", flush=True)
 """
 
 # Truncate up-front + define the incremental Delta sink. Kept OUT of _PREAMBLE (which
@@ -738,7 +968,7 @@ def run_heavy(mode):
     # Scope to fns that HAVE this mode (the *_agg aggregators are spark-path-only); otherwise
     # a pure-core resume perpetually reports the 7 aggregators as "missing" + dispatches them
     # to the JVM pure-core path for zero rows.
-    _mode_names = {f.name for f in fnspecs if mode in f.modes}
+    _mode_names = {f.name for f in fnspecs if mode in f.modes and f.heavy}
     _todo_fns = [
         f for f in FUNCTIONS.split(",") if f and f not in _done and f in _mode_names
     ]
@@ -822,7 +1052,7 @@ _CELL_HEAVY_SPARK = """# (d) Heavyweight spark-path
 show_section("heavyweight", "spark-path", run_heavy("spark-path"))
 """
 
-_CELL_READERS = """# Reader benchmark: light raster_gbx vs heavy gdal (both on-cluster)
+_CELL_READERS = """# Reader benchmark: light raster_gbx (on-cluster)
 from databricks.labs.gbx.bench import readers as _rd
 _rows_dir = f"{CORPUS}/rows"
 _reader_rows = []
@@ -831,11 +1061,7 @@ if LIGHTWEIGHT:
                              api="lightweight", fmt="raster_gbx",
                              options={"filterRegex": r".*\\.tif$"}, where="cluster")
     _sink([_r]); lw.append(_r); _reader_rows.append(_r)
-if HEAVYWEIGHT:
-    _r = _rd.run_format_read(spark, _rows_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                             api="heavyweight", fmt="gdal", where="cluster")
-    _sink([_r]); hw.append(_r); _reader_rows.append(_r)
-# Writer benchmark: light gtiff_gbx vs heavy gtiff_gdal (same raster_gbx-read input)
+# Writer benchmark: light gtiff_gbx (raster_gbx-read input)
 import shutil as _sh
 _wsrc = f"{CORPUS}/rows"
 if LIGHTWEIGHT:
@@ -845,14 +1071,6 @@ if LIGHTWEIGHT:
                                write_api="lightweight", read_fmt="raster_gbx", write_fmt="gtiff_gbx",
                                options={"filterRegex": r".*\\.tif$"}, where="cluster")
     _sink([_wr]); lw.append(_wr); _reader_rows.append(_wr)
-if HEAVYWEIGHT:
-    _wh = "/local_disk0/bench_writer_heavy"
-    _sh.rmtree(_wh, ignore_errors=True)
-    _wr = _rd.run_format_write(spark, _wsrc, _wh, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                               write_api="heavyweight", read_fmt="raster_gbx", write_fmt="gtiff_gdal",
-                               mode="append",  # heavy gdal writer is append-only (overwrite -> truncate error)
-                               options={"filterRegex": r".*\\.tif$"}, where="cluster")
-    _sink([_wr]); hw.append(_wr); _reader_rows.append(_wr)
 if _reader_rows:
     _df = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category IN ('reader', 'writer')"
@@ -865,12 +1083,11 @@ if _reader_rows:
     _show_md(f"reader benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_NETCDF = """# NetCDF RASTER reader benchmark: heavy netcdf_gdal vs light netcdf_gbx (regular grids, on-cluster)
-# Honest heavy-vs-light throughput over real NASA-NEX GDDP-CMIP6 granules staged at {CORPUS}/netcdf
+_CELL_NETCDF = """# NetCDF RASTER reader benchmark: light netcdf_gbx (regular grids, on-cluster)
+# Throughput over real NASA-NEX GDDP-CMIP6 granules staged at {CORPUS}/netcdf
 # (download-and-stop via NasaNexDownloader -- staged separately, decoupled from read()). These are
-# regular 0.25-degree lat/lon global grids, so BOTH tiers can enumerate the SAME .nc pool with
-# filterRegex .*\\.nc$ (light in raster mode) -- a fair comparison. size_mib=-1 makes each grid var
-# ONE tile in both tiers (matching one-tile-per-var granularity). This is a THROUGHPUT bench, NOT a
+# regular 0.25-degree lat/lon global grids, read with filterRegex .*\\.nc$ (netcdf_gbx in raster mode).
+# size_mib=-1 makes each grid var ONE tile. This is a THROUGHPUT bench, NOT a
 # bit-parity gate (cross-tier parity uses a small gridded fixture -- see docs/api/benchmarking.mdx).
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
@@ -894,11 +1111,6 @@ else:
                                  api="lightweight", fmt="netcdf_gbx",
                                  options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
         _sink([_r]); lw.append(_r); _netcdf_rows.append(_r)
-    if HEAVYWEIGHT:
-        _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                                 api="heavyweight", fmt="netcdf_gdal",
-                                 options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
-        _sink([_r]); hw.append(_r); _netcdf_rows.append(_r)
     if _netcdf_rows:
         _df = spark.sql(
             f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader' AND fn LIKE 'read_netcdf%'"
@@ -915,9 +1127,8 @@ _CELL_NETCDF_SWATH = """# NetCDF VECTOR (swath) reader benchmark: light netcdf_g
 # Real Sentinel-5P L2 CH4 SWATH granules staged at {CORPUS}/netcdf-swath (download-and-stop via
 # TropomiDownloader -- staged separately, decoupled from read()). S5P L2 is an irregular per-pixel
 # lat/lon SWATH, so it is read in the light netcdf_gbx VECTOR mode (one point row per pixel). There
-# is NO heavy swath path -- netcdf_gdal has no swath reader -- so this leg is a LIGHT-ONLY throughput
-# measurement, NOT a heavy-vs-light comparison. (The heavy-vs-light comparison lives in the RASTER
-# leg above, over regular-grid NASA-NEX granules.)
+# is NO heavy swath path, so this leg is a throughput measurement. (The RASTER leg above reads
+# regular-grid NASA-NEX granules.)
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
 _swath_dir = f"{CORPUS}/netcdf-swath"
@@ -963,7 +1174,7 @@ else:
 """
 
 _CELL_NETCDF_WRITER = """# NetCDF WRITER benchmark: light netcdf_gbx write throughput (raster + vector legs, on-cluster)
-# LIGHT-ONLY: there is NO heavy NetCDF writer (netcdf_gdal is read-only here), so this is a
+# LIGHT-ONLY: there is NO heavy NetCDF writer, so this is a
 # throughput measurement of the light netcdf_gbx writer, NOT a heavy-vs-light comparison -- the
 # same shape as the S5P vector reader leg. Each mode runs THREE write shapes:
 #   parts  (default): one .nc per row (raster) / per partition (vector)
@@ -1195,23 +1406,17 @@ if _jpg_files:
         _show_md(f"EXIF reader benchmark (light-only) -- {RUN_ID}", _md)
 """
 
-_CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
+_CELL_PMTILES = """# PMTiles benchmark: the light pmtiles_gbx writer (on-cluster)
 from databricks.labs.gbx.bench import readers as _rd
-from pmtiles.reader import MemorySource, Reader as _PMReader
-import pmtiles.reader as _pmr
-import gzip as _gz
 import os as _os
 import shutil as _sh
-# Both pmtiles writers are two-phase (executor-write -> driver-merge), so their
-# intermediates MUST be on a filesystem shared across driver+executors. Node-local
-# /local_disk0 fails the driver merge on a multi-node cluster. Use DBFS: light
-# (pure-Python) via the /dbfs FUSE mount (its single-archive finalize is now
-# rename-free, so sequential FUSE writes are safe); heavy (JVM) via the dbfs:
-# scheme (it cannot use UC /Volumes by direct API). Parity decodes both via FUSE.
+# The pmtiles writer is two-phase (executor-write -> driver-merge), so its intermediates
+# MUST be on a filesystem shared across driver+executors. Node-local /local_disk0 fails the
+# driver merge on a multi-node cluster. Use DBFS via the /dbfs FUSE mount (its single-archive
+# finalize is rename-free, so sequential FUSE writes are safe).
 _DBFS_FUSE = "/dbfs/tmp/gbx_bench"
 _os.makedirs(_DBFS_FUSE, exist_ok=True)
 _pmtiles_rows = []
-_pl = _ph = None
 if LIGHTWEIGHT:
     _pl = _DBFS_FUSE + "/pmtiles_light.pmtiles"
     if _os.path.isdir(_pl):
@@ -1222,87 +1427,10 @@ if LIGHTWEIGHT:
                                n_tiles=1000, shard_zoom=0, write_fmt="pmtiles_gbx",
                                where="cluster")
     _sink([_r]); lw.append(_r); _pmtiles_rows.append(_r)
-if HEAVYWEIGHT:
-    _ph = _DBFS_FUSE + "/pmtiles_heavy"            # FUSE path (for parity decode)
-    _sh.rmtree(_ph, ignore_errors=True)
-    _ph_save = "dbfs:/tmp/gbx_bench/pmtiles_heavy"  # dbfs: scheme (for the JVM writer)
-    _r = _rd.run_pmtiles_write(spark, _ph_save, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                               n_tiles=1000, shard_zoom=0, write_fmt="pmtiles",
-                               where="cluster")
-    _sink([_r]); hw.append(_r); _pmtiles_rows.append(_r)
-# Parity check: decode all tiles from both archives and compare (z,x,y) keys+bytes.
-if LIGHTWEIGHT and HEAVYWEIGHT and _pl and _ph:
-    # The Python pmtiles Reader gzip-decompresses directories unconditionally, but
-    # PMTiles directories may be uncompressed (the heavy Scala writer uses
-    # internal_compression=NONE). Patch deserialize_directory to fall back to the
-    # raw bytes (re-gzip so the lib's own parser still runs) -> reads both tiers.
-    _orig_dd = _pmr.deserialize_directory
-    def _dd_compat(_buf):
-        try:
-            return _orig_dd(_buf)
-        except Exception:
-            return _orig_dd(_gz.compress(bytes(_buf)))
-    _pmr.deserialize_directory = _dd_compat
-
-    def _decode_any(path):
-        # Return {(z,x,y): bytes} for every tile in path (file or dir of *.pmtiles).
-        # Read the whole archive into memory (sequential) and use MemorySource:
-        # the DBFS/Volumes paths are cloud object storage and do not support the
-        # mmap/seek that MmapSource needs.
-        import os as _os2
-        if _os2.path.isfile(path):
-            files = [path]
-        else:
-            from databricks.labs.gbx.ds._listing import list_files
-            files = list_files(path, r".*\\.pmtiles$", raise_on_empty=False)
-        tiles = {}
-        for _pf in files:
-            with open(_pf, "rb") as _fh:
-                _data = _fh.read()
-            _rdr = _PMReader(MemorySource(_data))
-            # min/max zoom live in the PMTiles header (not metadata); the Reader
-            # tile accessor is .get(z, x, y) (returns None when absent).
-            _hdr = _rdr.header()
-            _zmin = int(_hdr["min_zoom"])
-            _zmax = int(_hdr["max_zoom"])
-            for _z in range(_zmin, _zmax + 1):
-                _side = 2 ** _z
-                for _x in range(_side):
-                    for _y in range(_side):
-                        _b = _rdr.get(_z, _x, _y)
-                        if _b is not None:
-                            tiles[(_z, _x, _y)] = bytes(_b)
-        return tiles
-    _verdict_path = "/dbfs/tmp/gbx_bench/parity_verdict.txt"
-    try:
-        _lt = _decode_any(_pl)
-        _ht = _decode_any(_ph)
-        _lk = set(_lt.keys())
-        _hk = set(_ht.keys())
-        if _lk == _hk and all(_lt[_k] == _ht[_k] for _k in _lk):
-            _verdict = f"PMTILES PARITY: PASS ({len(_lk)} tiles, keys+bytes equal)"
-        elif _lk == _hk:
-            _bad = [_k for _k in _lk if _lt[_k] != _ht[_k]]
-            _verdict = (f"PMTILES PARITY: FAIL bytes differ on {len(_bad)} tile(s) "
-                        f"e.g. {sorted(_bad)[:5]} ({len(_lk)} tiles)")
-        else:
-            _verdict = (f"PMTILES PARITY: FAIL keyset differs -- light-only "
-                        f"{sorted(_lk - _hk)[:5]}, heavy-only {sorted(_hk - _lk)[:5]} "
-                        f"(light={len(_lk)}, heavy={len(_hk)})")
-    except Exception as _pe:
-        _verdict = f"PMTILES PARITY: ERROR -- {type(_pe).__name__}: {_pe}"
-    print(_verdict)
-    try:
-        with open(_verdict_path, "w") as _vf:
-            _vf.write(_verdict)
-    except Exception as _we:
-        print(f"(could not write verdict file: {_we})")
-    # Hard gate: a parity mismatch or decode error fails the bench run.
-    assert _verdict.startswith("PMTILES PARITY: PASS"), _verdict
 if _pmtiles_rows:
     _df = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'writer' "
-        f"AND fn IN ('pmtiles_gbx', 'pmtiles')"
+        f"AND fn = 'pmtiles_gbx'"
     )
     try:
         display(_df)
@@ -1312,12 +1440,10 @@ if _pmtiles_rows:
     _show_md(f"pmtiles benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_MVT = """# MVT benchmark: light pyvx st_asmvt vs heavy vectorx st_asmvt (+ decoded-feature parity)
+_CELL_MVT = """# MVT benchmark: light pyvx st_asmvt (it has no heavyweight level)
 from databricks.labs.gbx.bench import readers as _rd
-import mapbox_vector_tile as _mvt_lib
 _mvt_rows = []
 _mvt_light_blobs = None  # {(z,x,y): bytes} decoded from light run
-_mvt_heavy_blobs = None  # {(z,x,y): bytes} decoded from heavy run
 _N_FEATURES = 500
 _N_TILES = 10
 if LIGHTWEIGHT:
@@ -1356,97 +1482,14 @@ if LIGHTWEIGHT:
                 _F_mvt.struct(_F_mvt.col("id"), _F_mvt.col("score"), _F_mvt.col("label")).alias("attrs"),
             ).cache(); _df2.count()
             from databricks.labs.gbx.pyvx import functions as _vx
-            _vx.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3")
             _lrows = (_df2.groupBy("z","x","y")
-                .agg(_vx.st_asmvt(_F_mvt.col("geom"), _F_mvt.col("attrs"), _F_mvt.lit("layer")).alias("mvt"))
+                .agg(_vx._light_st_asmvt(_F_mvt.col("geom"), _F_mvt.col("attrs"), _F_mvt.lit("layer")).alias("mvt"))
                 .collect())
             _mvt_light_blobs = {(r["z"], r["x"], r["y"]): bytes(r["mvt"]) for r in _lrows if r["mvt"]}
         except Exception as _pe:
             print(f"MVT light parity capture error: {type(_pe).__name__}: {_pe}")
-if HEAVYWEIGHT:
-    _r = _rd.run_mvt_agg(spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                         api="heavyweight", n_features=_N_FEATURES, n_tiles=_N_TILES,
-                         where="cluster")
-    _sink([_r]); hw.append(_r); _mvt_rows.append(_r)
-    # Capture decoded blobs for parity.
-    if _r.status == "ok":
-        try:
-            import pyspark.sql.functions as _F_mvth
-            from shapely.geometry import box as _bh
-            from shapely import to_wkb as _wkbh
-            from pyspark.sql.types import (StructType, StructField, IntegerType,
-                                           BinaryType, DoubleType, StringType)
-            _z3h = 3
-            _addrsh = [(_z3h, i % 8, (i // 8) % 8) for i in range(_N_TILES)]
-            _rdh = []
-            for _i in range(_N_FEATURES):
-                _tz, _tx, _ty = _addrsh[_i % _N_TILES]
-                # Mirror run_mvt_agg's coordinate spread: squares on a 16x16 grid over
-                # the full [0,4096] extent so they survive the heavy MVT driver's
-                # quantization (a packed band collapses to sub-pixel -> empty heavy tile).
-                _slot = (_i // _N_TILES) % 256
-                _cx = 128 + (_slot % 16) * 256; _cy = 128 + (_slot // 16) * 256
-                _g = bytes(_wkbh(_bh(_cx-32, _cy-32, _cx+32, _cy+32)))
-                _rdh.append((_tz, _tx, _ty, _g, _i, float(_i)*0.1, f"feat_{_i}"))
-            _schh = StructType([
-                StructField("z", IntegerType(), False), StructField("x", IntegerType(), False),
-                StructField("y", IntegerType(), False), StructField("geom", BinaryType(), True),
-                StructField("id", IntegerType(), True), StructField("score", DoubleType(), True),
-                StructField("label", StringType(), True),
-            ])
-            _dfh = spark.createDataFrame(_rdh, schema=_schh).select(
-                "z","x","y","geom",
-                _F_mvth.struct(_F_mvth.col("id"), _F_mvth.col("score"), _F_mvth.col("label")).alias("attrs"),
-            ).cache(); _dfh.count()
-            from databricks.labs.gbx.vectorx import functions as _hx
-            _hx.register(spark)
-            _hrows = (_dfh.groupBy("z","x","y")
-                .agg(_hx.st_asmvt(_F_mvth.col("geom"), _F_mvth.col("attrs"), _F_mvth.lit("layer")).alias("mvt"))
-                .collect())
-            _mvt_heavy_blobs = {(r["z"], r["x"], r["y"]): bytes(r["mvt"]) for r in _hrows if r["mvt"]}
-        except Exception as _pe:
-            print(f"MVT heavy parity capture error: {type(_pe).__name__}: {_pe}")
-# Parity check: decode both tiers' MVT output and compare geometry+property counts.
-if LIGHTWEIGHT and HEAVYWEIGHT and _mvt_light_blobs is not None and _mvt_heavy_blobs is not None:
-    try:
-        _lk = set(_mvt_light_blobs.keys())
-        _hk = set(_mvt_heavy_blobs.keys())
-        _parity_ok = True
-        _parity_msg = []
-        if _lk != _hk:
-            _parity_ok = False
-            _parity_msg.append(
-                f"tile-key mismatch: light-only={sorted(_lk-_hk)[:3]} "
-                f"heavy-only={sorted(_hk-_lk)[:3]} (light={len(_lk)}, heavy={len(_hk)})"
-            )
-        else:
-            _feat_mismatches = []
-            for _k in sorted(_lk):
-                _ld = _mvt_lib.decode(_mvt_light_blobs[_k])
-                _hd = _mvt_lib.decode(_mvt_heavy_blobs[_k])
-                _ll = _ld.get("layer", {}).get("features", [])
-                _hl = _hd.get("layer", {}).get("features", [])
-                if len(_ll) != len(_hl):
-                    _feat_mismatches.append(f"{_k}: light={len(_ll)} heavy={len(_hl)}")
-                else:
-                    # Order-independent: the two encoders may emit features in a different
-                    # order, so compare the SET of feature ids per tile, not positionally.
-                    _lids = {_f.get("properties", {}).get("id") for _f in _ll}
-                    _hids = {_f.get("properties", {}).get("id") for _f in _hl}
-                    if _lids != _hids:
-                        _diff = sorted((_lids ^ _hids), key=lambda v: (v is None, v))[:5]
-                        _feat_mismatches.append(f"{_k}: id-set differs (sym-diff {_diff})")
-            if _feat_mismatches:
-                _parity_ok = False
-                _parity_msg.append("feature mismatches: " + "; ".join(_feat_mismatches[:5]))
-        if _parity_ok:
-            _verdict = f"MVT PARITY: PASS ({len(_lk)} tiles, feature counts + ids match)"
-        else:
-            _verdict = "MVT PARITY: FAIL -- " + "; ".join(_parity_msg)
-    except Exception as _pe:
-        _verdict = f"MVT PARITY: ERROR -- {type(_pe).__name__}: {_pe}"
-    print(_verdict)
-    assert _verdict.startswith("MVT PARITY: PASS"), _verdict
 if _mvt_rows:
     _df_mvt = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'mvt'"
@@ -1528,11 +1571,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _ldf = spark.createDataFrame(_ldata, schema=_lschema)
         _ldf.createOrReplaceTempView("_leg_parity_v")
         from databricks.labs.gbx.pyvx import functions as _vx_leg
-        _vx_leg.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3")
         _light_w = [bytes(r["w"]) for r in spark.sql(
             "SELECT gbx_st_legacyaswkb(g) AS w FROM _leg_parity_v").collect()]
-        from databricks.labs.gbx.vectorx.jts.legacy import functions as _hx_leg
-        _hx_leg.register(spark)
+        from databricks.labs.gbx.vectorx import functions as _hx_leg
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_st_legacy',), level="L1")
         _heavy_w = [bytes(r["w"]) for r in spark.sql(
             "SELECT gbx_st_legacyaswkb(g) AS w FROM _leg_parity_v").collect()]
         _leg_ok = len(_light_w) == len(_heavy_w) and len(_light_w) > 0
@@ -1547,13 +1592,35 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _v = "LEGACY PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
     print(_v); _verdicts.append(_v)
     assert _v.startswith("LEGACY PARITY: PASS"), _v
-    # --- TIN: register both tiers (different catalog paths -> coexist). ---
+    # --- TIN: both tiers use the same SQL names and a later registration replaces the earlier one, so the
+    # light leg (L3, SQL LATERAL) runs and is collected first, then L1 is registered for the heavy leg. ---
     from databricks.labs.gbx.pyvx import functions as _vx_tin
     from databricks.labs.gbx.vectorx import functions as _hx_tin
-    _vx_tin.register(spark); _hx_tin.register(spark)
+    from databricks.labs.gbx import manager as _gbx_mgr
     _tdata, _tschema = _cv.generate_tin_points(_TIN_N_ROWS, n_points=_TIN_N_POINTS)
     _tdf = spark.createDataFrame(_tdata, schema=_tschema)
     _tdf.createOrReplaceTempView("_tin_parity_v")
+    _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3")
+    _tin_light = {}
+    for _k, _q in (
+        ("tri", "SELECT t.triangle FROM _tin_parity_v, LATERAL "
+                "gbx_st_triangulate(pts, bl, mt, st, spf, 'constrained') t"),
+        ("bbox", "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
+                 "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, xmin, ymin, xmax, ymax, "
+                 "w, h, srid, 'constrained') t"),
+        ("geom", "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
+                 "gbx_st_interpolateelevationgeom(pts, bl, mt, st, spf, origin, cols, rows_n, "
+                 "cell_x, cell_y, 'constrained') t"),
+    ):
+        try:
+            _tin_light[_k] = spark.sql(_q).collect()
+        except Exception as _pe:
+            _tin_light[_k] = _pe
+    def _light_rows(_k):
+        if isinstance(_tin_light[_k], Exception):
+            raise _tin_light[_k]
+        return _tin_light[_k]
+    _gbx_mgr.register_family(spark, ('gbx_st_',), only=_gbx_mgr.names_at_level(('gbx_st_',), "L1"), level="L1")
     def _centroid(_blob):
         _g = _shp_wkb.loads(bytes(_blob)); _c = _g.centroid
         return (round(_c.x, 6), round(_c.y, 6))
@@ -1564,8 +1631,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         return None
     # triangulate: count + centroid-set match within 1e-6.
     try:
-        _lt = spark.sql("SELECT t.triangle FROM _tin_parity_v, LATERAL "
-                        "gbx_st_triangulate(pts, bl, mt, st, spf, 'constrained') t").collect()
+        _lt = _light_rows("tri")
         _ht = _tdf.select(_F_tin.call_function(
             "gbx_st_triangulate", _F_tin.col("pts"), _F_tin.col("bl"), _F_tin.col("mt"),
             _F_tin.col("st"), _F_tin.col("spf"), _F_tin.lit("constrained")
@@ -1590,10 +1656,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         return _out
     # bbox
     try:
-        _lb = _grid_dict(spark.sql(
-            "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
-            "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, xmin, ymin, xmax, ymax, "
-            "w, h, srid, 'constrained') t").collect(), "p")
+        _lb = _grid_dict(_light_rows("bbox"), "p")
         _hb = _grid_dict(_tdf.select(_F_tin.call_function(
             "gbx_st_interpolateelevationbbox", _F_tin.col("pts"), _F_tin.col("bl"),
             _F_tin.col("mt"), _F_tin.col("st"), _F_tin.col("spf"), _F_tin.col("xmin"),
@@ -1609,27 +1672,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _v = "TIN INTERP BBOX PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
     print(_v); _verdicts.append(_v)
     assert _v.startswith("TIN INTERP BBOX PARITY: PASS"), _v
-    # geom
-    try:
-        _lg2 = _grid_dict(spark.sql(
-            "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
-            "gbx_st_interpolateelevationgeom(pts, bl, mt, st, spf, origin, cols, rows_n, "
-            "cell_x, cell_y, 'constrained') t").collect(), "p")
-        _hg2 = _grid_dict(_tdf.select(_F_tin.call_function(
-            "gbx_st_interpolateelevationgeom", _F_tin.col("pts"), _F_tin.col("bl"),
-            _F_tin.col("mt"), _F_tin.col("st"), _F_tin.col("spf"), _F_tin.col("origin"),
-            _F_tin.col("cols"), _F_tin.col("rows_n"), _F_tin.col("cell_x"),
-            _F_tin.col("cell_y"), _F_tin.lit("constrained")
-        ).alias("p")).collect(), "p")
-        _gg_ok = (_lg2.keys() == _hg2.keys() and len(_lg2) > 0
-                  and all(abs(_lg2[_k] - _hg2[_k]) < 1e-6 for _k in _lg2))
-        _v = ("TIN INTERP GEOM PARITY: PASS (%d cells, |dz|<1e-6)" % len(_lg2)
-              if _gg_ok else "TIN INTERP GEOM PARITY: FAIL -- cell/Z mismatch (light=%d heavy=%d)"
-              % (len(_lg2), len(_hg2)))
-    except Exception as _pe:
-        _v = "TIN INTERP GEOM PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("TIN INTERP GEOM PARITY: PASS"), _v
+    # geom: no JVM form (gbx_st_interpolateelevationgeom runs its Python level), so no parity leg
 if _tin_rows:
     _df_tin = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category IN ('tin','legacy')"
@@ -1642,16 +1685,12 @@ if _tin_rows:
     _show_md(f"TIN + legacy benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_GRID_QUADBIN = """# Quadbin grid benchmark: light pygx vs heavy gridx.quadbin, exact-output parity.
+_CELL_GRID_QUADBIN = """# Quadbin grid benchmark: the lightweight pygx level only (the heavyweight quadbin form is gone).
 # ALL 10 quadbin functions: pointascell (scalar) / polyfill (geom->ARRAY<cell>) /
 # tessellate (struct-array) / cellunion_agg (grouped aggregate) / resolution (scalar INT) /
 # kring (scalar ARRAY<LONG>) / distance (scalar INT) / aswkb (scalar EWKB polygon) /
-# centroid (scalar EWKB point) / cellunion (scalar ARRAY<cell>->EWKB). Both tiers expose the
-# SAME gbx_quadbin_* SQL names, so light is collected BEFORE heavy re-registers (the later
-# registration overwrites the UDF) -- the same ordering trick as the legacy parity cell.
+# centroid (scalar EWKB point) / cellunion (scalar ARRAY<cell>->EWKB).
 from databricks.labs.gbx.bench import readers as _rd
-from databricks.labs.gbx.bench import corpus_vector as _cv
-from shapely import wkb as _shp_wkb
 _quadbin_rows = []
 _QB_N_ROWS = 1000
 _QB_PAC_RES = 12   # pointascell resolution
@@ -1659,7 +1698,7 @@ _QB_GEOM_RES = 8   # polyfill / tessellate resolution
 _QB_AGG_RES = 8    # cellunion_agg / cellunion cell resolution
 _QB_CELL_RES = 12  # resolution / kring / distance / aswkb / centroid cell resolution
 _QB_KRING_K = 1    # kring radius
-_QB_N_LEGS = 10    # legs per tier (keep in sync with the appends below)
+_QB_N_LEGS = 10    # legs (keep in sync with the appends below)
 if LIGHTWEIGHT:
     _quadbin_rows.append(_rd.run_quadbin_pointascell(
         spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="lightweight",
@@ -1693,298 +1732,6 @@ if LIGHTWEIGHT:
         n_rows=_QB_N_ROWS, res=_QB_AGG_RES, where="cluster"))
     for _r in _quadbin_rows[-_QB_N_LEGS:]:
         _sink([_r]); lw.append(_r)
-if HEAVYWEIGHT:
-    _hw_qb = []
-    _hw_qb.append(_rd.run_quadbin_pointascell(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_PAC_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_polyfill(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_GEOM_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_tessellate(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_GEOM_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_cellunion_agg(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_AGG_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_resolution(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_CELL_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_kring(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_CELL_RES, k=_QB_KRING_K, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_distance(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_CELL_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_aswkb(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_CELL_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_centroid(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_CELL_RES, where="cluster"))
-    _hw_qb.append(_rd.run_quadbin_cellunion(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api="heavyweight",
-        n_rows=_QB_N_ROWS, res=_QB_AGG_RES, where="cluster"))
-    for _r in _hw_qb:
-        _sink([_r]); hw.append(_r); _quadbin_rows.append(_r)
-# Exact-output parity (hard gate): rebuild the SAME deterministic corpora, collect each tier
-# through its native SQL surface, and compare. Cells: exact equality. Decoded geometry: 1e-6.
-if LIGHTWEIGHT and HEAVYWEIGHT:
-    import pyspark.sql.functions as _F_qb
-    _verdicts = []
-    def _centroid_qb(_blob):
-        _g = _shp_wkb.loads(bytes(_blob)); _c = _g.centroid
-        return (round(_c.x, 6), round(_c.y, 6))
-    # --- pointascell: exact cell-id equality (light BEFORE heavy: shared SQL name). ---
-    try:
-        _pdata, _pschema = _cv.generate_quadbin_points(_QB_N_ROWS)
-        _pdf = spark.createDataFrame(_pdata, schema=_pschema)
-        _pdf.createOrReplaceTempView("_qb_pac_parity_v")
-        from databricks.labs.gbx.pygx import functions as _gx_pac
-        _gx_pac.register(spark)
-        _light_cells = [r["cell"] for r in spark.sql(
-            "SELECT gbx_quadbin_pointascell(lon, lat, %d) AS cell FROM _qb_pac_parity_v"
-            % _QB_PAC_RES).collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_pac
-        _hx_pac.register(spark)
-        _heavy_cells = [r["cell"] for r in spark.sql(
-            "SELECT gbx_quadbin_pointascell(lon, lat, %d) AS cell FROM _qb_pac_parity_v"
-            % _QB_PAC_RES).collect()]
-        _pac_ok = (len(_light_cells) == len(_heavy_cells) > 0
-                   and _light_cells == _heavy_cells)
-        _v = ("QUADBIN POINTASCELL PARITY: PASS (%d cells, exact id equality)" % len(_light_cells)
-              if _pac_ok else "QUADBIN POINTASCELL PARITY: FAIL -- cell id mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN POINTASCELL PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN POINTASCELL PARITY: PASS"), _v
-    # --- polyfill: exact per-row cell-SET equality. ---
-    try:
-        _gdata, _gschema = _cv.generate_quadbin_polygons(_QB_N_ROWS)
-        _gdf = spark.createDataFrame(_gdata, schema=_gschema)
-        _gdf.createOrReplaceTempView("_qb_geom_parity_v")
-        from databricks.labs.gbx.pygx import functions as _gx_pf
-        _gx_pf.register(spark)
-        _light_pf = [sorted(r["cells"]) for r in spark.sql(
-            "SELECT gbx_quadbin_polyfill(geom, %d) AS cells FROM _qb_geom_parity_v"
-            % _QB_GEOM_RES).collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_pf
-        _hx_pf.register(spark)
-        _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
-            "SELECT gbx_quadbin_polyfill(geom, %d) AS cells FROM _qb_geom_parity_v"
-            % _QB_GEOM_RES).collect()]
-        _pf_ok = (len(_light_pf) == len(_heavy_pf) > 0 and _light_pf == _heavy_pf)
-        _ncells = sum(len(c) for c in _light_pf)
-        _v = ("QUADBIN POLYFILL PARITY: PASS (%d rows, %d cells, exact set equality)"
-              % (len(_light_pf), _ncells)
-              if _pf_ok else "QUADBIN POLYFILL PARITY: FAIL -- cell set mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN POLYFILL PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN POLYFILL PARITY: PASS"), _v
-    # --- tessellate: exact (cell, centroid) set per row; cells exact, centroid within 1e-6. ---
-    try:
-        from databricks.labs.gbx.pygx import functions as _gx_ts
-        _gx_ts.register(spark)
-        def _chip_set(_chips):
-            return sorted((int(c["cell"]), _centroid_qb(c["geom"])) for c in _chips)
-        _light_ts = [_chip_set(r["chips"]) for r in spark.sql(
-            "SELECT gbx_quadbin_tessellate(geom, %d) AS chips FROM _qb_geom_parity_v"
-            % _QB_GEOM_RES).collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_ts
-        _hx_ts.register(spark)
-        _heavy_ts = [_chip_set(r["chips"]) for r in spark.sql(
-            "SELECT gbx_quadbin_tessellate(geom, %d) AS chips FROM _qb_geom_parity_v"
-            % _QB_GEOM_RES).collect()]
-        _ts_ok = len(_light_ts) == len(_heavy_ts) > 0
-        if _ts_ok:
-            for _lrow, _hrow in zip(_light_ts, _heavy_ts):
-                if len(_lrow) != len(_hrow):
-                    _ts_ok = False; break
-                for (_lc, (_lx, _ly)), (_hc, (_hx2, _hy)) in zip(_lrow, _hrow):
-                    if _lc != _hc or abs(_lx - _hx2) >= 1e-6 or abs(_ly - _hy) >= 1e-6:
-                        _ts_ok = False; break
-                if not _ts_ok:
-                    break
-        _nchips = sum(len(c) for c in _light_ts)
-        _v = ("QUADBIN TESSELLATE PARITY: PASS (%d rows, %d chips, cells exact + centroid<1e-6)"
-              % (len(_light_ts), _nchips)
-              if _ts_ok else "QUADBIN TESSELLATE PARITY: FAIL -- chip/cell/centroid mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN TESSELLATE PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN TESSELLATE PARITY: PASS"), _v
-    # --- cellunion_agg: per-group decoded-union geometry equality (within 1e-6). ---
-    try:
-        _adata, _aschema = _cv.generate_quadbin_cellid_arrays(_QB_N_ROWS, res=_QB_AGG_RES)
-        _adf = spark.createDataFrame(_adata, schema=_aschema)
-        _adf.createOrReplaceTempView("_qb_agg_parity_v")
-        from databricks.labs.gbx.pygx import functions as _gx_ag
-        _gx_ag.register(spark)
-        _light_ag = {r["group"]: bytes(r["u"]) for r in spark.sql(
-            "SELECT group, gbx_quadbin_cellunion_agg(cell) AS u "
-            "FROM _qb_agg_parity_v GROUP BY group").collect()}
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_ag
-        _hx_ag.register(spark)
-        _heavy_ag = {r["group"]: bytes(r["u"]) for r in spark.sql(
-            "SELECT group, gbx_quadbin_cellunion_agg(cell) AS u "
-            "FROM _qb_agg_parity_v GROUP BY group").collect()}
-        _ag_ok = (_light_ag.keys() == _heavy_ag.keys() and len(_light_ag) > 0)
-        if _ag_ok:
-            for _k in _light_ag:
-                _lg = _shp_wkb.loads(_light_ag[_k]); _hg = _shp_wkb.loads(_heavy_ag[_k])
-                # Decoded-geometry equality within tolerance. shapely union_all and JTS
-                # union pick different vertex orders / multipolygon member orders, so
-                # equals()/equals_exact() report False on identical coverage. The
-                # geometrically meaningful 1e-6 bar is "area of disagreement < tol":
-                # symmetric_difference().area collapses to floating-point noise (~1e-13)
-                # when the two unions cover the same region.
-                if _lg.symmetric_difference(_hg).area >= 1e-6:
-                    _ag_ok = False; break
-        _v = ("QUADBIN CELLUNION_AGG PARITY: PASS (%d groups, decoded union equality)"
-              % len(_light_ag)
-              if _ag_ok else "QUADBIN CELLUNION_AGG PARITY: FAIL -- union geometry mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN CELLUNION_AGG PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN CELLUNION_AGG PARITY: PASS"), _v
-    # --- shared single-cell corpus for the scalar cell-in legs (resolution/kring/aswkb/centroid). ---
-    _cdata, _cschema = _cv.generate_quadbin_cells(_QB_N_ROWS, res=_QB_CELL_RES)
-    _cdf = spark.createDataFrame(_cdata, schema=_cschema)
-    _cdf.createOrReplaceTempView("_qb_cell_parity_v")
-    # --- resolution: exact INT equality. ---
-    try:
-        from databricks.labs.gbx.pygx import functions as _gx_rs
-        _gx_rs.register(spark)
-        _light_rs = [r["r"] for r in spark.sql(
-            "SELECT gbx_quadbin_resolution(cell) AS r FROM _qb_cell_parity_v").collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_rs
-        _hx_rs.register(spark)
-        _heavy_rs = [r["r"] for r in spark.sql(
-            "SELECT gbx_quadbin_resolution(cell) AS r FROM _qb_cell_parity_v").collect()]
-        _rs_ok = (len(_light_rs) == len(_heavy_rs) > 0 and _light_rs == _heavy_rs)
-        _v = ("QUADBIN RESOLUTION PARITY: PASS (%d cells, exact INT equality)" % len(_light_rs)
-              if _rs_ok else "QUADBIN RESOLUTION PARITY: FAIL -- resolution mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN RESOLUTION PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN RESOLUTION PARITY: PASS"), _v
-    # --- kring: exact sorted cell-set per row (fixed k). ---
-    try:
-        from databricks.labs.gbx.pygx import functions as _gx_kr
-        _gx_kr.register(spark)
-        _light_kr = [sorted(r["ring"]) for r in spark.sql(
-            "SELECT gbx_quadbin_kring(cell, %d) AS ring FROM _qb_cell_parity_v"
-            % _QB_KRING_K).collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_kr
-        _hx_kr.register(spark)
-        _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
-            "SELECT gbx_quadbin_kring(cell, %d) AS ring FROM _qb_cell_parity_v"
-            % _QB_KRING_K).collect()]
-        _kr_ok = (len(_light_kr) == len(_heavy_kr) > 0 and _light_kr == _heavy_kr)
-        _nk = sum(len(c) for c in _light_kr)
-        _v = ("QUADBIN KRING PARITY: PASS (%d rows, %d cells, exact set equality, k=%d)"
-              % (len(_light_kr), _nk, _QB_KRING_K)
-              if _kr_ok else "QUADBIN KRING PARITY: FAIL -- ring set mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN KRING PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN KRING PARITY: PASS"), _v
-    # --- distance: exact INT equality over (cell_a, cell_b) pairs. ---
-    try:
-        _ddata, _dschema = _cv.generate_quadbin_cell_pairs(_QB_N_ROWS, res=_QB_CELL_RES)
-        _ddf = spark.createDataFrame(_ddata, schema=_dschema)
-        _ddf.createOrReplaceTempView("_qb_pair_parity_v")
-        from databricks.labs.gbx.pygx import functions as _gx_ds
-        _gx_ds.register(spark)
-        _light_ds = [r["d"] for r in spark.sql(
-            "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _qb_pair_parity_v").collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_ds
-        _hx_ds.register(spark)
-        _heavy_ds = [r["d"] for r in spark.sql(
-            "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _qb_pair_parity_v").collect()]
-        _ds_ok = (len(_light_ds) == len(_heavy_ds) > 0 and _light_ds == _heavy_ds)
-        _v = ("QUADBIN DISTANCE PARITY: PASS (%d pairs, exact INT equality)" % len(_light_ds)
-              if _ds_ok else "QUADBIN DISTANCE PARITY: FAIL -- distance mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN DISTANCE PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN DISTANCE PARITY: PASS"), _v
-    # --- aswkb: decoded polygon within 1e-6 + SRID 4326. ---
-    try:
-        from shapely import from_wkb as _shp_from_wkb, get_srid as _shp_get_srid
-        from databricks.labs.gbx.pygx import functions as _gx_aw
-        _gx_aw.register(spark)
-        _light_aw = [bytes(r["g"]) for r in spark.sql(
-            "SELECT gbx_quadbin_aswkb(cell) AS g FROM _qb_cell_parity_v").collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_aw
-        _hx_aw.register(spark)
-        _heavy_aw = [bytes(r["g"]) for r in spark.sql(
-            "SELECT gbx_quadbin_aswkb(cell) AS g FROM _qb_cell_parity_v").collect()]
-        _aw_ok = (len(_light_aw) == len(_heavy_aw) > 0)
-        if _aw_ok:
-            for _lb, _hb in zip(_light_aw, _heavy_aw):
-                _lg = _shp_from_wkb(_lb); _hg = _shp_from_wkb(_hb)
-                if (_shp_get_srid(_lg) != 4326 or _shp_get_srid(_hg) != 4326
-                        or _lg.symmetric_difference(_hg).area >= 1e-6):
-                    _aw_ok = False; break
-        _v = ("QUADBIN ASWKB PARITY: PASS (%d cells, polygon<1e-6 + SRID 4326)" % len(_light_aw)
-              if _aw_ok else "QUADBIN ASWKB PARITY: FAIL -- polygon/SRID mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN ASWKB PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN ASWKB PARITY: PASS"), _v
-    # --- centroid: decoded point within 1e-6. ---
-    try:
-        from databricks.labs.gbx.pygx import functions as _gx_ct
-        _gx_ct.register(spark)
-        _light_ct = [_centroid_qb(r["g"]) for r in spark.sql(
-            "SELECT gbx_quadbin_centroid(cell) AS g FROM _qb_cell_parity_v").collect()]
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_ct
-        _hx_ct.register(spark)
-        _heavy_ct = [_centroid_qb(r["g"]) for r in spark.sql(
-            "SELECT gbx_quadbin_centroid(cell) AS g FROM _qb_cell_parity_v").collect()]
-        _ct_ok = (len(_light_ct) == len(_heavy_ct) > 0)
-        if _ct_ok:
-            for (_lx, _ly), (_hx2, _hy) in zip(_light_ct, _heavy_ct):
-                if abs(_lx - _hx2) >= 1e-6 or abs(_ly - _hy) >= 1e-6:
-                    _ct_ok = False; break
-        _v = ("QUADBIN CENTROID PARITY: PASS (%d cells, point<1e-6)" % len(_light_ct)
-              if _ct_ok else "QUADBIN CENTROID PARITY: FAIL -- point mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN CENTROID PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN CENTROID PARITY: PASS"), _v
-    # --- cellunion: per-group decoded-union geometry equality (sym-diff area < 1e-6). ---
-    try:
-        _udata, _uschema = _cv.generate_quadbin_cellid_arrays(_QB_N_ROWS, res=_QB_AGG_RES)
-        _udf = spark.createDataFrame(_udata, schema=_uschema)
-        _udf.createOrReplaceTempView("_qb_union_src_v")
-        _uarr = spark.sql(
-            "SELECT group, collect_list(cell) AS cells FROM _qb_union_src_v GROUP BY group")
-        _uarr.createOrReplaceTempView("_qb_union_arr_v")
-        from databricks.labs.gbx.pygx import functions as _gx_cu
-        _gx_cu.register(spark)
-        _light_cu = {r["group"]: bytes(r["u"]) for r in spark.sql(
-            "SELECT group, gbx_quadbin_cellunion(cells) AS u FROM _qb_union_arr_v").collect()}
-        from databricks.labs.gbx.gridx.quadbin import functions as _hx_cu
-        _hx_cu.register(spark)
-        _heavy_cu = {r["group"]: bytes(r["u"]) for r in spark.sql(
-            "SELECT group, gbx_quadbin_cellunion(cells) AS u FROM _qb_union_arr_v").collect()}
-        _cu_ok = (_light_cu.keys() == _heavy_cu.keys() and len(_light_cu) > 0)
-        if _cu_ok:
-            for _k in _light_cu:
-                _lg = _shp_wkb.loads(_light_cu[_k]); _hg = _shp_wkb.loads(_heavy_cu[_k])
-                # Member-ordering-robust: shapely union_all vs JTS union differ in
-                # vertex/member order; sym-diff area collapses to FP noise on equal coverage.
-                if _lg.symmetric_difference(_hg).area >= 1e-6:
-                    _cu_ok = False; break
-        _v = ("QUADBIN CELLUNION PARITY: PASS (%d groups, decoded union equality)" % len(_light_cu)
-              if _cu_ok else "QUADBIN CELLUNION PARITY: FAIL -- union geometry mismatch")
-    except Exception as _pe:
-        _v = "QUADBIN CELLUNION PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("QUADBIN CELLUNION PARITY: PASS"), _v
 if _quadbin_rows:
     _df_qb = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'grid'"
@@ -2004,7 +1751,9 @@ _CELL_GRID_BNG = """# BNG grid benchmark: light pygx vs heavy gridx.bng, exact-o
 # (scalar STRING cell-in -> ARRAY<STRING>) / cellunion_agg (grouped aggregate over
 # chip structs). Both tiers expose the SAME gbx_bng_* SQL names, so light is
 # collected BEFORE heavy re-registers (the later registration overwrites the UDF)
-# -- the same ordering trick as the quadbin parity cell. Inputs are EPSG:27700
+# -- the same ordering trick as the quadbin parity cell. The *explode names do not
+# overwrite each other (light table functions vs heavy generators); each tier's
+# explode leg uses the SQL form that reaches it. Inputs are EPSG:27700
 # (BNG eastings/northings, not WGS84); resolutions are string keys ("1km"),
 # never metres-as-Int (the BNG resolution convention).
 from databricks.labs.gbx.bench import readers as _rd
@@ -2018,86 +1767,62 @@ _BNG_CELL_RES = "1km"   # scalar cell / pair / eastnorth resolution
 _BNG_KRING_K = 1        # kring / kloop radius
 _BNG_KLOOP_K = 1        # kloop radius
 _BNG_GEOMK_K = 1        # geomkring / geomkloop radius
-_BNG_N_LEGS = 23        # legs per tier (keep in sync with the appends below)
-# Order: 5 originals (pointascell, polyfill, tessellate, kring, cellunion_agg)
-# then the 18 new legs: scalars, arrays, chip-struct, intersection_agg, explodes.
-def _bng_legs(_api):
-    # Run all 23 BNG legs for one tier, in a fixed order, returning the rows.
-    _out = []
-    _out.append(_rd.run_bng_pointascell(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
-    _out.append(_rd.run_bng_polyfill(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
-    _out.append(_rd.run_bng_tessellate(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
-    _out.append(_rd.run_bng_kring(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KRING_K, where="cluster"))
-    _out.append(_rd.run_bng_cellunion_agg(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_AGG_RES, where="cluster"))
+# One (name, kwargs) row per BNG leg, run for each tier in this order: 5 originals
+# (pointascell, polyfill, tessellate, kring, cellunion_agg), then scalars, arrays,
+# chip-struct, intersection_agg, explodes.
+_BNG_LEGS = [
+    ("bng_pointascell", dict(res=_BNG_GEOM_RES)),
+    ("bng_polyfill", dict(res=_BNG_GEOM_RES)),
+    ("bng_tessellate", dict(res=_BNG_GEOM_RES)),
+    ("bng_kring", dict(res=_BNG_CELL_RES, k=_BNG_KRING_K)),
+    ("bng_cellunion_agg", dict(res=_BNG_AGG_RES)),
     # --- scalars (cell-in / pair / eastnorth) ---
-    _out.append(_rd.run_bng_aswkb(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_aswkt(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_centroid(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_cellarea(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_distance(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_euclideandistance(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_eastnorthasbng(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
+    ("bng_aswkb", dict(res=_BNG_CELL_RES)),
+    ("bng_aswkt", dict(res=_BNG_CELL_RES)),
+    ("bng_centroid", dict(res=_BNG_CELL_RES)),
+    ("bng_cellarea", dict(res=_BNG_CELL_RES)),
+    ("bng_distance", dict(res=_BNG_CELL_RES)),
+    ("bng_euclideandistance", dict(res=_BNG_CELL_RES)),
+    ("bng_eastnorthasbng", dict(res=_BNG_CELL_RES)),
     # --- array-returning (kloop, geomk*) ---
-    _out.append(_rd.run_bng_kloop(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KLOOP_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkring(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkloop(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
+    ("bng_kloop", dict(res=_BNG_CELL_RES, k=_BNG_KLOOP_K)),
+    ("bng_geomkring", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    ("bng_geomkloop", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
     # --- chip-struct scalars ---
-    _out.append(_rd.run_bng_cellintersection(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_cellunion(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
+    ("bng_cellintersection", dict(res=_BNG_CELL_RES)),
+    ("bng_cellunion", dict(res=_BNG_CELL_RES)),
     # --- grouped intersection aggregate ---
-    _out.append(_rd.run_bng_cellintersection_agg(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_AGG_RES, where="cluster"))
-    # --- explode UDTFs (LATERAL SQL, tier-agnostic job) ---
-    _out.append(_rd.run_bng_kringexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KRING_K, where="cluster"))
-    _out.append(_rd.run_bng_kloopexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KLOOP_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkringexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkloopexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
-    _out.append(_rd.run_bng_tessellateexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
+    ("bng_cellintersection_agg", dict(res=_BNG_AGG_RES)),
+    # --- explodes: light LATERAL table functions, heavy select-list generators; each
+    # leg checks its query's plan reaches its own tier before timing (readers). ---
+    ("bng_kringexplode", dict(res=_BNG_CELL_RES, k=_BNG_KRING_K)),
+    ("bng_kloopexplode", dict(res=_BNG_CELL_RES, k=_BNG_KLOOP_K)),
+    ("bng_geomkringexplode", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    ("bng_geomkloopexplode", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    ("bng_tessellateexplode", dict(res=_BNG_GEOM_RES)),
+]
+_BNG_N_LEGS = len(_BNG_LEGS)
+_BNG_LEG_NAMES = [_n for _n, _ in _BNG_LEGS]
+# --functions selects BNG legs by name (e.g. bng_kringexplode); with no BNG leg named,
+# every leg runs. A bng_* name that is neither a BNG leg nor a registered bench
+# function (bng_cellfill runs in the function benchmark) is a typo: stop here.
+_bng_names = [x for x in FUNCTIONS.split(",") if x.startswith("bng_")]
+_bng_unknown = [x for x in _bng_names if x not in _BNG_LEG_NAMES and x not in _s.REGISTRY]
+if _bng_unknown:
+    raise ValueError(
+        "--functions names no BNG leg: %s (legs: %s)"
+        % (", ".join(_bng_unknown), ", ".join(_BNG_LEG_NAMES)))
+_BNG_SEL = frozenset(x for x in _bng_names if x in _BNG_LEG_NAMES)
+def _bng_legs(_api):
+    # Run the selected BNG legs for one tier, in table order, returning the rows.
+    _out = []
+    for _fn, _kw in _BNG_LEGS:
+        if _api == "heavyweight" and _fn == "bng_eastnorthasbng":
+            continue  # no heavyweight level (it measured slower than light)
+        if not _BNG_SEL or _fn in _BNG_SEL:
+            _out.append(getattr(_rd, "run_" + _fn)(
+                spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
+                n_rows=_BNG_N_ROWS, where="cluster", **_kw))
     return _out
 if LIGHTWEIGHT:
     for _r in _bng_legs("lightweight"):
@@ -2115,12 +1840,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _pdf = spark.createDataFrame(_pdata, schema=_pschema)
         _pdf.createOrReplaceTempView("_bng_pac_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pac
-        _gx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_pointascell(geom, '%s') AS cell FROM _bng_pac_parity_v"
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_pac
-        _hx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_pointascell(geom, '%s') AS cell FROM _bng_pac_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2138,12 +1865,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _gdf = spark.createDataFrame(_gdata, schema=_gschema)
         _gdf.createOrReplaceTempView("_bng_geom_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pf
-        _gx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_bng_polyfill(geom, '%s') AS cells FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_pf
-        _hx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_bng_polyfill(geom, '%s') AS cells FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2159,14 +1888,16 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- tessellate: exact chip cellid-SET equality per row (the load-bearing field). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ts
-        _gx_ts.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         def _chip_cells(_chips):
             return sorted(c["cellid"] for c in _chips)
         _light_ts = [_chip_cells(r["chips"]) for r in spark.sql(
             "SELECT gbx_bng_tessellate(geom, '%s') AS chips FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ts
-        _hx_ts.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ts = [_chip_cells(r["chips"]) for r in spark.sql(
             "SELECT gbx_bng_tessellate(geom, '%s') AS chips FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2185,12 +1916,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _cdf = spark.createDataFrame(_cdata, schema=_cschema)
         _cdf.createOrReplaceTempView("_bng_cell_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_kr
-        _gx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kring(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KRING_K).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_kr
-        _hx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kring(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KRING_K).collect()]
@@ -2211,12 +1944,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _adf = spark.createDataFrame(_adata, schema=_aschema)
         _adf.createOrReplaceTempView("_bng_agg_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ag
-        _gx_ag.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ag = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect() if r["u"] is not None}
         from databricks.labs.gbx.gridx.bng import functions as _hx_ag
-        _hx_ag.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         # Heavy returns STRUCT<cellid, core, chip>; the load-bearing field is .chip (BINARY).
         _heavy_ag = {r["group"]: bytes(r["u"]["chip"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
@@ -2244,11 +1979,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_cdata, schema=_cschema).createOrReplaceTempView(
             "_bng_cell_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_wb
-        _gx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_wb
-        _hx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_parity_v").collect()]
         _wb_ok = len(_light_wb) == len(_heavy_wb) > 0
@@ -2267,11 +2004,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     try:
         from shapely import wkt as _shp_wkt
         from databricks.labs.gbx.pygx import functions as _gx_wt
-        _gx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_wt
-        _hx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_parity_v").collect()]
         _wt_ok = len(_light_wt) == len(_heavy_wt) > 0
@@ -2289,11 +2028,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- centroid: decoded point distance < 1e-6. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ct
-        _gx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ct
-        _hx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_parity_v").collect()]
         _ct_ok = len(_light_ct) == len(_heavy_ct) > 0
@@ -2310,11 +2051,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- cellarea: exact scalar equality. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ca
-        _gx_ca.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ca = [r["a"] for r in spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ca
-        _hx_ca.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ca = [r["a"] for r in spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_parity_v").collect()]
         _ca_ok = (len(_light_ca) == len(_heavy_ca) > 0 and _light_ca == _heavy_ca)
@@ -2330,12 +2073,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_pdata, schema=_pschema).createOrReplaceTempView(
             "_bng_pair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_di
-        _gx_di.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_di = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_di
-        _hx_di.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_di = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
@@ -2348,12 +2093,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     assert _v.startswith("BNG DISTANCE PARITY: PASS"), _v
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ed
-        _gx_ed.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ed = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ed
-        _hx_ed.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ed = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
@@ -2365,38 +2112,17 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _v = "BNG EUCLIDEANDISTANCE PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
     print(_v); _verdicts.append(_v)
     assert _v.startswith("BNG EUCLIDEANDISTANCE PARITY: PASS"), _v
-    # --- eastnorthasbng: exact STRING cell-id equality. ---
-    try:
-        _edata, _eschema = _cv.generate_bng_eastnorth(_BNG_N_ROWS)
-        spark.createDataFrame(_edata, schema=_eschema).createOrReplaceTempView(
-            "_bng_eastnorth_parity_v")
-        from databricks.labs.gbx.pygx import functions as _gx_en
-        _gx_en.register(spark)
-        _light_en = [r["cell"] for r in spark.sql(
-            "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
-            "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
-        from databricks.labs.gbx.gridx.bng import functions as _hx_en
-        _hx_en.register(spark)
-        _heavy_en = [r["cell"] for r in spark.sql(
-            "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
-            "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
-        _en_ok = (len(_light_en) == len(_heavy_en) > 0 and _light_en == _heavy_en)
-        _v = ("BNG EASTNORTHASBNG PARITY: PASS (%d points, exact id equality)"
-              % len(_light_en)
-              if _en_ok else "BNG EASTNORTHASBNG PARITY: FAIL -- cell id mismatch")
-    except Exception as _pe:
-        _v = "BNG EASTNORTHASBNG PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("BNG EASTNORTHASBNG PARITY: PASS"), _v
     # --- kloop: exact sorted cell-set per row (shared single-cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_kl
-        _gx_kl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kloop(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KLOOP_K).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_kl
-        _hx_kl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_kl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kloop(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KLOOP_K).collect()]
@@ -2411,12 +2137,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- geomkring / geomkloop: exact sorted cell-set per row (shared geom corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_gkr
-        _gx_gkr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_gkr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkring(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_gkr
-        _hx_gkr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_gkr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkring(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
@@ -2430,12 +2158,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     assert _v.startswith("BNG GEOMKRING PARITY: PASS"), _v
     try:
         from databricks.labs.gbx.pygx import functions as _gx_gkl
-        _gx_gkl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_gkl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkloop(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_gkl
-        _hx_gkl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_gkl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkloop(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
@@ -2457,11 +2187,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
                    "struct(lid, lcore, lchip), struct(rid, rcore, rchip)).chip AS c "
                    "FROM _bng_chippair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ci
-        _gx_ci.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ci = [bytes(r["c"]) for r in spark.sql(_ci_sql).collect()
                      if r["c"] is not None]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ci
-        _hx_ci.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ci = [bytes(r["c"]) for r in spark.sql(_ci_sql).collect()
                      if r["c"] is not None]
         _ci_ok = len(_light_ci) == len(_heavy_ci) > 0
@@ -2482,11 +2214,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
                    "struct(lid, lcore, lchip), struct(rid, rcore, rchip)).chip AS c "
                    "FROM _bng_chippair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_cu
-        _gx_cu.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cu = [bytes(r["c"]) for r in spark.sql(_cu_sql).collect()
                      if r["c"] is not None]
         from databricks.labs.gbx.gridx.bng import functions as _hx_cu
-        _hx_cu.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_cu = [bytes(r["c"]) for r in spark.sql(_cu_sql).collect()
                      if r["c"] is not None]
         _cu_ok = len(_light_cu) == len(_heavy_cu) > 0
@@ -2509,12 +2243,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_aidata, schema=_aischema).createOrReplaceTempView(
             "_bng_agg_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ai
-        _gx_ai.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ai = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect() if r["u"] is not None}
         from databricks.labs.gbx.gridx.bng import functions as _hx_ai
-        _hx_ai.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ai = {r["group"]: bytes(r["u"]["chip"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect()
@@ -2539,10 +2275,12 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     def _bng_explode_gate(_name, _light_lateral, _heavy_array_sql):
         try:
             from databricks.labs.gbx.pygx import functions as _gx_ex
-            _gx_ex.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
             _lset = sorted(r["cellid"] for r in spark.sql(_light_lateral).collect())
             from databricks.labs.gbx.gridx.bng import functions as _hx_ex
-            _hx_ex.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
             _hset = sorted(r["cellid"] for r in spark.sql(_heavy_array_sql).collect())
             _ok = (len(_lset) == len(_hset) > 0 and _lset == _hset)
             _vv = ("BNG %s PARITY: PASS (%d flat cells, global set equality)"
@@ -2666,12 +2404,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _pdf = spark.createDataFrame(_pdata, schema=_pschema)
         _pdf.createOrReplaceTempView("_custom_pac_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pac
-        _gx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_custom_pointascell(geom, %s, %d) AS cell FROM _custom_pac_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_pac
-        _hx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_custom_pointascell(geom, %s, %d) AS cell FROM _custom_pac_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
@@ -2689,12 +2429,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _gdf = spark.createDataFrame(_gdata, schema=_gschema)
         _gdf.createOrReplaceTempView("_custom_geom_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pf
-        _gx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_custom_polyfill(geom, %s, %d) AS cells FROM _custom_geom_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_pf
-        _hx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_custom_polyfill(geom, %s, %d) AS cells FROM _custom_geom_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
@@ -2713,12 +2455,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _cdf = spark.createDataFrame(_cdata, schema=_cschema)
         _cdf.createOrReplaceTempView("_custom_cell_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_kr
-        _gx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_custom_kring(cell, %s, %d) AS ring FROM _custom_cell_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_KRING_K)).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_kr
-        _hx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_custom_kring(cell, %s, %d) AS ring FROM _custom_cell_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_KRING_K)).collect()]
@@ -2734,12 +2478,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- cellaswkb: decoded polygon sym-diff area < 1e-6 (shared single-cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_wb
-        _gx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_cellaswkb(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_wb
-        _hx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_cellaswkb(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
@@ -2759,12 +2505,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     try:
         from shapely import wkt as _shp_wkt
         from databricks.labs.gbx.pygx import functions as _gx_wt
-        _gx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_custom_cellaswkt(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_wt
-        _hx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_custom_cellaswkt(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
@@ -2783,12 +2531,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- centroid: decoded point distance < 1e-6 (shared cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ct
-        _gx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_centroid(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_ct
-        _hx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_centroid(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
@@ -2811,11 +2561,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         def _grid_tuple(_g):
             return tuple(_g[_f] for _f in _GRID_FIELDS)
         from databricks.labs.gbx.pygx import functions as _gx_gr
-        _gx_gr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_gr = _grid_tuple(spark.sql(
             "SELECT %s AS grid" % _CUSTOM_GRID_SQL).head(1)[0]["grid"])
         from databricks.labs.gbx.gridx.custom import functions as _hx_gr
-        _hx_gr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_gr = _grid_tuple(spark.sql(
             "SELECT %s AS grid" % _CUSTOM_GRID_SQL).head(1)[0]["grid"])
         _gr_ok = _light_gr == _heavy_gr
@@ -2844,7 +2596,7 @@ _CELL_FANOUT = """# Fan-out UDTF benchmark: light pyrx (streaming UDTF) vs heavy
 # flat row counts are compared per function (hard gate).
 from databricks.labs.gbx.bench import readers as _rd
 _fanout_rows = []
-_fanout_fns = list(_rd.FANOUT_FUNCTIONS)  # all 8 streaming UDTFs
+_fanout_fns = list(_rd.FANOUT_FUNCTIONS)  # all 6 streaming UDTFs
 # For parity: collect (fn, api, flat_output_count) to compare light vs heavy per-fn.
 _fanout_counts = {}  # (fn, api) -> flat row count
 for _ffn in _fanout_fns:
@@ -2932,6 +2684,75 @@ else:
             _df_gfile.show(100, truncate=False)
         _md = results.summarize(_gfile_rows)
         _show_md(f"grouped FILE-amortization benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of the chosen set at each
+# execution level this compute offers (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog),
+# timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
+from databricks.labs.gbx.bench import levels as _lv
+print("=== levels leg starting:", LEVELS_MVP, flush=True)
+from databricks.labs.gbx.bench import levels_forms as _lf
+_lf.FORMS[LEVELS_MVP] = _lf.select_forms(LEVELS_MVP, LEVELS_FORMS)
+print("=== levels forms:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
+# Each (form, scale) row is sunk the moment that scale has run, and the heartbeat names the form in progress.
+_lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
+                       schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
+                       scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, form_cap_s=STALL_CAP_S,
+                       inject_stall=INJECT_STALL, fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR,
+                       rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S,
+                       warmup_skip_s=WARMUP_SKIP_S, run_mode=RUN_MODE, concurrent=CONCURRENT,
+                       cluster_id=CLUSTER_ID, part=PART, exclusive=EXCLUSIVE)
+lw.extend(_lv_rows)
+_show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
+"""
+
+# Smoke stage: before the real scales, prove the run can work. A one-row UDF imports the wheel on a WORKER and reports
+# its version and arch (the Serverless environment-spec mistake showed only there), then every form of the levels set
+# runs once at SMOKE_ROWS rows. Rows sink per form; the exit payload says what ran, what failed and how many Spark tasks
+# each form's input scan ran (a tile form over a one-file table runs on one task whatever the cluster's size).
+_CELL_SMOKE = """# Smoke stage: the worker import check, then each form of the levels set once at the smallest scale.
+import json as _json
+from pyspark.sql import functions as _F
+_smoke = dict(smoke=True, run_id=RUN_ID, import_check=None, forms=[], errors=[])
+
+
+def _worker_probe(_):
+    import json, platform
+    import databricks.labs.gbx as _g
+    return json.dumps(dict(version=getattr(_g, "__version__", "?"), arch=platform.machine()))
+
+
+try:
+    _probe = spark.range(1).select(_F.udf(_worker_probe, "string")("id")).collect()[0][0]
+    _smoke["import_check"] = dict(ok=True, **_json.loads(_probe))
+    print("worker import check:", _probe, flush=True)
+except Exception as _e:
+    _smoke["import_check"] = dict(ok=False, error=(type(_e).__name__ + ": " + str(_e))[-600:])
+    print("worker import check FAILED:", _smoke["import_check"]["error"], flush=True)
+
+if _smoke["import_check"]["ok"] and LEVELS_MVP:
+    from databricks.labs.gbx.bench import levels as _lv
+    from databricks.labs.gbx.bench import levels_forms as _lf
+    _lf.FORMS[LEVELS_MVP] = _lf.select_forms(LEVELS_MVP, LEVELS_FORMS)
+    print("=== levels forms:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
+    _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, 0, 1, corpus=CORPUS,
+                           schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
+                           scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,
+                           form_cap_s=STALL_CAP_S, report_tasks=True, inject_stall=INJECT_STALL,
+                           fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR, rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S,
+                           warmup_skip_s=WARMUP_SKIP_S, run_mode=RUN_MODE, concurrent=CONCURRENT,
+                           cluster_id=CLUSTER_ID, part=PART, exclusive=EXCLUSIVE)
+    for _r in _lv_rows:
+        _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
+                                    tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
+        if _r.status == "error":
+            _smoke["errors"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, failure=_r.failure_mode[:2000]))
+    print(_lv.summarize(_lv_rows), flush=True)
+HEARTBEAT.stop("done" if _smoke["import_check"]["ok"] and not _smoke["errors"] else "failed")
+"""
+
+_EXIT_SMOKE = """# The smoke result is the notebook output the launcher reads (its own cell, like the bench exit).
+dbutils.notebook.exit(_json.dumps(_smoke))
 """
 
 _CELL_FILE_MATRIX = """# FILE-access matrix: GeoTIFF + GeoPackage reads across file_mode in ("fuse","external","managed").
@@ -3058,7 +2879,7 @@ _CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across w
 import os as _os
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
-from databricks.labs.gbx.ds.register import register as _ds_reg
+from databricks.labs.gbx import manager as _gbx_mgr
 print("=== FILE write layout sweep starting ===", flush=True)
 _ls_rows = []
 # Derive the catalog+schema prefix for FILE table targets from the results TABLE name.
@@ -3073,7 +2894,7 @@ _TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
 # needs -- point GBX_BENCH_CORPUS at a ~1k-tile pool (e.g. bench-corpus-1024-1k) -- and (2)
 # `.cache()` so the leg's actions share ONE metadata read. The write still materializes pixels per
 # tile (the real write cost); caching only removes the redundant re-opens.
-_ds_reg(spark)
+_gbx_mgr.register_sources(spark)
 _ls_gtiff_src = f"{CORPUS}/rows"
 _ls_tile_df = (
     spark.read.format("raster_gbx")
@@ -3292,7 +3113,7 @@ _CELL_RASTER_DECODE_READ = """# Raster pixel-decode throughput benchmark: rst_av
 # Reads GeoTIFF tiles from the layout-sweep FILE tables (or a Volume dir for fuse) and
 # forces actual pixel decode via rst_avg -- NOT enumeration (gbx_file_read+count).
 # For managed/external: also emits an ordering-amortization comparison (auto-order vs
-# skipOrdering=True) to measure the T8 same-source sort payoff on open/LRU reuse.
+# skipOrdering=True) to measure the same-source sort payoff on open/LRU reuse.
 # Skipped cleanly when FILE_FILESPACE is not set (no FILE tables were provisioned).
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import results
@@ -3358,7 +3179,7 @@ if _rdr_rows:
     _show_md(f"Raster decode-read (FILE) -- {RUN_ID}", _md)
 """
 
-_CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr (+ row-count parity)
+_CELL_VECTOR = """# Vector reader + writer benchmark: the light *_gbx readers and writers
 # Two-leg pipeline (scaled branch):
 #   Leg 1 (reader): spark.read.format(fmt).load(copies/) -> Delta ingest table (forces
 #     materialization of the full multi-file corpus into one queryable table per format).
@@ -3367,9 +3188,8 @@ _CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr
 from databricks.labs.gbx.bench import readers as _rd
 if VECTOR_SCALE:
     # Scaled corpus: 1M-row seed per format.  The READ path is the copies/ directory so
-    # BOTH tiers enumerate N copies and read them in parallel -- a fair all-format
-    # light-vs-heavy comparison.  Shapefile and FileGDB copies are self-contained zips
-    # (.shp.zip / .gdb.zip) so the heavy OGR dir-read sees each copy as one file.
+    # the reader enumerates N copies and reads them in parallel.  Shapefile and FileGDB
+    # copies are self-contained zips (.shp.zip / .gdb.zip).
     # Writer source is the shared pre-materialized Delta table (WRITER_ROWS polygons).
     _vscale_base = f"{CORPUS}/vector-scale"
     # Fresh Delta state each run: drop the writer-source + per-format ingest tables so each
@@ -3377,23 +3197,17 @@ if VECTOR_SCALE:
     # in the catalog between repeat benchmarks. Dropped again at the end (cleanup).
     _bench_tbls = ["geospatial_docs.geobrix.bench_vec_wsrc"] + [
         f"geospatial_docs.geobrix.bench_vec_ingest_{_f}"
-        for _f in (
-            "geojson_gbx", "geojson_ogr", "shapefile_gbx", "shapefile_ogr",
-            "gpkg_gbx", "gpkg_ogr", "file_gdb_gbx", "file_gdb_ogr",
-        )
+        for _f in ("geojson_gbx", "shapefile_gbx", "gpkg_gbx", "file_gdb_gbx")
     ]
     for _t in _bench_tbls:
         spark.sql(f"DROP TABLE IF EXISTS {_t}")
     _vcases = [
-        # (light_fmt, heavy_fmt, read_path, heavy_options)
-        ("geojson_gbx",  "geojson_ogr",  _vscale_base + "/geojson_gbx/copies",   {"multi": "false"}),
-        ("shapefile_gbx", "shapefile_ogr", _vscale_base + "/shapefile_gbx/copies", {}),
-        ("gpkg_gbx",     "gpkg_ogr",     _vscale_base + "/gpkg_gbx/copies",      {}),
-        # FileGDB reads the single seed.gdb.zip for BOTH tiers: the heavy OGR reader opens
-        # one FileGDB datasource, not a directory of them. (light *_gbx CAN dir-read a folder
-        # of .gdb.zip -- a light-only capability noted in the docs.) Single-archive keeps the
-        # light-vs-heavy comparison fair and avoids the heavy dir-read error.
-        ("file_gdb_gbx", "file_gdb_ogr", _vscale_base + "/file_gdb_gbx/seed.gdb.zip",  {}),
+        # (fmt, read_path)
+        ("geojson_gbx",  _vscale_base + "/geojson_gbx/copies"),
+        ("shapefile_gbx", _vscale_base + "/shapefile_gbx/copies"),
+        ("gpkg_gbx",     _vscale_base + "/gpkg_gbx/copies"),
+        # FileGDB reads the single seed.gdb.zip (light *_gbx can also dir-read a folder of .gdb.zip).
+        ("file_gdb_gbx", _vscale_base + "/file_gdb_gbx/seed.gdb.zip"),
     ]
     if VECTOR_FORMATS:
         _sel = set(f.strip() for f in VECTOR_FORMATS.split(",") if f.strip())
@@ -3407,35 +3221,13 @@ if VECTOR_SCALE:
         from databricks.labs.gbx.bench.corpus_vector import generate_polygon_seed
         generate_polygon_seed(spark, WRITER_ROWS).write.format("delta").mode("overwrite").saveAsTable(_wsrc_tbl)
     _vrows = []
-    for _lfmt, _hfmt, _vp, _hopts in _vcases:
+    for _lfmt, _vp in _vcases:
         if LIGHTWEIGHT and _do_read:
             _it = f"geospatial_docs.geobrix.bench_vec_ingest_{_lfmt}"
             _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                      api="lightweight", fmt=_lfmt, ingest_table=_it,
                                      where="cluster")
             _sink([_r]); lw.append(_r); _vrows.append(_r)
-        # The heavy OGR FileGDB reader reads native Esri .gdb/.gdb.zip but not the GeoBrix-
-        # generated .gdb.zip archive -- skip its heavy leg (FileGDB heavy-read is reported as
-        # native-archive-only; light reads the generated corpus, incl. a directory of them).
-        _heavy_ok = _hfmt != "file_gdb_ogr"
-        if HEAVYWEIGHT and _heavy_ok and _do_read:
-            _it = f"geospatial_docs.geobrix.bench_vec_ingest_{_hfmt}"
-            _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                                     api="heavyweight", fmt=_hfmt, options=(_hopts or None),
-                                     ingest_table=_it, where="cluster")
-            _sink([_r]); hw.append(_r); _vrows.append(_r)
-        if LIGHTWEIGHT and HEAVYWEIGHT and _heavy_ok and _do_read:
-            # Non-fatal parity: a single format's mismatch/failure must NOT abort the whole
-            # vector bench -- record it and continue so the other formats + the writer leg run.
-            try:
-                _lc = spark.read.format(_lfmt).load(_vp).count()
-                _hr = spark.read.format(_hfmt)
-                for _k, _v in (_hopts or {}).items():
-                    _hr = _hr.option(_k, _v)
-                _hc = _hr.load(_vp).count()
-                print(f"VECTOR PARITY {_lfmt}: light={_lc} heavy={_hc} {'PASS' if _lc==_hc else 'FAIL'}")
-            except Exception as _e:  # noqa: BLE001
-                print(f"VECTOR PARITY {_lfmt}: ERROR {type(_e).__name__}: {str(_e)[:120]}")
         if LIGHTWEIGHT and _do_write:
             _w = _rd.run_vector_write(spark, _wsrc_tbl, f"{OUT}/vecwrite/{_lfmt}", RUN_ID,
                                       SPARK_WARMUP, SPARK_MEASURED, fmt=_lfmt,
@@ -3446,40 +3238,19 @@ if VECTOR_SCALE:
         spark.sql(f"DROP TABLE IF EXISTS {_t}")
 else:
     _vbase = f"{CORPUS}/vector"
-    # (light_fmt, heavy_fmt, read_path, seed_path, heavy_options).
-    # The heavy geojson_ogr reader defaults to the GeoJSONSeq driver, so force multi=false
-    # to read the standard FeatureCollection corpus file (matching the light geojson_gbx
-    # GeoJSON-driver reader) for a fair comparison.
+    # (fmt, read_path, seed_path).
     _vcases = [
-        ("geojson_gbx",  "geojson_ogr",  _vbase + "/nyc_boroughs.geojson", _vbase + "/nyc_boroughs.geojson", {"multi": "false"}),
-        ("shapefile_gbx", "shapefile_ogr", _vbase + "/nyc_subway.shp.zip",  _vbase + "/nyc_subway.shp.zip",   {}),
-        ("gpkg_gbx",     "gpkg_ogr",     _vbase + "/nyc_complete.gpkg",    _vbase + "/nyc_complete.gpkg",    {}),
-        ("file_gdb_gbx", "file_gdb_ogr", _vbase + "/NYC_Sample.gdb.zip",   _vbase + "/NYC_Sample.gdb.zip",   {}),
+        ("geojson_gbx",  _vbase + "/nyc_boroughs.geojson", _vbase + "/nyc_boroughs.geojson"),
+        ("shapefile_gbx", _vbase + "/nyc_subway.shp.zip",  _vbase + "/nyc_subway.shp.zip"),
+        ("gpkg_gbx",     _vbase + "/nyc_complete.gpkg",    _vbase + "/nyc_complete.gpkg"),
+        ("file_gdb_gbx", _vbase + "/NYC_Sample.gdb.zip",   _vbase + "/NYC_Sample.gdb.zip"),
     ]
     _vrows = []
-    for _lfmt, _hfmt, _vp, _vseed, _hopts in _vcases:
+    for _lfmt, _vp, _vseed in _vcases:
         if LIGHTWEIGHT:
             _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                      api="lightweight", fmt=_lfmt, where="cluster")
             _sink([_r]); lw.append(_r); _vrows.append(_r)
-        if HEAVYWEIGHT:
-            _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                                     api="heavyweight", fmt=_hfmt, options=(_hopts or None),
-                                     where="cluster")
-            _sink([_r]); hw.append(_r); _vrows.append(_r)
-        if LIGHTWEIGHT and HEAVYWEIGHT:
-            # Non-fatal parity: a single format's mismatch/failure must NOT abort the whole
-            # vector bench -- record it and continue so the other formats + the writer leg run.
-            try:
-                _lc = spark.read.format(_lfmt).load(_vp).count()
-                _hr = spark.read.format(_hfmt)
-                for _k, _v in (_hopts or {}).items():
-                    _hr = _hr.option(_k, _v)
-                _hc = _hr.load(_vp).count()
-                print(f"VECTOR PARITY {_lfmt}: light={_lc} heavy={_hc} {'PASS' if _lc==_hc else 'FAIL'}")
-            except Exception as _e:  # noqa: BLE001
-                print(f"VECTOR PARITY {_lfmt}: ERROR {type(_e).__name__}: {str(_e)[:120]}")
-        if LIGHTWEIGHT:
             _w = _rd.run_vector_write(spark, _vseed, f"{OUT}/vecwrite/{_lfmt}", RUN_ID,
                                       SPARK_WARMUP, SPARK_MEASURED, fmt=_lfmt, where="cluster")
             _sink([_w]); lw.append(_w); _vrows.append(_w)
@@ -3488,7 +3259,112 @@ if _vrows:
     _show_md(f"vector reader+writer benchmark -- {RUN_ID}", _md)
 """
 
+# Zarr benchmark (light tier only): the cases of spec.ZARR_CASES (R1-R3 reads against
+# one GeoTIFF per hour, W1-W2 writes) and two probes, through bench.zarr_bench. The first
+# line is filled from the launcher's --zarr-* options; the rest is the cell as it runs.
+_CELL_ZARR_BODY = """
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import zarr_bench as _zb
+from databricks.labs.gbx.bench import zarr_ladder_bench as _zlb
+if not LIGHTWEIGHT:
+    print("ZARR BENCH SKIPPED: Zarr is light-tier only.", flush=True)
+else:
+    _zcfg = _zb.ZarrBenchConfig(**_ZARR)
+    os.makedirs(_zcfg.scratch, exist_ok=True)
+    if any(c.startswith("W") for c in _zcfg.cases):
+        # the write legs' manifest tables live here: a catalog without it errors every rep
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {_zcfg.schema}")
+    if any(c.startswith("R") for c in _zcfg.cases):
+        # one GeoTIFF per hour of the store's t2m; skipped when its manifest exists
+        _rd.stage_zarr_cog_corpus(spark, _zcfg.store, _zcfg.cog_dir)
+    def _zsink(rows):
+        _sink(rows)
+        lw.extend(rows)
+    _zrows = []
+    try:
+        if _zcfg.cases:
+            _zrows += _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
+        if _ZLADDER:
+            _zl = dict(_ZLADDER)
+            if _zl.pop("generate", False):
+                from databricks.labs.gbx.bench import zarr_ladder as _zlg
+                _zlg.generate_to(_zl["root"], _zl["families"], _zl["rungs"], local_dir="/local_disk0" if os.path.isdir("/local_disk0") else None)
+            _zlm = []
+            if not _zcfg.serverless:  # a classic session: the task slots, and the Spark UI's worker seconds and peak memory
+                _zl["cores"] = int(spark.sparkContext.defaultParallelism)
+                _zl["attribution"] = True
+                from databricks.labs.gbx.zarr import _read as _zr
+                _zconf = {}
+                for _k in ("spark.default.parallelism", "spark.executor.cores", "spark.executor.instances", "spark.master"):
+                    try:
+                        _zconf[_k] = spark.conf.get(_k, None)
+                    except Exception as _e:
+                        _zconf[_k] = f"unreadable: {type(_e).__name__}"
+                _zconf.update(planner_slots=_zr._task_slots(spark), planner_slots_source=_zr.slots_source(spark), default_parallelism=_zl["cores"])
+                print("ZARR-LADDER slots", _zconf, flush=True)
+                with open(f"{OUT}/zarr_ladder_slots.json", "w") as _zf:
+                    import json as _zj0
+                    _zj0.dump(_zconf, _zf)
+            _zrows += _zlb.run_ladder(spark, _zlb.LadderConfig(**_zl), sink=_zsink, collect=_zlm)
+            from databricks.labs.gbx.bench import zarr_ladder_write as _zlw
+            import json as _zj
+            print("ZARR-LADDER SUMMARY", flush=True)
+            print(_zlb.summary_table(_zlm), flush=True)
+            print(_zlw.write_table([m for m in _zlm if m["case"].startswith("ZL-W")]), flush=True)
+            print("\\n".join(_zlb.verdicts(_zlm, _zl.get("cores") or 8) + _zlw.write_verdicts([m for m in _zlm if m["case"].startswith("ZL-W")])), flush=True)
+            with open(f"{OUT}/zarr_ladder_metrics.json", "w") as _zf:
+                _zj.dump(_zlm, _zf, indent=1)
+    finally:
+        import shutil as _zsh
+        _zsh.rmtree(_zcfg.scratch, ignore_errors=True)  # the legs' own scratch, emptied by them
+    _show_md(f"zarr benchmark -- {RUN_ID}", results.summarize(_zrows))
+"""
+
+
+def _zarr_cell(cfg: dict) -> str:
+    """The Zarr cell, its settings taken from the launcher's ``zarr_*`` options."""
+    settings = dict(
+        store=cfg["zarr_store"],
+        cog_dir=cfg["zarr_cog_dir"],
+        scratch=cfg["zarr_scratch"],
+        schema=cfg["zarr_schema"],
+        run_id=cfg["run_id"],
+        serverless=bool(cfg.get("serverless")),
+        reps=int(cfg.get("zarr_reps", 3)),
+        cases=tuple(c for c in str(cfg.get("zarr_cases", "")).split(",") if c),
+    )
+    ladder = None
+    if cfg.get("zarr_ladder"):
+
+        def csv(k):
+            return tuple(c for c in str(cfg.get(k, "")).split(",") if c)
+
+        ladder = dict(
+            root=cfg["zarr_ladder_root"],
+            rungs=csv("zarr_ladder"),
+            families=csv("zarr_ladder_family"),
+            cases=csv("zarr_ladder_cases"),
+            reps=int(cfg.get("zarr_reps", 3)),
+            run_id=cfg["run_id"],
+            where="cluster",
+            serverless=bool(cfg.get("serverless")),
+            budget_mib=(
+                int(cfg["zarr_ladder_budget"])
+                if cfg.get("zarr_ladder_budget")
+                else None
+            ),
+            scratch=cfg.get("zarr_ladder_scratch") or None,
+            schema=cfg["zarr_schema"],
+            generate=bool(cfg.get("zarr_ladder_generate")),
+        )
+    return (
+        "# Zarr benchmark (light tier only): R1-R3 reads, W1-W2 writes, two probes, the size-ladder reads\n"
+        f"_ZARR = {settings!r}\n_ZLADDER = {ladder!r}" + _CELL_ZARR_BODY
+    )
+
+
 _EPILOGUE = """# Wrap-up: durable jsonl shards + per-tier summaries + heavy-vs-light comparison.
+HEARTBEAT.stop("done")
 all_rows = lw + hw
 if lw:
     results.write_jsonl(lw, f"{OUT}/lightweight.jsonl")
@@ -3542,6 +3418,33 @@ else:
 _EXIT = """# Emit the status-led JSON exit payload (separate cell -- see _EPILOGUE note).
 dbutils.notebook.exit(json.dumps(result))
 """
+
+
+def install_extras(cfg: dict) -> list:
+    """The geobrix extras a run installs after the env wheel.
+
+    ``cfg["extras"]`` (comma-separated) when given; else ``zarr`` (the env6 wheel's Zarr extra)
+    for a run with the Zarr cell; else none. The env wheels have no ``light_*`` extra.
+    """
+    extras = str(cfg.get("extras") or "").strip()
+    if not extras and (cfg.get("benchmark_zarr") or cfg.get("zarr_only")):
+        extras = "zarr"
+    return [e.strip() for e in extras.split(",") if e.strip()]
+
+
+def _install_extras_suffix(cfg: dict) -> str:
+    """``[<extras>]`` to follow ``geobrix`` in the install cell's requirement, or nothing."""
+    extras = install_extras(cfg)
+    return f"[{','.join(extras)}]" if extras else ""
+
+
+# A Serverless job whose environment installs the wheel and its extras (cfg["env_deps"]):
+# a pip install from the notebook would reach the driver only, not the executors.
+_ENV_DEPS_CELL = (
+    "import importlib.metadata as _md\n"
+    "print('geobrix', _md.version('geobrix'), 'and its extras: installed by the job "
+    "environment', flush=True)\n"
+)
 
 
 def build_bench_notebook(cfg: dict) -> dict:
@@ -3615,6 +3518,26 @@ def build_bench_notebook(cfg: dict) -> dict:
         disable_fuse_direct=bool(cfg.get("disable_fuse_direct", False)),
         benchmark_grouped_file=bool(cfg.get("benchmark_grouped_file")),
         grouped_file_only=bool(cfg.get("grouped_file_only")),
+        levels_mvp=str(cfg.get("levels_mvp", "") or ""),
+        levels_only=bool(cfg.get("levels_only")),
+        levels_uc=str(cfg.get("levels_uc", "") or ""),
+        levels_scales=tuple(cfg["levels_scales"]) if cfg.get("levels_scales") else None,
+        levels_forms=tuple(cfg.get("levels_forms") or ()),
+        heartbeat_secs=float(cfg.get("heartbeat_secs", 30)),
+        launch_token=str(cfg.get("launch_token", "")),
+        stall_cap_s=int(cfg.get("stall_cap_s", 900)),
+        fail_fast=bool(cfg.get("fail_fast", True)),
+        bar_factor=float(cfg.get("bar_factor", 1.5)),
+        rung_cap_s=float(cfg.get("rung_cap_s", 1200)),
+        setup_cap_s=float(cfg.get("setup_cap_s", 600)),
+        warmup_skip_s=float(cfg.get("warmup_skip_s", 120)),
+        run_mode=str(cfg.get("run_mode", "isolate")),
+        concurrent=int(cfg.get("concurrent", 1)),
+        part=str(cfg.get("part", "")),
+        exclusive=bool(cfg.get("exclusive")),
+        smoke=bool(cfg.get("smoke")),
+        smoke_rows=int(cfg.get("smoke_rows", 16)),
+        inject_stall=float(cfg.get("inject_stall", 0) or 0),
         multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),
         benchmark_file_matrix=bool(cfg.get("file_matrix")),
         file_matrix_only=bool(cfg.get("file_matrix_only")),
@@ -3634,6 +3557,7 @@ def build_bench_notebook(cfg: dict) -> dict:
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section
     )
+    setup += _LIVENESS  # the stack dump at the stall cap + the heartbeat file
     light = bool(cfg.get("lightweight"))
     heavy = bool(cfg.get("heavyweight"))
     modes = cfg["modes"]
@@ -3674,6 +3598,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     exif_only = bool(cfg.get("exif_only"))
     benchmark_grouped_file = bool(cfg.get("benchmark_grouped_file"))
     grouped_file_only = bool(cfg.get("grouped_file_only"))
+    levels_mvp = str(cfg.get("levels_mvp", "") or "")
+    levels_only = bool(cfg.get("levels_only"))
     benchmark_file_matrix = bool(cfg.get("file_matrix"))
     file_matrix_only = bool(cfg.get("file_matrix_only"))
     benchmark_gpkg_chunksize = bool(cfg.get("gpkg_chunksize"))
@@ -3686,6 +3612,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     vector_table_read_only = bool(cfg.get("vector_table_read_only"))
     benchmark_raster_decode_read = bool(cfg.get("raster_decode_read"))
     raster_decode_read_only = bool(cfg.get("raster_decode_read_only"))
+    benchmark_zarr = bool(cfg.get("benchmark_zarr"))
+    zarr_only = bool(cfg.get("zarr_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
@@ -3695,7 +3623,9 @@ def build_bench_notebook(cfg: dict) -> dict:
     # subprocess so we control the restart precisely. Classic: the single %pip cell is
     # preferred (ONE kernel restart, no manual dbutils.library.restartPython() needed, and
     # avoids the triple-restart failure on DBR 19.x-snapshot).
-    if cfg.get("serverless"):
+    if cfg.get("serverless") and cfg.get("env_deps"):
+        _install_cell_src = _ENV_DEPS_CELL
+    elif cfg.get("serverless"):
         _install_cell_src = (
             "import subprocess, sys\n"
             "WHL = {wheel!r}\n"
@@ -3710,7 +3640,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
             "r2 = subprocess.run(\n"
             "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
-            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "     'geobrix{extras} @ file://' + WHL, 'markdown'],\n"
             "    capture_output=True, text=True,\n"
             ")\n"
             "print('deps install rc:', r2.returncode, flush=True)\n"
@@ -3719,7 +3649,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
             "print('installs done; restarting Python', flush=True)\n"
             "dbutils.library.restartPython()\n"
-        ).format(wheel=cfg["wheel"])
+        ).format(wheel=cfg["wheel"], extras=_install_extras_suffix(cfg))
     else:
         # Classic cluster: two-step subprocess install (same shape as serverless), one restart.
         # WHY NOT a single `%pip install --force-reinstall "geobrix[..] @ file://<whl>"`:
@@ -3748,7 +3678,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
             "r2 = subprocess.run(\n"
             "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
-            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "     'geobrix{extras} @ file://' + WHL, 'markdown'],\n"
             "    capture_output=True, text=True,\n"
             ")\n"
             "print('deps install rc:', r2.returncode, flush=True)\n"
@@ -3757,16 +3687,29 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
             "print('installs done; restarting Python', flush=True)\n"
             "dbutils.library.restartPython()\n"
-        ).format(wheel=cfg["wheel"])
-    cells = [
-        # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
-        # [light-dbr19] is the canonical protobuf-6 classic DBR 19 extra: it drops the
-        # mapbox-vector-tile<2.2 cap that conflicts with DBR 19's protobuf>=6.31.1.
+        ).format(wheel=cfg["wheel"], extras=_install_extras_suffix(cfg))
+    cells = (
+        [_cell(cfg["header_md"], kind="markdown")] if cfg.get("header_md") else []
+    ) + [
+        # Ensure BOTH fresh geobrix code AND its dependency set every run. The wheel is the env
+        # wheel for the compute's runtime (+env5: DBR 17.3 / 18, env 5; +env6: DBR 19, env 6): its
+        # own Requires-Dist holds the runtime's packages, so step 2 is a plain install of it.
         _cell(_install_cell_src),
+        # The wheel guard (the launcher builds its source): the driver and the Python workers import the staged
+        # wheel, not a same-version geobrix already on the compute; the run fails here otherwise.
+        *([_cell(cfg["guard_cell"], collapsed=True)] if cfg.get("guard_cell") else []),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),
     ]
+    if cfg.get("smoke"):
+        # The smoke stage runs the import check and the levels forms only, then exits with its own payload.
+        return {
+            "cells": [*cells, _cell(_CELL_SMOKE), _cell(_EXIT_SMOKE)],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
     # Any "*-only" reader/writer benchmark suppresses the per-function sections (they stage
     # their own corpus and don't touch the function-bench row pool). Collapsed into one
     # membership test so adding a new *-only leg doesn't grow this function's branch count.
@@ -3787,12 +3730,14 @@ def build_bench_notebook(cfg: dict) -> dict:
             lidar_only,
             exif_only,
             grouped_file_only,
+            levels_only,
             file_matrix_only,
             gpkg_chunksize_only,
             layout_sweep_only,
             layout_scan_only,
             vector_table_read_only,
             raster_decode_read_only,
+            zarr_only,
         )
     )
     if not _any_only:
@@ -3825,6 +3770,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         (benchmark_grid_custom or grid_custom_only, [_CELL_GRID_CUSTOM]),
         (benchmark_fanout or fanout_only, [_CELL_FANOUT]),
         (benchmark_grouped_file or grouped_file_only, [_CELL_GROUPED_FILE]),
+        (bool(levels_mvp), [_CELL_LEVELS]),
         (benchmark_file_matrix or file_matrix_only, [_CELL_FILE_MATRIX]),
         (benchmark_gpkg_chunksize or gpkg_chunksize_only, [_CELL_GPKG_CHUNKSIZE]),
         (benchmark_layout_sweep or layout_sweep_only, [_CELL_LAYOUT_SWEEP]),
@@ -3838,6 +3784,8 @@ def build_bench_notebook(cfg: dict) -> dict:
             [_CELL_RASTER_DECODE_READ],
         ),
     ]
+    if benchmark_zarr or zarr_only:
+        _bench_cells.append((True, [_zarr_cell(cfg)]))
     for _enabled, _cell_srcs in _bench_cells:
         if _enabled:
             for _src in _cell_srcs:

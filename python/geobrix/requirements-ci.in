@@ -23,5 +23,5 @@ wheel==0.46.2
 # the hash-pin in requirements-ci.txt is what enforces supply-chain integrity.
 isort==8.0.1
 black==26.10.1
-flake8==7.3.0
+flake8==7.4.1
 flake8-pyproject==1.2.4

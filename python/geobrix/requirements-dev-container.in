@@ -89,7 +89,7 @@ mapclassify==2.10.0
 # --- lint tooling ---
 black==26.10.1
 isort==8.0.1
-flake8==7.3.0
+flake8==7.4.1
 
 # --- test tooling ---
 pytest==9.1.1

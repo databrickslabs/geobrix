@@ -2073,13 +2073,16 @@ _Constructor — builds a tile from binary content. Example uses Spark's `binary
 
 | Surface | Call | Returns |
 |---|---|---|
-| SQL (session) | `gbx_rst_fromfile(path, [driver])` | `TILE` |
-| Python | `rasterx.functions.rst_fromfile(path, driver=None, materialize=None)` | Column |
+| SQL (session) | `gbx_rst_fromfile(path, [driver], [geom], [clip_crs], [resolution])` | `TILE` |
+| Python | `rasterx.functions.rst_fromfile(path, driver=None, geom=None, clip_crs=None, resolution=None, materialize=None)` | Column |
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
-| `path` | `STRING` |  | The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A remote URL is refused unless the driver's remote-read switch is on. |
+| `path` | `STRING` or `FILE` |  | The raster file: a path (local, `/Volumes/...`, `/Workspace/...`) or a FILE value. A remote URL is refused unless the driver's remote-read switch is on. |
 | `driver` | `STRING` | `'GTiff'` | The GDAL driver short name hint, in any case. It goes into the tile's `driver` metadata; a name that is no raster driver (no driver of that name, or a vector-only one such as `'GeoJSON'`) raises. |
+| `geom` | `BINARY` or `STRING` | `NULL` | An optional polygon to clip to, as WKB, EWKB, WKT or EWKT. Only the blocks the polygon covers are read. |
+| `clip_crs` | `STRING` | `NULL` | The CRS of a `geom` that carries no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The CRS of the raster when NULL. An EWKB or EWKT SRID wins. |
+| `resolution` | `DOUBLE` | `NULL` | An optional target pixel size in the raster's CRS units. The coarsest overview that is still at least this fine is read. Full resolution when NULL. |
 {/* END GENERATED gbx_rst_fromfile */}
 
 Read a raster file by path into a tile.

@@ -26,18 +26,27 @@ def read_clip(
     """GTiff bytes of the window of the open dataset *ds* that covers *geom* (all of *ds* when ``geom`` is None),
     clipped to *geom* when it is given.
 
-    *geom* is a shapely geometry in *geom_crs* (the raster's CRS when None). Returns None when *geom* misses the
-    raster. Raises ``StageTooLargeError`` with a Fix when the window decodes to more than *cap_bytes*; the check runs
+    *geom* is a shapely geometry in *geom_crs* (the raster's CRS when None; an SRID the geometry carries wins).
+    Returns None when *geom* misses the raster. Raises ``StageTooLargeError`` with a Fix when the window decodes to more than *cap_bytes*; the check runs
     before any pixel is read.
     """
-    from rasterio.io import MemoryFile
     from rasterio.windows import Window
 
+    from databricks.labs.gbx._gdal_policy import open_bytes
     from databricks.labs.gbx.ds._window import window_for_geom
     from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
+    from databricks.labs.gbx.pyrx.core import _nodata
     from databricks.labs.gbx.pyrx.core.compression import write_gtiff
     from databricks.labs.gbx.pyrx.core.edit import clip_to_geom
 
+    if geom is not None:
+        # an SRID the geometry carries (EWKB, EWKT) wins over the caller's CRS, as it does in the clip kernel: the
+        # window is cut in the CRS the clip will use
+        import shapely
+
+        from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+        geom_crs = resolve_source_crs(shapely.get_srid(geom), crs=geom_crs)
     win = (
         Window(0, 0, ds.width, ds.height)
         if geom is None
@@ -58,10 +67,17 @@ def read_clip(
         "height": int(win.height),
         "transform": ds.window_transform(win),
     }
+    # a whole-raster read keeps the file's own mask band, as the materialized read does; a clip keeps the parity of
+    # gbx_rst_clip, which takes the mask from the geometry
+    mask = (
+        ds.read_masks(1, window=win)
+        if geom is None and _nodata.has_own_mask(ds)
+        else None
+    )
     window_bytes = write_gtiff(
-        profile, data, alpha_like=ds.colorinterp, all_labels=True
+        profile, data, alpha_like=ds.colorinterp, all_labels=True, mask=mask
     )
     if geom is None:
         return window_bytes
-    with MemoryFile(window_bytes) as mf, mf.open() as wds:
+    with open_bytes(window_bytes) as wds:
         return clip_to_geom(wds, geom, bool(all_touched), geom_crs=geom_crs)

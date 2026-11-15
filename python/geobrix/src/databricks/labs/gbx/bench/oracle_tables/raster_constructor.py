@@ -15,11 +15,17 @@ L3_CALLABLE_FNS = ("gbx_rst_fromcontent",)
 FC, FF = "gbx_rst_fromcontent", "gbx_rst_fromfile"
 GTIFF, PNG = Build("rc_gtiff_bytes"), Build("rc_png_bytes")
 GARBAGE, VRT = Build("rc_garbage_bytes"), Build("rc_vrt_bytes")
-FILE, PNG_FILE, GARBAGE_FILE = (
+FILE, PNG_FILE, GARBAGE_FILE, OVERVIEW_FILE = (
     Build("rc_file"),
     Build("rc_png_file"),
     Build("rc_garbage_file"),
+    Build("rc_overview_file"),
 )
+# the rc_file raster is 64 x 48 pixels of 0.01 degrees from (-1, 52): x -1..-0.36, y 51.52..52
+# a quarter pixel inside the pixel edges, so no edge falls on a pixel boundary, where rounding would decide: columns
+# 10..49 and rows 10..39, 40 x 30 pixels
+BOX_IN = "POLYGON((-0.8975 51.6025, -0.5025 51.6025, -0.5025 51.8975, -0.8975 51.8975, -0.8975 51.6025))"
+BOX_OUT = "POLYGON((10 10, 11 10, 11 11, 10 11, 10 10))"
 ONLY = ("session",)
 MATERIALIZE = (
     ("materialize", True),
@@ -76,6 +82,18 @@ def _rc_file(tmpdir):
     return _build("tile_virtual", tmpdir)[
         "path"
     ]  # the GeoTIFF the virtual tile is a window of
+
+
+@builder("rc_overview_file")
+def _rc_overview_file(tmpdir):
+    """The `rc_file` raster as a GeoTIFF with overviews (factors 2 and 4): a read at a coarser resolution takes one."""
+    from databricks.labs.gbx._gdal_policy import open_data
+    from databricks.labs.gbx.bench.oracles import _tile_bytes
+
+    path = _write(tmpdir, "rc_overview.tif", _tile_bytes("EPSG:4326"))
+    with open_data(path, "r+") as ds:
+        ds.build_overviews([2, 4])
+    return path
 
 
 def _write(tmpdir, name, content):
@@ -204,6 +222,59 @@ _SESSION_ROWS = (
         "fromfile_missing",
         FF,
         ("/no/such/dir/oracle_missing.tif", "GTiff"),
+        "null",
+        None,
+        ONLY,
+    ),
+    # a polygon clips the read to its window: only the blocks it covers are read, and the pixels are those of
+    # gbx_rst_clip on the whole raster (the box is 40 x 30 pixels)
+    Case(
+        "fromfile_clip_geom",
+        FF,
+        (FILE, "GTiff", BOX_IN, None, None),
+        "tile_meta",
+        {
+            "width": 40,
+            "height": 30,
+            "count": 1,
+            "dtype": "float32",
+            "nodata": -9999.0,
+            "crs": "EPSG:4326",
+            "driver": "GTiff",
+            "meta_driver": "GTiff",
+            "materialized": True,
+        },
+        ONLY,
+    ),
+    # an SRID in the geometry wins over clip_crs: this box is in 4326, clip_crs says 3857
+    Case(
+        "fromfile_clip_geom_srid_wins",
+        FF,
+        (FILE, "GTiff", "SRID=4326;" + BOX_IN, "EPSG:3857", None),
+        "tile_meta",
+        {"width": 40, "height": 30, "crs": "EPSG:4326", "materialized": True},
+        ONLY,
+    ),
+    # a coarser resolution reads an overview: 0.02 degrees is factor 2 of the 0.01 degree file
+    Case(
+        "fromfile_resolution",
+        FF,
+        (OVERVIEW_FILE, "GTiff", None, None, 0.02),
+        "tile_meta",
+        {
+            "width": 32,
+            "height": 24,
+            "count": 1,
+            "dtype": "float32",
+            "crs": "EPSG:4326",
+            "materialized": True,
+        },
+        ONLY,
+    ),
+    Case(
+        "fromfile_geom_outside_null",
+        FF,
+        (FILE, "GTiff", BOX_OUT, None, None),
         "null",
         None,
         ONLY,

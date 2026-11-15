@@ -762,10 +762,11 @@ def _fromcontent_udf(raster, drv):
         return _serde.build_error_tile(ops_core.content_refusal(exc), 0)
 
 
-def _fromfile_extra(path, driver, materialize):
+def _fromfile_extra(path, driver, geom, clip_crs, resolution, materialize):
     """The Python entry of ``rst_fromfile``: columns in, a tile Column out. ``materialize`` unset (None) or ``False`` is
     a virtual tile of the file (no pixel is read), as the light API always returned; ``True`` reads the pixels now, as
-    the SQL name does, with the driver's materialize cap carried in (a worker cannot measure it).
+    the SQL name does, with the driver's materialize cap carried in (a worker cannot measure it). A ``geom`` or a
+    ``resolution`` reads only that window or overview, and gives a materialized tile whatever ``materialize`` says.
     """
     from databricks.labs.gbx.ds.file_gbx import (
         _connect_aware_lru_sizing,
@@ -774,7 +775,7 @@ def _fromfile_extra(path, driver, materialize):
 
     _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
     udf = carrying_call(_fromfile_udf, driver_switch())
-    return udf(path, driver, materialize, f.lit(_cap))
+    return udf(path, driver, materialize, f.lit(_cap), geom, clip_crs, resolution)
 
 
 # rst_fromfile: reference a raster on disk as a tile. LIGHT-TIER DEFAULT is a
@@ -896,6 +897,13 @@ def _remote_vrt_refusal(path) -> str:
     )
 
 
+def _refuse_remote_vrt(src, url):
+    """Raise ``DriverPolicyError`` when the opened remote ``src`` is a VRT, or a driver the byte-open policy refuses
+    because it can name other files."""
+    if src.driver == "VRT" or src.driver in _gdal_policy.bytes_refused_light_names():
+        raise DriverPolicyError(_remote_vrt_refusal(url))
+
+
 def _fromfile_read_remote(url, drv, cap_bytes):
     """``rst_fromfile`` materialized over a remote location the driver's switch allows: open it through GDAL, gate the
     DECODED size by the same cap as a local file (header only, before any pixel), then read and re-encode it.
@@ -908,11 +916,7 @@ def _fromfile_read_remote(url, drv, cap_bytes):
         # the name says nothing of what a remote file is (``a.vrt?token=x``, a VRT served as ``.tif``): the opened
         # driver does. A VRT, or any driver the byte-open policy refuses because it can name other files, names its
         # own sources, which the remote-path gate never sees: refused before any pixel is read
-        if (
-            src.driver == "VRT"
-            or src.driver in _gdal_policy.bytes_refused_light_names()
-        ):
-            raise DriverPolicyError(_remote_vrt_refusal(url))
+        _refuse_remote_vrt(src, url)
         decoded = (
             src.count
             * src.width
@@ -933,18 +937,14 @@ def _fromfile_read_remote(url, drv, cap_bytes):
     return _serde.build_tile(new_bytes, drv, 0)
 
 
-def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
-    """``rst_fromfile`` materialized for a file with sidecars: the file and its sidecars are copied, under their own
-    names, to one local folder (a sequential read of each, as every Volume read is), opened there by path under the
-    driver policy, and written as a GeoTIFF with the CRS, NoData and georeferencing GDAL reads from them. The decoded
-    size is gated first, from the header, as for a file with none."""
+@contextlib.contextmanager
+def _sidecar_folder(local, sides):
+    """The path of ``local`` copied, with its sidecars and under their own names, to one local folder (a sequential read
+    of each, as every Volume read is); the folder is removed when the block ends."""
     import os
     import shutil
 
-    import numpy as _np_cap
-
     from databricks.labs.gbx.ds import _listing
-    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
     from databricks.labs.gbx.pyrx.core.local_temp import (
         new_local_temp_dir,
         retried_source_signature,
@@ -963,7 +963,22 @@ def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
                     shutil.copyfileobj(fin, fout, length=8 * 1024 * 1024)
 
             _listing._retry_transient(_copy)
-        with open_data(os.path.join(folder, os.path.basename(local))) as src:
+        yield os.path.join(folder, os.path.basename(local))
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
+    """``rst_fromfile`` materialized for a file with sidecars: the file and its sidecars are copied, under their own
+    names, to one local folder (a sequential read of each, as every Volume read is), opened there by path under the
+    driver policy, and written as a GeoTIFF with the CRS, NoData and georeferencing GDAL reads from them. The decoded
+    size is gated first, from the header, as for a file with none."""
+    import numpy as _np_cap
+
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
+
+    with _sidecar_folder(local, sides) as copied:
+        with open_data(copied) as src:
             decoded = (
                 src.count
                 * src.width
@@ -981,12 +996,117 @@ def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
             new_bytes = write_gtiff(
                 src.profile, data, alpha_like=src.colorinterp, mask=mask
             )
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
     return _serde.build_tile(new_bytes, drv, 0)
 
 
-def _fromfile_impl(path, driver, materialize, cap_bytes=None):
+def _fromfile_cutline(geom, clip_crs):
+    """The ``geom`` of ``rst_fromfile`` as a shapely geometry (an empty value is None). An unreadable geometry, or a
+    ``clip_crs`` that names no CRS, raises ``ValueError`` with a Fix. An SRID the geometry carries wins over
+    ``clip_crs``."""
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+    try:
+        cut = parse_geom(geom)
+        if cut is not None:
+            resolve_source_crs(shapely.get_srid(cut), crs=clip_crs)
+    except Exception as exc:  # noqa: BLE001 - the reason is the answer
+        raise ValueError(
+            f"gbx_rst_fromfile: the geom cannot be used: {exc}. Fix: pass the polygon as WKB, EWKB, WKT or EWKT, and "
+            "clip_crs as EPSG:<code>, ESRI:<code>, WKT or an integer code."
+        ) from exc
+    return cut
+
+
+def _fromfile_clip_target(target, drv, cutline, clip_crs, resolution, cap_bytes):
+    """The tile of the window ``cutline`` covers in the raster at ``target``, read from the coarsest overview that is
+    still at least ``resolution`` fine (full resolution when None), or None when the cutline misses the raster.
+    """
+    from databricks.labs.gbx.pyrx.core.clip_read import read_clip
+    from databricks.labs.gbx.pyrx.core.cog_ranges import pick_overview
+
+    cap = cap_bytes
+    if cap is None:
+        from databricks.labs.gbx.ds.file_gbx import (
+            _connect_aware_lru_sizing,
+            _resolve_session_for_cap,
+        )
+
+        cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+    with open_data(target) as head:
+        if _gdal_policy.remote_location(str(target)) is not None:
+            _refuse_remote_vrt(head, target)
+        level = pick_overview(head, resolution)
+    kwargs = {} if level is None else {"overview_level": level}
+    with open_data(target, **kwargs) as src:
+        out = read_clip(src, cutline, clip_crs, False, cap)
+    return None if out is None else _serde.build_tile(out, drv, 0)
+
+
+def _fromfile_clip(path, local, drv, cap_bytes, geom, clip_crs, resolution):
+    """``rst_fromfile`` with a ``geom`` or a ``resolution``: a materialized tile of only the window the geometry covers
+    (clipped by it, as ``rst_clip`` does), read from the overview ``resolution`` picks. A file on a Volume is read in
+    place where it can be (see ``_stage_local_if_needed``); a VRT is opened by its path, where its sources resolve.
+    """
+    from databricks.labs.gbx.ds.file_gbx import (
+        StageTooLargeError,
+        _stage_local_if_needed,
+    )
+    from databricks.labs.gbx.pyrx import _env
+
+    try:
+        cutline = None if geom is None else _fromfile_cutline(geom, clip_crs)
+    except ValueError as exc:
+        return _serde.build_error_tile(str(exc), 0)
+    if geom is not None and cutline is None:
+        return None  # an empty geometry clips to nothing
+    try:
+        if _gdal_policy.remote_location(str(path)) is not None:
+            # the driver's remote-path switch is on (data_path refused it otherwise): GDAL reads the URL's own blocks
+            return _fromfile_clip_target(
+                str(path), drv, cutline, clip_crs, resolution, cap_bytes
+            )
+        if _names_a_vrt(local):
+            return _fromfile_clip_target(
+                local, drv, cutline, clip_crs, resolution, cap_bytes
+            )
+        sides = _env.copied_sidecar_files(local)
+        if sides:
+            with _sidecar_folder(local, sides) as copied:
+                return _fromfile_clip_target(
+                    copied, drv, cutline, clip_crs, resolution, cap_bytes
+                )
+        staged, is_temp = _stage_local_if_needed(local)
+        try:
+            return _fromfile_clip_target(
+                staged, drv, cutline, clip_crs, resolution, cap_bytes
+            )
+        finally:
+            if is_temp:
+                from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
+
+                remove_staged(staged)
+    except StageTooLargeError:
+        raise  # an actionable, user-visible refusal, not a bad path
+    except DriverPolicyError as exc:
+        return _serde.build_error_tile(str(exc), 0)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a bad/missing path is NULL, matching the whole-file read
+        return None
+
+
+def _fromfile_impl(
+    path,
+    driver,
+    materialize,
+    cap_bytes=None,
+    geom=None,
+    clip_crs=None,
+    resolution=None,
+):
     """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
     virtual). Returns a v2 tile row (virtual by default, materialized when asked),
     or None on a bad/missing path.
@@ -997,10 +1117,22 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     session-less Serverless worker, so it must NOT re-resolve the cap from a live
     session (that would wrongly use the 256 MiB classic cap). When ``cap_bytes`` is
     None (the SQL UDF paths, which do not bake a driver cap), materialize_decision
-    falls back to session resolution."""
+    falls back to session resolution.
+
+    ``path`` is a path or a FILE value (anything ``path_of`` reads). ``geom`` (WKB, EWKB, WKT or EWKT, its SRID winning
+    over ``clip_crs``) and ``resolution`` (a pixel size in the raster's CRS units) each make the result a materialized
+    tile of only the window read: clipped by ``geom``, from the overview ``resolution`` picks. A geometry that misses
+    the raster is None."""
     if path is None:
         return None
-    from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed, to_local_path
+    from databricks.labs.gbx.ds.file_gbx import (
+        _stage_local_if_needed,
+        path_of,
+        to_local_path,
+    )
+
+    if not isinstance(path, str):
+        path = path_of(path)
     from databricks.labs.gbx.pyrx import _env
 
     # a column's path is data: a remote URL is refused here, at once, unless the driver's switch was carried in
@@ -1008,6 +1140,9 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     _env.configure_gdal_env()
     drv = ops_core.known_driver("GTiff" if driver is None else driver, "rst_fromfile")
     local = to_local_path(str(path))
+
+    if geom is not None or resolution is not None:
+        return _fromfile_clip(path, local, drv, cap_bytes, geom, clip_crs, resolution)
 
     if materialize and _names_a_vrt(local):
         if _gdal_policy.remote_location(str(path)) is not None:
@@ -1143,26 +1278,38 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
 
 
 @_tile_udf(tiles=())
-def _fromfile_udf(path, driver, materialize, cap_bytes):
-    """Python-binding UDF: 4-arg (path, driver, materialize, cap_bytes).
+def _fromfile_udf(
+    path, driver, materialize, cap_bytes, geom=None, clip_crs=None, resolution=None
+):
+    """Python-binding UDF: (path, driver, materialize, cap_bytes, geom, clip_crs, resolution).
 
     ``cap_bytes`` is the DRIVER-captured connect-aware materialize cap baked by
     ``rst_fromfile`` as an f.lit — passed through so the worker-side cap guard
     uses the correct 64 MiB Serverless cap instead of re-resolving (session-less
     worker → wrong 256 MiB classic cap)."""
-    return _fromfile_impl(path, driver, bool(materialize), cap_bytes=cap_bytes)
+    return _fromfile_impl(
+        path,
+        driver,
+        bool(materialize),
+        cap_bytes=cap_bytes,
+        geom=geom,
+        clip_crs=clip_crs,
+        resolution=resolution,
+    )
 
 
 @_tile_udf(tiles=())
-def _fromfile_sql_udf(path, driver):
-    """SQL UDF registered by the LIGHT (pyrx) tier: 2-arg (path, driver) → a
-    VIRTUAL tile (materialize=False, the light-tier default). Keeps the historical
-    2-arg SQL surface; the tier that registers decides virtual vs materialized."""
-    return _fromfile_impl(path, driver, False)
+def _fromfile_sql_udf(path, driver, geom=None, clip_crs=None, resolution=None):
+    """SQL UDF registered by the LIGHT (pyrx) tier: (path, driver[, geom, clip_crs, resolution]) → a
+    VIRTUAL tile (materialize=False, the light-tier default) unless a geom or a resolution asks for a window. The tier
+    that registers decides virtual vs materialized."""
+    return _fromfile_impl(
+        path, driver, False, geom=geom, clip_crs=clip_crs, resolution=resolution
+    )
 
 
 def _build_fromfile_sql_materialized_udf(cap_bytes=None):
-    """The SQL UDF behind ``gbx_rst_fromfile``: 2-arg (path, driver) → a MATERIALIZED tile (bytes present). Same call
+    """The SQL UDF behind ``gbx_rst_fromfile``: (path, driver, geom, clip_crs, resolution) → a MATERIALIZED tile (bytes present). Same call
     text as the light registration; the heavyweight tier reads the pixels because JVM/heavy expressions cannot use a
     virtual path-only tile. Whichever tier's register() ran last wins.
 
@@ -1171,8 +1318,18 @@ def _build_fromfile_sql_materialized_udf(cap_bytes=None):
     """
 
     @_tile_udf(tiles=())
-    def fromfile_sql_materialized_udf(path, driver="GTiff"):
-        return _fromfile_impl(path, driver, True, cap_bytes=cap_bytes)
+    def fromfile_sql_materialized_udf(
+        path, driver="GTiff", geom=None, clip_crs=None, resolution=None
+    ):
+        return _fromfile_impl(
+            path,
+            driver,
+            True,
+            cap_bytes=cap_bytes,
+            geom=geom,
+            clip_crs=clip_crs,
+            resolution=resolution,
+        )
 
     return fromfile_sql_materialized_udf
 

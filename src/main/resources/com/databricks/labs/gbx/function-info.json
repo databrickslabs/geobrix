@@ -691,7 +691,7 @@
     },
     "gbx_rst_fromfile": {
       "examples": "Examples:\n      > SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/nyc/sentinel2.tif', 'GTiff') AS tile;",
-      "usage_args": "path, [driver]",
+      "usage_args": "path, [driver], [geom], [clip_crs], [resolution]",
       "description": "Read the raster file at a path into a tile.",
       "surfaces": [
         "session",

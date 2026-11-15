@@ -97,7 +97,7 @@ dev = [
     # to the dev container's `--check`. Unpinned here previously let the .venv resolve
     # to newer black/isort than CI, so host-formatted files failed CI's black --check.
     # When bumping requirements-ci.in, bump these in the same commit.
-    "isort==8.0.1",
+    "isort==9.0.2",
     "black==26.10.1",
     "flake8==7.3.0",
     "flake8-pyproject==1.2.4",

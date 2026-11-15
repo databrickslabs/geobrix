@@ -88,7 +88,7 @@ mapclassify==2.10.0
 
 # --- lint tooling ---
 black==26.10.1
-isort==8.0.1
+isort==9.0.2
 flake8==7.3.0
 
 # --- test tooling ---

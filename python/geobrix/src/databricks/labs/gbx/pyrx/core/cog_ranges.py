@@ -86,11 +86,11 @@ class _Ranges(io.RawIOBase):
             at = self._pos + got
             i = bisect.bisect_right(self._starts, at) - 1
             if i < 0 or at >= self._spans[i][0] + len(self._spans[i][1]):
-                # GDAL may re-raise this as a rasterio error, so the miss is also recorded on the opener.
+                # Record the miss and stop with a short read. No Python exception may escape into GDAL's read
+                # callback (it surfaces as an "unraisable" warning); the short read makes GDAL fail the read, so
+                # missing bytes never come back as zeros.
                 self._misses.append((at, self._pos + want - at))
-                raise MissingRangeError(
-                    f"bytes {at}..{self._pos + want} were not fetched"
-                )
+                break
             off, data = self._spans[i]
             take = min(want - got, off + len(data) - at)
             buf[got : got + take] = data[at - off : at - off + take]
@@ -144,10 +144,20 @@ def _open(opener: _Opener, overview_level: Optional[int] = None) -> Iterator:
 
 @contextmanager
 def open_ranges(
-    size: int, pieces: Sequence[Tuple[int, bytes]], overview_level: Optional[int] = None
+    size: int,
+    pieces: Sequence[Tuple[int, bytes]],
+    overview_level: Optional[int] = None,
+    misses: Optional[List[Tuple[int, int]]] = None,
 ) -> Iterator:
-    """The COG opened over only ``pieces`` (offset, bytes); GTiff driver only."""
-    with _open(_Opener(size, pieces), overview_level) as ds:
+    """The COG opened over only ``pieces`` (offset, bytes); GTiff driver only.
+
+    A read outside ``pieces`` fails (GDAL raises a rasterio error); it never returns zeros. Pass a list as
+    ``misses`` to receive each (offset, length) that was asked for and not fetched.
+    """
+    opener = _Opener(size, pieces)
+    if misses is not None:
+        opener.misses = misses
+    with _open(opener, overview_level) as ds:
         yield ds
 
 
@@ -166,7 +176,9 @@ def pick_overview(ds, resolution: Optional[float]) -> Optional[int]:
     return best
 
 
-def _block_ranges(ds, window: Tuple[int, int, int, int]) -> List[Tuple[int, int]]:
+def _block_ranges(
+    ds, window: Tuple[int, int, int, int], misses: List[Tuple[int, int]]
+) -> List[Tuple[int, int]]:
     from rasterio.enums import Interleaving
 
     col_off, row_off, w, h = window
@@ -176,10 +188,15 @@ def _block_ranges(ds, window: Tuple[int, int, int, int]) -> List[Tuple[int, int]
     for b in bands:
         for by in range(row_off // bh, (row_off + h - 1) // bh + 1):
             for bx in range(col_off // bw, (col_off + w - 1) // bw + 1):
+                seen = len(misses)
                 off = ds.get_tag_item(f"BLOCK_OFFSET_{bx}_{by}", "TIFF", bidx=b)
                 n = ds.get_tag_item(f"BLOCK_SIZE_{bx}_{by}", "TIFF", bidx=b)
-                # A sparse block (SPARSE_OK) has no offset or size: GDAL reads it as nodata without a fetch. The file
-                # was already checked as tiled, so a block wrongly skipped here fails at read time, never as zeros.
+                if len(misses) > seen:
+                    # GDAL loads the tile offset and size arrays lazily: they lie past the fetched head.
+                    raise MissingRangeError(
+                        f"the block table was not fetched (bytes {misses[seen][0]}..)"
+                    )
+                # A sparse block (SPARSE_OK) has no offset or size: GDAL reads it as nodata without a fetch.
                 if off is not None and n is not None and int(n) > 0:
                     out.append((int(off), int(n)))
     return out
@@ -209,6 +226,13 @@ def plan_ranges(
     from databricks.labs.gbx.ds._window import window_for_geom
 
     opener = _Opener(size, [(0, head)])
+
+    def too_large(why: object) -> HeaderTooLargeError:
+        return HeaderTooLargeError(
+            f"the COG header does not fit in the first {len(head)} bytes ({why}). "
+            "Fix: write smaller COGs with cog_gbx (a smaller raster per file)"
+        )
+
     try:
         with _open(opener) as ds:
             if not ds.block_shapes or ds.profile.get("tiled") is False:
@@ -217,21 +241,27 @@ def plan_ranges(
                 )
             level = pick_overview(ds, resolution)
         with _open(opener, level) as lv:
-            if geom is None:
-                win = (0, 0, lv.width, lv.height)
-            else:
+            win: Optional[Tuple[int, int, int, int]] = (0, 0, lv.width, lv.height)
+            if geom is not None:
                 w = window_for_geom(lv, geom, geom_crs)
-                if w is None:
-                    return Plan(level, None, ())
-                win = (int(w.col_off), int(w.row_off), int(w.width), int(w.height))
-            return Plan(level, win, _coalesce(_block_ranges(lv, win)))
+                win = (
+                    None
+                    if w is None
+                    else (int(w.col_off), int(w.row_off), int(w.width), int(w.height))
+                )
+            ranges = (
+                () if win is None else _coalesce(_block_ranges(lv, win, opener.misses))
+            )
+            plan = Plan(level, win, ranges)
     except (NotTiledError, HeaderTooLargeError):
         raise
     except Exception as exc:
-        # GDAL can surface a failed read as a rasterio error, not the MissingRangeError raised under it.
+        # GDAL fails a short read with a rasterio error; the miss is on the opener.
         if not opener.misses:
             raise
-        raise HeaderTooLargeError(
-            f"the COG header does not fit in the first {len(head)} bytes ({exc}). "
-            "Fix: write smaller COGs with cog_gbx (a smaller raster per file)"
-        ) from exc
+        raise too_large(exc) from exc
+    if opener.misses:
+        # GDAL can swallow a failed header read and answer with an empty value.
+        gap = f"bytes {opener.misses[0][0]}.. were not fetched"
+        raise too_large(gap) from MissingRangeError(gap)
+    return plan

@@ -3,7 +3,9 @@ from test._cog_fixture import cog_bytes as _cog_bytes
 import numpy as np
 import pytest
 import shapely.geometry as sg
+from rasterio.errors import RasterioIOError
 from rasterio.io import MemoryFile
+from rasterio.shutil import copy
 from rasterio.transform import from_origin
 from rasterio.windows import Window
 
@@ -48,6 +50,15 @@ def test_sparse_block_reads_as_nodata():
         blob, sg.box(400000, 3994000, 406000, 4000000)
     )  # covers the sparse block
     assert np.array_equal(got, _full_read(blob, plan))
+
+
+def test_sparse_block_is_not_planned():
+    blob = _cog_bytes(sparse=True)
+    # cols 0-300, rows 0-400: inside block (0, 0), the unwritten one
+    plan, got = _ranged_read(blob, sg.box(400000, 3996000, 403000, 4000000))
+    assert plan.window == (0, 0, 300, 400)
+    assert plan.ranges == ()  # nothing to fetch for a sparse block
+    assert not got.any()  # nodata (0), from no fetched bytes
 
 
 def test_edge_blocks():
@@ -98,24 +109,57 @@ def test_outside_window_is_none():
 
 
 def test_missing_range_raises():
-    """A read past the fetched bytes fails; it never returns zeros. GDAL may wrap the Python error."""
+    """A read past the fetched bytes fails: GDAL gets a short read, never zeros."""
     blob = _cog_bytes()
-    opener = cr._Opener(len(blob), [(0, blob[: cr.HEAD_BYTES])])
-    import rasterio
-
-    with pytest.raises(Exception) as exc:
-        with rasterio.open(cr._NAME, driver="GTiff", opener=opener) as ds:
+    misses = []
+    with pytest.raises(RasterioIOError):
+        with cr.open_ranges(
+            len(blob), [(0, blob[: cr.HEAD_BYTES])], misses=misses
+        ) as ds:
             ds.read(1)  # pixel blocks were never fetched
-    assert isinstance(exc.value, cr.MissingRangeError) or opener.misses
-    assert opener.misses or isinstance(exc.value, cr.MissingRangeError)
+    assert misses
+    assert all(off >= 0 and n > 0 for off, n in misses)
 
 
-def test_header_too_large():
-    blob = _cog_bytes()
+def _many_tile_cog(side=12000, block=256):
+    """A COG with thousands of tiles: its offset and size arrays are larger than a small head."""
+    prof = dict(
+        driver="GTiff",
+        width=side,
+        height=side,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:32614",
+        transform=from_origin(400000, 4000000, 10, 10),
+        tiled=True,
+        blockxsize=block,
+        blockysize=block,
+        compress="deflate",
+    )
+    with MemoryFile() as tmp:
+        with tmp.open(**prof) as ds:
+            for row in range(0, side, 1000):
+                h = min(1000, side - row)
+                ds.write(
+                    np.full((1, h, side), 7, "uint8"), window=Window(0, row, side, h)
+                )
+        with tmp.open() as src, MemoryFile() as out:
+            copy(src, out.name, driver="COG", BLOCKSIZE=block, COMPRESS="DEFLATE")
+            return out.read()
+
+
+@pytest.mark.parametrize("head_bytes", [200, 2000, 8000, 16000])
+def test_header_too_large(head_bytes):
+    blob = _many_tile_cog()
+    # a truncated head is never read as a sparse file: the window of tiles is far past the fetched block table
     with pytest.raises(cr.HeaderTooLargeError, match="Fix:"):
         cr.plan_ranges(
-            blob[:200], len(blob), None, None, None
-        )  # head far too short for the IFDs
+            blob[:head_bytes],
+            len(blob),
+            sg.box(400000, 3880000, 420000, 3900000),
+            None,
+            None,
+        )
 
 
 def test_striped_refused():

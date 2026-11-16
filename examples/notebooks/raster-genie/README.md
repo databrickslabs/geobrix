@@ -14,9 +14,9 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 ### 01 — Smokehouse Creek
 
-- **FILE + COG** — each Sentinel-2 scene becomes one seven-band master COG (`stack_scene`: 512-pixel blocks, nearest-neighbour overviews 2/4/8/16 so SCL keeps its class ids, GeoBrix compression, nodata 0), registered in the `rasters` table by a `FILE EXTERNAL` column. Nothing is copied.
+- **FILE + COG** — each Sentinel-2 scene becomes one seven-band master COG (`stack_scene`: 512-pixel blocks, average overviews 2/4/8/16, GeoBrix compression, nodata 0). The scene is cloud-masked once, when the COG is written: SCL classes 0, 1, 3, 8, 9, 10, 11 become nodata in the reflectance bands at 10 m, so no query needs an SCL mask. SCL stays as band 7, valid at full resolution only, registered in the `rasters` table by a `FILE EXTERNAL` column. Nothing is copied.
 - **Windowed reads** — `gbx_rst_fromfile(file, 'GTiff', <perimeter>, 'EPSG:4326', <resolution>)` fetches only the COG blocks the perimeter needs, at a suitable overview.
-- **Burn severity in SQL** — the notebook first sizes the perimeter's window against the 64 MiB a Unity Catalog function can return and picks the overview to read. `gbx_rst_nbr`, `gbx_rst_band`, `gbx_rst_mapalgebra` (dNBR masked with the SCL band: cloud, shadow, snow, saturated, no data), `gbx_rst_merge` and `gbx_rst_histogram` turn a pre-fire and a post-fire scene of each tile (same relative orbit where possible) into dNBR severity classes (Key & Benson, 2006; USGS) and an area per class. WorldPop gives the people inside the perimeter.
+- **Burn severity in SQL** — the notebook first sizes the perimeter's window against the 64 MiB a Unity Catalog function can return and picks the overview to read. `gbx_rst_nbr`, `gbx_rst_mapalgebra` (dNBR, and each tile's offset from an unburned ring), `gbx_rst_merge` and `gbx_rst_histogram` turn a pre-fire and a post-fire scene of each tile (same relative orbit where possible) into dNBR severity classes (Key & Benson, 2006; USGS) and an area per class. WorldPop gives the people inside the perimeter.
 - **Map and Genie** — the severity classes over an Esri basemap, then the same question asked of a Genie Agent in Agent mode, with the SQL it wrote.
 
 ---

@@ -13,11 +13,16 @@ Reads only the bbox window through ``stac._download.windowed_download`` (GDAL /v
 range reads, COG-aware), restricted to the ``data.worldpop.org`` host, and writes a small
 GeoTIFF on the Volume. read() loads via raster_gbx.
 
-KNOWN LIMIT (probed 2026-11-15): data.worldpop.org answers ``Range`` requests with a full
+NO RANGE SUPPORT (probed 2026-11-15): data.worldpop.org answers ``Range`` requests with a full
 200 response, not 206, although it advertises ``Accept-Ranges: bytes``; GDAL /vsicurl then
-fails with "Range downloading not supported by this server!". The window read only works
-where ranges are honored (e.g. a mirror, or a local/Volume copy passed as ``href``). Serverless-safe (driver-side window
-read; no runtime Spark-config mutation or JVM-bridge access).
+fails ("Range downloading not supported by this server!"). So the first call probes the href
+(one checked byte-range GET, through ``core._http`` under the ``data.worldpop.org`` allow-list)
+and, finding no range support, DOWNLOADS THE NATIONAL FILE ONCE (about 0.5 GB for the USA) to
+``cache_dir`` (default ``<out_dir>/_source``; any path, e.g. a Volume folder). The copy is
+streamed in 1 MiB chunks to a scratch file, checked against the server's Content-Length (and
+ETag), then published atomically; a cut-short transfer leaves no file. Every later call, for
+any bbox, finds the copy by its size and windows it locally with no download. A source that
+does serve ranges keeps the direct windowed read and no copy is made.
 """
 
 from __future__ import annotations
@@ -25,9 +30,13 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import re
 import warnings
 from datetime import datetime
 from typing import Optional, Sequence
+
+from databricks.labs.gbx.core import _http
+from databricks.labs.gbx.ds._listing import to_local_path
 
 USA_2020_CONSTRAINED = (
     "https://data.worldpop.org/GIS/Population/Global_2000_2020_Constrained/"
@@ -35,6 +44,7 @@ USA_2020_CONSTRAINED = (
 )
 _ALLOWED_HOSTS = ("data.worldpop.org",)
 _ASSET = "ppp"
+_SOURCE_DIR = "_source"
 # WorldPop 100 m grids are 3 arcsec = 1/1200 degree, one float32 band. Used only to ESTIMATE
 # the decoded size of a window before reading it (the real window is clipped to the file, so
 # it can only be smaller).
@@ -100,6 +110,10 @@ class WorldPopDownloader:
     Serverless, 1536 MiB on classic), the same cap GeoBrix applies to a tile read. The
     estimate assumes a 3 arcsec float32 grid (``native_deg``); pass ``native_deg`` for
     another source.
+
+    ``cache_dir`` holds the source copy when the server has no range support (see the module
+    docstring); a ``/Volumes/...`` path is used as a bare path (``file:`` / ``dbfs:`` schemes are
+    stripped). ``max_source_bytes`` refuses a source copy over that size (default 2 GiB).
     """
 
     def __init__(
@@ -107,10 +121,49 @@ class WorldPopDownloader:
         href: str = USA_2020_CONSTRAINED,
         _download=None,
         native_deg: float = _NATIVE_DEG,
+        cache_dir: Optional[str] = None,
+        max_source_bytes: Optional[int] = None,
+        _probe=None,
+        _fetch=None,
     ):
         self.href = href
         self._download = _download or _default_download
         self.native_deg = native_deg
+        self.cache_dir = cache_dir
+        self.max_source_bytes = max_source_bytes
+        self._probe = _probe
+        self._fetch = _fetch
+        self._info = None  # the range probe, made once per downloader
+
+    def _range_info(self):
+        if self._info is None:
+            probe = self._probe or _http.probe_range
+            self._info = probe(self.href, allowed_hosts=_ALLOWED_HOSTS)
+        return self._info
+
+    def _cache_for(self, out_dir: str, cache_dir: Optional[str]) -> str:
+        """The bare local path of the source-copy folder (``<out_dir>/_source`` by default)."""
+        chosen = cache_dir or self.cache_dir or os.path.join(out_dir, _SOURCE_DIR)
+        return to_local_path(chosen)
+
+    def _source(self, out_dir: str, cache_dir: Optional[str]) -> str:
+        """The href to window: itself when the server serves ranges, else the local copy."""
+        info = self._range_info()
+        if info.supports_range:
+            return self.href
+        from databricks.labs.gbx.stac._download import (
+            MAX_SOURCE_BYTES,
+            local_source_copy,
+        )
+
+        return local_source_copy(
+            self.href,
+            self._cache_for(out_dir, cache_dir),
+            info,
+            allowed_hosts=_ALLOWED_HOSTS,
+            max_bytes=self.max_source_bytes or MAX_SOURCE_BYTES,
+            fetch=self._fetch,
+        )
 
     @property
     def _item_id(self) -> str:
@@ -146,6 +199,7 @@ class WorldPopDownloader:
         out_dir: str,
         spark=None,
         max_mpp: Optional[float] = None,
+        cache_dir: Optional[str] = None,
     ):
         from pyspark.sql import SparkSession
 
@@ -154,6 +208,7 @@ class WorldPopDownloader:
         bbox = _check_bbox(bbox)
         self._guard_size(bbox, max_mpp)
         spark = spark or SparkSession.getActiveSession()
+        out_dir = to_local_path(out_dir)
         os.makedirs(out_dir, exist_ok=True)
         dest = self._dest(out_dir, bbox, max_mpp)
         scratch = new_scratch_dir(out_dir)
@@ -163,7 +218,8 @@ class WorldPopDownloader:
         if max_mpp is not None:
             kw["max_mpp"] = max_mpp
         try:
-            self._download(self.href, tmp, bbox, **kw)
+            source = self._source(out_dir, cache_dir)  # the href, or the local copy
+            self._download(source, tmp, bbox, **kw)
             os.replace(
                 tmp, dest
             )  # publish atomically; an earlier file is untouched on failure
@@ -182,15 +238,17 @@ class WorldPopDownloader:
         out_dir: str,
         spark=None,
         max_mpp: Optional[float] = None,
+        cache_dir: Optional[str] = None,
     ):
         """Re-download only if THIS bbox's GeoTIFF is missing or empty."""
+        out_dir = to_local_path(out_dir)
         dest = self._dest(out_dir, _check_bbox(bbox), max_mpp)
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
             from pyspark.sql import SparkSession
 
             spark = spark or SparkSession.getActiveSession()
             return spark.createDataFrame([self._row(dest, True)], _SCHEMA)
-        return self.download(bbox, out_dir, spark, max_mpp=max_mpp)
+        return self.download(bbox, out_dir, spark, max_mpp=max_mpp, cache_dir=cache_dir)
 
     def read(
         self,
@@ -203,11 +261,13 @@ class WorldPopDownloader:
         from pyspark.sql import SparkSession
 
         spark = spark or SparkSession.getActiveSession()
+        out_dir = to_local_path(out_dir)
         if bbox is not None:
             name = os.path.basename(self._dest(out_dir, _check_bbox(bbox), max_mpp))
             regex = r".*/" + name.replace(".", r"\.") + "$"
         else:
-            regex = r".*\.tif$"
+            # never the 0.5 GB source copy or a scratch folder under out_dir
+            regex = r"(?!.*/(?:" + re.escape(_SOURCE_DIR) + r"|\.gbx_scratch)/).*\.tif$"
         return (
             spark.read.format("raster_gbx").option("filterRegex", regex).load(out_dir)
         )
@@ -218,6 +278,9 @@ def download_worldpop_aoi(
     bbox: Sequence[float],
     out_dir: str,
     max_mpp: Optional[float] = None,
+    cache_dir: Optional[str] = None,
 ):
     """One-shot: default WorldPopDownloader + download the USA 2020 window for an AOI."""
-    return WorldPopDownloader().download(bbox, out_dir, spark=spark, max_mpp=max_mpp)
+    return WorldPopDownloader().download(
+        bbox, out_dir, spark=spark, max_mpp=max_mpp, cache_dir=cache_dir
+    )

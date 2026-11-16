@@ -48,6 +48,65 @@ def download_href(
     return outpath
 
 
+# A source copy bigger than this is refused: the whole file is streamed to disk once (1 MiB chunks, bounded memory),
+# and 2 GiB is several times the 0.5 GB national WorldPop grid.
+MAX_SOURCE_BYTES = 2 * 1024**3
+
+
+def local_source_copy(
+    href: str,
+    cache_dir: str,
+    probe,
+    allowed_hosts=None,
+    max_bytes: int = MAX_SOURCE_BYTES,
+    fetch: Optional[Callable] = None,
+) -> str:
+    """The local copy of an href whose server does not honor byte ranges (``probe``: a ``core._http.RangeProbe``).
+
+    A windowed read of such a file would download all of it for every window, so it is streamed ONCE into
+    ``cache_dir`` and every window is cut from that copy (``windowed_download`` accepts a local path). The copy is
+    written to a scratch directory beside it and published with ``os.replace``, only after the byte count (and the
+    probe's ETag, when it sent one) matched: a cut-short transfer leaves no file. A copy already there with the
+    probed size is reused, so a second window downloads nothing. ``fetch`` is a test seam for ``_http.download``;
+    the href is fetched under ``allowed_hosts`` and the redirect checks like every href.
+    """
+    from databricks.labs.gbx.ds._scratch import new_scratch_dir, remove_scratch_dir
+    from databricks.labs.gbx.pyrx.core.budget import size_text
+
+    name = _sanitize_filename(urlsplit(href).path) or "source.tif"
+    dest = os.path.join(cache_dir, name)
+    if probe.size is not None:
+        if probe.size > max_bytes:
+            raise ValueError(
+                f"{href!r} is {size_text(probe.size)}, over the {size_text(max_bytes)} limit for a source copy. "
+                "Fix: raise max_bytes, or use a source that serves byte ranges."
+            )
+        if os.path.exists(dest) and os.path.getsize(dest) == probe.size:
+            return dest
+    os.makedirs(cache_dir, exist_ok=True)
+    scratch = new_scratch_dir(cache_dir)
+    os.makedirs(scratch, exist_ok=True)
+    tmp = os.path.join(scratch, name)
+    try:
+        (fetch or _http.download)(
+            href,
+            tmp,
+            allowed_hosts=allowed_hosts,
+            expected_size=probe.size,
+            expected_etag=probe.etag,
+        )
+        got = os.path.getsize(tmp) if os.path.exists(tmp) else 0
+        if probe.size is not None and got != probe.size:  # a fetcher that did not check
+            raise OSError(
+                f"{href!r}: the copy is {got} bytes, expected {probe.size}. "
+                "Fix: the transfer was cut short; run the download again."
+            )
+        os.replace(tmp, dest)
+    finally:
+        remove_scratch_dir(scratch)
+    return dest
+
+
 def read_validate(path: str) -> bool:
     """True iff the file opens AND decodes a window (a genuine readable raster).
 

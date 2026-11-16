@@ -10,6 +10,7 @@ pyspark = pytest.importorskip("pyspark")
 
 from pyspark.sql import SparkSession  # noqa: E402
 
+from databricks.labs.gbx.core import _http  # noqa: E402
 from databricks.labs.gbx.sample.worldpop import (  # noqa: E402
     USA_2020_CONSTRAINED,
     WorldPopDownloader,
@@ -17,6 +18,16 @@ from databricks.labs.gbx.sample.worldpop import (  # noqa: E402
 
 BBOX = [-101.5, 35.0, -100.0, 36.0]
 BBOX2 = [-100.0, 35.0, -98.5, 36.0]
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """The default range probe never reaches the network: it says ranges are served."""
+
+    def probe(url, allowed_hosts=None, timeout=100):
+        return _http.RangeProbe(True, 1000, None)
+
+    monkeypatch.setattr(_http, "probe_range", probe)
 
 
 @pytest.fixture(scope="module")
@@ -248,3 +259,171 @@ def test_read_with_bbox_reads_only_that_window(spark, tmp_path):
     dl.download(BBOX2, d, spark=spark)
     assert dl.read(d, spark=spark).count() == 2
     assert dl.read(d, spark=spark, bbox=BBOX2).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# A server with no range support (data.worldpop.org): the national file is downloaded once into
+# cache_dir and every window is cut from that local copy, by the REAL windowed_download.
+# ---------------------------------------------------------------------------
+
+SRC_BBOX = [1.0, 1.0, 4.0, 4.0]  # 3 x 3 pixels of the 1-degree source grid below
+SRC_BBOX2 = [4.0, 4.0, 7.0, 7.0]
+
+
+def _write_source(path):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dst:
+        dst.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
+    return os.path.getsize(path)
+
+
+class _Fetch:
+    """Stands in for ``_http.download``: copies a local file, honoring expected_size like it."""
+
+    def __init__(self, source, truncate=False):
+        self.source = source
+        self.truncate = truncate
+        self.calls = []
+
+    def __call__(self, url, outpath, allowed_hosts=None, **kw):
+        self.calls.append((url, allowed_hosts, kw))
+        data = open(self.source, "rb").read()
+        with open(outpath, "wb") as fh:
+            fh.write(data[: len(data) // 2] if self.truncate else data)
+
+
+def _no_range(tmp_path, truncate=False, **kw):
+    src = str(tmp_path / "national.tif")
+    size = _write_source(src)
+    fetch = _Fetch(src, truncate=truncate)
+    probes = []
+
+    def probe(url, allowed_hosts=None, timeout=100):
+        probes.append((url, allowed_hosts))
+        return _http.RangeProbe(False, size, '"abc"')
+
+    dl = WorldPopDownloader(
+        _probe=probe, _fetch=fetch, native_deg=1.0, **kw
+    )  # default _download: the real windowed_download
+    return dl, fetch, probes, size
+
+
+def test_no_range_downloads_once_then_windows_the_local_copy(spark, tmp_path):
+    import numpy as np
+    import rasterio
+
+    dl, fetch, probes, size = _no_range(tmp_path)
+    out = str(tmp_path / "out")
+    row = dl.download(SRC_BBOX, out, spark=spark).collect()[0]
+    assert row["is_out_file_valid"] is True
+    # the probe and the one download went to the allowed host, and the size and ETag were passed
+    assert probes == [(USA_2020_CONSTRAINED, ("data.worldpop.org",))]
+    url, hosts, kw = fetch.calls[0]
+    assert url == USA_2020_CONSTRAINED and hosts == ("data.worldpop.org",)
+    assert kw["expected_size"] == size and kw["expected_etag"] == '"abc"'
+    # the source copy is published under <out_dir>/_source; no scratch is left behind
+    cached = os.path.join(out, "_source", "usa_ppp_2020_constrained.tif")
+    assert os.path.getsize(cached) == size
+    assert not os.path.exists(os.path.join(out, "_source", ".gbx_scratch"))
+    # the window is a real read of the local copy: rows 4..6, cols 1..3 of the 8x8 ramp
+    with rasterio.open(row["out_file_path"]) as win:
+        assert (win.width, win.height) == (3, 3)
+        assert win.bounds.left == 1.0 and win.bounds.top == 4.0
+        expect = np.arange(64, dtype="float32").reshape(8, 8)[4:7, 1:4]
+        assert (win.read(1) == expect).all()
+
+
+def test_second_bbox_reuses_the_cached_copy_without_a_second_download(spark, tmp_path):
+    dl, fetch, probes, _ = _no_range(tmp_path)
+    out = str(tmp_path / "out")
+    a = dl.download(SRC_BBOX, out, spark=spark).collect()[0]["out_file_path"]
+    b = dl.download(SRC_BBOX2, out, spark=spark).collect()[0]["out_file_path"]
+    assert a != b and os.path.exists(a) and os.path.exists(b)
+    assert len(fetch.calls) == 1  # the national file came down once
+    assert len(probes) == 1  # and the href was probed once
+
+
+def test_a_new_downloader_reuses_the_copy_by_its_size(spark, tmp_path):
+    dl, fetch, _, size = _no_range(tmp_path)
+    out = str(tmp_path / "out")
+    dl.download(SRC_BBOX, out, spark=spark)
+    dl2, fetch2, _, _ = _no_range(tmp_path)  # the same file, a fresh downloader
+    dl2.download(SRC_BBOX2, out, spark=spark)
+    assert fetch2.calls == []
+
+
+def test_truncated_download_is_refused_and_publishes_nothing(spark, tmp_path):
+    dl, fetch, _, _ = _no_range(tmp_path, truncate=True)
+    out = str(tmp_path / "out")
+    with pytest.raises(OSError, match="Fix:"):
+        dl.download(SRC_BBOX, out, spark=spark)
+    assert not os.path.exists(
+        os.path.join(out, "_source", "usa_ppp_2020_constrained.tif")
+    )
+    assert not list((tmp_path / "out").rglob("*.tif"))
+    assert not os.path.exists(os.path.join(out, "_source", ".gbx_scratch"))
+
+
+def test_fetch_that_raises_leaves_no_copy(spark, tmp_path):
+    dl, fetch, _, _ = _no_range(tmp_path)
+
+    def boom(url, outpath, **kw):
+        open(outpath, "wb").write(b"part")
+        raise OSError("downloaded 4 bytes, expected 999. Fix: run it again.")
+
+    dl._fetch = boom
+    with pytest.raises(OSError):
+        dl.download(SRC_BBOX, str(tmp_path / "o"), spark=spark)
+    assert not list((tmp_path / "o").rglob("*.tif"))
+
+
+def test_cache_dir_is_used_and_a_file_scheme_is_stripped(spark, tmp_path):
+    dl, fetch, _, size = _no_range(tmp_path)
+    cache = tmp_path / "vol" / "src"
+    dl.download(SRC_BBOX, str(tmp_path / "o"), spark=spark, cache_dir=f"file:{cache}")
+    assert (cache / "usa_ppp_2020_constrained.tif").stat().st_size == size
+    assert not (tmp_path / "o" / "_source").exists()
+    assert not os.path.exists("file:")  # a bare path, never a "file:" folder
+
+
+def test_source_over_the_limit_is_refused_before_downloading(spark, tmp_path):
+    dl, fetch, _, _ = _no_range(tmp_path, max_source_bytes=10)
+    with pytest.raises(ValueError, match="Fix:"):
+        dl.download(SRC_BBOX, str(tmp_path / "o"), spark=spark)
+    assert fetch.calls == []
+
+
+def test_range_support_keeps_the_direct_windowed_read(spark, tmp_path):
+    fake = _FakeDownload()
+    fetch = _Fetch("/nonexistent")
+    dl = WorldPopDownloader(
+        _download=fake,
+        _fetch=fetch,
+        _probe=lambda url, allowed_hosts=None: _http.RangeProbe(True, 5, None),
+    )
+    dl.download(BBOX, str(tmp_path / "r"), spark=spark)
+    assert fake.calls[0][0] == USA_2020_CONSTRAINED  # windowed from the href itself
+    assert fetch.calls == [] and not (tmp_path / "r" / "_source").exists()
+
+
+def test_read_skips_the_source_copy(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    dl, _, _, _ = _no_range(tmp_path)
+    out = str(tmp_path / "out")
+    dl.download(SRC_BBOX, out, spark=spark)
+    assert dl.read(out, spark=spark).count() == 1  # the window, not the source copy

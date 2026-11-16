@@ -342,21 +342,79 @@ def download(
     outpath: str,
     allowed_hosts: Union[None, str, Iterable[str]] = None,
     timeout: float = 100,
+    expected_size: Optional[int] = None,
+    expected_etag: Optional[str] = None,
 ) -> str:
     """Stream ``url`` to ``outpath`` under the checks above; an HTTP error status raises (``raise_for_status``), so a
-    throttled or expired href is retried by the caller, not written as data."""
+    throttled or expired href is retried by the caller, not written as data.
+
+    The body is written in 1 MiB chunks (never held whole); ``timeout`` bounds each connect and read. With
+    ``expected_size`` the bytes written must equal it, and with ``expected_etag`` the response's ``ETag`` must equal
+    it, else ``OSError`` (a truncated or changed file is not a download; the caller discards ``outpath``).
+    """
     session = _session()
     try:
         resp, _target_ = _follow(session, url, allowed_hosts, timeout)
         with resp:
             resp.raise_for_status()
+            if expected_etag is not None and resp.headers.get("ETag") != expected_etag:
+                raise OSError(
+                    f"{url!r}: the ETag is {resp.headers.get('ETag')!r}, expected {expected_etag!r}. "
+                    "Fix: the file changed since it was probed; run the download again."
+                )
+            written = 0
             with open(outpath, "wb") as fh:
                 for chunk in resp.iter_content(1024 * 1024):
                     if chunk:
                         fh.write(chunk)
+                        written += len(chunk)
+            if expected_size is not None and written != expected_size:
+                raise OSError(
+                    f"{url!r}: downloaded {written} bytes, expected {expected_size}. "
+                    "Fix: the transfer was cut short; run the download again."
+                )
     finally:
         session.close()
     return outpath
+
+
+@dataclass(frozen=True)
+class RangeProbe:
+    """What a one-byte ranged GET learned about an href: whether the server honors ``Range`` (206), the full size of the
+    file, and its ``ETag`` (None when not sent)."""
+
+    supports_range: bool
+    size: Optional[int]
+    etag: Optional[str]
+
+
+def probe_range(
+    url: str,
+    allowed_hosts: Union[None, str, Iterable[str]] = None,
+    timeout: float = 100,
+) -> RangeProbe:
+    """Whether ``url`` serves byte ranges, judged under the checks above (the same host and redirect checks as every
+    fetch here). One byte is asked for (``Range: bytes=0-0``) and the body is not read: a 206 means ranges are
+    honored (the size is the total in ``Content-Range``); a 200 means the server ignores ``Range`` and would send the
+    whole file (the size is its ``Content-Length``), whatever ``Accept-Ranges`` advertises.
+    """
+    session = _session()
+    try:
+        resp, _target_ = _follow(
+            session, url, allowed_hosts, timeout, headers={"Range": "bytes=0-0"}
+        )
+        with resp:
+            resp.raise_for_status()
+            etag = resp.headers.get("ETag")
+            if resp.status_code == 206:
+                total = (resp.headers.get("Content-Range") or "").rpartition("/")[2]
+                return RangeProbe(True, int(total) if total.isdigit() else None, etag)
+            length = resp.headers.get("Content-Length")
+            return RangeProbe(
+                False, int(length) if (length or "").isdigit() else None, etag
+            )
+    finally:
+        session.close()
 
 
 def final_url(

@@ -582,3 +582,92 @@ def test_a_windowed_read_of_an_href_without_slashes_is_refused_before_gdal_opens
     with pytest.raises(_http.RefusedHref, match="only as an http"):
         windowed_download(href, str(tmp_path / "w.tif"), (2, 2, 5, 6))
     assert server.hits == []
+
+
+# ---------------------------------------------------------------------------
+# Range probe and the checked streaming download (a server with no range support, like data.worldpop.org).
+# ---------------------------------------------------------------------------
+
+
+def test_probe_range_sees_a_server_that_ignores_range(server, public_test, served_tif):
+    info = _http.probe_range(f"{public_test}/a.tif", allowed_hosts=[".public.test"])
+    assert info.supports_range is False and info.size == len(served_tif)
+    assert server.hits[0][1].get("Range") == "bytes=0-0"  # one byte was asked for
+
+
+def test_probe_range_sees_a_server_that_honors_range(monkeypatch):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes 0-0/12345")
+            self.send_header("ETag", '"e1"')
+            self.send_header("Content-Length", "1")
+            self.end_headers()
+            self.wfile.write(b"x")
+
+        def log_message(self, *args):
+            pass
+
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    local = ("127.0.0.1", srv.server_address[1])
+    _network(
+        monkeypatch,
+        {"public.test": ["93.184.216.34"]},
+        {"public.test": local, "93.184.216.34": local},
+    )
+    try:
+        info = _http.probe_range(f"http://public.test:{local[1]}/a.tif")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert info == _http.RangeProbe(True, 12345, '"e1"')
+
+
+def test_probe_range_applies_the_allow_list_before_any_request(server, public_test):
+    with pytest.raises(_http.RefusedHref, match="not in allowed_hosts"):
+        _http.probe_range(f"{public_test}/a.tif", allowed_hosts=["other.test"])
+    assert server.hits == []
+
+
+def test_download_refuses_a_size_mismatch_and_accepts_a_match(
+    server, public_test, tmp_path, served_tif
+):
+    url = f"{public_test}/a.tif"
+    with pytest.raises(OSError, match="expected"):
+        _http.download(url, str(tmp_path / "x.tif"), expected_size=len(served_tif) + 1)
+    out = tmp_path / "ok.tif"
+    _http.download(url, str(out), expected_size=len(served_tif))
+    assert out.stat().st_size == len(served_tif)
+
+
+def test_download_refuses_a_changed_etag(server, public_test, tmp_path):
+    with pytest.raises(OSError, match="ETag"):
+        _http.download(
+            f"{public_test}/a.tif", str(tmp_path / "x.tif"), expected_etag='"nope"'
+        )
+
+
+def test_local_source_copy_publishes_only_a_full_copy(
+    server, public_test, tmp_path, served_tif
+):
+    from databricks.labs.gbx.stac._download import local_source_copy
+
+    url = f"{public_test}/a.tif"
+    cache = tmp_path / "cache"
+    short = _http.RangeProbe(False, len(served_tif) + 5, None)
+    with pytest.raises(OSError):
+        local_source_copy(url, str(cache), short, allowed_hosts=[".public.test"])
+    assert not (cache / "a.tif").exists()
+    assert not (cache / ".gbx_scratch").exists()
+    good = _http.RangeProbe(False, len(served_tif), None)
+    path = local_source_copy(url, str(cache), good, allowed_hosts=[".public.test"])
+    assert os.path.getsize(path) == len(served_tif)
+    n = len(server.hits)
+    assert (
+        local_source_copy(url, str(cache), good, allowed_hosts=[".public.test"]) == path
+    )
+    assert len(server.hits) == n  # reused by size: no second fetch

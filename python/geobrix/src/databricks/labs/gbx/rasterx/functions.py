@@ -2736,8 +2736,9 @@ def rst_fromfile(
         driver: The GDAL driver short name hint, in any case. It goes into the tile's
             `driver` metadata; a name that is no raster driver (no driver of that name, or a
             vector-only one such as `'GeoJSON'`) raises. SQL default: ``'GTiff'``.
-        geom: An optional polygon to clip to, as WKB, EWKB, WKT or EWKT. Only the blocks
-            the polygon covers are read. SQL default: ``NULL``.
+        geom: An optional polygon to clip to, as WKB, EWKB, WKT or EWKT, or a GEOMETRY
+            on Unity Catalog. Only the blocks the polygon covers are read. SQL default:
+            ``NULL``.
         clip_crs: The CRS of a `geom` that carries no SRID: `EPSG:<code>`,
             `ESRI:<code>`, WKT or an integer code. The CRS of the raster when NULL. An EWKB
             or EWKT SRID wins. SQL default: ``NULL``.
@@ -2752,7 +2753,9 @@ def rst_fromfile(
         overview. NULL for a NULL path, a file that cannot be opened, or a `geom` that
         misses the raster; an error tile with a `Fix:` for a format GeoBrix refuses or a
         `geom` that cannot be read. A file, or a window, whose decoded size is over the
-        materialize cap fails the call with an error that says how to fix it.
+        materialize cap fails the call with an error that says how to fix it. On Unity
+        Catalog there is no error tile: a format the function refuses, or a window over
+        its cap, fails the call with a `Fix:` error.
 
     SQL: ``gbx_rst_fromfile(path, [driver], [geom], [clip_crs], [resolution])``
     """

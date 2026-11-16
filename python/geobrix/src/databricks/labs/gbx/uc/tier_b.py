@@ -1554,6 +1554,37 @@ HANDLERS["gbx_rst_fromcontent"] = rst_fromcontent
 # planner below names the COG block ranges the window needs, SQL fetches them, and the reader below makes the tile.
 # Both are private routines (uc_private), not in HANDLERS: that table holds the public rows of this module.
 _FROMFILE = "gbx_rst_fromfile"
+# The bytes SQL may fetch for one window: the compressed blocks of a window decoded under DECODED_CAP, with room for data
+# that does not compress and for the gaps the planner joins. A block table that names more is refused, not fetched.
+FETCH_CAP = UC_WINDOWED_DECODED_CAP
+_TIFF_MAGIC = (
+    b"II*\x00",
+    b"MM\x00*",
+    b"II+\x00",
+    b"MM\x00+",
+)  # TIFF and BigTIFF, both byte orders
+_NOT_TIFF = (
+    f"{_FROMFILE}: the Unity Catalog function reads tiled GeoTIFF/COG files only. Fix: run it in a notebook or job "
+    "session, or read the bytes with read_files binaryFile and call gbx_rst_fromcontent."
+)
+
+
+def _check_fetch(fn: str, ranges, size: int) -> None:
+    """Refuse byte ranges that a file's own header names outside the file, or more bytes in all than FETCH_CAP: the
+    header is data, and it must not steer what SQL fetches."""
+    total = 0
+    for off, n in ranges:
+        if off < 0 or n <= 0 or off + n > size:
+            raise _Refusal(
+                f"{fn}: the file's block table names bytes {off}..{off + n} of a {size}-byte file. "
+                "Fix: write the file again as a COG with cog_gbx."
+            )
+        total += n
+    if total > FETCH_CAP:
+        raise _Refusal(
+            f"{fn}: the window needs {size_text(total)} of the file, over the {size_text(FETCH_CAP)} a Unity Catalog "
+            "function fetches. Fix: pass a coarser resolution or a smaller geom, or run it in a notebook or job session."
+        )
 
 
 def _fromfile_cut(geom, clip_crs):
@@ -1576,8 +1607,9 @@ def fromfile_plan(head, size, geom, clip_crs, resolution):
     fetched head of the file. ``level`` is -1 for full resolution; ``empty`` is true when the geometry misses the
     raster (NULL out, nothing more fetched). Ranges inside the head are left out: SQL has those bytes.
 
-    A window decoded over :data:`DECODED_CAP`, a striped GeoTIFF and a header longer than the head are refused with a
-    Fix here, before SQL fetches a byte of the window. Bytes that are no GeoTIFF are NULL.
+    These are refused with a Fix here, before SQL fetches a byte of the window: bytes that are no TIFF, a striped
+    GeoTIFF, a header longer than the head, a window decoded over :data:`DECODED_CAP`, and block ranges outside the
+    file or over :data:`FETCH_CAP` in all. A TIFF that cannot be read is NULL.
     """
     from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
     from databricks.labs.gbx.pyrx.core import cog_ranges as cr
@@ -1590,6 +1622,8 @@ def fromfile_plan(head, size, geom, clip_crs, resolution):
     empty = {"level": -1, "offs": [], "lens": [], "empty": True}
     if cut is not None and cut.is_empty:
         return empty
+    if head[:4] not in _TIFF_MAGIC:
+        raise _Refusal(_NOT_TIFF)
     try:
         plan = cr.plan_ranges(
             head,
@@ -1611,8 +1645,9 @@ def fromfile_plan(head, size, geom, clip_crs, resolution):
         raise
     except (
         Exception
-    ):  # noqa: BLE001 - bytes that are no GeoTIFF are data a UC function cannot read: NULL
+    ):  # noqa: BLE001 - a TIFF that cannot be read is data a UC function cannot read: NULL
         return None
+    _check_fetch(_FROMFILE, plan.ranges, int(size))
     offs, lens = [], []
     for off, n in plan.ranges:  # the head already holds the bytes before len(head)
         if off + n <= len(head):
@@ -1644,14 +1679,18 @@ def fromfile_read(head, size, offs, chunks, geom, clip_crs, level, driver):
     cut, cut_crs = _fromfile_cut(geom, clip_crs)
     if cut is not None and cut.is_empty:
         return None
-    pieces = [(0, bytes(head))] + [
+    fetched = [
         (int(o), bytes(c)) for o, c in zip(offs or (), chunks or ()) if c is not None
     ]
+    _check_fetch(
+        _FROMFILE, [(o, len(c)) for o, c in fetched if len(c)], int(size)
+    )  # the same bound as the plan's, on what SQL passed in
+    pieces = [(0, bytes(head))] + fetched
     overview = None if level is None or int(level) < 0 else int(level)
     misses: list = []
     unfetched = _Refusal(
         f"{_FROMFILE}: the read needs bytes of the file that were not fetched. Fix: run {_FROMFILE} in a notebook or "
-        "job session, or write the file as a COG with cog_gbx"
+        "job session, or write the file as a COG with cog_gbx."
     )
     try:
         with cr.open_ranges(int(size), pieces, overview, misses) as ds:

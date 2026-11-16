@@ -9,9 +9,14 @@ source "$SCRIPT_DIR/common.sh"
 GEN_DIR="resources/images/generators"
 EXPORTER="$GEN_DIR/diagrams/export_diagrams.py"
 # name -> generator script and the folder for its HTML and PNGs
-DIAGRAMS=("rasterx-function-categories")
+DIAGRAMS=("rasterx-function-categories" "raster-genie-architecture")
 gen_script() { echo "$GEN_DIR/$1.py"; }
-out_dir() { case "$1" in rasterx-*) echo "resources/images/diagrams/rasterx" ;; esac; }
+out_dir() {
+    case "$1" in
+        rasterx-*) echo "resources/images/diagrams/rasterx" ;;
+        raster-genie-*) echo "resources/images/diagrams/raster-genie" ;;
+    esac
+}
 
 show_help() {
     show_banner "GeoBrix: Docs Diagrams"
@@ -26,6 +31,7 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--html-only${NC}         Write the HTML only; skip the PNG export (needs no Chrome)"
     echo -e "  ${GREEN}--theme <t>${NC}         light, dark or both (default: both)"
+    echo -e "  ${GREEN}--slide${NC}             Also export the 1920 x 1080 (16:9) slide PNGs (<name>-slide-light.png, -slide-dark.png)"
     echo -e "  ${GREEN}--log <path>${NC}        Write output to a log file"
     echo -e "  ${GREEN}--help${NC}              Show this help"
     echo ""
@@ -35,11 +41,13 @@ show_help() {
 
 LOG_PATH=""
 HTML_ONLY=false
+SLIDE=false
 THEME="both"
 TARGETS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --html-only) HTML_ONLY=true; shift ;;
+        --slide) SLIDE=true; shift ;;
         --theme)
             THEME="${2:-}"
             [[ "$THEME" =~ ^(light|dark|both)$ ]] || { echo -e "${RED}--theme needs light, dark or both${NC}"; exit 2; }
@@ -75,6 +83,10 @@ for t in "${TARGETS[@]}"; do
     if ! $HTML_ONLY; then
         echo -e "${CYAN}==> $t: PNG ($THEME)${NC}"
         uvx --quiet --with playwright python -I "$EXPORTER" "$html" --out-dir "$dir" --theme "$THEME" || exit 1
+        if $SLIDE; then
+            echo -e "${CYAN}==> $t: slide PNG, 16:9 ($THEME)${NC}"
+            uvx --quiet --with playwright python -I "$EXPORTER" "$html" --out-dir "$dir" --theme "$THEME" --slide || exit 1
+        fi
     fi
 done
 show_separator

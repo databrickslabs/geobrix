@@ -25,7 +25,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 | File | Purpose |
 |---|---|
-| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `BURN_RES_M`, `GENIE_SPACE_ID`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
+| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `MAX_NODATA`, `BURN_RES_M`, `GENIE_SPACE_ID`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
 | `01_smokehouse_creek.ipynb` | The Smokehouse Creek slice: `aois`, Sentinel-2 master COGs, WorldPop, the `rasters` FILE table, the `coverage` view, the burn severity query, a map and the Genie Agent. |
 | [`lakeflow/land/scenes.py`](lakeflow/land/scenes.py) | `stack_scene`: per-band Sentinel-2 files in, one master COG out. Tested in `lakeflow/tests/`. |
 

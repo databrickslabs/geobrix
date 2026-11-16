@@ -311,6 +311,12 @@ def test_spark_view_rewrites_only_the_two_databricks_forms():
     assert t28.spark_view(
         "SELECT CAST(CAST(f AS FILE) AS BINARY), to_file('/Volumes/a')"
     ) == ("SELECT CAST(CAST(f AS BINARY) AS BINARY), to_file('/Volumes/a')")
+    alias = (
+        "SELECT CAST(x AS FILE) AS file, f.file AS FILE_NAME FROM (SELECT 1) AS file"
+    )
+    assert t28.spark_view(alias) == (
+        "SELECT CAST(x AS BINARY) AS file, f.file AS FILE_NAME FROM (SELECT 1) AS file"
+    )  # a column alias `AS file` is no type
     scalar = "SELECT `c`.`s`.gbx_rst_width(t) FROM tbl"
     assert t28.spark_view(scalar) == scalar  # a scalar call keeps its qualifier
 

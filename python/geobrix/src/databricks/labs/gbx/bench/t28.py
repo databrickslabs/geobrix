@@ -949,7 +949,9 @@ def write(out_dir: str, files: Sequence[File], runs: Sequence[Run], p: Params) -
         fh.write(manifest_md(files, runs, p))
 
 
-_GEOM_TYPE = re.compile(r"GEOMETRY\((?:ANY|\d+)\)|(?<=\bAS )FILE\b", re.I)
+_GEOM_TYPE = re.compile(r"GEOMETRY\((?:ANY|\d+)\)", re.I)
+# the FILE type of a CAST: upper case only, so a column alias `AS file` is left alone
+_FILE_TYPE = re.compile(r"(?<=\bAS )FILE\b")
 _TVF_CALL = re.compile(
     r"(\b(?:FROM|JOIN|LATERAL)\s+|,\s*)`[^`]+`\.`[^`]+`\.(gbx_\w+\s*\()", re.I
 )
@@ -959,7 +961,9 @@ def spark_view(sql: str) -> str:
     """The statement as open-source Spark can parse it. Two Databricks forms are rewritten, nothing else: a GEOMETRY(n)
     or FILE type becomes BINARY and a table function in FROM / LATERAL loses its catalog.schema qualifier.
     """
-    return _TVF_CALL.sub(r"\1\2", _GEOM_TYPE.sub("BINARY", sql))
+    return _TVF_CALL.sub(
+        r"\1\2", _FILE_TYPE.sub("BINARY", _GEOM_TYPE.sub("BINARY", sql))
+    )
 
 
 def parse_locally(files: Sequence[File]) -> Dict[str, str]:

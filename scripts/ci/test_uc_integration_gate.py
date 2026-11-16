@@ -1254,3 +1254,37 @@ def test_the_tables_option_needs_against(driver):
     a = driver.parse_args(["--profile", "p", "--scope", "full", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--tables", "RASTER_STAT"])
     assert a.tables == "RASTER_STAT" and a.against is None
     assert driver.main(["--profile", "p", "--scope", "full", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--tables", "RASTER_STAT", "--dry-run"]) == 2
+
+
+def test_a_deferred_row_is_judged_in_the_container_with_the_runs_tables(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import oracles
+
+    calls = []
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        calls.append(argv[-1])
+        out = [a for a in argv[-1].split() if a.endswith("-out.json")][0]
+        (tmp_path / Path(out).name).write_text(json.dumps({"failures": ["c1: still red"]}))
+        return 0, ""
+
+    monkeypatch.setattr(oracles, "check_uc_results", lambda cases, results, d: ["c1: x (OsgeoUnavailable: no osgeo)", "c2: red"])
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    got = driver.judge_uc([], {"c1": {"value": 1}, "c2": {"value": 2}}, "full", "RASTER_CONSTRUCTOR")
+    assert "--tables RASTER_CONSTRUCTOR" in calls[0] and "--scope full" in calls[0]
+    assert got == ["c2: red", "c1: still red"]  # the container's verdict replaces the deferred line
+
+
+def test_the_container_judge_finds_a_narrowed_table_and_fails_a_result_with_no_case(driver, tmp_path):
+    inp, out = tmp_path / "in.json", tmp_path / "out.json"
+    inp.write_text(json.dumps({"uc_fromfile_clip": {"value": 700}, "uc_fromfile_resolution": {"value": 7}, "no_such_row": {"value": 1}}))
+    base = ["--judge-uc", str(inp), "--judge-out", str(out), "--scope", "core"]
+    assert driver.main(base + ["--tables", "RASTER_CONSTRUCTOR"]) == 0
+    failures = json.loads(out.read_text())["failures"]
+    assert len(failures) == 2
+    assert any(f.startswith("uc_fromfile_resolution:") for f in failures)  # judged, and red
+    assert any(f.startswith("no_such_row:") and "no case" in f for f in failures)  # never a silent pass
+    # without the run's tables the core slice has no case for the rows: each is a failure, not a pass
+    assert driver.main(base) == 0
+    assert len(json.loads(out.read_text())["failures"]) == 3

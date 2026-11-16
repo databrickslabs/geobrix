@@ -333,6 +333,31 @@ def _clip_avg():
     return [float(d[b, 400:1000, 500:1200].mean()) for b in range(COG_SHAPE[0])]
 
 
+_CLIP_4326_RING = (
+    (-99.977003, 36.050579),
+    (-99.977672, 36.104666),
+    (-100.05543, 36.104006),
+    (-100.054708, 36.049921),
+)
+_COG_ORIGIN, _COG_PIXEL = (400000.0, 4000000.0), 10.0
+
+
+def _clip_4326_width():
+    """The width of the 4326 clip's window, from pyproj and the fixture's grid, not from the function: the ring's vertices
+    in EPSG:32614, their x bounds snapped outward to whole pixels (floor of the near edge, ceil of the far edge).
+    """
+    import math
+
+    from pyproj import Transformer
+
+    tr = Transformer.from_crs(4326, 32614, always_xy=True)
+    xs = [tr.transform(x, y)[0] for x, y in _CLIP_4326_RING]
+    x0, x1 = (min(xs) - _COG_ORIGIN[0]) / _COG_PIXEL, (
+        max(xs) - _COG_ORIGIN[0]
+    ) / _COG_PIXEL
+    return math.ceil(x1) - math.floor(x0)
+
+
 def _full_avg():
     d = cog_pixels()
     return [float(d[b].mean()) for b in range(COG_SHAPE[0])]
@@ -439,7 +464,7 @@ UC_FROMFILE = (
         + _read(_file("cog.tif"), _geom(_CLIP_4326_WKT, 4326))
         + ") AS out",
         "exact",
-        702,
+        _clip_4326_width,
     ),
     # a FILE with a non-NULL offset reads as the file it is a slice of: the clip's pixels equal cog.tif's own
     recipe(
@@ -458,14 +483,16 @@ UC_FROMFILE = (
         "uc_fromfile_striped_refused",
         FF,
         "SELECT " + _read(_file("striped.tif")) + " AS out",
-        "uc_refused",
+        "raises",
+        "the GeoTIFF is striped. Fix: write it as a COG",
     ),
     # bytes that are no TIFF are refused, not NULL
     recipe(
         "uc_fromfile_not_tiff_refused",
         FF,
         "SELECT " + _read(_file("notiff.bin")) + " AS out",
-        "uc_refused",
+        "raises",
+        "reads tiled GeoTIFF/COG files only. Fix:",
     ),
 )
 

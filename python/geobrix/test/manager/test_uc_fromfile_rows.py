@@ -110,3 +110,59 @@ def test_a_recipe_list_of_doubles_that_arrives_as_text_is_judged_by_value():
         [c], {c.cid: {"value": ["1.0", "2.0", "3.0"]}}, "/tmp"
     )
     assert len(bad) == 1 and "uc_fromfile_clip_pixels" in bad[0]
+
+
+def test_the_4326_width_is_computed_apart_from_the_function():
+    from test.manager.test_uc_fromfile import _Geom, _pixels
+
+    import shapely
+
+    from databricks.labs.gbx.uc import tier_b
+
+    ring = list(rc._CLIP_4326_RING)
+    assert (
+        rc._CLIP_4326_WKT
+        == "POLYGON((" + ",".join(f"{x!r} {y!r}" for x, y in ring + ring[:1]) + "))"
+    )
+    want = rc._clip_4326_width()
+    assert want == 702  # pyproj on the ring's vertices and the fixture's grid
+    blob = cog_bytes()
+    poly = shapely.Polygon(ring)
+    plan = tier_b.fromfile_plan(
+        blob[: cr.HEAD_BYTES], len(blob), _Geom(poly, 4326), None, None
+    )
+    chunks = [blob[o : o + n] for o, n in zip(plan["offs"], plan["lens"])]
+    tile = tier_b.fromfile_read(
+        blob[: cr.HEAD_BYTES],
+        len(blob),
+        plan["offs"],
+        chunks,
+        _Geom(poly, 4326),
+        None,
+        plan["level"],
+        "GTiff",
+    )
+    assert _pixels(tile)[0].shape[2] == want  # the function agrees with it
+
+
+def test_the_refusal_rows_pin_the_wording_the_function_raises(tmp_path):
+    import pytest
+
+    from databricks.labs.gbx.uc import tier_b
+
+    _fixtures_module().build(tmp_path)
+    for cid, name in (
+        ("uc_fromfile_striped_refused", "striped.tif"),
+        ("uc_fromfile_not_tiff_refused", "notiff.bin"),
+    ):
+        row = UC_ROWS[cid]
+        assert row.kind == "raises" and "Fix:" in row.expect
+        blob = (tmp_path / name).read_bytes()
+        with pytest.raises(ValueError) as exc:
+            tier_b.fromfile_plan(blob, len(blob), None, None, None)
+        assert row.expect in str(exc.value)
+        assert oracles.check_error(row, RuntimeError(str(exc.value))) is None
+        assert (
+            oracles.check_error(row, RuntimeError("some other error. Fix: do x"))
+            is not None
+        )

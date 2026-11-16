@@ -422,11 +422,12 @@ _CONTAINER_SLICE: dict = {}
 _OSGEO_JUDGE = "(OsgeoUnavailable:"
 
 
-def judge_uc(cases, results: dict, scope: str) -> List[str]:
+def judge_uc(cases, results: dict, scope: str, tables: Optional[str] = None) -> List[str]:
     """`check_uc_results` on the host; the cases whose reference needs osgeo are judged again in the dev container.
 
     The summary, polygonize and contour references need GDAL's Python bindings, which the host lacks. Only those
-    cases go to the container, so a core run never needs it.
+    cases go to the container, so a core run never needs it. `tables` is the run's --tables list: the container must
+    look the cases up in the same tables the run used, or a deferred row would find no case to judge it.
     """
     from databricks.labs.gbx.bench import oracles
 
@@ -444,6 +445,8 @@ def judge_uc(cases, results: dict, scope: str) -> List[str]:
         f"cd /root/geobrix && PYTHONPATH=python/geobrix/src python3 examples/tests/uc_integration.py "
         f"--judge-uc {inp.relative_to(REPO_ROOT).as_posix()} --judge-out {out.relative_to(REPO_ROOT).as_posix()} --scope {scope}"
     )
+    if tables:
+        inner += f" --tables {tables}"
     try:
         rc, text = run_cmd(["bash", str(CMD / "gbx-docker-exec.sh"), inner], OUT_DIR / f"{tag}.log", "judge", echo=False)
         if rc != 0 or not out.is_file():
@@ -825,7 +828,7 @@ class Gate:
         ran = {cid for cid, _ in pairs}
         cases = [c for c in all_cases if c.cid in ran or "uc" not in c.surfaces]  # a smoke run or a part judges only what it ran
         self.part_cids = sorted(c.cid for c in cases if "uc" in c.surfaces)
-        failures = [m for m in judge_uc(cases, merged, self.a.scope) if failed_id(m) not in harness]  # a harness error is no "no result"
+        failures = [m for m in judge_uc(cases, merged, self.a.scope, getattr(self.a, "tables", None)) if failed_id(m) not in harness]  # a harness error is no "no result"
         (self.run_dir / ("slice_failures.txt" if n_parts == 1 else f"slice_failures_p{i_part}.txt")).write_text("\n".join(failures))
         total = len([1 for c in cases if "uc" in c.surfaces])
         sl = judge_slice(failures, total, known, list(harness))
@@ -1144,9 +1147,11 @@ def main(argv=None) -> int:
         from databricks.labs.gbx.bench import oracles, probes
 
         results = oracles.load_uc_results(a.judge_uc)
-        cases = [c for c in probes.uc_slice_cases(slice_tables(a.scope)) if c.cid in results]
+        cases = [c for c in probes.uc_slice_cases(narrow_tables(a.tables) if a.tables else slice_tables(a.scope)) if c.cid in results]
         with tempfile.TemporaryDirectory(prefix="uc-it-judge-") as d:
-            failures = oracles.check_uc_results(cases, results, d)
+            failures = oracles.check_uc_results(cases, {k: v for k, v in results.items() if k in {c.cid for c in cases}}, d)
+        # a result with no case to judge it is a failure, never a silent pass
+        failures += [f"{cid}: no case of the slice judges this result (the container's tables differ from the run's)" for cid in sorted(set(results) - {c.cid for c in cases})]
         Path(a.judge_out).write_text(json.dumps({"failures": failures}))
         say(f"judged {len(cases)} case(s): {len(failures)} failure line(s)")
         return 0

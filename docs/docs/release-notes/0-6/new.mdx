@@ -193,6 +193,7 @@ See [Zarr Stores](../../api/zarr-stores.mdx), [Zarr Reader](../../readers/zarr.m
 - **Cell rasterizers without a `GROUP BY`**. `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize` and `gbx_rst_custom_rasterize` burn an array of cells into one GeoTIFF.
 - **Table functions for large groups.** `gbx_rst_merge_tvf` merges each key's tiles into one raster. `gbx_rst_bng_rasterize_tvf` burns each key's BNG cells into one raster. Both read a row at a time. Call them as `TABLE(...) PARTITION BY (key)`.
 - **`gbx_drivers()`** lists the GDAL drivers. See [above](#gbx-drivers).
+- **`gbx_rst_fromfile` reads a FILE value.** With a clip or a target resolution, it reads only the COG blocks it needs, in notebooks, SQL warehouses and Unity Catalog. See [`rst_fromfile`](../../api/raster-functions.mdx#rst_fromfile).
 - **The Unity Catalog forms** listed under [Forms that need no session](#uc-no-session-forms).
 - **`segment_raster(..., weights=)` loads a GeoSAM checkpoint from a Volume**. A workspace that blocks internet egress then needs no download. See [GeoSAM](../../models/geosam.mdx).
 - **`run_sfm(..., prior_sigma_m=)` sets the accuracy of GPS pose priors** when EXIF gives none. See [Orthomosaic](../../notebooks/orthomosaic.mdx).

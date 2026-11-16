@@ -202,6 +202,22 @@ ingest_files(
 raises `ValueError` with an upgrade message — use
 [`open_for_write(file_mode="fuse")`](../writers/file) for a plain Delta write instead.
 
+## Query FILE columns from Unity Catalog
+
+A SQL warehouse reads a window of a raster in a FILE column with `gbx_rst_fromfile`. It needs no session.
+
+1. Write COGs with [`cog_gbx`](../writers/cog). Land them with [`open_for_write(..., file_mode="external")`](../writers/file). The table keeps a FILE EXTERNAL column that points at each COG.
+2. Select the rows. Join the table to the polygons that you want to cut.
+3. Call `gbx_rst_fromfile` on the FILE column, with a `geom` or a `resolution`.
+
+```sql
+SELECT gbx_rst_avg(gbx_rst_fromfile(r.file, 'GTiff', a.geom, NULL, 20.0)) AS mean_value
+FROM rasters r
+JOIN aois a ON st_intersects(r.footprint, a.geom)
+```
+
+Pass the FILE column directly. `CAST(<col> AS FILE)` fails with `CAST_TO_FILE_TYPE.FROM_FILE`. A `GEOMETRY(4326)` column also passes directly as `geom`. The function reads only the COG blocks it needs. See [`rst_fromfile`](../api/raster-functions#rst_fromfile) for the refusals and their fixes.
+
 ## Next steps
 
 - [COG Reader](./cog) — windowed read from prepared COGs

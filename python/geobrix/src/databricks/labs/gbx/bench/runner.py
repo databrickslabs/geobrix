@@ -186,14 +186,10 @@ def capture_env(where: str, spark=None) -> Dict:
 
 
 def peak_rss_mb() -> float:
-    try:
-        import resource
+    from databricks.labs.gbx.pyrx.core.budget import peak_rss_mib
 
-        kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        # macOS reports bytes; Linux reports kilobytes.
-        return (kb / (1024 * 1024)) if platform.system() == "Darwin" else (kb / 1024)
-    except Exception:  # noqa: BLE001
-        return 0.0
+    rss = peak_rss_mib()
+    return 0.0 if rss is None else rss
 
 
 class WorkerRssSampler:

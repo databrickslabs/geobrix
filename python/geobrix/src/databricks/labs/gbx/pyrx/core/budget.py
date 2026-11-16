@@ -11,10 +11,32 @@ from __future__ import annotations
 import functools
 import math
 import os
+import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 _MIB = 1024 * 1024
+
+
+def peak_rss_mib() -> Optional[float]:
+    """Process peak RSS in MiB for diagnostics only (never a budget input); None if unmeasurable."""
+    try:
+        import resource  # POSIX only: imported here so the package imports without it
+
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # darwin reports bytes, linux KiB
+        return rss / _MIB if sys.platform == "darwin" else rss / 1024
+    except ImportError:
+        pass
+    try:
+        import psutil
+
+        info = psutil.Process().memory_info()
+        return float(getattr(info, "peak_wset", None) or info.rss) / _MIB
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        return None
+
+
 # serverless: 64 MiB decoded/tile fallback (when no cgroup limit is detectable).
 # The Serverless PySpark UDF has a hard 1 GB memory cap. With one-tile-per-partition
 # each task encodes exactly ONE tile, so the constraint is the single-tile encode PEAK

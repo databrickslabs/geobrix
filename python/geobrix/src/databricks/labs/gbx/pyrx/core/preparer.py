@@ -10,9 +10,7 @@ registered as a gbx_* function.
 from __future__ import annotations
 
 import os
-import resource
 import shutil
-import sys
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -20,6 +18,7 @@ from databricks.labs.gbx.ds.file_gbx import StageTooLargeError  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _is_fuse_path  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _probe_direct_open  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
+from databricks.labs.gbx.pyrx.core.budget import peak_rss_mib
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file, remove_staged
 
 
@@ -139,12 +138,13 @@ def prepare_cog(
         return None, f"error:{type(exc).__name__}: {exc}"[:300]
 
 
-def _peak_rss_mib() -> float:
-    """Process high-water RSS in MiB (darwin reports bytes, linux KiB)."""
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if sys.platform == "darwin":
-        return rss / (1024 * 1024)
-    return rss / 1024
+def _peak_rss_mib() -> Optional[float]:
+    """Process high-water RSS in MiB, or None when it cannot be measured."""
+    return peak_rss_mib()
+
+
+def _fmt_mib(value: Optional[float]) -> str:
+    return "n/a" if value is None else f"{value:.0f}"
 
 
 def prepare_cog_measured(
@@ -273,7 +273,7 @@ def prepare_cogs(
     total = len(resolved)
     results: List[Dict[str, object]] = []
     counts = {"ok": 0, "skipped": 0, "error": 0}
-    peak = 0.0
+    peak: Optional[float] = None
     t0 = time.time()
 
     for i, (src, err) in enumerate(resolved, start=1):
@@ -310,7 +310,8 @@ def prepare_cogs(
                         remove_staged(local_src)
         f_elapsed = round(time.time() - f_t0, 2)
         rss = _peak_rss_mib()
-        peak = max(peak, rss)
+        if rss is not None:
+            peak = rss if peak is None else max(peak, rss)
         key = status.split(":", 1)[0]
         counts[key] = counts.get(key, 0) + 1
         results.append(
@@ -328,7 +329,7 @@ def prepare_cogs(
             arrow = f" -> {os.path.basename(out_path)}" if out_path else ""
             print(
                 f"[{i}/{total}] {key:<7} {os.path.basename(src)}{arrow} "
-                f"({left} left, {f_elapsed}s, peak {rss:.0f} MiB)",
+                f"({left} left, {f_elapsed}s, peak {_fmt_mib(rss)} MiB)",
                 flush=True,
             )
 
@@ -336,7 +337,7 @@ def prepare_cogs(
     if verbose:
         print(
             f"done: {counts['ok']} ok, {counts['skipped']} skipped, "
-            f"{counts['error']} error of {total} (peak {peak:.0f} MiB, {elapsed}s total)",
+            f"{counts['error']} error of {total} (peak {_fmt_mib(peak)} MiB, {elapsed}s total)",
             flush=True,
         )
     return {

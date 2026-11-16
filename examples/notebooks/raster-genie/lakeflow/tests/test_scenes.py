@@ -4,10 +4,9 @@ import numpy as np
 import pytest
 
 rasterio = pytest.importorskip("rasterio")
+from land.scenes import S2_BANDS, choose_scene_pairs, stack_scene  # noqa: E402
 from rasterio.enums import MaskFlags  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
-
-from land.scenes import S2_BANDS, choose_scene_pairs, stack_scene  # noqa: E402
 
 CRS = "EPSG:32614"
 SIZE_10M = 1100  # large enough that a 512 block grid and 4 overview levels are real
@@ -17,7 +16,9 @@ SIZE_20M = SIZE_10M // 2
 def _write(path, band, size, res, dtype="uint16"):
     rng = np.random.default_rng(sum(map(ord, band)))
     if band == "SCL":
-        data = rng.choice([4, 5, 8, 9], size=(size, size)).astype(dtype)
+        data = rng.choice([4, 5, 6, 7], size=(size, size)).astype(
+            dtype
+        )  # classes that are NOT masked
     else:
         data = rng.integers(1, 4000, size=(size, size)).astype(dtype)
     data[:5, :5] = 0  # a nodata corner
@@ -93,8 +94,8 @@ def test_20m_bands_resampled_to_the_10m_grid(band_paths, tmp_path):
     with rasterio.open(band_paths["B11"]) as src:
         replicate = np.repeat(np.repeat(src.read(1), 2, axis=0), 2, axis=1)
     assert (b11 != replicate).mean() > 0.5
-    # nearest keeps SCL a set of source class ids, no blended values
-    assert set(np.unique(scl)) <= {0, 4, 5, 8, 9}
+    # SCL is written with nearest neighbour at full resolution: only source class ids, no blended values
+    assert set(np.unique(scl)) <= {0, 4, 5, 6, 7}
 
 
 def test_10m_bands_are_copied_unchanged(band_paths, tmp_path):
@@ -102,7 +103,8 @@ def test_10m_bands_are_copied_unchanged(band_paths, tmp_path):
     with rasterio.open(out) as ds:
         for idx, name in ((1, "B02"), (2, "B03"), (3, "B04"), (4, "B08")):
             with rasterio.open(band_paths[name]) as src:
-                assert (ds.read(idx) == src.read(1)).all(), name
+                # outside the SCL nodata corner (10 x 10 px at 10 m), where the scene is masked
+                assert (ds.read(idx)[10:, 10:] == src.read(1)[10:, 10:]).all(), name
 
 
 def test_nodata_corner_stays_nodata(band_paths, tmp_path):
@@ -128,33 +130,146 @@ def test_boa_offset_is_removed_from_reflectance_not_scl(band_paths, tmp_path):
         assert (a.read(7) == b.read(7)).all()  # SCL untouched
 
 
-def test_overviews_are_nearest_so_scl_keeps_its_class_ids(band_paths, tmp_path):
-    out = stack_scene(band_paths, str(tmp_path / "scene.tif"))
+def _scene_with_scl(tmp_path, scl_cells):
+    """Band files whose 20 m SCL is class 4 everywhere but at `scl_cells` ({(row, col): class} at 20 m)."""
+    paths = {}
+    for b in ("B02", "B03", "B04", "B08"):
+        paths[b] = _write(tmp_path / f"{b}.tif", b, SIZE_10M, 10.0)
+    for b in ("B11", "B12"):
+        paths[b] = _write(tmp_path / f"{b}.tif", b, SIZE_20M, 20.0)
+    scl = np.full((SIZE_20M, SIZE_20M), 4, dtype="uint8")
+    for (r, c), cls in scl_cells.items():
+        scl[r, c] = cls
+    profile = dict(
+        driver="GTiff",
+        width=SIZE_20M,
+        height=SIZE_20M,
+        count=1,
+        dtype="uint8",
+        crs=CRS,
+        transform=from_origin(500000.0, 4000000.0, 20.0, 20.0),
+        nodata=0,
+    )
+    with rasterio.open(tmp_path / "SCL.tif", "w", **profile) as dst:
+        dst.write(scl, 1)
+    paths["SCL"] = str(tmp_path / "SCL.tif")
+    return paths
+
+
+@pytest.mark.parametrize("cls", [0, 1, 3, 8, 9, 10, 11])
+def test_masked_scl_classes_become_nodata_in_every_reflectance_band(tmp_path, cls):
+    paths = _scene_with_scl(tmp_path, {(100, 100): cls})
+    out = stack_scene(paths, str(tmp_path / "scene.tif"))
     with rasterio.open(out) as ds:
-        for level in (2, 4, 8):
-            scl = ds.read(7, out_shape=(ds.height // level, ds.width // level))
-            assert set(np.unique(scl)) <= {0, 4, 5, 8, 9}, level  # an average would blend 4, 5, 8 and 9
+        for idx in (1, 2, 3, 4, 5, 6):
+            assert (ds.read(idx)[200:202, 200:202] == 0).all(), (
+                idx,
+                cls,
+            )  # the 2 x 2 of the 20 m pixel
+            assert (ds.read(idx)[210:212, 210:212] > 0).all(), (
+                idx,
+                cls,
+            )  # a neighbour is untouched
+        assert (ds.read(7)[200:202, 200:202] == cls).all()  # SCL is written as it is
+
+
+@pytest.mark.parametrize("cls", [2, 4, 5, 6, 7])
+def test_clear_scl_classes_stay_valid(tmp_path, cls):
+    paths = _scene_with_scl(tmp_path, {(100, 100): cls})
+    out = stack_scene(paths, str(tmp_path / "scene.tif"))
+    with rasterio.open(out) as ds:
+        assert (ds.read(3)[200:202, 200:202] > 0).all()
+
+
+def test_mask_scl_false_leaves_the_reflectance_alone(tmp_path):
+    paths = _scene_with_scl(tmp_path, {(100, 100): 9})
+    out = stack_scene(paths, str(tmp_path / "scene.tif"), mask_scl=False)
+    with rasterio.open(out) as ds:
+        assert (ds.read(3)[200:202, 200:202] > 0).all()
+
+
+def test_reflectance_overview_is_the_mean_of_its_valid_pixels(tmp_path):
+    # one 20 m pixel (2 x 2 at 10 m) masked inside a 4 x 4 block of the 4x overview: 12 valid, 4 nodata
+    paths = _scene_with_scl(tmp_path, {(100, 100): 8})
+    out = stack_scene(paths, str(tmp_path / "scene.tif"))
+    with rasterio.open(out) as ds:
+        assert ds.overviews(1) == [2, 4, 8, 16]
+        full = ds.read(3).astype("float64")
+        block = full[200:204, 200:204]
+        valid = block[block > 0]
+        assert len(valid) == 12
+        ovr = ds.read(
+            3, out_shape=(ds.height // 4, ds.width // 4)
+        )  # served by the 4x overview
+        assert (
+            abs(float(ovr[50, 50]) - valid.mean()) <= 1.0
+        )  # the mean of the valid pixels, not of all 16 (25% lower)
+        assert ovr[50, 50] > 0.9 * valid.mean()
+
+
+def test_an_overview_pixel_is_nodata_only_where_every_pixel_it_covers_is(tmp_path):
+    cells = {
+        (100 + i, 100 + j): 9 for i in range(2) for j in range(2)
+    }  # a 4 x 4 block at 10 m, all masked
+    paths = _scene_with_scl(tmp_path, cells)
+    out = stack_scene(paths, str(tmp_path / "scene.tif"))
+    with rasterio.open(out) as ds:
+        ovr = ds.read(3, out_shape=(ds.height // 4, ds.width // 4))
+        assert ovr[50, 50] == 0 and ovr[51, 51] > 0
+
+
+def test_stats_count_the_masked_share_of_the_data_pixels(tmp_path):
+    cells = {
+        (10, 10): 9,
+        (10, 11): 3,
+        (20, 20): 0,
+    }  # two masked 20 m pixels and one nodata one
+    paths = _scene_with_scl(tmp_path, cells)
+    stats = {}
+    stack_scene(paths, str(tmp_path / "scene.tif"), stats=stats)
+    assert (
+        stats["masked_px"] == 2 * 4
+        and stats["data_px"] == (SIZE_20M * SIZE_20M - 1) * 4
+    )
+    assert stats["masked_pct"] == round(
+        100.0 * stats["masked_px"] / stats["data_px"], 2
+    )
 
 
 def _row(tile, date, orbit, cloud, nodata=0.0, item=None):
-    return dict(item_id=item or f"{tile}_{date}_R{orbit}", mgrs_tile=tile, date=date, orbit=orbit, cloud_pct=cloud, nodata_pct=nodata)
+    return dict(
+        item_id=item or f"{tile}_{date}_R{orbit}",
+        mgrs_tile=tile,
+        date=date,
+        orbit=orbit,
+        cloud_pct=cloud,
+        nodata_pct=nodata,
+    )
 
 
 def test_pre_scenes_share_the_date_that_serves_most_tiles():
     pre = [
-        _row("A", "2024-02-19", "055", 1.0), _row("B", "2024-02-19", "055", 2.0),
-        _row("A", "2024-02-24", "055", 0.0), _row("B", "2024-02-14", "055", 0.0),  # cleaner, but on other days
+        _row("A", "2024-02-19", "055", 1.0),
+        _row("B", "2024-02-19", "055", 2.0),
+        _row("A", "2024-02-24", "055", 0.0),
+        _row("B", "2024-02-14", "055", 0.0),  # cleaner, but on other days
     ]
     post = [_row("A", "2024-03-10", "055", 0.0), _row("B", "2024-03-10", "055", 0.0)]
     got = choose_scene_pairs(pre, post, max_cloud=20, max_nodata=5)
-    assert {t: r["date"] for t, r in got["pre"].items()} == {"A": "2024-02-19", "B": "2024-02-19"}
+    assert {t: r["date"] for t, r in got["pre"].items()} == {
+        "A": "2024-02-19",
+        "B": "2024-02-19",
+    }
 
 
 def test_a_tie_in_dates_goes_to_the_day_closest_to_the_fire():
     pre = [_row("A", "2024-02-10", "055", 0.0), _row("A", "2024-02-20", "055", 0.0)]
     post = [_row("A", "2024-03-05", "055", 0.0), _row("A", "2024-03-15", "055", 0.0)]
     got = choose_scene_pairs(pre, post, 20, 5)
-    assert got["pre"]["A"]["date"] == "2024-02-20" and got["post"]["A"]["date"] == "2024-03-05"
+    assert (
+        got["pre"]["A"]["date"] == "2024-02-20"
+        and got["post"]["A"]["date"] == "2024-03-05"
+    )
 
 
 def test_post_scene_is_on_the_pre_scenes_relative_orbit_when_there_is_one():
@@ -172,13 +287,20 @@ def test_a_post_orbit_that_differs_is_used_and_reported_when_the_pre_orbit_has_n
 
 
 def test_cloudy_and_cut_scenes_are_out_but_an_unknown_nodata_figure_is_kept():
-    pre = [_row("A", "2024-02-19", "055", 30.0), _row("B", "2024-02-19", "055", 1.0, nodata=54.0), _row("C", "2024-02-19", "055", 1.0, nodata=None)]
+    pre = [
+        _row("A", "2024-02-19", "055", 30.0),
+        _row("B", "2024-02-19", "055", 1.0, nodata=54.0),
+        _row("C", "2024-02-19", "055", 1.0, nodata=None),
+    ]
     post = [_row(t, "2024-03-10", "055", 0.0) for t in "ABC"]
     got = choose_scene_pairs(pre, post, 20, 5)
     assert sorted(got["pre"]) == ["C"] and got["dropped"] == ["A", "B"]
 
 
 def test_least_cloud_ties_by_whole_percent_then_exact_cloud_then_item_id():
-    rs = [_row("A", "2024-02-19", "055", 0.4, item="b"), _row("A", "2024-02-19", "055", 0.2, item="a")]
+    rs = [
+        _row("A", "2024-02-19", "055", 0.4, item="b"),
+        _row("A", "2024-02-19", "055", 0.2, item="a"),
+    ]
     got = choose_scene_pairs(rs, [_row("A", "2024-03-10", "055", 0.0)], 20, 5)
     assert got["pre"]["A"]["item_id"] == "a"

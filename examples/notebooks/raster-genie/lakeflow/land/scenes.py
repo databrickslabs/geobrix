@@ -1,12 +1,18 @@
 """Stack the per-band files of one Sentinel-2 scene into a single master COG.
 
 One scene, one file: the bands an index needs plus SCL, on the 10 m grid of a reference band, with
-512-pixel internal blocks, nearest-neighbour overviews at 2/4/8/16, GeoBrix's own compression options and
-nodata 0. The overviews are nearest neighbour, not averages: a COG has one overview resampling for all
-bands, and SCL holds class ids, which an average would blend into ids that mean nothing. A coarse read of
-the file can therefore be masked with SCL.
-Nodata is the only validity signal. The file carries no internal mask band, which the Unity Catalog
-windowed reader (`gbx_rst_fromfile` with a geometry or a resolution) does not plan.
+512-pixel internal blocks, average overviews at 2/4/8/16, GeoBrix's own compression options and nodata 0.
+
+The scene is **cloud-masked when the file is written**: at the native 10 m, every reflectance pixel whose
+SCL class is no data (0), saturated (1), cloud shadow (3), cloud medium or high probability (8, 9), thin
+cirrus (10) or snow (11) is set to nodata. Downstream SQL then needs no mask: a coarse read is already
+clean. GDAL's average skips nodata, so a masked pixel does not pull an overview pixel toward zero; an
+overview pixel is nodata only where all the pixels it covers are.
+
+SCL stays in the file as band 7, for reference, and is valid at full resolution only: its overview
+levels are averages of class ids and mean nothing. Nodata is the only validity signal. The file carries
+no internal mask band, which the Unity Catalog windowed reader (`gbx_rst_fromfile` with a geometry or a
+resolution) does not plan.
 
 No Spark, no side effects beyond `out_path`.
 """
@@ -29,6 +35,9 @@ BLOCKSIZE = 512
 OVERVIEW_LEVELS = [2, 4, 8, 16]
 NODATA = 0
 _DTYPE = "uint16"
+#: SCL classes masked out of the reflectance bands: no data, saturated, cloud shadow, cloud (medium, high
+#: probability), thin cirrus, snow.
+SCL_MASKED = (0, 1, 3, 8, 9, 10, 11)
 
 
 def boa_offset_for(processing_baseline) -> int:
@@ -45,6 +54,8 @@ def stack_scene(
     bands: Sequence[str] = S2_BANDS,
     ref: str = "B04",
     boa_offset: int = 0,
+    mask_scl: bool = True,
+    stats: Optional[dict] = None,
 ) -> str:
     """Write one multi-band master COG from per-band files and return `out_path`.
 
@@ -52,10 +63,19 @@ def stack_scene(
     the other bands are resampled onto it, bilinear for reflectance and nearest for the bands in
     `CATEGORICAL`. Band descriptions are the band names, in `bands` order.
 
+    With `mask_scl` (the default) and an SCL band among `bands`, the reflectance bands are set to nodata
+    wherever SCL is in `SCL_MASKED`, at the native 10 m, before the file is written. SCL itself is
+    written as it is. A dict passed as `stats` is filled with the scene's counts: `data_px` (pixels whose
+    SCL is not no data), `masked_px` (pixels masked for cloud, shadow, snow or saturation) and
+    `masked_pct` (their share of `data_px`).
+
     `boa_offset` is subtracted from the reflectance bands, never below 1 so that a valid pixel does
     not become nodata. Pass `boa_offset_for(baseline)` so that an index (a ratio) is taken on true
-    reflectance. Overviews are nearest neighbour, so SCL keeps its class ids at every level.
+    reflectance. Overviews are averages that skip nodata, so a reflectance overview is the mean of its
+    valid pixels; SCL is valid at full resolution only.
     """
+    import contextlib
+
     import rasterio
     from rasterio.enums import Resampling
     from rasterio.shutil import copy as rio_copy
@@ -95,32 +115,57 @@ def stack_scene(
             height, width = r.height, r.width
 
         staged = os.path.join(scratch, "stack.tif")
-        with rasterio.open(staged, "w", **profile) as dst:
-            for i, name in enumerate(bands, start=1):
-                categorical = name in CATEGORICAL
-                offset = 0 if categorical else int(boa_offset)
-                resampling = Resampling.nearest if categorical else Resampling.bilinear
-                with rasterio.open(band_paths[name]) as src:
-                    with WarpedVRT(
+        masking = mask_scl and "SCL" in bands
+        data_px = masked_px = 0
+        with contextlib.ExitStack() as stack:
+            dst = stack.enter_context(rasterio.open(staged, "w", **profile))
+            vrts = {}
+            for name in bands:
+                src = stack.enter_context(rasterio.open(band_paths[name]))
+                vrts[name] = stack.enter_context(
+                    WarpedVRT(
                         src,
                         crs=profile["crs"],
                         transform=profile["transform"],
                         width=width,
                         height=height,
-                        resampling=resampling,
+                        resampling=(
+                            Resampling.nearest
+                            if name in CATEGORICAL
+                            else Resampling.bilinear
+                        ),
                         nodata=NODATA,
                         dtype=_DTYPE,
-                    ) as vrt:
-                        # One block row at a time: memory stays bounded for a full scene.
-                        for row in range(0, height, BLOCKSIZE):
-                            win = Window(0, row, width, min(BLOCKSIZE, height - row))
-                            data = vrt.read(1, window=win)
-                            if offset:
-                                valid = data != NODATA
-                                shifted = np.maximum(data.astype("int32") - offset, 1)
-                                data = np.where(valid, shifted, NODATA).astype(_DTYPE)
-                            dst.write(data, i, window=win)
+                    )
+                )
+            # One block row at a time: memory stays bounded for a full scene.
+            for row in range(0, height, BLOCKSIZE):
+                win = Window(0, row, width, min(BLOCKSIZE, height - row))
+                bad = None
+                if masking:
+                    scl = vrts["SCL"].read(1, window=win)
+                    bad = np.isin(scl, SCL_MASKED)
+                    data_px += int((scl != NODATA).sum())
+                    masked_px += int((bad & (scl != NODATA)).sum())
+                for i, name in enumerate(bands, start=1):
+                    categorical = name in CATEGORICAL
+                    data = vrts[name].read(1, window=win)
+                    offset = 0 if categorical else int(boa_offset)
+                    if offset:
+                        valid = data != NODATA
+                        shifted = np.maximum(data.astype("int32") - offset, 1)
+                        data = np.where(valid, shifted, NODATA).astype(_DTYPE)
+                    if bad is not None and not categorical:
+                        data = np.where(bad, NODATA, data).astype(_DTYPE)
+                    dst.write(data, i, window=win)
+            for i, name in enumerate(bands, start=1):
                 dst.set_band_description(i, name)
+        if stats is not None:
+            stats.update(
+                data_px=data_px,
+                masked_px=masked_px,
+                masked_pct=round(100.0 * masked_px / data_px, 2) if data_px else 0.0,
+            )
 
         cog = os.path.join(scratch, "scene.tif")
         opts = creation_opts(_DTYPE, compress="auto", driver="COG")
@@ -129,7 +174,7 @@ def stack_scene(
             cog,
             driver="COG",
             blocksize=BLOCKSIZE,
-            overview_resampling="NEAREST",
+            overview_resampling="AVERAGE",
             overview_count=len(OVERVIEW_LEVELS),
             bigtiff="IF_SAFER",
             **opts,
@@ -146,7 +191,8 @@ def stack_scene(
 
 def _clean(rows: List[dict], max_cloud: float, max_nodata: float) -> List[dict]:
     """Scenes at or under the cloud limit, and under the no-data limit or with no no-data figure (kept, not dropped:
-    the STAC figure is a whole-tile one, and a scene without it is judged by the coverage check on the result)."""
+    the STAC figure is a whole-tile one, and a scene without it is judged by the coverage check on the result).
+    """
     return [
         r
         for r in rows
@@ -158,10 +204,14 @@ def _clean(rows: List[dict], max_cloud: float, max_nodata: float) -> List[dict]:
 
 def _best_on_day(rows: List[dict]) -> dict:
     """The scene of one tile on one day: the least cloud, ties (the same whole percent) by item id."""
-    return min(rows, key=lambda r: (round(r["cloud_pct"]), r["cloud_pct"], r["item_id"]))
+    return min(
+        rows, key=lambda r: (round(r["cloud_pct"]), r["cloud_pct"], r["item_id"])
+    )
 
 
-def _cover(rows: List[dict], tiles: Sequence[str], later_is_better: bool) -> Dict[str, dict]:
+def _cover(
+    rows: List[dict], tiles: Sequence[str], later_is_better: bool
+) -> Dict[str, dict]:
     """One scene per tile, on as few dates as possible: take the date that serves most tiles, then the date
     that serves most of the rest, and so on. A tie goes to the date closest to the fire (`later_is_better`
     for the window before it, earlier for the window after)."""
@@ -172,12 +222,18 @@ def _cover(rows: List[dict], tiles: Sequence[str], later_is_better: bool) -> Dic
         by_day: Dict[str, Dict[str, List[dict]]] = {}
         for r in rows:
             if r["mgrs_tile"] in remaining:
-                by_day.setdefault(r["date"][:10], {}).setdefault(r["mgrs_tile"], []).append(r)
+                by_day.setdefault(r["date"][:10], {}).setdefault(
+                    r["mgrs_tile"], []
+                ).append(r)
         if not by_day:
             break
         day = min(
             by_day,
-            key=lambda d: (-len(by_day[d]), sign * datetime.date.fromisoformat(d).toordinal(), d),
+            key=lambda d: (
+                -len(by_day[d]),
+                sign * datetime.date.fromisoformat(d).toordinal(),
+                d,
+            ),
         )
         for tile, rs in by_day[day].items():
             chosen[tile] = _best_on_day(rs)
@@ -204,14 +260,27 @@ def choose_scene_pairs(
     Returns `{"pre": {tile: row}, "post": {tile: row}, "dropped": [tiles without a candidate on a side],
     "orbit_mismatch": [tiles whose post orbit is not their pre orbit]}`.
     """
-    pre_c, post_c = _clean(pre, max_cloud, max_nodata), _clean(post, max_cloud, max_nodata)
+    pre_c, post_c = _clean(pre, max_cloud, max_nodata), _clean(
+        post, max_cloud, max_nodata
+    )
     tiles = sorted({r["mgrs_tile"] for r in pre_c} & {r["mgrs_tile"] for r in post_c})
-    dropped = sorted(({r["mgrs_tile"] for r in pre} | {r["mgrs_tile"] for r in post}) - set(tiles))
+    dropped = sorted(
+        ({r["mgrs_tile"] for r in pre} | {r["mgrs_tile"] for r in post}) - set(tiles)
+    )
     pre_sel = _cover(pre_c, tiles, later_is_better=True)
     post_rows: List[dict] = []
     for t in tiles:
-        same = [r for r in post_c if r["mgrs_tile"] == t and r["orbit"] == pre_sel[t]["orbit"]]
+        same = [
+            r
+            for r in post_c
+            if r["mgrs_tile"] == t and r["orbit"] == pre_sel[t]["orbit"]
+        ]
         post_rows += same or [r for r in post_c if r["mgrs_tile"] == t]
     post_sel = _cover(post_rows, tiles, later_is_better=False)
     mismatch = [t for t in tiles if post_sel[t]["orbit"] != pre_sel[t]["orbit"]]
-    return {"pre": pre_sel, "post": post_sel, "dropped": dropped, "orbit_mismatch": mismatch}
+    return {
+        "pre": pre_sel,
+        "post": post_sel,
+        "dropped": dropped,
+        "orbit_mismatch": mismatch,
+    }

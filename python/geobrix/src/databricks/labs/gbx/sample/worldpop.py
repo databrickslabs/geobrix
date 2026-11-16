@@ -31,12 +31,14 @@ import hashlib
 import math
 import os
 import re
+import shutil
 import warnings
 from datetime import datetime
 from typing import Optional, Sequence
 
 from databricks.labs.gbx.core import _http
 from databricks.labs.gbx.ds._listing import to_local_path
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 USA_2020_CONSTRAINED = (
     "https://data.worldpop.org/GIS/Population/Global_2000_2020_Constrained/"
@@ -100,8 +102,8 @@ class WorldPopDownloader:
 
     The file name carries a short hash of the bbox (and ``max_mpp``), so two bboxes in one
     ``out_dir`` do not overwrite each other and ``repair`` checks the file of THIS bbox.
-    A window is written to a scratch directory under ``out_dir`` and published with an
-    atomic ``os.replace``, so a failed call never damages an earlier file.
+    A window is written on local disk (a Volume cannot take GDAL's seek-back header write), copied to a
+    scratch directory under ``out_dir`` and published with an atomic ``os.replace``, so a failed call never damages an earlier file.
 
     ``max_mpp`` (source-CRS units: DEGREES for these EPSG:4326 grids, 1/1200 is native) is
     passed to ``windowed_download`` to decimate the read, as StacClient and DemDownloader do.
@@ -214,12 +216,18 @@ class WorldPopDownloader:
         scratch = new_scratch_dir(out_dir)
         os.makedirs(scratch, exist_ok=True)
         tmp = os.path.join(scratch, os.path.basename(dest))
+        # GDAL writes a GeoTIFF's header last, by seeking back, which a Volume does not allow (the file keeps a
+        # zero IFD offset and no reader opens it). So the window is written on local disk and copied over in one
+        # sequential pass, then published with an atomic rename.
+        local_dir = new_local_temp_dir("gbx_worldpop_")
+        local = os.path.join(local_dir, os.path.basename(dest))
         kw = {"bbox_crs": "EPSG:4326", "allowed_hosts": _ALLOWED_HOSTS}
         if max_mpp is not None:
             kw["max_mpp"] = max_mpp
         try:
             source = self._source(out_dir, cache_dir)  # the href, or the local copy
-            self._download(source, tmp, bbox, **kw)
+            self._download(source, local, bbox, **kw)
+            shutil.copyfile(local, tmp)
             os.replace(
                 tmp, dest
             )  # publish atomically; an earlier file is untouched on failure
@@ -229,6 +237,7 @@ class WorldPopDownloader:
             warnings.warn(f"WorldPop window not written: {exc}", stacklevel=2)
             return spark.createDataFrame([self._row(dest, False)], _SCHEMA)
         finally:
+            shutil.rmtree(local_dir, ignore_errors=True)
             remove_scratch_dir(scratch)
         return spark.createDataFrame([self._row(dest, True)], _SCHEMA)
 

@@ -96,9 +96,12 @@ def test_download_passes_bbox_and_allowed_host(spark, tmp_path):
     assert bbox == tuple(BBOX)
     assert kw["bbox_crs"] == "EPSG:4326"
     assert kw["allowed_hosts"] == ("data.worldpop.org",)
-    # the window is written to a scratch path, then published under the bbox-tagged name
+    # the window is written on local disk (never under the Volume out_dir), then published under the bbox-tagged name
     assert os.path.basename(res["out_file_path"]) == os.path.basename(outpath)
-    assert ".gbx_scratch" in outpath and ".gbx_scratch" not in res["out_file_path"]
+    assert (
+        not outpath.startswith(str(tmp_path))
+        and ".gbx_scratch" not in res["out_file_path"]
+    )
     assert res["is_out_file_valid"] is True
     assert res["out_file_sz"] == os.path.getsize(res["out_file_path"]) > 0
     assert outpath.endswith(".tif")
@@ -427,3 +430,28 @@ def test_read_skips_the_source_copy(spark, tmp_path):
     out = str(tmp_path / "out")
     dl.download(SRC_BBOX, out, spark=spark)
     assert dl.read(out, spark=spark).count() == 1  # the window, not the source copy
+
+
+def test_window_is_written_where_gdal_can_seek_not_under_the_volume(
+    spark, tmp_path, volume_like_tmp
+):
+    """A Volume refuses GDAL's header write-back: the window must be written on local disk and copied over."""
+    out_dir = str(tmp_path / "vol")
+    fake = (
+        _FakeDownload()
+    )  # writes with rasterio: refused under out_dir, as a Volume refuses it
+    res = (
+        WorldPopDownloader(_download=fake)
+        .download(BBOX, out_dir, spark=spark)
+        .collect()[0]
+    )
+    assert res["is_out_file_valid"] is True
+    import rasterio
+
+    with rasterio.open(
+        res["out_file_path"]
+    ) as src:  # published bytes are a readable GeoTIFF
+        assert src.shape == (2, 2)
+    assert os.listdir(out_dir) == [
+        os.path.basename(res["out_file_path"])
+    ]  # no scratch left

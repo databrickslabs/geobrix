@@ -188,12 +188,16 @@ def _install_pairs(p: Params, schema: str) -> List[Tuple[str, str]]:
 
 
 def _slice_pairs(
-    p: Params, schema: str, tables: Sequence[str], notes: List[str]
+    p: Params,
+    schema: str,
+    tables: Sequence[str],
+    notes: List[str],
+    vol: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     from databricks.labs.gbx.bench import oracles, probes
 
     with tempfile.TemporaryDirectory(prefix="t28-fixtures-") as d:
-        pairs = oracles.uc_sql(probes.uc_slice_cases(tables), p.catalog, schema, d)
+        pairs = oracles.uc_sql(probes.uc_slice_cases(tables), p.catalog, schema, d, vol)
     # A virtual-tile row names a fixture path of this machine. The function refuses the tile before it opens the path,
     # so the path only has to be stable: it is the same text on every machine.
     pairs = [(cid, sql.replace(d, FIXTURE_PATH)) for cid, sql in pairs]
@@ -945,7 +949,7 @@ def write(out_dir: str, files: Sequence[File], runs: Sequence[Run], p: Params) -
         fh.write(manifest_md(files, runs, p))
 
 
-_GEOM_TYPE = re.compile(r"GEOMETRY\((?:ANY|\d+)\)", re.I)
+_GEOM_TYPE = re.compile(r"GEOMETRY\((?:ANY|\d+)\)|(?<=\bAS )FILE\b", re.I)
 _TVF_CALL = re.compile(
     r"(\b(?:FROM|JOIN|LATERAL)\s+|,\s*)`[^`]+`\.`[^`]+`\.(gbx_\w+\s*\()", re.I
 )
@@ -953,7 +957,7 @@ _TVF_CALL = re.compile(
 
 def spark_view(sql: str) -> str:
     """The statement as open-source Spark can parse it. Two Databricks forms are rewritten, nothing else: a GEOMETRY(n)
-    type becomes BINARY and a table function in FROM / LATERAL loses its catalog.schema qualifier.
+    or FILE type becomes BINARY and a table function in FROM / LATERAL loses its catalog.schema qualifier.
     """
     return _TVF_CALL.sub(r"\1\2", _GEOM_TYPE.sub("BINARY", sql))
 

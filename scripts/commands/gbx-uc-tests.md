@@ -11,6 +11,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
   - `core` runs the grid and vector oracle tables and all example files.
   - `full` adds the raster tables to `core`.
 - `--against SCHEMA` - run the scope against the existing install in `SCHEMA`. No build, stage, install or cleanup. It writes `evidence-adhoc.json`, never `evidence.json`.
+- `--tables A,B` - with `--against`, run only these slice tables (for example `RASTER_CONSTRUCTOR`). Not evidence, so a gated run refuses it. A recipe row that reads `{vol}` needs fixture files: the run builds them in the dev container (`examples/tests/uc_fixtures.py`) and stages them into `<volroot>/uc-it/adhoc/fixtures/` (a gated run: `<its folder>/fixtures/`, dropped with it).
 - `--warehouse-id ID` - SQL warehouse. Default `GBX_UC_GATE_WAREHOUSE_ID__<profile>` in `examples/tests/databricks_cluster_config.env`.
   - If that key is absent, the default is `GBX_UC_GATE_WAREHOUSE_ID`, then `GBX_UC_WAREHOUSE_ID`.
   - The ID is local config: it lives in that untracked file, never in a committed file.

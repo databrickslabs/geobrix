@@ -308,6 +308,9 @@ def test_spark_view_rewrites_only_the_two_databricks_forms():
     sql = "SELECT CAST(g AS GEOMETRY(ANY)), CAST(h AS GEOMETRY(4326)) FROM `c`.`s`.gbx_bng_kringexplode('x', 1) AS t, LATERAL `c`.`s`.gbx_x(t.a) u"
     want = "SELECT CAST(g AS BINARY), CAST(h AS BINARY) FROM gbx_bng_kringexplode('x', 1) AS t, LATERAL gbx_x(t.a) u"
     assert t28.spark_view(sql) == want
+    assert t28.spark_view(
+        "SELECT CAST(CAST(f AS FILE) AS BINARY), to_file('/Volumes/a')"
+    ) == ("SELECT CAST(CAST(f AS BINARY) AS BINARY), to_file('/Volumes/a')")
     scalar = "SELECT `c`.`s`.gbx_rst_width(t) FROM tbl"
     assert t28.spark_view(scalar) == scalar  # a scalar call keeps its qualifier
 

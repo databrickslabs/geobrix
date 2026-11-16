@@ -1208,3 +1208,49 @@ def test_an_unknown_install_and_dirty_sources_are_refused(republish, driver, mon
     put(_record())
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: ["python/geobrix/src/x.py"])
     assert run() == 1 and "uncommitted" in capsys.readouterr().err and not (out / "evidence.json").exists()
+
+
+def test_slice_tables_narrows_to_the_named_tables(driver):
+    from databricks.labs.gbx.bench import probes
+
+    assert driver.narrow_tables("raster_constructor, RASTER_STAT") == ("RASTER_CONSTRUCTOR", "RASTER_STAT")
+    assert driver.slice_tables("full") == probes.UC_SLICE_TABLES
+    with pytest.raises(ValueError, match="names no slice table"):
+        driver.narrow_tables("NO_SUCH_TABLE")
+
+
+def test_the_container_slice_carries_the_tables_and_the_fixture_folder(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import t28
+
+    class OsgeoUnavailable(Exception):
+        pass
+
+    calls = []
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        calls.append(argv)
+        (tmp_path / "slice-custom.json").write_text(json.dumps({"pairs": [["c1", "SELECT 1"]]}))
+        return 0, ""
+
+    monkeypatch.setattr(t28, "_slice_pairs", lambda *a, **k: (_ for _ in ()).throw(OsgeoUnavailable("x")))
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "_CONTAINER_SLICE", {})
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    assert driver.slice_pairs("cat", "sch", ("RASTER_CONSTRUCTOR",), "/Volumes/c/s/v/uc-it/adhoc") == [("c1", "SELECT 1")]
+    inner = calls[0][-1]
+    assert "--tables RASTER_CONSTRUCTOR" in inner and "--fixtures-vol /Volumes/c/s/v/uc-it/adhoc" in inner
+
+
+def test_a_recipe_that_reads_vol_needs_the_fixture_files(driver):
+    from databricks.labs.gbx.bench import probes
+
+    cases = probes.uc_slice_cases(("RASTER_CONSTRUCTOR",))
+    assert driver.needs_fixtures(cases)
+    assert not driver.needs_fixtures(probes.uc_slice_cases(("GRID_SCALAR",)))
+
+
+def test_the_tables_option_needs_against(driver):
+    a = driver.parse_args(["--profile", "p", "--scope", "full", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--tables", "RASTER_STAT"])
+    assert a.tables == "RASTER_STAT" and a.against is None
+    assert driver.main(["--profile", "p", "--scope", "full", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--tables", "RASTER_STAT", "--dry-run"]) == 2

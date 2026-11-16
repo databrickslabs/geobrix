@@ -383,15 +383,16 @@ def _needs_osgeo(exc: BaseException) -> bool:
     return type(exc).__name__ == "OsgeoUnavailable"
 
 
-def _slice_via_container(catalog: str, schema: str, tables) -> dict:
+def _slice_via_container(catalog: str, schema: str, tables, vol: Optional[str] = None) -> dict:
     """Build the slice statements inside the dev container, where osgeo exists (the raster engine rows need it).
 
     The container sees this checkout at /root/geobrix, so it writes the JSON where the host reads it.
     """
     from databricks.labs.gbx.bench import probes
 
-    scope = "full" if tuple(tables) == tuple(probes.UC_SLICE_TABLES) else "core"
-    key = (catalog, schema, scope)
+    tables = tuple(tables)
+    scope = "full" if tables == tuple(probes.UC_SLICE_TABLES) else "core" if tables == tuple(probes.UC_CORE_TABLES) else "custom"
+    key = (catalog, schema, tables, vol)
     if key not in _CONTAINER_SLICE:
         out = OUT_DIR / f"slice-{scope}.json"
         rel = out.relative_to(REPO_ROOT).as_posix()
@@ -400,8 +401,12 @@ def _slice_via_container(catalog: str, schema: str, tables) -> dict:
         say(f"the host has no osgeo (GDAL's Python bindings): building the {scope} statements in the dev container")
         inner = (
             f"cd /root/geobrix && PYTHONPATH=python/geobrix/src python3 examples/tests/uc_integration.py "
-            f"--emit-slice {rel} --scope {scope} --catalog {catalog} --against {schema}"
+            f"--emit-slice {rel} --scope {'core' if scope == 'core' else 'full'} --catalog {catalog} --against {schema}"
         )
+        if scope == "custom":
+            inner += f" --tables {','.join(tables)}"
+        if vol:
+            inner += f" --fixtures-vol {vol}"
         rc, text = run_cmd(["bash", str(CMD / "gbx-docker-exec.sh"), inner], OUT_DIR / f"slice-{scope}.log", "slice statements", echo=False)
         if rc != 0 or not out.is_file():
             tail = " | ".join(text.strip().splitlines()[-3:])[:400]
@@ -454,16 +459,17 @@ def judge_uc(cases, results: dict, scope: str) -> List[str]:
     return [m for m in failures if failed_id(m) not in redo] + again
 
 
-def slice_pairs(catalog: str, schema: str, tables) -> list:
+def slice_pairs(catalog: str, schema: str, tables, vol: Optional[str] = None) -> list:
+    """The slice statements. `vol` is the Volume folder a recipe's `{vol}` names (where the fixture files are staged)."""
     from databricks.labs.gbx.bench import t28
 
     notes: List[str] = []
     try:
-        return t28._slice_pairs(t28.Params(catalog=catalog, schema=schema), schema, tables, notes)
+        return t28._slice_pairs(t28.Params(catalog=catalog, schema=schema), schema, tables, notes, vol)
     except Exception as exc:  # noqa: BLE001 - only a missing osgeo is handled here
         if not _needs_osgeo(exc):
             raise
-        return [tuple(p) for p in _slice_via_container(catalog, schema, tables)["pairs"]]
+        return [tuple(p) for p in _slice_via_container(catalog, schema, tables, vol)["pairs"]]
 
 
 def slice_batchable(tables) -> set:
@@ -480,10 +486,51 @@ def warehouse_statements(pairs, batchable, size: int) -> int:
     return len(uc_sql.plan_units(pairs, batchable, size))
 
 
+def narrow_tables(only: str) -> tuple:
+    """The slice tables a --tables list (comma separated, any case) names."""
+    from databricks.labs.gbx.bench import probes
+
+    names = tuple(n.strip().upper() for n in only.split(",") if n.strip())
+    bad = [n for n in names if n not in probes.UC_SLICE_TABLES]
+    if bad:
+        raise ValueError(f"--tables names no slice table: {bad}; the slice tables are {list(probes.UC_SLICE_TABLES)}")
+    return names
+
+
 def slice_tables(scope: str) -> tuple:
     from databricks.labs.gbx.bench import probes
 
     return probes.UC_SLICE_TABLES if scope == "full" else probes.UC_CORE_TABLES  # smoke samples the core tables
+
+
+FIXTURE_SCRIPT = HERE / "uc_fixtures.py"
+FIXTURE_DIR = OUT_DIR / "fixtures"
+
+
+def needs_fixtures(cases) -> bool:
+    """True when a UC row of `cases` is a recipe that reads `{vol}` (a file the gate must stage)."""
+    return any(c.sql is not None and "{vol}" in c.sql for c in cases if "uc" in c.surfaces)
+
+
+def build_fixtures() -> Dict[str, Path]:
+    """The fixture files (examples/tests/uc_fixtures.py), built in the dev container (they need rasterio) unless the
+    copies in test-logs/uc-integration/fixtures are newer than the script and the rows' constants."""
+    sys.path.insert(0, str(HERE))
+    import uc_fixtures
+
+    paths = {n: FIXTURE_DIR / n for n in uc_fixtures.FILES}
+    table = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/bench/oracle_tables/raster_constructor.py"
+    newest = max(FIXTURE_SCRIPT.stat().st_mtime, table.stat().st_mtime, (REPO_ROOT / "python/geobrix/test/_cog_fixture.py").stat().st_mtime)
+    if all(p.is_file() and p.stat().st_mtime >= newest for p in paths.values()):
+        return paths
+    rel = FIXTURE_DIR.relative_to(REPO_ROOT).as_posix()
+    say("building the fixture files in the dev container")
+    inner = f"cd /root/geobrix && PYTHONPATH=python/geobrix/src:python/geobrix python3 examples/tests/uc_fixtures.py --out {rel}"
+    rc, text = run_cmd(["bash", str(CMD / "gbx-docker-exec.sh"), inner], OUT_DIR / "fixtures.log", "fixture files", echo=False)
+    if rc != 0 or not all(p.is_file() for p in paths.values()):
+        tail = " | ".join(text.strip().splitlines()[-3:])[:400]
+        raise StepFailed(f"building the fixture files failed (exit {rc}): {tail}\nFix: start the container (`gbx:docker:start`); the log is {OUT_DIR / 'fixtures.log'}")
+    return paths
 
 
 def example_pairs(catalog: str, schema: str, prefixes: Optional[str] = None) -> Dict[Path, list]:
@@ -522,6 +569,8 @@ def parse_args(argv=None):
     p.add_argument("--run-part", metavar="I/N", type=parse_run_part, default=None, help="run part I of a gated run cut into N parts (N >= 2): parts 1 to N-1 deal the slice, part N runs the example files; evidence.json comes with the last part to finish")
     p.add_argument("--drop-parts", metavar="SHA12", default=None, help="drop the schema and the Volume and workspace folders of the unfinished parted run of commit SHA12, then stop")
     p.add_argument("--republish", metavar="SHA12", default=None, help="write evidence.json again from the record of a finished parted run of this install commit (and --scope): every part must have passed, and the record must cover the sources of HEAD. No workspace call")
+    p.add_argument("--tables", metavar="A,B", default=None, help="run only these slice tables (names as in probes.UC_SLICE_TABLES); needs --against, and writes evidence-adhoc.json like every --against run")
+    p.add_argument("--fixtures-vol", metavar="DIR", default=None, help=argparse.SUPPRESS)  # internal: the folder a recipe's {vol} names (with --emit-slice)
     p.add_argument("--judge-uc", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: judge these results (run in the dev container, where osgeo exists)
     p.add_argument("--judge-out", metavar="FILE", default=None, help=argparse.SUPPRESS)
     p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
@@ -545,6 +594,8 @@ class Gate:
         # A kept install reads its wheel from this folder at every call: it gets a folder of its own, by schema.
         sub = f"uc-install/{install_into}" if install_into else f"uc-it/{self.sha12}"
         self.folder = f"{args.volroot.rstrip('/')}/{sub}"
+        # The folder a recipe's `{vol}` names: the run's own folder (dropped with it), or a fixed one for an --against run.
+        self.vol = f"{args.volroot.rstrip('/')}/uc-it/adhoc" if args.against else self.folder
         self.ws_dir: Optional[str] = None
         self.run_dir = OUT_DIR / self.sha12
         self.warehouse = args.warehouse_id or warehouse_from_config(profile=args.profile or "")
@@ -690,6 +741,26 @@ class Gate:
             argv += ["--warehouse-id", self.warehouse]
         return argv
 
+    def step_fixtures(self) -> None:
+        """Stage the fixture files into `<vol>/fixtures/` (idempotent: a file of the right size is left alone)."""
+        files = build_fixtures()
+        dest = f"{self.vol}/fixtures"
+        w = self.client()
+        w.files.create_directory(dest)
+        have = {e.name: e.file_size for e in w.files.list_directory_contents(dest) if not e.is_directory}
+        for name, path in files.items():
+            size = path.stat().st_size
+            if have.get(name) == size:
+                continue
+            say(f"staging {dest}/{name} ({size} bytes)")
+            with path.open("rb") as fh:
+                w.files.upload(f"{dest}/{name}", fh, overwrite=True)
+        have = {e.name: e.file_size for e in w.files.list_directory_contents(dest) if not e.is_directory}
+        wrong = {n: (have.get(n), p.stat().st_size) for n, p in files.items() if have.get(n) != p.stat().st_size}
+        if wrong:
+            raise StepFailed(f"the staged fixture files differ in size from the local ones (staged, local): {wrong}")
+        say(f"fixture files staged in {dest}: {', '.join(files)}")
+
     def step_warehouse(self, tables, known: Dict[str, str], part: Tuple[int, int] = (1, 1)) -> Tuple[dict, Optional[dict]]:
         """(slice verdict, examples verdict) of this run's share: all of it, or part `part` (I, N) of a parted run.
 
@@ -699,13 +770,17 @@ class Gate:
 
         i_part, n_parts = part
         label = "" if n_parts == 1 else f"part {i_part}/{n_parts}: "
-        pairs = slice_pairs(self.a.catalog, self.schema, tables)
+        all_cases = probes.uc_slice_cases(tables)
+        if needs_fixtures(all_cases):
+            self.step_fixtures()
+        pairs = slice_pairs(self.a.catalog, self.schema, tables, self.vol)
         if self.a.scope == "smoke":
             pairs = pairs[:SMOKE_STATEMENTS]
-        all_cases = probes.uc_slice_cases(tables)
         in_pairs = {cid for cid, _ in pairs}
         self.slice_expected = sorted(c.cid for c in all_cases if "uc" in c.surfaces and c.cid in in_pairs)
         pairs, run_examples = part_work(pairs, i_part, n_parts)
+        if getattr(self.a, "tables", None):
+            run_examples = False  # a narrowed run checks its tables only
         say(f"step 5/6: {label}" + ("the oracle slice and the example files on the warehouse, in parallel" if pairs and run_examples
                                      else "the oracle slice on the warehouse" if pairs else "the example files on the warehouse"))
         batchable = slice_batchable(tables)
@@ -1079,7 +1154,7 @@ def main(argv=None) -> int:
         if not a.against:
             print("--emit-slice needs --against SCHEMA (the schema the statements are written for)", file=sys.stderr)
             return 2
-        pairs = slice_pairs(a.catalog, a.against, slice_tables(a.scope))
+        pairs = slice_pairs(a.catalog, a.against, narrow_tables(a.tables) if a.tables else slice_tables(a.scope), a.fixtures_vol)
         Path(a.emit_slice).write_text(json.dumps({"pairs": pairs}))
         say(f"wrote {len(pairs)} statements to {a.emit_slice}")
         return 0
@@ -1121,10 +1196,17 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    tables = slice_tables(a.scope)
+    if a.tables and not a.against:
+        print("--tables narrows the slice, so the run is not evidence: it needs --against SCHEMA", file=sys.stderr)
+        return 2
+    try:
+        tables = narrow_tables(a.tables) if a.tables else slice_tables(a.scope)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if a.dry_run:
         try:
-            pairs = slice_pairs(a.catalog, g.schema, tables)
+            pairs = slice_pairs(a.catalog, g.schema, tables, g.vol)
         except StepFailed as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 1

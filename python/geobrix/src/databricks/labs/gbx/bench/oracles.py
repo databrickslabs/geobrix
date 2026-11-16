@@ -4069,7 +4069,9 @@ def _check_approx(case: Case, out) -> Optional[str]:
 
     if out is None:
         return f"{case.cid}: got NULL, want {case.expect}"
-    got, want = flat(out), flat(case.expect)
+    # a recipe's list answer arrives as the API's JSON text: its DOUBLEs are strings (the coercion by the function's declared
+    # return type does not apply to a recipe, whose answer is the statement's own)
+    got, want = [float(g) for g in flat(out)], flat(case.expect)
     if len(got) != len(want) or not all(
         math.isclose(g, w, rel_tol=1e-9, abs_tol=1e-12) for g, w in zip(got, want)
     ):

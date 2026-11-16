@@ -95,3 +95,18 @@ def test_the_clip_window_needs_more_than_one_range_past_the_head():
     blob = cog_bytes()
     plan = tier_b.fromfile_plan(blob[: cr.HEAD_BYTES], len(blob), G(), None, None)
     assert len(plan["offs"]) > 1 and plan["offs"][0] >= cr.HEAD_BYTES
+
+
+def test_a_recipe_list_of_doubles_that_arrives_as_text_is_judged_by_value():
+    c = UC_ROWS["uc_fromfile_clip_pixels"]
+    want = rc._clip_avg()
+    assert (
+        oracles.check_uc_results(
+            [c], {c.cid: {"value": [repr(v) for v in want]}}, "/tmp"
+        )
+        == []
+    )
+    bad = oracles.check_uc_results(
+        [c], {c.cid: {"value": ["1.0", "2.0", "3.0"]}}, "/tmp"
+    )
+    assert len(bad) == 1 and "uc_fromfile_clip_pixels" in bad[0]

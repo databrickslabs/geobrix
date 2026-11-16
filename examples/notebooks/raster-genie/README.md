@@ -29,7 +29,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 | `01_smokehouse_creek.ipynb` | The Smokehouse Creek slice: `aois`, Sentinel-2 master COGs, WorldPop, the `rasters` FILE table, the `coverage` view, the burn severity query, a map and the Genie Agent. |
 | [`genie/agent_spec.py`](genie/agent_spec.py) | The two Genie Agents (live and precomputed): their tables, attached GeoBrix functions, instruction text and example SQL. |
 | [`genie/seed_agent.py`](genie/seed_agent.py) | Creates or updates a Genie space from `agent_spec` and prints its id: `python genie/seed_agent.py --profile <name> --warehouse-id <id> --variant live\|precomputed [--space-id <id>]`. |
-| [`genie/run_questions.py`](genie/run_questions.py) | Asks one or both agents (`--space live\|precomputed\|both`) the headline questions in Agent mode, several times, and writes the answers, SQL, timings and a correct/incorrect verdict per space to `evidence.json`. |
+| [`genie/run_questions.py`](genie/run_questions.py) | Asks one or both agents (`--space live\|precomputed\|both`) plain-language questions in Agent mode, `--runs` times each, and writes a row per run (answer, SQL, seconds, correct) to `evidence.json`. Ids come from `--live-id`, `--precomputed-id`, `--warehouse-id` or the environment (`GENIE_SPACE_ID`, `GENIE_SPACE_ID_PRECOMPUTED`, `GENIE_WAREHOUSE_ID`). `--questions Q3,Q1,Q5n` picks the questions (live: all three; precomputed: Q3 and Q1). The agent's SQL is re-run on the warehouse and its rows are judged; `--no-rerun` judges the answer text alone. Q5n has no example in the agent: it asks for Hutchinson County's mean burn severity and acres at moderate-low or worse, and the row records whether the SQL is new (`novel`) and how close it is to the examples (`similarity`). |
 | [`lakeflow/land/scenes.py`](lakeflow/land/scenes.py) | `stack_scene`: per-band Sentinel-2 files in, one master COG out. Tested in `lakeflow/tests/`. |
 
 Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties it touches and the Texas outline), `s2_scene_assets` (the Sentinel-2 scenes chosen), `rasters` (one row per master COG, with a `FILE EXTERNAL` column), the `coverage` view, and `burn_severity_summary`.
@@ -54,6 +54,19 @@ Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties
 2. Run `01_smokehouse_creek.ipynb` top to bottom. It starts with `%run ./config_nb`.
 
 The first run downloads the national WorldPop file once (about 0.5 GB) and the Sentinel-2 windows (a few GB). Every step is guarded: files already on the Volume are not downloaded again and existing tables are not rewritten. A master COG without the current `GBX_STACK_VERSION` tag (written by an older `stack_scene`) is rebuilt, so master COGs written before the tag existed are rebuilt on the next full run. Set `FORCE_REBUILD = True` in the cell right after `%run ./config_nb` to rebuild everything.
+
+Rebuilt master COGs cascade: when any master COG is written in a run, the `rasters` table (the FILE size and checksum of each COG) is rewritten from the new files, the `coverage` view follows it, and `burn_severity_summary` is dropped and rebuilt by the burn step. The notebook stamps `gbx.stack_version` as a table property on `rasters`, so a table written for an older stack version is rewritten on the next run too. The cell that rebuilds the COGs prints which COGs were written.
+
+### Asking the agents
+
+After a run, seed the two spaces (`genie/seed_agent.py`, once per variant) and ask them the headline questions:
+
+```bash
+python examples/notebooks/raster-genie/genie/run_questions.py --profile <name> --space both \
+  --live-id <id> --precomputed-id <id> --warehouse-id <id> --runs 3
+```
+
+Run it after the notebook, not during it: the notebook rewrites the tables the agents read. Q3 (the fire's burned land, severity and people) and Q1 (the coverage of Hutchinson County) are judged against the notebook's own numbers; Q5n is a question no example answers, judged against a direct GeoBrix SQL run with the same method.
 
 ---
 

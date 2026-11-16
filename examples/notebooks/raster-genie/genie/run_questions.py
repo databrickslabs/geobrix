@@ -391,8 +391,8 @@ def check_q1(
     says_dates = _dates_in(answer_text, first) and _dates_in(answer_text, last)
     no_elev = bool(
         re.search(
-            r"\b(?:no|not|none|without|zero)\b[^.\n]{0,50}\b(?:elevation|dem)\b"
-            r"|\b(?:elevation|dem)\b[^.\n]{0,50}\b(?:not held|not available|none|no data|absent|missing)\b",
+            r"\b(?:no|not|none|without|zero|don't|doesn't|do not|does not)\b[^.\n]{0,50}\b(?:elevation|dem)\b"
+            r"|\b(?:elevation|dem)\b[^.\n]{0,50}\b(?:not held|not available|is not|are not|none|no data|absent|missing)\b",
             low,
         )
     )

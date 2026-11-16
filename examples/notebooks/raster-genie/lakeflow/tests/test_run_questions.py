@@ -181,6 +181,19 @@ def test_q1_text_must_state_resolution_dates_tier_and_no_elevation():
     )[0]
 
 
+def test_q1_accepts_a_plain_denial_of_elevation():
+    base = "Sentinel-2 L2A, enhanced tier, 10 m, from 27 Jan to 12 Mar 2024. "
+    for denial in (
+        "Elevation: We don't hold any elevation data yet.",
+        "Imagery is available, elevation is not.",
+        "We do not hold elevation.",
+    ):
+        assert rq.check_q1(base + denial, COV_ROWS, Q1_SQL)[0], denial
+    assert not rq.check_q1(
+        base + "Elevation is 600 m above sea level.", COV_ROWS, Q1_SQL
+    )[0]
+
+
 def test_q1_needs_the_live_read_in_the_live_space_only():
     assert not rq.check_q1(Q1_TEXT, COV_ROWS, [f"SELECT * FROM {T}coverage"])[0]
     assert rq.check_q1(

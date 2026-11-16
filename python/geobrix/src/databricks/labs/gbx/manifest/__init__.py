@@ -868,6 +868,11 @@ def _check_sql_levels(
             raise ValueError(
                 f"{name} L4: private (the Python routines a body calls) needs sql"
             )
+        if l4["sql"] == SQL_FROM_L0:
+            raise ValueError(
+                f"{name} L4: private needs a body of its own, not {SQL_FROM_L0!r}: the session's L0 function "
+                "would call a private routine that nothing creates there"
+            )
         listed = l4["private"]
         if (
             isinstance(listed, (str, bytes))

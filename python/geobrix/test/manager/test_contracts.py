@@ -1413,7 +1413,11 @@ PRIV_TVF = sorted(
         if f.levels["L4"].get("tvf_over") in MAN.private
     }
 )
-UC_NAMES.update({n: f"geobrix 0.6.0: {MAN.private[n].summary}" for n in PRIV_TVF})
+# the private routines a SQL body calls (L4 `private`) are created and verified with it too
+PRIV_SQL = sorted({p for f in UC_FNS for p in f.levels["L4"].get("private", ())})
+UC_NAMES.update(
+    {n: f"geobrix 0.6.0: {MAN.private[n].summary}" for n in PRIV_TVF + PRIV_SQL}
+)
 # the SQL helpers of a kernel are created and verified with it (one definition however many functions name it)
 SQL_HELPERS = {h["name"]: h for f in UC_SQL_FNS for h in sqlbody.l4_source(f)[1]}
 UC_NAMES.update(
@@ -1506,7 +1510,7 @@ def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
     ]
     assert sum("LANGUAGE PYTHON" in s for s in stmts) == len(python) - len(
         UC_SCALA_FNS
-    ) + len(PRIV_TVF)
+    ) + len(PRIV_TVF) + len(PRIV_SQL)
     assert spark.stmts[: len(stmts)] == stmts
 
 
@@ -1587,7 +1591,7 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
             else 2 if any(p.default for p in f.params) else 1
         )
         for f in UC_FNS
-    ) + len(PRIV_TVF) + len(SQL_HELPERS)
+    ) + len(PRIV_TVF) + len(PRIV_SQL) + len(SQL_HELPERS)
     assert all(ENV6_WHEEL in s for s in everything if "LANGUAGE PYTHON" in s)
     only = uc.install(
         "cat", "sch", VOLUME_DIR, only=["gbx_bng_eastnorthasbng"], dry_run=True

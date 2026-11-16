@@ -10,8 +10,9 @@ from databricks.labs.gbx import manifest, uc
 
 VOL = "/Volumes/cat/sch/vol/uc"
 RAW = json.loads(Path(manifest.__file__).with_name("functions.json").read_text())
-# A row with an L4 SQL body and a private routine that already exist; the fixture below joins them.
-FIXTURE_FN = "gbx_quadbin_kloop"
+# A row with an L4 SQL body of its own (not the L0 one) and a private routine that already exist; the fixture below
+# joins them.
+FIXTURE_FN = "gbx_rst_memsize"
 FIXTURE_PRIVATE = "gbx__rst_polygonize_features"
 
 
@@ -45,6 +46,36 @@ def test_private_key_requires_sql_and_known_names():
     )
 
 
+def test_private_with_the_l0_body_is_refused():
+    # the session's L0 function would call a private routine nothing creates there
+    levels = {
+        "L0": {"sql": "1"},
+        "L4": {"sql": "L0", "private": ["gbx__fromfile_plan"]},
+    }
+    with pytest.raises(ValueError, match="L0"):
+        manifest._check_sql_levels(
+            "gbx_rst_x", levels, "scalar", {"gbx__fromfile_plan"}
+        )
+
+
+def test_private_listing_a_name_twice_is_refused():
+    with pytest.raises(ValueError, match="twice"):
+        manifest._check_sql_levels(
+            "gbx_rst_x",
+            _levels(sql="select 1", private=["gbx__fromfile_plan"] * 2),
+            "scalar",
+            {"gbx__fromfile_plan"},
+        )
+
+
+def test_private_beside_a_stub_is_refused():
+    raw = copy.deepcopy(RAW)
+    row = next(r for r in raw["functions"] if "stub" in r["levels"].get("L4", {}))
+    row["levels"]["L4"]["private"] = [FIXTURE_PRIVATE]
+    with pytest.raises(ValueError, match="stub"):
+        manifest.parse(raw)
+
+
 def _with_private(monkeypatch, **extra_l4):
     """TEST FIXTURE ONLY: an in-memory manifest whose FIXTURE_FN row also lists FIXTURE_PRIVATE as `private`."""
     raw = copy.deepcopy(RAW)
@@ -75,17 +106,17 @@ def test_install_creates_private_routines_before_the_function(monkeypatch):
 
 
 def test_a_private_shared_by_two_functions_is_created_once(monkeypatch):
-    # the same private listed on a second SQL row: still one CREATE in the install
+    # a private gbx_rst_fromfile calls, listed on a second SQL row too: still one CREATE in the install
     raw = copy.deepcopy(RAW)
-    for name in (FIXTURE_FN, "gbx_h3_cellfill_array"):
-        row = next(r for r in raw["functions"] if r["sql_name"] == name)
-        row["levels"]["L4"]["private"] = [FIXTURE_PRIVATE]
+    shared = "gbx__fromfile_plan"
+    row = next(r for r in raw["functions"] if r["sql_name"] == FIXTURE_FN)
+    row["levels"]["L4"]["private"] = [shared]
     both = manifest.parse(raw)
     monkeypatch.setattr(manifest, "load", lambda: both)
     stmts = uc.install(
-        "cat", "sch", VOL, dry_run=True, only=[FIXTURE_FN, "gbx_h3_cellfill_array"]
+        "cat", "sch", VOL, dry_run=True, only=[FIXTURE_FN, "gbx_rst_fromfile"]
     )
-    assert sum(f"FUNCTION `cat`.`sch`.{FIXTURE_PRIVATE}(" in s for s in stmts) == 1
+    assert sum(f"FUNCTION `cat`.`sch`.{shared}(" in s for s in stmts) == 1
 
 
 def test_private_honours_volume_deps_like_a_tvf_private(monkeypatch):
@@ -110,7 +141,6 @@ def test_a_private_is_not_a_public_function(monkeypatch):
         uc._l4_names([FIXTURE_PRIVATE])
 
 
-@pytest.mark.xfail(strict=True, reason="row added in Task 5")
 def test_install_dry_run_creates_private_before_function():
     stmts = uc.install("cat", "sch", VOL, dry_run=True, only=["gbx_rst_fromfile"])
     text = "\n".join(stmts)

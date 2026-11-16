@@ -695,6 +695,7 @@
       "description": "Read the raster file at a path into a tile.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"

@@ -394,7 +394,6 @@ Some session functions have no UC function of the same name. The table says what
 | `gbx_rst_derivedband_agg` | aggregate | UC does not run caller-supplied Python. Run the aggregate in a notebook or job session. |
 | `gbx_rst_dtmfromgeoms_agg` | aggregate | GROUP BY the key and call `gbx_rst_dtmfromgeoms` on `collect_list(CAST(geom AS GEOMETRY(ANY)))`. |
 | `gbx_rst_frombands_agg` | aggregate | GROUP BY the key and call `gbx_rst_frombands` on `collect_list(tile)`. |
-| `gbx_rst_fromfile` | scalar | UC reads no raw path. Ingest the file in a notebook or job session into a Delta table, or read its bytes with `read_files` in `binaryFile` format and call `gbx_rst_fromcontent`. |
 | `gbx_rst_gridfrompoints_agg` | aggregate | GROUP BY the key and call `gbx_rst_gridfrompoints` on the collected points and the collected values. |
 | `gbx_rst_h3_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_h3_rasterize` on `collect_list(struct(cellid, value))`. |
 | `gbx_rst_merge_agg` | aggregate | GROUP BY the key and call `gbx_rst_merge` on `collect_list(tile)`. For many tiles, use the `gbx_mosaic_by_key` procedure. |

@@ -1005,11 +1005,12 @@ def _fromfile_cutline(geom, clip_crs):
     ``clip_crs``."""
     import shapely
 
-    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx._geom import geometry_value_as_ewkb, parse_geom
     from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
 
     try:
-        cut = parse_geom(geom)
+        # a GEOMETRY column arrives as a Geometry value (WKB without the SRID, and the SRID): EWKB keeps both
+        cut = parse_geom(geometry_value_as_ewkb(geom))
         if cut is not None:
             resolve_source_crs(shapely.get_srid(cut), crs=clip_crs)
     except Exception as exc:  # noqa: BLE001 - the reason is the answer
@@ -1139,7 +1140,8 @@ def _fromfile_impl(
     None (the SQL UDF paths, which do not bake a driver cap), materialize_decision
     falls back to session resolution.
 
-    ``path`` is a path or a FILE value (anything ``path_of`` reads). ``geom`` (WKB, EWKB, WKT or EWKT, its SRID winning
+    ``path`` is a path or a FILE value (anything ``path_of`` reads). ``geom`` (WKB, EWKB, WKT, EWKT or a GEOMETRY value,
+    its SRID winning
     over ``clip_crs``) and ``resolution`` (a pixel size in the raster's CRS units) each make the result a materialized
     tile of only the window read: clipped by ``geom``, from the overview ``resolution`` picks. A geometry that misses
     the raster is None."""

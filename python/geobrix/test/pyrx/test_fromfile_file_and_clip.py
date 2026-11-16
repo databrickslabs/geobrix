@@ -79,6 +79,49 @@ def test_embedded_srid_wins_over_clip_crs(tmp_path):
     assert got is not None and _arr(got)[1:] == (700, 600)
 
 
+class _GeometryValue:
+    """Stand-in for ``pyspark.sql.types.Geometry``, as a Python UDF receives a GEOMETRY column (measured on Serverless env 6):
+    ``getBytes()`` is the WKB without the SRID and ``getSrid()`` the SRID."""
+
+    def __init__(self, geom, srid):
+        self._wkb, self._srid = geom.wkb, srid
+
+    def getBytes(self):  # noqa: N802
+        return self._wkb
+
+    def getSrid(self):  # noqa: N802
+        return self._srid
+
+
+def test_a_geometry_value_clips_like_its_ewkb(tmp_path):
+    import shapely
+
+    p = _write(tmp_path, _cog_bytes())
+    box = sg.box(405000, 3990000, 412000, 3996000)
+    want = _fromfile_impl(
+        p,
+        "GTiff",
+        True,
+        geom=shapely.to_wkb(shapely.set_srid(box, 32614), include_srid=True),
+    )
+    got = _fromfile_impl(p, "GTiff", True, geom=_GeometryValue(box, 32614))
+    assert got is not None and _arr(got)[1:] == (700, 600)
+    assert np.array_equal(_arr(got)[0], _arr(want)[0])
+
+
+def test_a_geometry_value_carries_its_srid_over_clip_crs(tmp_path):
+    from pyproj import Transformer
+
+    p = _write(tmp_path, _cog_bytes())
+    t = Transformer.from_crs("EPSG:32614", "EPSG:4326", always_xy=True)
+    box = sg.box(*t.transform(405000, 3990000), *t.transform(412000, 3996000))
+    # the value is in 4326 and says so; clip_crs names another CRS, which must lose
+    got = _fromfile_impl(
+        p, "GTiff", True, geom=_GeometryValue(box, 4326), clip_crs="EPSG:32614"
+    )
+    assert got is not None and _arr(got)[1] > 0
+
+
 def test_resolution_reads_overview(tmp_path):
     p = _write(tmp_path, _cog_bytes())
     t = _fromfile_impl(p, "GTiff", True, resolution=40.0)

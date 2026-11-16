@@ -16,7 +16,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 - **FILE + COG** — each Sentinel-2 scene becomes one seven-band master COG (`stack_scene`: 512-pixel blocks, overviews 2/4/8/16, GeoBrix compression, nodata 0), registered in the `rasters` table by a `FILE EXTERNAL` column. Nothing is copied.
 - **Windowed reads** — `gbx_rst_fromfile(file, 'GTiff', <perimeter>, 'EPSG:4326', <resolution>)` fetches only the COG blocks the perimeter needs, at a suitable overview.
-- **Burn severity in SQL** — `gbx_rst_nbr`, `gbx_rst_mapalgebra`, `gbx_rst_merge` and `gbx_rst_histogram` turn a pre-fire and a post-fire scene into dNBR severity classes (Key & Benson, 2006; USGS) and an area per class. WorldPop gives the people inside the perimeter.
+- **Burn severity in SQL** — the notebook first sizes the perimeter's window against the 64 MiB a Unity Catalog function can return and picks the overview to read. `gbx_rst_nbr`, `gbx_rst_mapalgebra`, `gbx_rst_merge` and `gbx_rst_histogram` turn a pre-fire and a post-fire scene into dNBR severity classes (Key & Benson, 2006; USGS) and an area per class. WorldPop gives the people inside the perimeter.
 - **Map and Genie** — the severity classes over an Esri basemap, then the same question asked of a Genie Agent in Agent mode, with the SQL it wrote.
 
 ---
@@ -25,7 +25,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 | File | Purpose |
 |---|---|
-| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `GENIE_SPACE_ID`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
+| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `BURN_RES_M`, `GENIE_SPACE_ID`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
 | `01_smokehouse_creek.ipynb` | The Smokehouse Creek slice: `aois`, Sentinel-2 master COGs, WorldPop, the `rasters` FILE table, the `coverage` view, the burn severity query, a map and the Genie Agent. |
 | [`lakeflow/land/scenes.py`](lakeflow/land/scenes.py) | `stack_scene`: per-band Sentinel-2 files in, one master COG out. Tested in `lakeflow/tests/`. |
 
@@ -39,7 +39,7 @@ Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties
 - **GeoBrix 0.6.0.** `config_nb` installs the env6 wheel from the Hub Volume: `/Volumes/geospatial_catalog/geobrix/sample-data/env6/geobrix-0.6.0+env6-py3-none-any.whl`.
 - **The GeoBrix UC functions installed** in your catalog, if you want to query the `rasters` table from a SQL warehouse or Genie. The notebook itself calls the session functions.
 - **Unity Catalog.** `config_nb` creates the schema and a Volume named `data` under it (`CREATE ... IF NOT EXISTS`), so you need `CREATE SCHEMA` and `CREATE VOLUME` on the catalog. Edit `catalog_name` and `schema_name` to change them.
-- **The whole folder.** Import the `raster-genie` folder as a Git folder so that `lakeflow/land/scenes.py` sits beside the notebook: notebook 01 imports `stack_scene` from `./lakeflow`.
+- **The whole folder.** Open the series from a Git folder, or copy the `lakeflow/` folder next to the notebooks, so that `lakeflow/land/scenes.py` sits beside notebook 01: it imports `stack_scene` from `./lakeflow` and stops with a Fix if the file is missing.
 - **A Genie space (last step only).** Paste the space id into `GENIE_SPACE_ID` in `config_nb`; until then the Genie step prints a message and skips.
 - **Network access.** Planetary Computer, NIFC, WorldPop and Census are all fetched over HTTPS.
 

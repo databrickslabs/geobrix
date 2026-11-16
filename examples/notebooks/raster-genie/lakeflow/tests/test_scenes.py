@@ -89,6 +89,10 @@ def test_20m_bands_resampled_to_the_10m_grid(band_paths, tmp_path):
         # a 20 m pixel is a 2x2 block at 10 m: bilinear stays inside the source range
         lo, hi = src.read(1)[src.read(1) > 0].min(), src.read(1).max()
     assert b11[b11 > 0].min() >= lo and b11.max() <= hi
+    # bilinear blends neighbouring 20 m pixels: most output pixels differ from a nearest-neighbour 2x replicate
+    with rasterio.open(band_paths["B11"]) as src:
+        replicate = np.repeat(np.repeat(src.read(1), 2, axis=0), 2, axis=1)
+    assert (b11 != replicate).mean() > 0.5
     # nearest keeps SCL a set of source class ids, no blended values
     assert set(np.unique(scl)) <= {0, 4, 5, 8, 9}
 

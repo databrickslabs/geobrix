@@ -2736,9 +2736,8 @@ def rst_fromfile(
         driver: The GDAL driver short name hint, in any case. It goes into the tile's
             `driver` metadata; a name that is no raster driver (no driver of that name, or a
             vector-only one such as `'GeoJSON'`) raises. SQL default: ``'GTiff'``.
-        geom: An optional polygon to clip to, as WKB, EWKB, WKT or EWKT, or a GEOMETRY
-            on Unity Catalog. Only the blocks the polygon covers are read. SQL default:
-            ``NULL``.
+        geom: An optional polygon to clip to, as WKB, EWKB, WKT or EWKT, or a GEOMETRY.
+            Only the blocks the polygon covers are read. SQL default: ``NULL``.
         clip_crs: The CRS of a `geom` that carries no SRID: `EPSG:<code>`,
             `ESRI:<code>`, WKT or an integer code. The CRS of the raster when NULL. An EWKB
             or EWKT SRID wins. SQL default: ``NULL``.

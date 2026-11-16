@@ -69,14 +69,15 @@ QUESTIONS = [  # (id, audience, text or None to read from run_questions.py, in t
 
 # --- Layout (SVG units) ------------------------------------------------------------------------------------
 
-W = 1240
+W = 1500
 MARGIN = 20
 GAP = 42
 PAD = 14
-COLS = [224, 214, 252, 384]  # sources, land, FILE table, functions
+COLS = [262, 250, 300, 522]  # sources, land, FILE table, functions
 MONO_W, SANS_W = 6.6, 5.9  # per-character widths for 11px mono and 11px sans
 PILL_H, PILL_ROW, PILL_GAP = 21, 26, 5
 GLOW = ' filter="url(#glow)"'
+PHASE = ["", "p2", "p3"]  # pulse delays of diagrams.css, so a row of pills breathes in a wave
 
 
 def load(path: Path, name: str):
@@ -112,6 +113,30 @@ def groups(rst: list[str]) -> list[tuple[str, list[str]]]:
     if stray := [n for n in names if n not in known]:
         sys.exit(f"raster-genie-architecture: attached functions with no group in FUNCTION_GROUPS: {stray}")
     return [(g, [n for n in names if n in members]) for g, members in FUNCTION_GROUPS]
+
+
+def live_chain_names(grouped: list[tuple[str, list[str]]]) -> list[str]:
+    """The live agent's chain, read from the severity example of agent_spec: its read, index and map-algebra
+    functions in order of first use, then the statement's last statistic (so fromfile, nbr, mapalgebra, merge,
+    histogram). Only functions that are attached to the agent count."""
+    spec = load(AGENT_SPEC, "raster_genie_agent_spec")
+    used = re.findall(r"gbx_rst_([a-z0-9_]+)", spec._SQL_SEVERITY)
+    members = {g: set(f) for g, f in grouped}
+    first = list(dict.fromkeys(used))
+    chain = [n for n in first if n in members["read"] | members["indices"] | members["map algebra"]]
+    stats = [n for n in used if n in members["stats"]]
+    if not chain or not stats:
+        sys.exit("raster-genie-architecture: no live chain found in agent_spec._SQL_SEVERITY")
+    return chain + [stats[-1]]
+
+
+def table_precomputed() -> str:
+    """The table only the precomputed agent holds: TABLES_PRECOMPUTED minus TABLES."""
+    spec = load(AGENT_SPEC, "raster_genie_agent_spec")
+    extra = [t.rsplit(".", 1)[-1] for t in spec.TABLES_PRECOMPUTED if t not in spec.TABLES]
+    if len(extra) != 1:
+        sys.exit(f"raster-genie-architecture: expected one precomputed-only table, found {extra}")
+    return extra[0]
 
 
 # --- SVG helpers -------------------------------------------------------------------------------------------
@@ -156,13 +181,15 @@ def mono_pills(x: float, y: float, names: list[str], max_w: float, color: str, *
             rx = round(x + px, 1)
             data = f' data-fn="{attr[n]}"' if attr else ""
             hot = n == hero
+            halo = (f'<rect class="pulse" x="{rx}" y="{ry}" width="{w}" height="{PILL_H}" rx="10.5" fill="{color}" '
+                    f'fill-opacity=".3"/>') if hot else ""
             bold = ' font-weight="700"' if hot else ""
             fill = f'fill="{color}" fill-opacity=".22"' if hot else f'fill="{STAGE}" fill-opacity=".55"'
             stroke = f'stroke="{color}" stroke-opacity="{".95" if hot else ".4"}"' + (' stroke-width="1.4"' if hot else "")
             if dashed:
                 stroke += ' stroke-dasharray="3 3"'
             out.append(
-                f'<g class="pill"{data}><rect x="{rx}" y="{ry}" width="{w}" height="{PILL_H}" rx="10.5" {fill} {stroke}/>'
+                f'<g class="pill"{data}>{halo}<rect x="{rx}" y="{ry}" width="{w}" height="{PILL_H}" rx="10.5" {fill} {stroke}/>'
                 f'<text x="{round(rx + w / 2, 2)}" y="{ry + 14.5}"{bold}>{n}</text></g>'
             )
     out.append("</g>")
@@ -198,15 +225,15 @@ def label(x: float, y: float, text: str, color: str = FAINT) -> str:
 
 def arrow(x1: float, x2: float, y: float, rid: str) -> str:
     return (
-        f'<path id="{rid}" d="M{x1},{y} H{x2 - 3}" fill="none" stroke="{CORAL}" stroke-width="2" stroke-linecap="round"/>'
-        f'<path d="M{x2 - 9},{y - 5.5} L{x2},{y} L{x2 - 9},{y + 5.5} Z" fill="{CORAL}"/>'
+        f'<path id="{rid}" class="draw" pathLength="1" d="M{x1},{y} H{x2 - 3}" fill="none" stroke="{CORAL}" stroke-width="2" stroke-linecap="round"/>'
+        f'<path class="reveal r4" d="M{x2 - 9},{y - 5.5} L{x2},{y} L{x2 - 9},{y + 5.5} Z" fill="{CORAL}"/>'
     )
 
 
 def down_arrow(x: float, y1: float, y2: float, rid: str, text: str) -> str:
     return (
-        f'<path id="{rid}" d="M{x},{y1} V{y2 - 3}" fill="none" stroke="{CORAL}" stroke-width="2" stroke-linecap="round"/>'
-        f'<path d="M{x - 5.5},{y2 - 9} L{x},{y2} L{x + 5.5},{y2 - 9} Z" fill="{CORAL}"/>'
+        f'<path id="{rid}" class="draw" pathLength="1" d="M{x},{y1} V{y2 - 3}" fill="none" stroke="{CORAL}" stroke-width="2" stroke-linecap="round"/>'
+        f'<path class="reveal r4" d="M{x - 5.5},{y2 - 9} L{x},{y2} L{x + 5.5},{y2 - 9} Z" fill="{CORAL}"/>'
         f'<text x="{x + 12}" y="{round((y1 + y2) / 2 + 4, 1)}" font-size="11" fill="{MUTED}">{text}</text>'
     )
 
@@ -257,22 +284,25 @@ def land_card(x: float, y: float, w: float, h: float) -> str:
     out = [card(x, y, w, h, PURPLE, "k2", "2", "Land", ["The raster data-engineering step"])]
     iw = w - 2 * PAD
     cy = y + 80
-    for i, (head, detail) in enumerate([("Download + validate", "one scene or file at a time"),
-                                         ("Write master COGs", "cog_gbx, one COG per scene"),
-                                         ("Register in the table", "a thin pipeline, nothing copied")]):
+    steps = [("Download + validate", "one scene or file at a time"),
+             ("Write master COGs", "cog_gbx, one COG per scene"),
+             ("Register in the table", "registered by a FILE EXTERNAL column, nothing copied")]
+    for i, (head, detail) in enumerate(steps):
+        lines = wrap(detail, iw - 24, 5.6)
+        bh = 30 + 13 * len(lines)
         out.append(
-            f'<rect x="{x + PAD}" y="{cy}" width="{iw}" height="44" rx="9" fill="{STAGE}" fill-opacity=".55" '
+            f'<rect x="{x + PAD}" y="{cy}" width="{iw}" height="{bh}" rx="9" fill="{STAGE}" fill-opacity=".55" '
             f'stroke="{PURPLE}" stroke-opacity=".5"/>'
             f'<text x="{x + PAD + 12}" y="{cy + 19}" font-size="12" font-weight="700" fill="{INK}">{head}</text>'
-            f'<text x="{x + PAD + 12}" y="{cy + 34}" font-size="10.5" fill="{MUTED}">{detail}</text>'
+            + "".join(f'<text x="{x + PAD + 12}" y="{cy + 34 + 13 * k}" font-size="10.5" fill="{MUTED}">{ln}</text>' for k, ln in enumerate(lines))
         )
-        if i < 2:
+        if i < len(steps) - 1:
             cx = x + w / 2
             out.append(
-                f'<path d="M{cx},{cy + 46} V{cy + 58}" stroke="{PURPLE}" stroke-width="1.6"/>'
-                f'<path d="M{cx - 4.5},{cy + 54} L{cx},{cy + 60} L{cx + 4.5},{cy + 54} Z" fill="{PURPLE}"/>'
+                f'<path d="M{cx},{cy + bh + 2} V{cy + bh + 14}" stroke="{PURPLE}" stroke-width="1.6"/>'
+                f'<path d="M{cx - 4.5},{cy + bh + 10} L{cx},{cy + bh + 16} L{cx + 4.5},{cy + bh + 10} Z" fill="{PURPLE}"/>'
             )
-        cy += 62
+        cy += bh + 18
     cy += 6
     out.append(label(x + PAD, cy, "EACH COG IS WRITTEN WITH"))
     cy += 12
@@ -336,7 +366,7 @@ def functions_card(x: float, y: float, w: float, h: float, grouped: list[tuple[s
         f'<text x="{x + PAD}" y="{y + 68}" font-size="11" fill="{MUTED}">Plain SQL on any SQL warehouse. Names start with '
         f'<tspan class="mono" fill="{GREEN}">gbx_rst_</tspan>.</text>'
     )
-    label_w = 86
+    label_w = 100
     cy = y + 92
     for gname, fns in grouped:
         planned = not fns
@@ -360,7 +390,7 @@ def functions_card(x: float, y: float, w: float, h: float, grouped: list[tuple[s
 
 
 def functions_height(grouped: list[tuple[str, list[str]]], w: float) -> float:
-    label_w = 86
+    label_w = 100
     cy = 92.0
     for _, fns in grouped:
         if not fns:
@@ -382,37 +412,41 @@ def chain(x: float, y: float, names: list[str], max_w: float, color: str) -> tup
             out.append(f'<text x="{round(x + px + 7, 1)}" y="{py + 14}" fill="{FAINT}" font-size="12">\u203a</text>')
             px += 14
         out.append(
+            f'<g class="step" data-step="{n}"><rect class="pulse {PHASE[k % 3]}" x="{round(x + px, 1)}" y="{py}" width="{w}" height="19" rx="9.5" '
+            f'fill="{color}" fill-opacity=".22"/>'
             f'<rect x="{round(x + px, 1)}" y="{py}" width="{w}" height="19" rx="9.5" fill="{STAGE}" fill-opacity=".55" '
-            f'stroke="{color}" stroke-opacity=".5"/><text x="{round(x + px + w / 2, 1)}" y="{py + 13.5}">{n}</text>'
+            f'stroke="{color}" stroke-opacity=".5"/><text x="{round(x + px + w / 2, 1)}" y="{py + 13.5}">{n}</text></g>'
         )
         px += w
     out.append("</g>")
     return "".join(out), py - y + 19
 
 
-def genie_band(x: float, y: float, w: float, qs: list[tuple[str, str, str, bool]], rst: list[str]) -> tuple[str, float]:
+def genie_band(x: float, y: float, w: float, qs: list[tuple[str, str, str, bool]], grouped: list[tuple[str, list[str]]]) -> tuple[str, float]:
     """The Genie Agent band: the agent and its two forms, the headline questions, the later Genie Map."""
-    fw = 236  # one form
-    qx, qw = x + PAD + 2 * fw + 12 + 18, 452
+    fw = 262  # one form
+    qx = x + PAD + 2 * fw + 12 + 18
+    later_w = 230
+    qw = x + w - PAD - 16 - later_w - qx
     text_w = qw - 136
     chip_h = [max(14 * len(wrap(t, text_w)) + 18, 54) for _, _, t, _ in qs]
     h = 56 + sum(chip_h) + 7 * (len(qs) - 1) + 16
     out = [card(x, y, w, h, CORAL, "k5", "5", "Genie Agent", [], dashed=False)]
     out.append(
-        f'<rect x="{x + 152}" y="{y + 17}" width="82" height="21" rx="10.5" fill="{CORAL}" fill-opacity=".16" stroke="{CORAL}" stroke-opacity=".6"/>'
-        f'<text x="{x + 193}" y="{y + 31.5}" font-size="10.5" font-weight="700" fill="{CORAL}" text-anchor="middle">Agent mode</text>'
+        f'<rect x="{x + 152}" y="{y + 17}" width="98" height="21" rx="10.5" fill="{CORAL}" fill-opacity=".16" stroke="{CORAL}" stroke-opacity=".6"/>'
+        f'<circle class="pulse" cx="{x + 166}" cy="{y + 27.5}" r="3" fill="{CORAL}"/>'
+        f'<text x="{x + 214}" y="{y + 31.5}" font-size="10.5" font-weight="700" fill="{CORAL}" text-anchor="middle">Agent mode</text>'
     )
-    for i, line in enumerate(wrap("Ask in plain English. The agent composes the functions into one SQL statement per answer.", 2 * fw)):
+    for i, line in enumerate(wrap("Ask in plain English. The agent composes the functions into SQL, one statement per part of the question.", 2 * fw)):
         out.append(f'<text x="{x + PAD}" y="{y + 54 + 14 * i}" font-size="11" fill="{MUTED}">{line}</text>')
     # two forms, side by side
     fy = y + 84
     fh = h - 84 - 16
-    names = [n[len("gbx_rst_"):] for n in rst]
-    live_chain = [n for n in ("fromfile", "nbr", "mapalgebra", "merge", "histogram") if n in names]
+    live_chain = live_chain_names(grouped)
     forms = [
         (x + PAD, CORAL, "Live: GeoBrix composes", "on the fly", "Reads the COGs and runs the whole chain on each question:", live_chain,
          None, "any area, window or index"),
-        (x + PAD + fw + 12, GOLD, "Precomputed summary", "precomputed", "Reads a saved summary table for the heavy answer:", ["burn_severity_summary"],
+        (x + PAD + fw + 12, GOLD, "Precomputed summary", "precomputed", "Reads a saved summary table for the heavy answer:", [table_precomputed()],
          "The same functions answer everything else.", "the repeated headline answer"),
     ]
     out.append(f'<clipPath id="k5f0"><rect x="{x + PAD}" y="{fy}" width="{fw}" height="{fh}" rx="10"/></clipPath>')
@@ -492,7 +526,7 @@ def render() -> str:
     qs = questions()
 
     top = 18
-    h1 = max(round(functions_height(grouped, COLS[3])), 340)
+    h1 = max(round(functions_height(grouped, COLS[3])), 384)
     xs = [MARGIN]
     for cw in COLS[:-1]:
         xs.append(xs[-1] + cw + GAP)
@@ -506,7 +540,7 @@ def render() -> str:
     for i in range(3):
         arrows.append(arrow(xs[i] + COLS[i] + 6, xs[i + 1] - 6, top + 27, f"flow{i}"))
     gy = top + h1 + 44
-    band, bh = genie_band(MARGIN, gy, W - 2 * MARGIN, qs, rst)
+    band, bh = genie_band(MARGIN, gy, W - 2 * MARGIN, qs, grouped)
     drop = [
         down_arrow(xs[2] + COLS[2] / 2, top + h1 + 6, gy - 6, "drop0", "tables the agent reads"),
         down_arrow(xs[3] + COLS[3] / 2, top + h1 + 6, gy - 6, "drop1", "functions attached to the agent"),
@@ -520,10 +554,12 @@ def render() -> str:
         f"columns and a FILE column, next to aois, s2_scene_assets and coverage. {n_fn} GeoBrix Unity Catalog functions "
         "are attached to the Genie Agent, which answers in two forms, live and precomputed. Genie Map is planned."
     )
+    # Two particles per connector. Every duration divides the 4.8 s GIF loop, so the loop closes.
     particles = "".join(
-        f'<circle r="2.6" fill="{"#fff" if k % 2 == 0 else "#ffd2c9"}"{GLOW if k % 2 == 0 else ""}>'
-        f'<animateMotion dur="2.4s" begin="{k * 0.6}s" repeatCount="indefinite"><mpath href="#{pid}"/></animateMotion></circle>'
-        for k, pid in enumerate(["flow0", "flow1", "flow2", "drop0", "drop1"])
+        f'<circle r="{r}" fill="{fill}"{glow}>'
+        f'<animateMotion dur="1.2s" begin="{begin}s" repeatCount="indefinite"><mpath href="#{pid}"/></animateMotion></circle>'
+        for pid in ["flow0", "flow1", "flow2", "drop0", "drop1"]
+        for r, fill, glow, begin in ((3.6, "#fff", GLOW, 0), (3, "#ffd2c9", "", 0.6))
     )
     svg = f"""  <svg viewBox="0 0 {W} {height}" role="img" aria-label="{escape(aria)}">
     <defs>
@@ -550,7 +586,7 @@ def render() -> str:
 
     sub = (
         "Land master COGs in a FILE table, read them with GeoBrix functions in Unity Catalog SQL, "
-        "and ask a Genie Agent in plain English. The agent composes the functions into one SQL statement per answer."
+        "and ask a Genie Agent in plain English. The agent composes the functions into SQL, one statement per part of the question."
     )
     legend = (
         f'<span><i style="background:{BLUE}"></i>sources</span>'

@@ -573,7 +573,7 @@ def test_the_driver_refuses_a_dirty_uc_source_and_runs_nothing(driver, monkeypat
 def test_the_driver_dry_run_reports_counts_without_a_workspace_call(driver, monkeypatch, capsys):
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(20)])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: [(f"c{i}", "SELECT 1") for i in range(20)])
     monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
     assert driver.main(["--profile", "p", "--dry-run", "--shards", "4"]) == 0
@@ -589,7 +589,7 @@ def test_scope_selects_the_tables_and_the_smoke_sample(driver, monkeypatch, caps
     assert driver.slice_tables("smoke") == probes.UC_CORE_TABLES
     assert driver.slice_tables("full") == probes.UC_SLICE_TABLES and len(probes.UC_SLICE_TABLES) > len(probes.UC_CORE_TABLES)
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(40)])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: [(f"c{i}", "SELECT 1") for i in range(40)])
     monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     seen = []
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: seen.append(prefixes) or {Path("a.sql"): [("x", "SELECT 1")]})
@@ -647,7 +647,7 @@ def test_the_driver_dry_run_counts_the_batched_warehouse_statements(driver, monk
     pairs = [(f"v{i}", f"SELECT f({i}) AS out") for i in range(60)] + [(f"r{i}", f"SELECT bad({i}) AS out") for i in range(5)]
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: pairs)
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: pairs)
     monkeypatch.setattr(driver, "slice_batchable", lambda t: {c for c, _ in pairs if c.startswith("v")})
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")]})
     assert driver.main(["--profile", "p", "--dry-run", "--batch", "25"]) == 0
@@ -834,7 +834,7 @@ def test_drop_parts_cleans_up_an_unfinished_parted_run_of_another_commit(driver,
 def test_the_dry_run_prints_the_plan_of_every_part(driver, monkeypatch, capsys):
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(10)])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: [(f"c{i}", "SELECT 1") for i in range(10)])
     monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
     assert driver.main(["--profile", "p", "--dry-run", "--scope", "full", "--run-part", "1/3"]) == 0

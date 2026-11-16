@@ -33,7 +33,11 @@ def _feat(i):
     ring = [[-101.0, 35.6], [-100.9, 35.6], [-100.9, 35.7], [-101.0, 35.6]]
     return {
         "type": "Feature",
-        "properties": {"poly_IncidentName": "Smokehouse Creek", "part": i},
+        "properties": {
+            "poly_IncidentName": "Smokehouse Creek",
+            "poly_IRWINID": f"{{{i}}}",
+            "part": i,
+        },
         "geometry": {"type": "Polygon", "coordinates": [ring]},
     }
 
@@ -41,10 +45,11 @@ def _feat(i):
 class _FakeGet:
     """Fake WFIGS FeatureServer: ``f=geojson`` pages plus ``returnCountOnly`` counts."""
 
-    def __init__(self, total=1, page_size=2000, reported_total=None):
-        self.total = total
+    def __init__(self, total=1, page_size=2000, reported_total=None, features=None):
+        self.features = features
+        self.total = len(features) if features is not None else total
         self.page_size = page_size
-        self.reported_total = total if reported_total is None else reported_total
+        self.reported_total = self.total if reported_total is None else reported_total
         self.calls = []
 
     def __call__(self, url, params):
@@ -53,7 +58,10 @@ class _FakeGet:
             return {"count": self.reported_total}
         off = int(params.get("resultOffset", 0))
         n = min(int(params.get("resultRecordCount", self.page_size)), self.page_size)
-        page = [_feat(i) for i in range(off, min(off + n, self.total))]
+        if self.features is not None:
+            page = self.features[off : off + n]
+        else:
+            page = [_feat(i) for i in range(off, min(off + n, self.total))]
         gj = {"type": "FeatureCollection", "features": page}
         if off + n < self.total:
             gj["properties"] = {"exceededTransferLimit": True}
@@ -62,6 +70,23 @@ class _FakeGet:
     @property
     def page_calls(self):
         return [p for _, p in self.calls if not p.get("returnCountOnly")]
+
+
+def _rec(irwin, created, oid, state="US-TX"):
+    return {
+        "type": "Feature",
+        "properties": {
+            "poly_IncidentName": "Smokehouse Creek",
+            "poly_IRWINID": irwin,
+            "poly_CreateDate": created,
+            "OBJECTID": oid,
+            "attr_POOState": state,
+        },
+        "geometry": {"type": "Point", "coordinates": [-101.0, 35.6]},
+    }
+
+
+MULTI = [_rec("{A}", 100, 1), _rec("{A}", 200, 2), _rec("{B}", 150, 3, "US-OK")]
 
 
 def test_wfigs_url_is_the_perimeter_query_endpoint():
@@ -165,3 +190,87 @@ def test_exports_from_sample():
 
     assert F is FirePerimeterDownloader
     assert callable(download_fire_perimeter_aoi)
+
+
+def test_default_keeps_the_newest_record_per_incident(spark, tmp_path):
+    get = _FakeGet(features=MULTI)
+    res = (
+        FirePerimeterDownloader(_get=get)
+        .download("Smokehouse Creek", str(tmp_path / "l"), year=2024, spark=spark)
+        .collect()[0]
+    )
+    assert res["feature_count"] == 2  # one per incident (A and B), B is a distinct fire
+    with open(res["out_file_path"]) as fh:
+        got = {
+            f["properties"]["poly_IRWINID"]: f["properties"]["poly_CreateDate"]
+            for f in json.load(fh)["features"]
+        }
+    assert got == {"{A}": 200, "{B}": 150}
+
+
+def test_latest_only_false_keeps_every_record(spark, tmp_path):
+    res = (
+        FirePerimeterDownloader(_get=_FakeGet(features=MULTI))
+        .download(
+            "Smokehouse Creek",
+            str(tmp_path / "a"),
+            year=2024,
+            spark=spark,
+            latest_only=False,
+        )
+        .collect()[0]
+    )
+    assert res["feature_count"] == 3
+    assert res["out_file_path"].endswith("_all.geojson")
+
+
+def test_state_filter_is_applied_and_normalized():
+    for given in ("US-TX", "tx"):
+        get = _FakeGet(total=1)
+        FirePerimeterDownloader(_get=get)._fetch_all(
+            "Smokehouse Creek", 2024, state=given
+        )
+        assert "attr_POOState = 'US-TX'" in get.page_calls[0]["where"]
+
+
+def test_state_changes_the_file_name(spark, tmp_path):
+    d = str(tmp_path / "s")
+    dl = FirePerimeterDownloader(_get=_FakeGet(total=1))
+    a = dl.download("X", d, spark=spark).collect()[0]["out_file_path"]
+    b = dl.download("X", d, spark=spark, state="US-TX").collect()[0]["out_file_path"]
+    assert a != b and os.path.exists(a) and os.path.exists(b)
+
+
+def test_paged_query_orders_by_objectid():
+    get = _FakeGet(total=1)
+    FirePerimeterDownloader(_get=get)._fetch_all("X", None)
+    assert get.page_calls[0]["orderByFields"] == "OBJECTID"
+
+
+def test_empty_result_removes_a_stale_file(spark, tmp_path):
+    d = str(tmp_path / "st")
+    dl = FirePerimeterDownloader(_get=_FakeGet(total=1))
+    first = dl.download("Smokehouse Creek", d, spark=spark).collect()[0]
+    assert os.path.exists(first["out_file_path"])
+    with pytest.warns(UserWarning, match="No perimeter"):
+        res = (
+            FirePerimeterDownloader(_get=_FakeGet(total=0))
+            .download("Smokehouse Creek", d, spark=spark)
+            .collect()[0]
+        )
+    assert res["out_file_path"] == first["out_file_path"]
+    assert not os.path.exists(res["out_file_path"])
+
+
+def test_read_regex_is_anchored_to_the_file_name(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    d = tmp_path / "an"
+    dl = FirePerimeterDownloader(_get=_FakeGet(total=3))
+    dl.download("Smokehouse Creek", str(d), year=2024, spark=spark)
+    # a sibling whose name merely ENDS in the slug must not be read
+    (d / "foo_smokehouse_creek_2024.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": [_feat(9)]})
+    )
+    assert dl.read(str(d), "Smokehouse Creek", 2024, spark=spark).count() == 3

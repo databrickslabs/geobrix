@@ -206,9 +206,11 @@ raises `ValueError` with an upgrade message — use
 
 A SQL warehouse reads a window of a raster in a FILE column with `gbx_rst_fromfile`. It needs no session.
 
-1. Write COGs with [`cog_gbx`](../writers/cog). Land them with [`open_for_write(..., file_mode="external")`](../writers/file). The table keeps a FILE EXTERNAL column that points at each COG.
+1. Write COGs with [`cog_gbx`](../writers/cog). Land them with [`gbx_file_write`](../common-functions), using `file_mode="external"` and `file_col="file"`.
 2. Select the rows. Join the table to the polygons that you want to cut.
 3. Call `gbx_rst_fromfile` on the FILE column, with a `geom` or a `resolution`.
+
+The table then holds a FILE EXTERNAL column that points at each COG. The query assumes that `rasters` has a `footprint` GEOMETRY column, and that `aois` has a `geom` column.
 
 ```sql
 SELECT gbx_rst_avg(gbx_rst_fromfile(r.file, 'GTiff', a.geom, NULL, 20.0)) AS mean_value

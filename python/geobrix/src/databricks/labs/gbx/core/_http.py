@@ -31,6 +31,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import warnings
 from dataclasses import dataclass
 from typing import Iterable, Optional, Union
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -337,6 +338,22 @@ def _follow(session, url: str, allowed_hosts, timeout, headers=None):
     raise RefusedHref(f"{first!r}: more than {MAX_REDIRECTS} redirects. {_FIX}")
 
 
+def _norm_etag(etag: Optional[str]) -> Optional[str]:
+    """An ETag compared by its opaque value: the weak marker ``W/`` and the quotes are not part of it (a CDN may send a
+    weak form of the strong ETag a probe saw)."""
+    if etag is None:
+        return None
+    e = etag.strip()
+    if e[:2].upper() == "W/":
+        e = e[2:]
+    return e.strip().strip('"')
+
+
+def etags_match(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether two ETags name the same opaque value (``W/`` and quotes ignored)."""
+    return _norm_etag(a) == _norm_etag(b)
+
+
 def download(
     url: str,
     outpath: str,
@@ -344,35 +361,75 @@ def download(
     timeout: float = 100,
     expected_size: Optional[int] = None,
     expected_etag: Optional[str] = None,
+    max_bytes: Optional[int] = None,
 ) -> str:
     """Stream ``url`` to ``outpath`` under the checks above; an HTTP error status raises (``raise_for_status``), so a
     throttled or expired href is retried by the caller, not written as data.
 
-    The body is written in 1 MiB chunks (never held whole); ``timeout`` bounds each connect and read. With
-    ``expected_size`` the bytes written must equal it, and with ``expected_etag`` the response's ``ETag`` must equal
-    it, else ``OSError`` (a truncated or changed file is not a download; the caller discards ``outpath``).
-    """
+    The body is written in 1 MiB chunks (never held whole); ``timeout`` bounds each connect and read.
+
+    Bounds, all off by default (an existing caller streams as before): the stream is cut off, ``outpath`` removed and
+    ``OSError`` raised the moment more than ``min(expected_size, max_bytes)`` bytes have arrived (a server that sends no
+    ``Content-Length``, or more than it said, cannot fill the disk), and a ``Content-Length`` over that limit is refused
+    before a byte is read.
+
+    Checks after the stream: with ``expected_size`` the bytes written must equal it, else ``OSError`` (a truncated file
+    is not a download; ``outpath`` is removed). With ``expected_etag`` the response's ``ETag`` is compared by its opaque
+    value (``W/`` and quotes ignored). A response that sends none is not checked. A differing ETag is a warning when the
+    size matched ``expected_size`` (a CDN may send another ETag on a GET than on a probe), and an ``OSError`` when no
+    size was expected to vouch for the file."""
+    limits = [v for v in (expected_size, max_bytes) if v is not None]
+    limit = min(limits) if limits else None
     session = _session()
     try:
         resp, _target_ = _follow(session, url, allowed_hosts, timeout)
         with resp:
             resp.raise_for_status()
-            if expected_etag is not None and resp.headers.get("ETag") != expected_etag:
+            length = resp.headers.get("Content-Length")
+            if limit is not None and (length or "").isdigit() and int(length) > limit:
                 raise OSError(
-                    f"{url!r}: the ETag is {resp.headers.get('ETag')!r}, expected {expected_etag!r}. "
-                    "Fix: the file changed since it was probed; run the download again."
+                    f"{url!r}: the server says {int(length)} bytes, over the {limit}-byte limit. "
+                    "Fix: raise max_bytes, or use a smaller source."
                 )
             written = 0
-            with open(outpath, "wb") as fh:
-                for chunk in resp.iter_content(1024 * 1024):
-                    if chunk:
-                        fh.write(chunk)
+            try:
+                with open(outpath, "wb") as fh:
+                    for chunk in resp.iter_content(1024 * 1024):
+                        if not chunk:
+                            continue
                         written += len(chunk)
+                        if limit is not None and written > limit:
+                            raise OSError(
+                                f"{url!r}: more than {limit} bytes arrived; the stream was cut off. "
+                                "Fix: raise max_bytes, or use a source of the size it said."
+                            )
+                        fh.write(chunk)
+            except BaseException:
+                try:
+                    os.remove(outpath)
+                except OSError:
+                    pass
+                raise
             if expected_size is not None and written != expected_size:
+                os.remove(outpath)
                 raise OSError(
                     f"{url!r}: downloaded {written} bytes, expected {expected_size}. "
                     "Fix: the transfer was cut short; run the download again."
                 )
+            got = resp.headers.get("ETag")
+            if expected_etag is not None and got is not None:
+                if not etags_match(got, expected_etag):
+                    if expected_size is None:
+                        os.remove(outpath)
+                        raise OSError(
+                            f"{url!r}: the ETag is {got!r}, expected {expected_etag!r}, and no size vouches for "
+                            "the file. Fix: the file changed since it was probed; run the download again."
+                        )
+                    warnings.warn(
+                        f"{url!r}: the ETag is {got!r}, the probe saw {expected_etag!r}; the size "
+                        f"({written} bytes) matches, so the file is kept.",
+                        stacklevel=2,
+                    )
     finally:
         session.close()
     return outpath

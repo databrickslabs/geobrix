@@ -274,3 +274,43 @@ def test_read_regex_is_anchored_to_the_file_name(spark, tmp_path):
         json.dumps({"type": "FeatureCollection", "features": [_feat(9)]})
     )
     assert dl.read(str(d), "Smokehouse Creek", 2024, spark=spark).count() == 3
+
+
+def _p(irwin, created, oid, name="Smokehouse Creek"):
+    return {
+        "properties": {
+            "poly_IncidentName": name,
+            "poly_IRWINID": irwin,
+            "poly_CreateDate": created,
+            "OBJECTID": oid,
+        }
+    }
+
+
+def test_a_null_irwin_id_groups_by_the_incident_name():
+    from databricks.labs.gbx.sample.fire import _latest_per_incident
+
+    feats = [
+        _p(None, 100, 1),
+        _p(None, 200, 2, name="SMOKEHOUSE CREEK"),  # same name, any case
+        _p("{A}", 50, 3),  # a different incident, kept
+    ]
+    got = _latest_per_incident(feats)
+    assert sorted(f["properties"]["OBJECTID"] for f in got) == [2, 3]
+
+
+def test_a_null_create_date_loses_to_a_dated_record():
+    from databricks.labs.gbx.sample.fire import _latest_per_incident
+
+    got = _latest_per_incident([_p("{A}", None, 9), _p("{A}", 100, 1)])
+    assert [f["properties"]["OBJECTID"] for f in got] == [1]
+
+
+def test_records_with_null_create_dates_are_split_by_objectid():
+    from databricks.labs.gbx.sample.fire import _latest_per_incident
+
+    got = _latest_per_incident([_p("{A}", None, 3), _p("{A}", None, 4)])
+    assert [f["properties"]["OBJECTID"] for f in got] == [4]
+    # equal dates too: the higher OBJECTID is the later record
+    got = _latest_per_incident([_p("{A}", 100, 8), _p("{A}", 100, 7)])
+    assert [f["properties"]["OBJECTID"] for f in got] == [8]

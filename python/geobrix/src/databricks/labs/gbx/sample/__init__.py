@@ -16,27 +16,39 @@ from databricks.labs.gbx.sample._bundle import (
 )
 from databricks.labs.gbx.sample.dem import DemDownloader, download_dem_aoi
 from databricks.labs.gbx.sample.emit import EmitDownloader, download_emit_aoi
+from databricks.labs.gbx.sample.fire import (
+    FirePerimeterDownloader,
+    download_fire_perimeter_aoi,
+)
 from databricks.labs.gbx.sample.naip import NaipDownloader, download_naip_aoi
 from databricks.labs.gbx.sample.nasanex import NasaNexDownloader, download_nasanex_aoi
 from databricks.labs.gbx.sample.overture import OvertureClient, download_overture_aoi
 from databricks.labs.gbx.sample.tropomi import TropomiDownloader, download_tropomi_aoi
 from databricks.labs.gbx.sample.wells import WellsDownloader, download_wells_aoi
+from databricks.labs.gbx.sample.worldpop import (
+    WorldPopDownloader,
+    download_worldpop_aoi,
+)
 
 __all__ = [
     "DemDownloader",
     "EmitDownloader",
+    "FirePerimeterDownloader",
     "NasaNexDownloader",
     "NaipDownloader",
     "OvertureClient",
     "TropomiDownloader",
     "WellsDownloader",
+    "WorldPopDownloader",
     "download_dem_aoi",
     "download_emit_aoi",
+    "download_fire_perimeter_aoi",
     "download_naip_aoi",
     "download_nasanex_aoi",
     "download_overture_aoi",
     "download_tropomi_aoi",
     "download_wells_aoi",
+    "download_worldpop_aoi",
     "get_temp_dir",
     "get_volumes_path",
     "run_complete_bundle",

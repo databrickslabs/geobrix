@@ -187,3 +187,28 @@ def test_merge_without_space_id_just_creates():
     client = _FakeClient()
     apply_space("T", "wh1", "/p", _build(), client=client, merge=True)
     assert [c[0] for c in client.api_client.calls] == ["POST"]
+
+
+def test_merge_keeps_existing_table_metadata_and_adds_new():
+    rich = {
+        "identifier": "c.s.zeta",
+        "description": ["curated"],
+        "column_configs": [{"column_name": "id", "enable_format_assistance": True}],
+    }
+    no_id = {"description": ["odd entry"]}
+    existing = {
+        "version": 2,
+        "data_sources": {"tables": [rich, no_id]},
+        "instructions": {},
+    }
+    client = _FakeClient(response={})
+    client.api_client.get_response = {"serialized_space": json.dumps(existing)}
+    new = _build(tables=["c.s.alpha", "c.s.zeta"], functions=[], examples=[], text="")
+    apply_space("T", "wh1", "/p", new, space_id="abc", client=client, merge=True)
+    sent = json.loads(client.api_client.calls[-1][2]["serialized_space"])
+    tables = sent["data_sources"]["tables"]
+    assert rich in tables and no_id in tables  # untouched, no duplicate zeta
+    assert {"identifier": "c.s.alpha"} in tables
+    assert len(tables) == 3
+    idents = [t.get("identifier") or "" for t in tables]
+    assert idents == sorted(idents)

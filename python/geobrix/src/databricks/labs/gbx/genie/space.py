@@ -59,11 +59,15 @@ def _merge_serialized(existing: dict, new: dict) -> dict:
     merged = dict(existing)
     merged.setdefault("version", new.get("version", 2))
     ds = dict(existing.get("data_sources") or {})
-    tables = {t["identifier"] for t in ds.get("tables") or []}
-    tables |= {
-        t["identifier"] for t in (new.get("data_sources") or {}).get("tables") or []
-    }
-    ds["tables"] = [{"identifier": t} for t in sorted(tables)]
+    # Existing table dicts stay as they are (description, column_configs, ...), including any
+    # without an identifier; only identifiers not already present are added from ``new``.
+    tables = list(ds.get("tables") or [])
+    seen = {t.get("identifier") for t in tables if isinstance(t, dict)}
+    for t in (new.get("data_sources") or {}).get("tables") or []:
+        if t.get("identifier") not in seen:
+            seen.add(t.get("identifier"))
+            tables.append(t)
+    ds["tables"] = sorted(tables, key=lambda t: t.get("identifier") or "")
     merged["data_sources"] = ds
     instructions = dict(existing.get("instructions") or {})
     instructions.update(new.get("instructions") or {})
@@ -90,7 +94,8 @@ def apply_space(
     anything curated in the space that is not in ``serialized`` (tables, instructions,
     examples, attached functions) is dropped. Pass ``merge=True`` (with ``space_id``) to
     first read the current space (``GET .../{id}?include_serialized_space=true``) and
-    merge: its tables are kept and unioned with ``serialized``'s (sorted), instruction
+    merge: its table entries are kept unchanged (with their metadata) and ``serialized``'s new
+    identifiers are added (sorted by identifier), instruction
     keys present in ``serialized`` replace the existing ones while the other instruction
     keys are kept, and the existing ``version`` is kept.
     """

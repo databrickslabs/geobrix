@@ -54,6 +54,23 @@ def build_serialized_space(
     }
 
 
+def _merge_serialized(existing: dict, new: dict) -> dict:
+    """Merge ``new`` into ``existing``: union the tables, replace only the instruction keys given."""
+    merged = dict(existing)
+    merged.setdefault("version", new.get("version", 2))
+    ds = dict(existing.get("data_sources") or {})
+    tables = {t["identifier"] for t in ds.get("tables") or []}
+    tables |= {
+        t["identifier"] for t in (new.get("data_sources") or {}).get("tables") or []
+    }
+    ds["tables"] = [{"identifier": t} for t in sorted(tables)]
+    merged["data_sources"] = ds
+    instructions = dict(existing.get("instructions") or {})
+    instructions.update(new.get("instructions") or {})
+    merged["instructions"] = instructions
+    return merged
+
+
 def apply_space(
     title: str,
     warehouse_id: str,
@@ -61,17 +78,34 @@ def apply_space(
     serialized: dict,
     space_id: str | None = None,
     client=None,
+    merge: bool = False,
 ) -> str:
     """Create the space, or update it when ``space_id`` is given; return the space id.
 
     Create is ``POST /api/2.0/genie/spaces`` with ``{warehouse_id, title, parent_path,
     serialized_space}``. Update is ``PATCH /api/2.0/genie/spaces/{id}`` with
     ``{serialized_space, warehouse_id, title}``; ``parent_path`` applies only at create.
+
+    The update REPLACES the whole ``serialized_space``: with the default ``merge=False``
+    anything curated in the space that is not in ``serialized`` (tables, instructions,
+    examples, attached functions) is dropped. Pass ``merge=True`` (with ``space_id``) to
+    first read the current space (``GET .../{id}?include_serialized_space=true``) and
+    merge: its tables are kept and unioned with ``serialized``'s (sorted), instruction
+    keys present in ``serialized`` replace the existing ones while the other instruction
+    keys are kept, and the existing ``version`` is kept.
     """
     if client is None:
         from databricks.sdk import WorkspaceClient
 
         client = WorkspaceClient()
+    if space_id and merge:
+        current = client.api_client.do(
+            "GET",
+            f"{_SPACES_PATH}/{space_id}",
+            query={"include_serialized_space": "true"},
+        )
+        existing = json.loads((current or {}).get("serialized_space") or "{}")
+        serialized = _merge_serialized(existing, serialized)
     body = {
         "serialized_space": json.dumps(serialized),
         "warehouse_id": warehouse_id,

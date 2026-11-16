@@ -82,9 +82,12 @@ class _FakeApi:
     def __init__(self, response):
         self.calls = []
         self._response = response
+        self.get_response = {}
 
-    def do(self, method, path, body=None, **kw):
+    def do(self, method, path, body=None, query=None, **kw):
         self.calls.append((method, path, body))
+        if method == "GET":
+            return self.get_response
         return self._response
 
 
@@ -116,3 +119,71 @@ def test_apply_space_patches_when_id_given():
     assert (method, path) == ("PATCH", "/api/2.0/genie/spaces/abc")
     assert json.loads(body["serialized_space"]) == ss
     assert body["warehouse_id"] == "wh1" and body["title"] == "T"
+
+
+def test_default_update_does_not_read_the_space():
+    client = _FakeClient(response={})
+    apply_space("T", "wh1", "/p", _build(), space_id="abc", client=client)
+    assert [c[0] for c in client.api_client.calls] == ["PATCH"]
+
+
+def test_merge_keeps_existing_tables_and_other_instruction_keys():
+    existing = {
+        "version": 2,
+        "data_sources": {
+            "tables": [{"identifier": "c.s.mid"}, {"identifier": "c.s.zeta"}]
+        },
+        "instructions": {
+            "text_instructions": [{"id": "0" * 32, "content": ["old text"]}],
+            "example_question_sqls": [
+                {"id": "1" * 32, "question": ["old q"], "sql": ["SELECT 0"]}
+            ],
+            "sql_functions": [{"id": "2" * 32, "identifier": "c.s.old_fn"}],
+        },
+        "config": {"sample_questions": [{"id": "3" * 32, "question": ["hi"]}]},
+    }
+    client = _FakeClient(response={})
+    client.api_client.get_response = {"serialized_space": json.dumps(existing)}
+    new = _build(functions=[], examples=[])  # text + tables only
+    apply_space("T", "wh1", "/p", new, space_id="abc", client=client, merge=True)
+    (g_method, g_path, _), (p_method, p_path, body) = client.api_client.calls
+    assert (g_method, g_path) == ("GET", "/api/2.0/genie/spaces/abc")
+    assert (p_method, p_path) == ("PATCH", "/api/2.0/genie/spaces/abc")
+    sent = json.loads(body["serialized_space"])
+    assert [t["identifier"] for t in sent["data_sources"]["tables"]] == [
+        "c.s.alpha",
+        "c.s.mid",
+        "c.s.zeta",
+    ]
+    ins = sent["instructions"]
+    assert (
+        ins["text_instructions"] == new["instructions"]["text_instructions"]
+    )  # replaced
+    assert (
+        ins["example_question_sqls"]
+        == existing["instructions"]["example_question_sqls"]
+    )  # kept
+    assert ins["sql_functions"] == existing["instructions"]["sql_functions"]  # kept
+    assert sent["version"] == 2 and sent["config"] == existing["config"]
+
+
+def test_merge_replaces_keys_the_caller_provides():
+    existing = {
+        "version": 2,
+        "data_sources": {"tables": []},
+        "instructions": {
+            "sql_functions": [{"id": "2" * 32, "identifier": "c.s.old_fn"}]
+        },
+    }
+    client = _FakeClient(response={})
+    client.api_client.get_response = {"serialized_space": json.dumps(existing)}
+    new = _build()
+    apply_space("T", "wh1", "/p", new, space_id="abc", client=client, merge=True)
+    sent = json.loads(client.api_client.calls[-1][2]["serialized_space"])
+    assert sent["instructions"]["sql_functions"] == new["instructions"]["sql_functions"]
+
+
+def test_merge_without_space_id_just_creates():
+    client = _FakeClient()
+    apply_space("T", "wh1", "/p", _build(), client=client, merge=True)
+    assert [c[0] for c in client.api_client.calls] == ["POST"]

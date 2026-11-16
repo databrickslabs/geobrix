@@ -192,29 +192,32 @@ def test_transport_error_is_reported_and_token_redacted():
     assert "401" in out["error"]
 
 
-def test_default_transport_requires_requests_streaming(monkeypatch):
-    """The default _post streams with a timeout and raises with a redacted body on non-200."""
+class _Resp:
+    def __init__(self, status_code=200, text="", lines=()):
+        self.status_code = status_code
+        self.text = text
+        self._lines = lines
+        self.encoding = None
+        self.encoding_at_read = "unset"
+
+    def iter_lines(self, decode_unicode=False):
+        self.encoding_at_read = self.encoding
+        return iter(self._lines)
+
+    def close(self):
+        pass
+
+
+def test_default_transport_error_status_is_redacted(monkeypatch):
     import requests
 
     calls = {}
-
-    class _Resp:
-        status_code = 500
-        text = "boom Bearer SECRET-TOKEN-123"
-
-        encoding = None
-
-        def iter_lines(self, decode_unicode=False):
-            return iter([])
-
-        def close(self):
-            pass
 
     def _fake_post(
         url, json=None, headers=None, stream=None, timeout=None
     ):  # noqa: A002
         calls.update(stream=stream, timeout=timeout)
-        return _Resp()
+        return _Resp(500, "boom Bearer SECRET-TOKEN-123")
 
     monkeypatch.setattr(requests, "post", _fake_post)
     out = ask("s", "Q?", client=_FakeClient(), timeout_s=7)
@@ -222,6 +225,73 @@ def test_default_transport_requires_requests_streaming(monkeypatch):
     assert out["status"] == "FAILED"
     assert "500" in out["error"]
     assert "SECRET-TOKEN-123" not in out["error"]
+
+
+def test_default_transport_200_decodes_utf8(monkeypatch):
+    import requests
+
+    report = "Médian slope 12.5°"
+    msg = {"type": "message", "content": [{"type": "output_text", "text": report}]}
+    events = [
+        _EVENTS[0],
+        {"type": "response.completed", "response": {"output": [msg]}},
+    ]
+    resp = _Resp(200, lines=_sse(events))
+    monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+    out = ask("s", "Q?", client=_FakeClient())
+    assert resp.encoding_at_read == "utf-8"
+    assert out["status"] == "COMPLETED"
+    assert out["text"] == [report]
+
+
+def test_multiline_data_payload_is_joined():
+    full = json.dumps(
+        _EVENTS[0], indent=1
+    ).splitlines()  # a payload split over several lines
+    lines = ["event: response.created"] + ["data: " + p for p in full] + [""]
+    lines += _sse(_EVENTS[1:])
+    out = ask("s", "Q?", client=_FakeClient(), _post=_post_of(lines))
+    assert out["conversation_id"] == "conv_1"
+    assert out["status"] == "COMPLETED"
+
+
+def test_last_event_without_trailing_blank_line_is_used():
+    lines = _sse(_EVENTS)[:-1]  # drop the final blank separator
+    out = ask("s", "Q?", client=_FakeClient(), _post=_post_of(lines))
+    assert out["status"] == "COMPLETED"
+
+
+def test_completed_tolerates_malformed_items():
+    done = {
+        "type": "response.completed",
+        "response": {
+            "conversation_id": "conv_late",
+            "output": [
+                "junk",
+                None,
+                {"type": "message", "content": "nope"},
+                {"type": "message", "content": [None, 3, {"text": "ok"}]},
+            ],
+        },
+    }
+    created_no_conv = {"type": "response.created", "response": {"id": "r"}}
+    out = ask(
+        "s", "Q?", client=_FakeClient(), _post=_post_of(_sse([created_no_conv, done]))
+    )
+    assert out["status"] == "COMPLETED"
+    assert out["text"] == ["ok"]
+    assert out["conversation_id"] == "conv_late"
+
+
+def test_failed_message_is_redacted():
+    failed = {
+        "type": "response.failed",
+        "response": {"error": {"message": "denied for Bearer SECRET-TOKEN-123"}},
+    }
+    out = ask("s", "Q?", client=_FakeClient(), _post=_post_of(_sse([failed])))
+    assert out["status"] == "FAILED"
+    assert "SECRET-TOKEN-123" not in out["error"]
+    assert "denied" in out["error"]
 
 
 def test_ask_requires_nonempty_question():

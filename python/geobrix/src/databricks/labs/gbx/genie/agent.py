@@ -54,6 +54,10 @@ def ask(
 ) -> dict:
     """Ask the Genie Agent ``space_id`` a question; return the parsed answer.
 
+    ``timeout_s`` is the socket read timeout of the default transport plus a soft
+    per-line deadline checked as lines arrive; it is not a hard wall-clock cap (a stream
+    that stays open while sending nothing is cut by the read timeout).
+
     Returns ``{status, seconds, conversation_id, sql, text, error}``. ``status`` is
     ``COMPLETED`` or ``FAILED`` (a failed event, a transport error, a timeout, or a stream
     that ended without a terminal event). ``sql`` lists the SQL the agent executed;
@@ -95,20 +99,22 @@ def ask(
         "error": None,
     }
     t0 = time.monotonic()
+    data: list[str] = []  # data: lines of the event being assembled
     try:
         for line in post(url, headers, body):
             if time.monotonic() - t0 > timeout_s:
                 raise TimeoutError(f"no terminal event within {timeout_s}s")
-            if not line or not line.startswith("data:"):
-                continue  # blank separators, "event:" names, comments
-            try:
-                ev = json.loads(line[5:].strip())
-            except ValueError:
-                continue  # keep-alives such as "data: [DONE]"
-            if isinstance(ev, dict):
-                _apply(ev, out)
+            if line:
+                if line.startswith("data:"):
+                    d = line[5:]
+                    data.append(d[1:] if d.startswith(" ") else d)
+                continue  # event:/id:/retry: names and ":" comments carry nothing we use
+            _dispatch(data, out, headers)  # a blank line ends the event
+            data = []
             if out["status"]:
                 break
+        if data and not out["status"]:
+            _dispatch(data, out, headers)  # stream ended without the final blank line
         if not out["status"]:
             out["status"], out["error"] = (
                 "FAILED",
@@ -122,18 +128,31 @@ def ask(
     return out
 
 
-def _apply(ev: dict, out: dict) -> None:
-    """Fold one SSE event into the result."""
+def _dispatch(data: list[str], out: dict, headers: dict) -> None:
+    """Parse the joined ``data:`` lines of one SSE event and fold it into the result."""
+    if not data:
+        return
+    try:
+        ev = json.loads("\n".join(data))
+    except ValueError:
+        return  # keep-alives such as "data: [DONE]"
+    if isinstance(ev, dict):
+        _apply(ev, out, headers)
+
+
+def _dict(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
+def _apply(ev: dict, out: dict, headers: dict) -> None:
+    """Fold one SSE event into the result; malformed parts are skipped, never raised."""
     ty = ev.get("type")
+    resp = _dict(ev.get("response"))
+    cid = resp.get("conversation_id") or ev.get("conversation_id")
     if ty == "response.created":
-        resp = ev.get("response") or {}
-        out["conversation_id"] = (
-            resp.get("conversation_id")
-            or ev.get("conversation_id")
-            or out["conversation_id"]
-        )
+        out["conversation_id"] = cid or out["conversation_id"]
     elif ty == "response.output_item.done":
-        item = ev.get("item") or {}
+        item = _dict(ev.get("item"))
         if item.get("type") == "function_call":
             try:
                 out["sql"].append(json.loads(item["arguments"])["sql"])
@@ -141,17 +160,19 @@ def _apply(ev: dict, out: dict) -> None:
                 pass  # not an execute_sql call, or arguments not JSON
     elif ty == "response.completed":
         out["status"] = "COMPLETED"
-        for item in (ev.get("response") or {}).get("output") or []:
-            if item.get("type") == "message":
-                out["text"] += [
-                    c["text"] for c in item.get("content") or [] if c.get("text")
-                ]
+        if not out["conversation_id"]:
+            out["conversation_id"] = cid  # created event lacked it
+        output = resp.get("output")
+        for item in output if isinstance(output, list) else []:
+            item = _dict(item)
+            content = item.get("content")
+            if item.get("type") != "message" or not isinstance(content, list):
+                continue
+            for c in map(_dict, content):
+                if c.get("text"):
+                    out["text"].append(c["text"])
     elif ty == "response.failed":
         out["status"] = "FAILED"
-        resp = ev.get("response") or {}
         err = resp.get("error") or ev.get("error") or ev
-        out["error"] = (
-            err.get("message")
-            if isinstance(err, dict) and err.get("message")
-            else json.dumps(err)[:1000]
-        )
+        msg = err.get("message") if isinstance(err, dict) else None
+        out["error"] = _redact(msg or json.dumps(err)[:1000], headers)

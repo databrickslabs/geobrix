@@ -1,16 +1,20 @@
 """Stack the per-band files of one Sentinel-2 scene into a single master COG.
 
 One scene, one file: the bands an index needs plus SCL, on the 10 m grid of a reference band, with
-512-pixel internal blocks, overviews at 2/4/8/16, GeoBrix's own compression options and nodata 0.
+512-pixel internal blocks, nearest-neighbour overviews at 2/4/8/16, GeoBrix's own compression options and
+nodata 0. The overviews are nearest neighbour, not averages: a COG has one overview resampling for all
+bands, and SCL holds class ids, which an average would blend into ids that mean nothing. A coarse read of
+the file can therefore be masked with SCL.
 Nodata is the only validity signal. The file carries no internal mask band, which the Unity Catalog
 windowed reader (`gbx_rst_fromfile` with a geometry or a resolution) does not plan.
 
 No Spark, no side effects beyond `out_path`.
 """
 
+import datetime
 import os
 import shutil
-from typing import Dict, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 from databricks.labs.gbx.pyrx.core.compression import creation_opts
@@ -50,7 +54,7 @@ def stack_scene(
 
     `boa_offset` is subtracted from the reflectance bands, never below 1 so that a valid pixel does
     not become nodata. Pass `boa_offset_for(baseline)` so that an index (a ratio) is taken on true
-    reflectance. Overviews are averages, so read SCL at full resolution.
+    reflectance. Overviews are nearest neighbour, so SCL keeps its class ids at every level.
     """
     import rasterio
     from rasterio.enums import Resampling
@@ -125,7 +129,7 @@ def stack_scene(
             cog,
             driver="COG",
             blocksize=BLOCKSIZE,
-            overview_resampling="AVERAGE",
+            overview_resampling="NEAREST",
             overview_count=len(OVERVIEW_LEVELS),
             bigtiff="IF_SAFER",
             **opts,
@@ -138,3 +142,76 @@ def stack_scene(
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return out_path
+
+
+def _clean(rows: List[dict], max_cloud: float, max_nodata: float) -> List[dict]:
+    """Scenes at or under the cloud limit, and under the no-data limit or with no no-data figure (kept, not dropped:
+    the STAC figure is a whole-tile one, and a scene without it is judged by the coverage check on the result)."""
+    return [
+        r
+        for r in rows
+        if r["cloud_pct"] is not None
+        and r["cloud_pct"] <= max_cloud
+        and (r["nodata_pct"] is None or r["nodata_pct"] <= max_nodata)
+    ]
+
+
+def _best_on_day(rows: List[dict]) -> dict:
+    """The scene of one tile on one day: the least cloud, ties (the same whole percent) by item id."""
+    return min(rows, key=lambda r: (round(r["cloud_pct"]), r["cloud_pct"], r["item_id"]))
+
+
+def _cover(rows: List[dict], tiles: Sequence[str], later_is_better: bool) -> Dict[str, dict]:
+    """One scene per tile, on as few dates as possible: take the date that serves most tiles, then the date
+    that serves most of the rest, and so on. A tie goes to the date closest to the fire (`later_is_better`
+    for the window before it, earlier for the window after)."""
+    chosen: Dict[str, dict] = {}
+    remaining = set(tiles)
+    sign = -1 if later_is_better else 1
+    while remaining:
+        by_day: Dict[str, Dict[str, List[dict]]] = {}
+        for r in rows:
+            if r["mgrs_tile"] in remaining:
+                by_day.setdefault(r["date"][:10], {}).setdefault(r["mgrs_tile"], []).append(r)
+        if not by_day:
+            break
+        day = min(
+            by_day,
+            key=lambda d: (-len(by_day[d]), sign * datetime.date.fromisoformat(d).toordinal(), d),
+        )
+        for tile, rs in by_day[day].items():
+            chosen[tile] = _best_on_day(rs)
+            remaining.discard(tile)
+    return chosen
+
+
+def choose_scene_pairs(
+    pre: List[dict], post: List[dict], max_cloud: float, max_nodata: float
+) -> Dict[str, object]:
+    """Pick one pre and one post scene per MGRS tile.
+
+    Rows are dicts with `item_id`, `mgrs_tile`, `date` (ISO), `orbit` (relative orbit), `cloud_pct`, `nodata_pct`
+    (None when STAC has no figure). The rules, in order:
+
+    1. A scene is a candidate when its cloud cover is at most `max_cloud` and its no-data share at most
+       `max_nodata` (or unknown).
+    2. The pre scenes are chosen to share as few dates as possible across the tiles, the date closest to the
+       fire first.
+    3. A tile's post scene is on the same relative orbit as its pre scene where that orbit has a candidate
+       (the same view angle, so a difference between the two is the ground). Then the post scenes share as few
+       dates as possible, the earliest first.
+
+    Returns `{"pre": {tile: row}, "post": {tile: row}, "dropped": [tiles without a candidate on a side],
+    "orbit_mismatch": [tiles whose post orbit is not their pre orbit]}`.
+    """
+    pre_c, post_c = _clean(pre, max_cloud, max_nodata), _clean(post, max_cloud, max_nodata)
+    tiles = sorted({r["mgrs_tile"] for r in pre_c} & {r["mgrs_tile"] for r in post_c})
+    dropped = sorted(({r["mgrs_tile"] for r in pre} | {r["mgrs_tile"] for r in post}) - set(tiles))
+    pre_sel = _cover(pre_c, tiles, later_is_better=True)
+    post_rows: List[dict] = []
+    for t in tiles:
+        same = [r for r in post_c if r["mgrs_tile"] == t and r["orbit"] == pre_sel[t]["orbit"]]
+        post_rows += same or [r for r in post_c if r["mgrs_tile"] == t]
+    post_sel = _cover(post_rows, tiles, later_is_better=False)
+    mismatch = [t for t in tiles if post_sel[t]["orbit"] != pre_sel[t]["orbit"]]
+    return {"pre": pre_sel, "post": post_sel, "dropped": dropped, "orbit_mismatch": mismatch}

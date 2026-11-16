@@ -7,7 +7,7 @@ rasterio = pytest.importorskip("rasterio")
 from rasterio.enums import MaskFlags  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 
-from land.scenes import S2_BANDS, stack_scene  # noqa: E402
+from land.scenes import S2_BANDS, choose_scene_pairs, stack_scene  # noqa: E402
 
 CRS = "EPSG:32614"
 SIZE_10M = 1100  # large enough that a 512 block grid and 4 overview levels are real
@@ -126,3 +126,59 @@ def test_boa_offset_is_removed_from_reflectance_not_scl(band_paths, tmp_path):
         assert (ra[valid] == rb[valid] - 1000).all()
         assert (ra[rb > 0] >= 1).all()  # a valid pixel never becomes nodata
         assert (a.read(7) == b.read(7)).all()  # SCL untouched
+
+
+def test_overviews_are_nearest_so_scl_keeps_its_class_ids(band_paths, tmp_path):
+    out = stack_scene(band_paths, str(tmp_path / "scene.tif"))
+    with rasterio.open(out) as ds:
+        for level in (2, 4, 8):
+            scl = ds.read(7, out_shape=(ds.height // level, ds.width // level))
+            assert set(np.unique(scl)) <= {0, 4, 5, 8, 9}, level  # an average would blend 4, 5, 8 and 9
+
+
+def _row(tile, date, orbit, cloud, nodata=0.0, item=None):
+    return dict(item_id=item or f"{tile}_{date}_R{orbit}", mgrs_tile=tile, date=date, orbit=orbit, cloud_pct=cloud, nodata_pct=nodata)
+
+
+def test_pre_scenes_share_the_date_that_serves_most_tiles():
+    pre = [
+        _row("A", "2024-02-19", "055", 1.0), _row("B", "2024-02-19", "055", 2.0),
+        _row("A", "2024-02-24", "055", 0.0), _row("B", "2024-02-14", "055", 0.0),  # cleaner, but on other days
+    ]
+    post = [_row("A", "2024-03-10", "055", 0.0), _row("B", "2024-03-10", "055", 0.0)]
+    got = choose_scene_pairs(pre, post, max_cloud=20, max_nodata=5)
+    assert {t: r["date"] for t, r in got["pre"].items()} == {"A": "2024-02-19", "B": "2024-02-19"}
+
+
+def test_a_tie_in_dates_goes_to_the_day_closest_to_the_fire():
+    pre = [_row("A", "2024-02-10", "055", 0.0), _row("A", "2024-02-20", "055", 0.0)]
+    post = [_row("A", "2024-03-05", "055", 0.0), _row("A", "2024-03-15", "055", 0.0)]
+    got = choose_scene_pairs(pre, post, 20, 5)
+    assert got["pre"]["A"]["date"] == "2024-02-20" and got["post"]["A"]["date"] == "2024-03-05"
+
+
+def test_post_scene_is_on_the_pre_scenes_relative_orbit_when_there_is_one():
+    pre = [_row("A", "2024-02-19", "012", 0.0)]
+    post = [_row("A", "2024-03-05", "055", 0.0), _row("A", "2024-03-12", "012", 5.0)]
+    got = choose_scene_pairs(pre, post, 20, 5)
+    assert got["post"]["A"]["orbit"] == "012" and got["orbit_mismatch"] == []
+
+
+def test_a_post_orbit_that_differs_is_used_and_reported_when_the_pre_orbit_has_none():
+    pre = [_row("A", "2024-02-19", "012", 0.0)]
+    post = [_row("A", "2024-03-05", "055", 0.0)]
+    got = choose_scene_pairs(pre, post, 20, 5)
+    assert got["post"]["A"]["orbit"] == "055" and got["orbit_mismatch"] == ["A"]
+
+
+def test_cloudy_and_cut_scenes_are_out_but_an_unknown_nodata_figure_is_kept():
+    pre = [_row("A", "2024-02-19", "055", 30.0), _row("B", "2024-02-19", "055", 1.0, nodata=54.0), _row("C", "2024-02-19", "055", 1.0, nodata=None)]
+    post = [_row(t, "2024-03-10", "055", 0.0) for t in "ABC"]
+    got = choose_scene_pairs(pre, post, 20, 5)
+    assert sorted(got["pre"]) == ["C"] and got["dropped"] == ["A", "B"]
+
+
+def test_least_cloud_ties_by_whole_percent_then_exact_cloud_then_item_id():
+    rs = [_row("A", "2024-02-19", "055", 0.4, item="b"), _row("A", "2024-02-19", "055", 0.2, item="a")]
+    got = choose_scene_pairs(rs, [_row("A", "2024-03-10", "055", 0.0)], 20, 5)
+    assert got["pre"]["A"]["item_id"] == "a"

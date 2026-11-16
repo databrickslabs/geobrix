@@ -26,7 +26,9 @@ def peak_rss_mib() -> Optional[float]:
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         # darwin reports bytes, linux KiB
         return rss / _MIB if sys.platform == "darwin" else rss / 1024
-    except ImportError:
+    except (
+        Exception
+    ):  # noqa: BLE001 — no resource module, or getrusage failed: try psutil
         pass
     try:
         import psutil

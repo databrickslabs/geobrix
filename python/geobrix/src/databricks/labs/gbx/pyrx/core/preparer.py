@@ -162,7 +162,7 @@ def prepare_cog_measured(
 ) -> Dict[str, object]:
     """prepare_cog + peak-RSS capture, returning a driver-collectable dict.
 
-    Keys: output_path (str|None), peak_rss_mib (float), status (str). This is the
+    Keys: output_path (str|None), peak_rss_mib (float | None; None when unmeasurable), status (str). This is the
     exact per-row payload the scalar UDF returns; RSS is captured on the DRIVER
     side by collecting this value (worker markers are unreliable on Serverless).
     """
@@ -260,6 +260,7 @@ def prepare_cogs(
     ``sources`` may be a directory, a single file, or an iterable freely mixing
     dirs and files. See _resolve_sources for resolution rules. Returns a summary
     dict (keys: total, ok, skipped, error, out_dir, peak_rss_mib, elapsed_s, results).
+    ``peak_rss_mib`` is float | None: None when RSS is unmeasurable or no source was processed.
 
     ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option applied to
     every output; outputs larger than ~4 GiB MUST be BigTIFF.

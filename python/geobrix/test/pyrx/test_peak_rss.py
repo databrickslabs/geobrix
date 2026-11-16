@@ -1,6 +1,7 @@
 """peak_rss_mib: diagnostics-only peak RSS that must not need the POSIX ``resource`` module."""
 
 import ast
+import os
 import subprocess
 import sys
 import types
@@ -66,7 +67,14 @@ def test_preparer_and_open_tile_import_without_resource():
         "assert v is None or v > 0\n"
         "assert r.peak_rss_mb() >= 0.0\n"
     )
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    env = {**os.environ, "PYTHONPATH": str(_SRC)}
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
     assert out.returncode == 0, out.stderr[-2000:]
 
 

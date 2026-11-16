@@ -1023,6 +1023,10 @@ def _fromfile_cutline(geom, clip_crs):
 def _fromfile_clip_target(target, drv, cutline, clip_crs, resolution, cap_bytes):
     """The tile of the window ``cutline`` covers in the raster at ``target``, read from the coarsest overview that is
     still at least ``resolution`` fine (full resolution when None), or None when the cutline misses the raster.
+
+    A remote target is opened as few times as it can be, and each open is judged: the first (the header, which
+    ``pick_overview`` reads) is refused when it is a VRT; the reopen at an overview level is pinned to the driver the
+    first open reported and judged again, so a source that changed between the opens is never read.
     """
     from databricks.labs.gbx.pyrx.core.clip_read import read_clip
     from databricks.labs.gbx.pyrx.core.cog_ranges import pick_overview
@@ -1034,13 +1038,20 @@ def _fromfile_clip_target(target, drv, cutline, clip_crs, resolution, cap_bytes)
             _resolve_session_for_cap,
         )
 
+        # the cap ``materialize_decision`` resolves when it is carried none: the connect-aware stream cap
         cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+    remote = _gdal_policy.remote_location(str(target)) is not None
     with open_data(target) as head:
-        if _gdal_policy.remote_location(str(target)) is not None:
+        if remote:
             _refuse_remote_vrt(head, target)
         level = pick_overview(head, resolution)
-    kwargs = {} if level is None else {"overview_level": level}
-    with open_data(target, **kwargs) as src:
+        if level is None:
+            out = read_clip(head, cutline, clip_crs, False, cap)
+            return None if out is None else _serde.build_tile(out, drv, 0)
+        driver = head.driver
+    with open_data(target, driver=driver, overview_level=level) as src:
+        if remote:
+            _refuse_remote_vrt(src, target)
         out = read_clip(src, cutline, clip_crs, False, cap)
     return None if out is None else _serde.build_tile(out, drv, 0)
 
@@ -1074,12 +1085,21 @@ def _fromfile_clip(path, local, drv, cap_bytes, geom, clip_crs, resolution):
             )
         sides = _env.copied_sidecar_files(local)
         if sides:
+            if (
+                resolution is not None
+            ):  # a coarser read needs the external overviews too
+                sides = _env.sidecar_files(local)
             with _sidecar_folder(local, sides) as copied:
                 return _fromfile_clip_target(
                     copied, drv, cutline, clip_crs, resolution, cap_bytes
                 )
         staged, is_temp = _stage_local_if_needed(local)
         try:
+            if is_temp and resolution is not None:
+                # the staged copy leaves the external overviews out, and a coarser read needs them
+                from databricks.labs.gbx.pyrx.core.local_temp import copy_overviews
+
+                copy_overviews(local, staged)
             return _fromfile_clip_target(
                 staged, drv, cutline, clip_crs, resolution, cap_bytes
             )

@@ -455,3 +455,21 @@ def test_window_is_written_where_gdal_can_seek_not_under_the_volume(
     assert os.listdir(out_dir) == [
         os.path.basename(res["out_file_path"])
     ]  # no scratch left
+
+
+def test_a_failing_local_temp_leaves_no_scratch_on_the_volume(
+    spark, tmp_path, monkeypatch
+):
+    """The local temp dir is made first, inside the try: if it cannot be made, no .gbx_scratch is left under out_dir."""
+    from databricks.labs.gbx.sample import worldpop
+
+    def boom(prefix):
+        raise OSError("no local disk")
+
+    monkeypatch.setattr(worldpop, "new_local_temp_dir", boom)
+    out_dir = tmp_path / "vol"
+    with pytest.raises(OSError, match="no local disk"):
+        WorldPopDownloader(_download=_FakeDownload()).download(
+            BBOX, str(out_dir), spark=spark
+        )
+    assert os.listdir(out_dir) == []

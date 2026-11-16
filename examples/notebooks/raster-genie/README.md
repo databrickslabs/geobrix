@@ -17,7 +17,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 - **FILE + COG** — each Sentinel-2 scene becomes one seven-band master COG (`stack_scene`: 512-pixel blocks, average overviews 2/4/8/16, GeoBrix compression, nodata 0). The scene is cloud-masked once, when the COG is written: SCL classes 0, 1, 3, 8, 9, 10, 11 become nodata in the reflectance bands at 10 m, so no query needs an SCL mask. SCL stays as band 7, valid at full resolution only, registered in the `rasters` table by a `FILE EXTERNAL` column. Nothing is copied.
 - **Windowed reads** — `gbx_rst_fromfile(file, 'GTiff', <perimeter>, 'EPSG:4326', <resolution>)` fetches only the COG blocks the perimeter needs, at a suitable overview.
 - **Burn severity in SQL** — the notebook first sizes the perimeter's window against the 64 MiB a Unity Catalog function can return and picks the overview to read. `gbx_rst_nbr`, `gbx_rst_mapalgebra` (dNBR, and each tile's offset from an unburned ring), `gbx_rst_merge` and `gbx_rst_histogram` turn a pre-fire and a post-fire scene of each tile (same relative orbit where possible) into dNBR severity classes (Key & Benson, 2006; USGS) and an area per class. WorldPop gives the people inside the perimeter.
-- **Map and Genie** — the severity classes over an Esri basemap, then the same question asked of a Genie Agent in Agent mode, with the SQL it wrote.
+- **Map and Genie** — the severity classes over an Esri basemap, then the same question asked of two Genie Agents in Agent mode, with the SQL each wrote and the time each took: the **live** agent composes the whole GeoBrix chain from the COGs; the **precomputed** agent reads the saved `burn_severity_summary` table for severity and composes the rest the same way.
 
 ---
 
@@ -25,11 +25,14 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 | File | Purpose |
 |---|---|
-| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `MAX_NODATA`, `BURN_RES_M`, `GENIE_SPACE_ID`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
+| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `MAX_NODATA`, `BURN_RES_M`, `GENIE_SPACE_ID`, `GENIE_SPACE_ID_PRECOMPUTED`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
 | `01_smokehouse_creek.ipynb` | The Smokehouse Creek slice: `aois`, Sentinel-2 master COGs, WorldPop, the `rasters` FILE table, the `coverage` view, the burn severity query, a map and the Genie Agent. |
+| [`genie/agent_spec.py`](genie/agent_spec.py) | The two Genie Agents (live and precomputed): their tables, attached GeoBrix functions, instruction text and example SQL. |
+| [`genie/seed_agent.py`](genie/seed_agent.py) | Creates or updates a Genie space from `agent_spec` and prints its id: `python genie/seed_agent.py --profile <name> --warehouse-id <id> --variant live\|precomputed [--space-id <id>]`. |
+| [`genie/run_questions.py`](genie/run_questions.py) | Asks one or both agents (`--space live\|precomputed\|both`) the headline questions in Agent mode, several times, and writes the answers, SQL, timings and a correct/incorrect verdict per space to `evidence.json`. |
 | [`lakeflow/land/scenes.py`](lakeflow/land/scenes.py) | `stack_scene`: per-band Sentinel-2 files in, one master COG out. Tested in `lakeflow/tests/`. |
 
-Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties it touches and the Texas outline), `rasters` (one row per master COG, with a `FILE EXTERNAL` column), the `coverage` view, and `burn_severity_summary`.
+Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties it touches and the Texas outline), `s2_scene_assets` (the Sentinel-2 scenes chosen), `rasters` (one row per master COG, with a `FILE EXTERNAL` column), the `coverage` view, and `burn_severity_summary`.
 
 ---
 
@@ -40,23 +43,23 @@ Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties
 - **The GeoBrix UC functions installed** in your catalog, if you want to query the `rasters` table from a SQL warehouse or Genie. The notebook itself calls the session functions.
 - **Unity Catalog.** `config_nb` creates the schema and a Volume named `data` under it (`CREATE ... IF NOT EXISTS`), so you need `CREATE SCHEMA` and `CREATE VOLUME` on the catalog. Edit `catalog_name` and `schema_name` to change them.
 - **The whole folder.** Open the series from a Git folder, or copy the `lakeflow/` folder next to the notebooks, so that `lakeflow/land/scenes.py` sits beside notebook 01: it imports `stack_scene` from `./lakeflow` and stops with a Fix if the file is missing.
-- **A Genie space (last step only).** Paste the space id into `GENIE_SPACE_ID` in `config_nb`; until then the Genie step prints a message and skips.
+- **Genie spaces (last step only).** Create them with `genie/seed_agent.py` (`--variant live`, and `--variant precomputed` for the second), then paste the ids it prints into `GENIE_SPACE_ID` and `GENIE_SPACE_ID_PRECOMPUTED` in `config_nb`; until `GENIE_SPACE_ID` is set the Genie step prints a message and skips, and the precomputed agent is skipped while its id is empty. The spaces need the GeoBrix UC functions installed in `geospatial_catalog.geobrix_uc` and a SQL warehouse.
 - **Network access.** Planetary Computer, NIFC, WorldPop and Census are all fetched over HTTPS.
 
 ---
 
 ## Run order
 
-1. Open `config_nb.ipynb`, check `catalog_name` / `schema_name`, and (optionally) set `GENIE_SPACE_ID`.
+1. Open `config_nb.ipynb`, check `catalog_name` / `schema_name`, and (optionally) set `GENIE_SPACE_ID` and `GENIE_SPACE_ID_PRECOMPUTED`.
 2. Run `01_smokehouse_creek.ipynb` top to bottom. It starts with `%run ./config_nb`.
 
-The first run downloads the national WorldPop file once (about 0.5 GB) and the Sentinel-2 windows (a few GB). Every step is guarded: files already on the Volume are not downloaded again and existing tables are not rewritten. Set `FORCE_REBUILD = True` in the cell right after `%run ./config_nb` to rebuild everything.
+The first run downloads the national WorldPop file once (about 0.5 GB) and the Sentinel-2 windows (a few GB). Every step is guarded: files already on the Volume are not downloaded again and existing tables are not rewritten. A master COG without the current `GBX_STACK_VERSION` tag (written by an older `stack_scene`) is rebuilt, so master COGs written before the tag existed are rebuilt on the next full run. Set `FORCE_REBUILD = True` in the cell right after `%run ./config_nb` to rebuild everything.
 
 ---
 
 ## Tests
 
-`stack_scene` has unit tests that write real small rasters and check the COG layout (blocks, overviews, compression, nodata, no mask band, band descriptions, resampling):
+`stack_scene` has unit tests that write real small rasters and check the COG layout (blocks, overviews, compression, nodata, no mask band, band descriptions, resampling, the `GBX_STACK_VERSION` tag). `agent_spec` has tests for its function names, instruction count and example SQL:
 
 ```bash
 bash scripts/commands/gbx-test-python.sh --path examples/notebooks/raster-genie/lakeflow/tests

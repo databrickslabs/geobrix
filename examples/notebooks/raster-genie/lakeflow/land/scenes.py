@@ -38,6 +38,27 @@ _DTYPE = "uint16"
 #: SCL classes masked out of the reflectance bands: no data, saturated, cloud shadow, cloud (medium, high
 #: probability), thin cirrus, snow.
 SCL_MASKED = (0, 1, 3, 8, 9, 10, 11)
+#: The version of what `stack_scene` writes, stamped in each master COG as the tag `GBX_STACK_VERSION`.
+#: 1 (no tag) left cloud, shadow and snow in the reflectance; 2 masks them at stack time. Raise it when the
+#: output changes, so a master written by an older version is rebuilt (see `is_current`).
+STACK_VERSION = 2
+STACK_VERSION_TAG = "GBX_STACK_VERSION"
+
+
+def stack_version(path: str) -> int:
+    """The `GBX_STACK_VERSION` stamped in the master COG at `path`; 0 when the tag is missing or not a number."""
+    import rasterio
+
+    with rasterio.open(path) as ds:
+        try:
+            return int(ds.tags().get(STACK_VERSION_TAG, 0))
+        except ValueError:
+            return 0
+
+
+def is_current(path: str) -> bool:
+    """True when the file exists and was written by this version of `stack_scene` or a later one."""
+    return os.path.exists(path) and stack_version(path) >= STACK_VERSION
 
 
 def boa_offset_for(processing_baseline) -> int:
@@ -160,6 +181,7 @@ def stack_scene(
                     dst.write(data, i, window=win)
             for i, name in enumerate(bands, start=1):
                 dst.set_band_description(i, name)
+            dst.update_tags(**{STACK_VERSION_TAG: str(STACK_VERSION)})
         if stats is not None:
             stats.update(
                 data_px=data_px,

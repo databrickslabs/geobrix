@@ -4,7 +4,14 @@ import numpy as np
 import pytest
 
 rasterio = pytest.importorskip("rasterio")
-from land.scenes import S2_BANDS, choose_scene_pairs, stack_scene  # noqa: E402
+from land.scenes import (  # noqa: E402
+    S2_BANDS,
+    STACK_VERSION,
+    choose_scene_pairs,
+    is_current,
+    stack_scene,
+    stack_version,
+)
 from rasterio.enums import MaskFlags  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 
@@ -58,7 +65,7 @@ def test_output_is_a_cog_with_blocks_and_overviews(band_paths, tmp_path):
     with rasterio.open(out) as ds:
         assert ds.overviews(1) == [2, 4, 8, 16]
         assert ds.block_shapes[0] == (512, 512)
-        assert ds.profile["compress"].lower() == "zstd"
+        assert ds.tags(ns="IMAGE_STRUCTURE").get("COMPRESSION", "").lower() == "zstd"
         assert ds.nodata == 0
         assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
 
@@ -304,3 +311,37 @@ def test_least_cloud_ties_by_whole_percent_then_exact_cloud_then_item_id():
     ]
     got = choose_scene_pairs(rs, [_row("A", "2024-03-10", "055", 0.0)], 20, 5)
     assert got["pre"]["A"]["item_id"] == "a"
+
+
+def test_master_cog_carries_the_stack_version_tag(band_paths, tmp_path):
+    out = stack_scene(band_paths, str(tmp_path / "scene.tif"))
+    with rasterio.open(out) as ds:
+        assert ds.tags()["GBX_STACK_VERSION"] == str(STACK_VERSION)
+        assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"  # still a COG
+    assert stack_version(out) == STACK_VERSION
+    assert is_current(out)
+
+
+def test_a_master_without_the_tag_or_with_a_lower_one_is_not_current(
+    band_paths, tmp_path
+):
+    out = stack_scene(band_paths, str(tmp_path / "scene.tif"))
+    old = tmp_path / "old.tif"
+    with rasterio.open(out) as src:  # a pre-fix master: same pixels, no tag
+        profile = src.profile
+        data = src.read()
+    with rasterio.open(old, "w", **profile) as dst:
+        dst.write(data)
+    assert stack_version(str(old)) == 0
+    assert not is_current(str(old))
+    with rasterio.open(old, "r+") as dst:
+        dst.update_tags(GBX_STACK_VERSION=str(STACK_VERSION - 1))
+    assert stack_version(str(old)) == STACK_VERSION - 1
+    assert not is_current(str(old))
+    with rasterio.open(old, "r+") as dst:
+        dst.update_tags(GBX_STACK_VERSION="garbage")
+    assert stack_version(str(old)) == 0
+
+
+def test_a_missing_file_is_not_current(tmp_path):
+    assert not is_current(str(tmp_path / "nope.tif"))

@@ -180,76 +180,96 @@ def test_the_coverage_example_makes_a_live_read():
     )
 
 
-def test_a_table_lookup_does_not_pass_q3():
-    import run_questions as rq
-
-    answer = "632,000 acres burned at low severity or worse; 3,850 people live inside the perimeter."
-    lookup = [
-        "SELECT * FROM geospatial_catalog.raster_genie.burn_severity_summary",
-        "SELECT gbx_rst_fromfile(r.file, 'GTiff', a.geom) FROM rasters r",
-    ]
-    live = [
-        "SELECT gbx_rst_nbr(gbx_rst_fromfile(f, 'GTiff', g, NULL, 80.0), 4, 6)",
-        "SELECT gbx_rst_fromfile(f, 'GTiff', g)",
-    ]
-    assert not rq.check_q3(answer, [], lookup)[0]
-    assert not rq.check_q3(answer, [], [])[0]
-    assert rq.check_q3(answer, [], live)[0]
-    assert not rq.check_q3("about 50 acres and 10 people", [], live)[0]
-
-
-def test_q1_needs_the_live_read():
-    import run_questions as rq
-
-    answer = "Sentinel-2 L2A imagery, enhanced tier, 10 m, 2024-01-27 to 2024-03-12. No elevation data is held."
-    assert rq.check_q1(
-        answer, [], ["SELECT 1 FROM coverage", "SELECT gbx_rst_fromfile(f, 'GTiff')"]
-    )[0]
-    assert not rq.check_q1(answer, [], ["SELECT 1 FROM coverage"])[0]
+def test_the_text_is_consistent_and_teaches_the_method():
+    for t in (spec.TEXT, spec.TEXT_PRECOMPUTED):
+        assert "one self-contained SQL statement for each part of a question" in t
+        assert "Compute every number in SQL" in t
+        assert "never convert it to WKB or WKT" in t
+        assert "1.5 to 2.5 minutes" in t
+        assert "about a minute" not in t
+        assert "as it is" not in t  # the example is adapted, not copied
+        assert "adapt" in t and "aois" in t
+        assert "kind = 'county'" in t
+    # the method behind a question about any area: dNBR, the ring offset, the classes
+    for word in (
+        "dNBR",
+        "ring",
+        "offset",
+        "Key and Benson",
+        "gbx_rst_mapalgebra",
+        "gbx_rst_histogram",
+    ):
+        assert word in spec.TEXT, word
 
 
-def test_a_table_lookup_passes_the_precomputed_space_on_numbers_only():
-    import run_questions as rq
-
-    answer = "632,000 acres burned at low severity or worse; 3,850 people live inside the perimeter."
-    lookup = ["SELECT * FROM geospatial_catalog.raster_genie.burn_severity_summary"]
-    assert rq.check_q3(answer, [], lookup, False)[0]
-    assert not rq.check_q3("about 50 acres and 10 people", [], lookup, False)[0]
-    q1 = "Sentinel-2 L2A imagery, enhanced tier, 10 m, 2024-01-27 to 2024-03-12. No elevation data is held."
-    assert rq.check_q1(q1, [], ["SELECT 1 FROM coverage"], False)[0]
-
-
-def test_per_class_acres_are_compared_within_one_percent_of_the_perimeter():
-    import run_questions as rq
-
-    # High is 48 acres: 90 acres is a miss of the class but 0.004% of the perimeter, so it passes;
-    # the class acres below are each off by far less than 1% of 1,054,160.
-    answer = (
-        "Unburned 425,000, Low 580,000, Moderate-low 47,000, Moderate-high 2,400, High 90; "
-        "3,849 people"
+def test_the_headline_numbers_are_sql_output_not_arithmetic():
+    sev = _example("How much land burned")
+    assert re.search(
+        r"(?s)sum\(CASE WHEN pos \+ 1 >= 2 THEN n END\) OVER \(\).*AS low_or_worse_acres",
+        sev,
     )
-    assert rq.check_q3(answer, [], [], False)[0]
-    off = "Unburned 500,000, Low 300,000, Moderate-low 47,000; 3,849 people"
-    assert not rq.check_q3(off, [], [], False)[0]
-
-
-def test_summarize_gives_median_and_max_per_space_and_question():
-    import run_questions as rq
-
-    rows = [
-        {"space": s, "question": "Q3", "seconds": x, "correct": ok}
-        for s, x, ok in [
-            ("live", 60.0, True),
-            ("live", 70.0, True),
-            ("live", 90.0, False),
-            ("precomputed", 20.0, True),
-            ("precomputed", 30.0, True),
-        ]
-    ]
-    got = {r["space"]: r for r in rq.summarize(rows)}
-    assert (got["live"]["median_s"], got["live"]["max_s"], got["live"]["correct"]) == (
-        70.0,
-        90.0,
-        2,
+    summary = next(
+        sql for q, sql in spec.EXAMPLES_PRECOMPUTED if "burn_severity_summary" in sql
     )
-    assert got["precomputed"]["median_s"] == 25.0
+    assert "AS low_or_worse_acres" in summary
+    people = _example("How many people")
+    assert (
+        re.search(r"gbx_rst_avg\(t\) AS avg_values", people)
+        and "gbx_rst_pixelcount" in people
+    )
+    assert not re.search(r"\d\.\d{4,}\s*\*", people)  # no typed-in constant
+
+
+def test_no_example_answers_the_composition_question():
+    # the novel question (average burn severity of a county and its acres) is left to the agent
+    for q, sql in (*spec.EXAMPLES, *spec.EXAMPLES_PRECOMPUTED):
+        assert "Hutchinson" not in q and "Hutchinson" not in sql
+        assert "county" not in q.lower() or "Carson" in q or "Gray" in q
+
+
+class _FakeApi:
+    """GET list + GET one over a dict of {space_id: (title, stored parent_path)}; records writes."""
+
+    def __init__(self, spaces):
+        self.spaces = spaces
+        self.writes = []
+
+    def do(self, method, path, query=None, body=None):
+        if method != "GET":
+            self.writes.append((method, path))
+            return {}
+        if path.endswith("/spaces"):
+            return {
+                "spaces": [{"space_id": i, "title": t} for i, (t, _) in self.spaces.items()]
+            }
+        sid = path.rsplit("/", 1)[1]
+        return {"space_id": sid, "parent_path": self.spaces[sid][1]}
+
+
+class _FakeClient:
+    def __init__(self, spaces):
+        self.api_client = _FakeApi(spaces)
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "/Users/me@x.com/geobrix/raster-genie",
+        "/Workspace/Users/me@x.com/geobrix/raster-genie",
+        "/Users/me@x.com/geobrix/raster-genie/",
+    ],
+)
+@pytest.mark.parametrize(
+    "asked",
+    [
+        "/Workspace/Users/me@x.com/geobrix/raster-genie",
+        "/Users/me@x.com/geobrix/raster-genie",
+    ],
+)
+def test_find_space_matches_the_folder_with_or_without_the_workspace_prefix(stored, asked):
+    import seed_agent
+
+    client = _FakeClient({"s1": ("T", stored), "s2": ("Other", stored), "s3": ("T", "/Users/x/else")})
+    assert seed_agent.find_space(client, "T", asked) == "s1"
+    assert seed_agent.find_space(client, "Missing", asked) is None
+    assert client.api_client.writes == []

@@ -73,7 +73,7 @@ _TEXT_DATA_PRECOMPUTED = """- burn_severity_summary: the saved result of the bur
 
 _TEXT_READ = f"""HOW TO READ RASTERS
 1. Pick rasters rows first: join aois with st_intersects(rasters.footprint, aois.geom) and filter on product, tier and acquired_date.
-2. Read with {_G}gbx_rst_fromfile(file, 'GTiff', <geom>, <clip_crs>, <resolution>). Pass the rasters.file column and the aois.geom column directly. NEVER wrap them in CAST(... AS FILE), and never convert the geometry. The read fetches only the COG blocks the geometry needs. Never pass the string 'NULL'; use NULL.
+2. Read with {_G}gbx_rst_fromfile(file, 'GTiff', <geom>, <clip_crs>, <resolution>). Pass the rasters.file column and the aois.geom column directly. NEVER wrap them in CAST(... AS FILE), and never convert it to WKB or WKT. The read fetches only the COG blocks the geometry needs. Never pass the string 'NULL'; use NULL.
 3. resolution is the pixel size in the raster's units: metres for Sentinel-2. Use 80 or coarser for the whole fire perimeter and 40 or coarser for a county; a read larger than 64 MiB is refused with an error that carries a Fix, so follow the Fix. For population, omit the resolution.
 4. The Sentinel-2 reflectance is already cloud-masked when the COG is written. Do not read or use the SCL band to mask. Nodata is 0 and the statistics skip it.
 5. Then apply an index (gbx_rst_nbr, gbx_rst_ndvi, gbx_rst_savi) or gbx_rst_mapalgebra, then a statistic (gbx_rst_avg, gbx_rst_pixelcount, gbx_rst_histogram). People inside an area = the population pixel mean times its valid pixel count.
@@ -81,24 +81,28 @@ _TEXT_READ = f"""HOW TO READ RASTERS
 7. Return geometry as ST_ASGEOJSON(...) when the answer is a map."""
 
 _TEXT_SEVERITY_LIVE = """BURN SEVERITY
-- Compute it live from the COGs; no table holds a ready answer. Burn severity is the dNBR (NBR before minus NBR after) of a pre-fire and a post-fire scene of each tile, taken relative to that tile's own unburned ring (the area 1 to 5 km outside the perimeter), in the USGS classes (Key and Benson 2006): 1 Unburned, 2 Low, 3 Moderate-low, 4 Moderate-high, 5 High. Burned area is low severity or worse (classes 2 to 5).
-- The example "How much land burned in the Smokehouse Creek fire, and how severe was it?" is the whole chain, read at 80 m: fromfile for the pre and the post scene of each tile (pre-fire 2024-01-15 to 2024-02-25, post-fire 2024-03-05 to 2024-03-31), gbx_rst_nbr, the ring offset, gbx_rst_mapalgebra for dNBR minus the offset and then the class ids, gbx_rst_merge across tiles, gbx_rst_histogram for the pixel counts, then acres from the pixel area. Use it as it is for the Smokehouse Creek fire; read at 80 m. It takes about a minute.
-- The people inside the fire perimeter come from the WorldPop raster (example "How many people live inside the Smokehouse Creek fire perimeter?"). They are counted on the whole perimeter, burned or not. Say so. For a question about both, run both statements."""
+- Compute it live from the COGs; no table holds a ready answer. "Burn severity" and "how badly it burned" mean dNBR: the NBR of a pre-fire scene minus the NBR of a post-fire scene (gbx_rst_nbr with the B08 and B12 band numbers), for each MGRS tile that meets the area. Scenes of one tile come from the same relative orbit where possible. Pre-fire scenes are 2024-01-15 to 2024-02-25, post-fire scenes 2024-03-05 to 2024-03-31.
+- Each tile's dNBR is taken relative to that tile's own unburned ring: read the same pre and post scenes over the ring (1 to 5 km outside the Smokehouse Creek perimeter, kind = 'fire' in aois, intersected with both footprints), take the mean ring dNBR as the tile's offset (0 when the ring holds fewer than 1000 valid pixels) and subtract it from the tile's dNBR with gbx_rst_mapalgebra. The offset removes the difference between scenes; the mean of the offset dNBR is the "average burn severity".
+- Classes of the offset dNBR (USGS, Key and Benson 2006): 1 Unburned below 0.1, 2 Low 0.1 to 0.27, 3 Moderate-low 0.27 to 0.44, 4 Moderate-high 0.44 to 0.66, 5 High 0.66 and above, made with gbx_rst_mapalgebra. Burned area is low severity or worse (classes 2 to 5); "moderate-low or worse" is classes 3 to 5. Count the classes with gbx_rst_histogram(tile, 5, 0.5, 5.5, false), merge the tiles first with gbx_rst_merge(collect_list(tile)), and turn pixels into acres with the pixel area (gbx_rst_pixelwidth times gbx_rst_pixelheight, divided by 4046.8564224).
+- To clip to any area, read each scene with gbx_rst_fromfile(file, 'GTiff', <aois.geom of that area>, 'EPSG:4326', 80.0) and keep only the tiles whose footprint intersects it: a county is a row of aois with kind = 'county' (match its name), the fire is the row with aoi_id = 'smokehouse_creek'. The ring stays the ring of the fire perimeter whatever the area.
+- The example "How much land burned in the Smokehouse Creek fire, and how severe was it?" is that whole chain for the fire perimeter, read at 80 m: adapt the example's chain to the area asked about, changing only the area (and the statistic or class limit the question asks for). It takes about 1.5 to 2.5 minutes. Its column low_or_worse_acres is the burned total.
+- The people inside an area come from the WorldPop raster (example "How many people live inside the Smokehouse Creek fire perimeter?"): the population pixel mean times its valid pixel count, for the geometry asked about. They are counted on the whole area, burned or not. Say so. For a question about both land and people, run both statements."""
 
 _TEXT_SEVERITY_PRECOMPUTED = """BURN SEVERITY
-- For how much burned, how severe and the area per class of the Smokehouse Creek fire, read burn_severity_summary: it is the saved answer of the full chain and it takes seconds. Burn severity is the dNBR of a pre-fire and a post-fire scene of each tile, relative to that tile's unburned ring, in the USGS classes (Key and Benson 2006). Burned area is low severity or worse (classes 2 to 5).
-- Use the GeoBrix functions for anything the table does not hold: another perimeter, window, resolution or index, or when the user asks to recompute. The example "Recompute the burn severity of the Smokehouse Creek fire from the Sentinel-2 imagery" is the whole chain at 80 m; it takes about a minute.
-- The people inside the fire perimeter come from the WorldPop raster (example "How many people live inside the Smokehouse Creek fire perimeter?"). They are counted on the whole perimeter, burned or not. Say so. For a question about both, run both statements."""
+- For how much burned, how severe and the area per class of the Smokehouse Creek fire, read burn_severity_summary: it is the saved answer of the full chain and it takes seconds. Its column low_or_worse_acres is the burned total. Burn severity is the dNBR (NBR before minus NBR after, gbx_rst_nbr) of a pre-fire and a post-fire scene of each MGRS tile, relative to that tile's unburned ring (1 to 5 km outside the perimeter, the tile's mean ring dNBR subtracted), in the USGS classes (Key and Benson 2006): 1 Unburned below 0.1, 2 Low, 3 Moderate-low from 0.27, 4 Moderate-high from 0.44, 5 High from 0.66. Burned area is low severity or worse (classes 2 to 5).
+- Use the GeoBrix functions for anything the table does not hold: another area, window, resolution or statistic, or when the user asks to recompute. Clip to any area with gbx_rst_fromfile(file, 'GTiff', <aois.geom>, 'EPSG:4326', 80.0) (a county is a row of aois with kind = 'county'), then apply the chain. The example "Recompute the burn severity of the Smokehouse Creek fire from the Sentinel-2 imagery" is the whole chain for the perimeter at 80 m: adapt its chain to the area asked about. It takes about 1.5 to 2.5 minutes.
+- The people inside an area come from the WorldPop raster (example "How many people live inside the Smokehouse Creek fire perimeter?"): the population pixel mean times its valid pixel count. They are counted on the whole area, burned or not. Say so. For a question about both land and people, run both statements."""
 
 _TEXT_ANSWERS = """ANSWERS
 - Give the numbers with units (acres and km2; people), name the source (Sentinel-2 L2A, WorldPop 2020) and the dates used, and keep it short.
 - For what data we hold, report product, tier, resolution in metres, first and last date, number of assets and valid percent from coverage, and confirm the pixel size with one live gbx_rst_fromfile read of one asset, as in the example for Carson County. Do not cite the pixel size of a coarse read as the resolution."""
 
-_TEXT_HEAD = f"""You answer questions about raster data held as Cloud Optimized GeoTIFFs (COGs) for the 2024 Smokehouse Creek fire in the Texas Panhandle. Write one self-contained SQL statement per answer and run it. Always write full names: tables as {_T}<table> and GeoBrix functions as {_G}gbx_rst_<name>.
+_TEXT_HEAD = f"""You answer questions about raster data held as Cloud Optimized GeoTIFFs (COGs) for the 2024 Smokehouse Creek fire in the Texas Panhandle. Write one self-contained SQL statement for each part of a question (a question about land and people takes one statement for each) and run each. Compute every number in SQL: never add, subtract or convert numbers yourself. Always write full names: tables as {_T}<table> and GeoBrix functions as {_G}gbx_rst_<name>.
 """
 
 
-_SQL_SEVERITY_SUMMARY = f"""SELECT class_id, severity, round(acres) AS acres, round(km2, 1) AS km2, pct_of_valid_pixels
+_SQL_SEVERITY_SUMMARY = f"""SELECT class_id, severity, round(acres) AS acres, round(km2, 1) AS km2, pct_of_valid_pixels,
+       round(sum(CASE WHEN class_id >= 2 THEN acres END) OVER (), 0) AS low_or_worse_acres
 FROM {_T}burn_severity_summary
 ORDER BY class_id"""
 
@@ -211,7 +215,9 @@ SELECT pos + 1 AS class_id,
        n AS pixels,
        round(n * abs({_G}gbx_rst_pixelwidth(tile) * {_G}gbx_rst_pixelheight(tile)) / 1e6, 1) AS km2,
        round(n * abs({_G}gbx_rst_pixelwidth(tile) * {_G}gbx_rst_pixelheight(tile)) / 4046.8564224, 0) AS acres,
-       round(100.0 * n / sum(n) OVER (), 1) AS pct_of_valid_pixels
+       round(100.0 * n / sum(n) OVER (), 1) AS pct_of_valid_pixels,
+       round(sum(CASE WHEN pos + 1 >= 2 THEN n END) OVER ()
+             * abs({_G}gbx_rst_pixelwidth(tile) * {_G}gbx_rst_pixelheight(tile)) / 4046.8564224, 0) AS low_or_worse_acres
 FROM (SELECT tile, {_G}gbx_rst_histogram(tile, 5, 0.5, 5.5, false)['band_1'] AS counts FROM severity)
 LATERAL VIEW posexplode(counts) h AS pos, n
 ORDER BY class_id"""

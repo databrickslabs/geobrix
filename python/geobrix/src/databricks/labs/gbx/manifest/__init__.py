@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 SCHEMA_VERSION = 2
 
@@ -58,9 +58,12 @@ LEVEL_KEYS = {
             "sql",
             "sql_helpers",
             "stub",
+            "private",
         }
     ),
 }
+# `private` (L4, with `sql`) lists the `uc_private` routines (`gbx__<x>`, Python) the SQL body calls as `{q}gbx__<x>(...)`:
+# `gbx.uc.install` creates each once, before the function. A body that must run Python steps around a SQL step uses it.
 # `tvf_select` (with `tvf_over`) is the SELECT list of a UC table function that is a PROJECTION of the rows the function
 # it is over returns: `RETURN SELECT <tvf_select> FROM (SELECT inline(<tvf_over>(...)))`. It reads the fields of the
 # partial's struct (a raster-to-grid statistic is `try_divide(sum, count)` of the cell's state), so one kernel serves every
@@ -830,9 +833,15 @@ def _check_sql_param_case(name: str, params, levels: Mapping) -> None:
             )
 
 
-def _check_sql_levels(name: str, levels: Mapping, kind: str = "scalar") -> None:
+def _check_sql_levels(
+    name: str,
+    levels: Mapping,
+    kind: str = "scalar",
+    private_names: Optional[Iterable[str]] = None,
+) -> None:
     """The rules of the SQL keys: a body is non-empty text; "L0" in L4 needs an L0 body (and no helpers of its own: they
-    live with the body); helpers need a body; a table function has no body of its own; only a scalar has a UC SQL body.
+    live with the body); helpers need a body; a table function has no body of its own; only a scalar has a UC SQL body;
+    `private` needs a body and names only `uc_private` routines (`private_names`, the manifest's).
     """
     l0, l4 = levels.get("L0", {}), levels.get("L4", {})
     for level, spec in (("L0", l0), ("L4", l4)):
@@ -854,6 +863,29 @@ def _check_sql_levels(name: str, levels: Mapping, kind: str = "scalar") -> None:
         raise ValueError(
             f"{name}: a table function (tvf_over) has no sql body of its own"
         )
+    if "private" in l4:
+        if "sql" not in l4:
+            raise ValueError(
+                f"{name} L4: private (the Python routines a body calls) needs sql"
+            )
+        listed = l4["private"]
+        if (
+            isinstance(listed, (str, bytes))
+            or not listed
+            or not all(isinstance(p, str) for p in listed)
+        ):
+            raise ValueError(
+                f"{name} L4: private must be a non-empty list of uc_private names"
+            )
+        known = set(private_names or ())
+        unknown = [p for p in listed if p not in known]
+        if unknown:
+            raise ValueError(
+                f"{name} L4: private names {unknown} are not uc_private rows. "
+                f"Fix: add the routine to uc_private or correct the name."
+            )
+        if len(set(listed)) != len(listed):
+            raise ValueError(f"{name} L4: private lists a name twice: {list(listed)}")
     if "tvf_select" in l4:
         if "tvf_over" not in l4:
             raise ValueError(
@@ -1054,7 +1086,12 @@ def parse(raw: Mapping) -> Manifest:
                 )
             stub = l4_raw["stub"]
             levels_raw = {k: v for k, v in levels_raw.items() if k != "L4"}
-        _check_sql_levels(r["sql_name"], levels_raw, r["kind"])
+        _check_sql_levels(
+            r["sql_name"],
+            levels_raw,
+            r["kind"],
+            [p["name"] for p in raw.get("uc_private", [])],
+        )
         _check_sql_param_case(r["sql_name"], params, levels_raw)
         if levels_raw.get("L4", {}).get("sql") == SQL_FROM_L0:
             _check_shared_l0_signature(

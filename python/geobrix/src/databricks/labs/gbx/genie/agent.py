@@ -35,6 +35,7 @@ def _requests_post(timeout_s: int) -> Callable:
                 raise RuntimeError(
                     f"HTTP {resp.status_code}: {(resp.text or '')[:500]}"
                 )
+            resp.encoding = "utf-8"  # text/event-stream declares no charset; requests would guess latin-1
             yield from resp.iter_lines(decode_unicode=True)
         finally:
             resp.close()

@@ -202,6 +202,8 @@ def test_default_transport_requires_requests_streaming(monkeypatch):
         status_code = 500
         text = "boom Bearer SECRET-TOKEN-123"
 
+        encoding = None
+
         def iter_lines(self, decode_unicode=False):
             return iter([])
 

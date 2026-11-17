@@ -209,7 +209,8 @@ class _Resp:
 
 
 def test_default_transport_error_status_is_redacted(monkeypatch):
-    import requests
+    # requests is a runtime/[stac] dependency, not installed in every CI environment.
+    requests = pytest.importorskip("requests")
 
     calls = {}
 
@@ -228,7 +229,8 @@ def test_default_transport_error_status_is_redacted(monkeypatch):
 
 
 def test_default_transport_200_decodes_utf8(monkeypatch):
-    import requests
+    # requests is a runtime/[stac] dependency, not installed in every CI environment.
+    requests = pytest.importorskip("requests")
 
     report = "Médian slope 12.5°"
     msg = {"type": "message", "content": [{"type": "output_text", "text": report}]}

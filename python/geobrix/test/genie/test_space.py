@@ -75,7 +75,13 @@ def test_sql_functions_only_when_given():
 
 
 def test_serializable():
-    json.dumps(_build())
+    built = _build()
+    again = json.loads(json.dumps(built))
+    assert again == built  # every value survives the JSON the API is sent
+    assert again["instructions"]["text_instructions"][0]["content"] == [
+        "Use the raster function."
+    ]
+    assert {t["identifier"] for t in again["data_sources"]["tables"]} == set(_TABLES)
 
 
 class _FakeApi:

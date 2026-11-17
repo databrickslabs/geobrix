@@ -793,9 +793,11 @@ def test_a_different_etag_with_no_size_to_vouch_is_refused(stream_server, tmp_pa
 
 def test_a_response_with_no_etag_is_not_checked_against_one(stream_server, tmp_path):
     url, _ = stream_server(1000)
-    _http.download(
-        url, str(tmp_path / "x.tif"), expected_size=1000, expected_etag='"a"'
-    )
+    out = tmp_path / "x.tif"
+    _http.download(url, str(out), expected_size=1000, expected_etag='"a"')
+    assert (
+        out.read_bytes() == b"x" * 1000
+    )  # the bytes landed, unchecked against the absent ETag
 
 
 def test_local_source_copy_caps_an_unsized_stream(stream_server, tmp_path):

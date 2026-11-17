@@ -1,0 +1,135 @@
+---
+sidebar_position: 11
+title: Genie Helpers
+---
+
+# Genie Helpers
+
+`databricks.labs.gbx.genie` builds a **Genie space** from tables, GeoBrix Unity Catalog functions, instructions and example SQL. It creates or updates the space, and asks a **Genie Agent** a question in Agent mode. Use it to put raster data in FILE columns in front of Genie, as the [raster-genie example](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/raster-genie) does.
+
+The module has three functions:
+
+| Function | What it does |
+|---|---|
+| `build_serialized_space(tables, functions, text, examples)` | Returns the space definition (`serialized_space`, version 2) as a dict. |
+| `apply_space(title, warehouse_id, parent_path, serialized, space_id=None, client=None, merge=False)` | Creates the space, or updates the space `space_id`. Returns the space id. |
+| `ask(space_id, question, *, conversation_id=None, client=None, timeout_s=300)` | Asks the Genie Agent a question and returns its answer, the SQL it ran and the time it took. |
+
+:::info Requirements
+The functions use `databricks-sdk`, the `databricks` extra of the env wheel. It is preinstalled on Databricks runtimes. The module imports it only when a function needs a workspace client. A space needs a SQL warehouse, and the GeoBrix Unity Catalog functions it attaches must be installed (see [Unity Catalog functions](./uc-functions)).
+:::
+
+## Import
+
+```python
+from databricks.labs.gbx.genie import apply_space, ask, build_serialized_space
+```
+
+## `build_serialized_space`
+
+```python
+build_serialized_space(tables, functions, text, examples) -> dict
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `tables` | `list[str]` | Tables and views the space reads, each as `catalog.schema.name`. |
+| `functions` | `list[str]` | Functions the space attaches, each as `catalog.schema.name`. Genie grants `EXECUTE` only on an attached function, so list every function the text or an example calls. |
+| `text` | `str` | The instruction text. An empty text adds none. |
+| `examples` | `list[tuple[str, str]]` | `(question, sql)` pairs. |
+
+- **The output does not depend on input order.** Each list is sorted as the API requires, and a repeated entry is kept once.
+- **Each instruction has a stable id**, derived from its content. Seeding the same space again gives the same ids.
+- **Write every name in full.** The warehouse that runs a Genie query resolves a bare table or function name against its own default schema.
+
+Each attached function, each example and the text block count against Genie's limit of 100 instructions. Tables do not count.
+
+## `apply_space`
+
+```python
+apply_space(title, warehouse_id, parent_path, serialized, space_id=None, client=None, merge=False) -> str
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `title` | `str` | The space title. |
+| `warehouse_id` | `str` | The SQL warehouse the space runs on. |
+| `parent_path` | `str` | The workspace folder of a new space, e.g. `/Workspace/Users/<you>/genie`. It applies only when the space is created. |
+| `serialized` | `dict` | The output of `build_serialized_space`. |
+| `space_id` | `str \| None` | Update this space. `None` creates a new space. |
+| `client` | `WorkspaceClient \| None` | The SDK client. `None` makes a default `WorkspaceClient()`. |
+| `merge` | `bool` | With `space_id`: keep what the space holds and add to it. Default `False`. |
+
+- **An update replaces the whole space definition by default.** Tables, instructions, examples and functions curated in the space but absent from `serialized` are dropped.
+- **`merge=True` keeps them.** It reads the space first, keeps its tables with their metadata and adds the new ones. Each instruction kind in `serialized` replaces that kind; the other kinds stay.
+- **A create that returns no id raises `RuntimeError`.**
+
+## `ask`
+
+```python
+ask(space_id, question, *, conversation_id=None, client=None, timeout_s=300) -> dict
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `space_id` | `str` | The Genie space to ask. |
+| `question` | `str` | The question in plain language. An empty question raises `ValueError`. |
+| `conversation_id` | `str \| None` | Continue this conversation. `None` starts a new one. |
+| `client` | `WorkspaceClient \| None` | The SDK client. `None` makes a default `WorkspaceClient()`. |
+| `timeout_s` | `int` | The read timeout of the stream, in seconds, also checked as each event arrives. Default `300`. |
+
+Returns a dict:
+
+| Key | Value |
+|---|---|
+| `status` | `COMPLETED`, or `FAILED` for a failed answer, a transport error, a timeout or a stream with no final event. |
+| `seconds` | The time the answer took. |
+| `conversation_id` | The conversation the answer belongs to. |
+| `sql` | The SQL statements the agent ran, in order. |
+| `text` | The message texts of the final answer. |
+| `error` | The reason of a `FAILED` status, else `None`. Auth header values and bearer tokens are removed from it. |
+
+- **`ask` never raises for a failed answer.** It returns `status="FAILED"` and the reason, so a loop over many questions keeps going.
+
+## Example
+
+The example builds a space over a FILE table and asks it one question.
+
+```python
+from databricks.labs.gbx.genie import apply_space, ask, build_serialized_space
+
+T = "main.raster_demo."  # the tables
+G = "main.geobrix_uc."   # the GeoBrix Unity Catalog functions
+
+serialized = build_serialized_space(
+    tables=[f"{T}rasters", f"{T}aois"],
+    functions=[f"{G}gbx_rst_fromfile", f"{G}gbx_rst_avg", f"{G}gbx_rst_pixelcount"],
+    text=(
+        f"Read rasters with {G}gbx_rst_fromfile(file, 'GTiff', <geom>, 'EPSG:4326'). "
+        f"Always write full names: tables as {T}<table> and functions as {G}gbx_rst_<name>."
+    ),
+    examples=[
+        (
+            "How many people live in the study area?",
+            f"SELECT round({G}gbx_rst_avg(t)[0] * {G}gbx_rst_pixelcount(t)[0]) AS people "
+            f"FROM (SELECT {G}gbx_rst_fromfile(r.file, 'GTiff', a.geom, 'EPSG:4326') AS t "
+            f"FROM {T}rasters r CROSS JOIN {T}aois a WHERE r.product = 'population')",
+        )
+    ],
+)
+
+space_id = apply_space(
+    "Raster demo",
+    warehouse_id="<warehouse-id>",
+    parent_path="/Workspace/Users/<you>/genie",
+    serialized=serialized,
+)
+
+answer = ask(space_id, "How many people live in the study area?")
+print(answer["status"], answer["seconds"])
+print("\n".join(answer["text"]))
+for sql in answer["sql"]:
+    print(sql)
+```
+
+To update the space later, pass its id: `apply_space(..., space_id=space_id)`. Add `merge=True` to keep what was curated in the space.

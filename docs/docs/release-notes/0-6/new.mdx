@@ -222,6 +222,12 @@ See [Databricks Container Service](../../installation/dcs.mdx).
 
 [Performance](../../api/performance.mdx) has the measurements.
 
+## Sample-data downloaders and Genie helpers {#downloaders-genie}
+
+- **`FirePerimeterDownloader` fetches a wildfire perimeter by name** from the NIFC WFIGS service, with an optional year and state. See [Fire Perimeter Downloader](../../sample-data/fire-perimeter-downloader.mdx).
+- **`WorldPopDownloader` windows the WorldPop 2020 population grid** of the USA to a bbox. See [WorldPop Downloader](../../sample-data/worldpop-downloader.mdx).
+- **`databricks.labs.gbx.genie` builds a Genie space and asks a Genie Agent.** `build_serialized_space` and `apply_space` create or update a space, and `ask` returns the answer and its SQL. See [Genie Helpers](../../api/genie.mdx).
+
 ## Examples {#examples}
 
 - **[Weather Features with Zarr](../../notebooks/zarr-weather-features.mdx)** registers, samples, writes back and versions a weather cube.

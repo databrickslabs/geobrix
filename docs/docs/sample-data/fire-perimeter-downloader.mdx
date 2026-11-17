@@ -1,0 +1,156 @@
+---
+sidebar_position: 12
+title: Fire Perimeter Downloader
+---
+
+## Fire Perimeter Downloader
+
+`FirePerimeterDownloader` fetches the **perimeter of a named wildfire** from the NIFC **WFIGS Interagency Fire Perimeters** service, an open ArcGIS REST FeatureServer. It stages the perimeter as one GeoJSON file in a Unity Catalog Volume.
+
+WFIGS holds the incident perimeters of US wildland fires, from the current year back through 2024 and earlier. A perimeter is the area of interest for a burn-severity or exposure analysis, such as the 2024 Smokehouse Creek fire in the Texas Panhandle. The service is **public: no authentication is required**.
+
+:::note Prerequisites
+- GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `requests` installed (standard with most Python environments)
+- No authentication required: WFIGS is a public ArcGIS FeatureServer
+:::
+
+---
+
+## How It Works
+
+`FirePerimeterDownloader` talks directly to the ArcGIS REST API, as the [TX RRC Wells Downloader](./wells-downloader) does:
+
+1. **`download(incident_name, out_dir, year=None, state=None, latest_only=True)`** pages the FeatureServer for the incident, in a stable `OBJECTID` order.
+   - The name matches `poly_IncidentName` in any case.
+   - A `year` selects the fires discovered in that year (`attr_FireDiscoveryDateTime`).
+   - A `state` (`"TX"` or `"US-TX"`) filters on `attr_POOState`.
+   - The paged total is checked against the server's count, so a short download fails with a Fix.
+   - It writes `<slug>.geojson` under `out_dir` and returns a one-row metadata DataFrame: `out_file_path`, `feature_count`, `is_out_file_valid`, `last_update`.
+
+2. **`repair(...)`** downloads again only if the GeoJSON is missing or holds no features. Otherwise it returns the existing file's metadata unchanged.
+
+3. **`read(out_dir, incident_name=None, ...)`** loads the GeoJSON via the `geojson_gbx` reader. With `incident_name`, it reads only that incident's file. Returns a DataFrame with the raw WFIGS attributes plus `geom_0` (WKB polygon), `geom_0_srid`, `geom_0_srid_proj`.
+
+**One perimeter per incident.** WFIGS keeps each revision of a perimeter as its own record. By default the downloader keeps the newest record of each incident (by `poly_CreateDate`). Records of one incident share `poly_IRWINID`, so two fires with the same name stay apart. Pass `latest_only=False` to keep every record.
+
+Serverless-safe: a single driver-side fetch of one merged file, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `FirePerimeterDownloader`
+
+```python
+from databricks.labs.gbx.sample.fire import FirePerimeterDownloader
+
+downloader = FirePerimeterDownloader()
+# Default service_url: the NIFC WFIGS Interagency Perimeters FeatureServer (layer 0)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `service_url` | `str` | ArcGIS REST FeatureServer query endpoint. Default is the public WFIGS `Perimeters` layer. |
+| `_get` | injectable | Mock `requests.get`-like callable `(url, params) -> dict` for offline unit tests. |
+
+#### `download(incident_name, out_dir, year=None, spark=None, state=None, latest_only=True) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `incident_name` | `str` | The incident name, as WFIGS spells it (any case), e.g. `"Smokehouse Creek"`. |
+| `out_dir` | `str` | Output directory: a UC Volume path (e.g. `/Volumes/...`) or local path. Created if it doesn't exist. |
+| `year` | `int \| None` | The discovery year. `None` matches every year. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+| `state` | `str \| None` | The point-of-origin state, `"TX"` or `"US-TX"`. `None` matches every state. |
+| `latest_only` | `bool` | `True` keeps the newest perimeter of each incident; `False` keeps every record. Default `True`. |
+
+Writes `{out_dir}/<slug>.geojson`. The slug is the incident name in lower case with `_` between words, then the year and the state when given, and `_all` with `latest_only=False`. Returns a one-row DataFrame with columns: `out_file_path` (string), `feature_count` (long), `is_out_file_valid` (boolean), `last_update` (timestamp). When no perimeter matches, it writes nothing, removes a stale file of the same name, warns, and returns `feature_count=0`, `is_out_file_valid=false`.
+
+#### `repair(incident_name, out_dir, year=None, spark=None, state=None, latest_only=True) → DataFrame`
+
+The parameters are those of `download`. If the incident's GeoJSON exists and holds features, `repair` returns its metadata without fetching again. Otherwise it calls `download()`.
+
+#### `read(out_dir, incident_name=None, year=None, spark=None, state=None, latest_only=True) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Directory written by `download()` |
+| `incident_name`, `year`, `state`, `latest_only` | | With `incident_name`, read only that incident's file, named as `download` names it. Without it, read every `.geojson` under `out_dir`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Loads the GeoJSON via `geojson_gbx`. Returns a DataFrame with the raw WFIGS attributes (`poly_IncidentName`, `attr_FireDiscoveryDateTime`, `attr_POOState`, `poly_IRWINID`, ...) plus `geom_0` (WKB polygon in EPSG:4326), `geom_0_srid`, `geom_0_srid_proj`.
+
+---
+
+### `download_fire_perimeter_aoi` (convenience function)
+
+Constructs a default `FirePerimeterDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample.fire import download_fire_perimeter_aoi
+
+download_fire_perimeter_aoi(
+    spark,
+    incident_name,
+    out_dir,
+    year=None,
+    state=None,
+    latest_only=True,
+)
+```
+
+---
+
+## Copy-Paste Example
+
+The example below fetches the perimeter of the 2024 Smokehouse Creek fire. It then reads the perimeter as a `GEOMETRY` and its bounding box, the area of interest for the imagery and population downloads.
+
+```python
+from pyspark.sql import functions as F
+
+from databricks.labs.gbx.sample.fire import FirePerimeterDownloader
+
+VOLUME = "/Volumes/main/default/geobrix_samples/fire"
+
+downloader = FirePerimeterDownloader()
+
+# Step 1 — download: one perimeter, the newest record of the incident
+meta = downloader.download("Smokehouse Creek", VOLUME, year=2024, state="TX")
+meta.show(truncate=False)
+
+# Step 2 — read: the perimeter as a GEOMETRY, with its bounding box
+perimeter = downloader.read(VOLUME, "Smokehouse Creek", year=2024, state="TX").select(
+    F.col("poly_IncidentName").alias("name"),
+    F.col("attr_FireDiscoveryDateTime").alias("discovered"),
+    F.expr("st_geomfromwkb(geom_0, 4326)").alias("geom"),
+)
+perimeter.select(
+    "name",
+    "discovered",
+    F.expr("st_xmin(geom)").alias("minx"),
+    F.expr("st_ymin(geom)").alias("miny"),
+    F.expr("st_xmax(geom)").alias("maxx"),
+    F.expr("st_ymax(geom)").alias("maxy"),
+).show(truncate=False)
+```
+
+### One-shot convenience
+
+```python
+from databricks.labs.gbx.sample.fire import download_fire_perimeter_aoi
+
+meta = download_fire_perimeter_aoi(spark, "Smokehouse Creek", VOLUME, year=2024, state="TX")
+meta.show()
+```
+
+:::tip Reuse for other ArcGIS FeatureServers
+`FirePerimeterDownloader(service_url=...)` accepts another ArcGIS REST FeatureServer query endpoint with the same WFIGS fields. Pass a different `service_url` to read a mirror or an archive layer of the same schema.
+:::
+
+---
+
+## Notebook Reference
+
+`FirePerimeterDownloader` is used in the [raster-genie example](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/raster-genie) (notebook 01). The notebook reads the Smokehouse Creek perimeter as the area for the Sentinel-2 burn severity and the WorldPop population count.

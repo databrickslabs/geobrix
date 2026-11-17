@@ -1,0 +1,152 @@
+---
+sidebar_position: 13
+title: WorldPop Downloader
+---
+
+## WorldPop Downloader
+
+`WorldPopDownloader` fetches a **bounding-box window of the WorldPop 2020 constrained population grid** (people per pixel, about 100 m) for the USA. It stages the window as a small GeoTIFF in a Unity Catalog Volume.
+
+WorldPop's constrained grid places people only in pixels with mapped settlement, so a pixel where nobody lives is nodata, not zero. The mean of a window times its valid pixel count is the number of people in it. The source is **public: no authentication is required**.
+
+:::note Prerequisites
+- GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- About 0.5 GB of room for one copy of the national file (see below)
+- No authentication required: WorldPop is served over public HTTPS
+:::
+
+---
+
+## How It Works
+
+`WorldPopDownloader` reads only the window of the national GeoTIFF that the bbox covers, as the STAC downloaders do:
+
+1. **`download(bbox, out_dir, max_mpp=None, cache_dir=None)`** first estimates the decoded size of the window. It refuses a window over the decoded budget of the compute (64 MiB on Serverless) with a Fix. It then reads the window through GDAL and writes `<item>_<hash>.tif` under `out_dir`. Returns a one-row metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+2. **`repair(bbox, out_dir, ...)`** downloads again only if the GeoTIFF of this bbox is missing or empty. Otherwise it returns the existing file's metadata unchanged.
+
+3. **`read(out_dir, bbox=None, ...)`** loads the GeoTIFFs in `out_dir` via the `raster_gbx` reader. With `bbox`, it reads only that window's file. Returns a DataFrame with a `tile` column ready for the RasterX functions.
+
+**One national copy, then local windows.** `data.worldpop.org` does not serve byte ranges, so GDAL cannot read a window over HTTP. On the first call the downloader checks for range support. Without it, the downloader fetches the national file once (about 0.5 GB for the USA) into `cache_dir` (default `<out_dir>/_source`). The copy is checked against the server's size and ETag, then published in one step, so a cut-short transfer leaves no file. Every later call, for any bbox, windows that local copy.
+
+**File names follow the bbox.** The file name carries a short hash of the bbox and `max_mpp`. Two bboxes in one `out_dir` do not overwrite each other, and `repair` checks the file of the bbox you pass. A failed call never damages an earlier file: the window is written on local disk, then copied to the Volume and renamed into place.
+
+Serverless-safe: one driver-side fetch, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `WorldPopDownloader`
+
+```python
+from databricks.labs.gbx.sample.worldpop import WorldPopDownloader
+
+downloader = WorldPopDownloader()
+# Default href: WorldPop Global_2000_2020_Constrained, 2020, BSGM, USA (usa_ppp_2020_constrained.tif)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `href` | `str` | The WorldPop GeoTIFF to window. Default is the USA 2020 constrained file. The host must be `data.worldpop.org`. |
+| `native_deg` | `float` | The source pixel size in degrees, used only to estimate the window's size. Default `1/1200` (3 arcsec). |
+| `cache_dir` | `str \| None` | Folder for the national copy when the server has no range support. Default `<out_dir>/_source`. A `dbfs:` or `file:` scheme is stripped. |
+| `max_source_bytes` | `int \| None` | Refuse a national copy over this size. Default 2 GiB. |
+
+#### `download(bbox, out_dir, spark=None, max_mpp=None, cache_dir=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 (WGS84 longitude/latitude) |
+| `out_dir` | `str` | Output directory: a UC Volume path (e.g. `/Volumes/...`) or local path. Created if it doesn't exist. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+| `max_mpp` | `float \| None` | Maximum pixel size in **degrees** (the source CRS units). A coarser value decimates the read, e.g. `0.005`. `None` reads full resolution. |
+| `cache_dir` | `str \| None` | Overrides the constructor's `cache_dir` for this call. |
+
+Writes `{out_dir}/usa_ppp_2020_constrained_<hash>.tif`. Returns a one-row DataFrame with columns: `item_id` (string), `asset_name` (`ppp`), `out_file_path` (string), `out_file_sz` (long), `is_out_file_valid` (boolean), `last_update` (timestamp). A bbox that does not overlap the grid warns and returns `is_out_file_valid=false`. A bbox that is not 4 finite numbers in order raises `ValueError` with a Fix.
+
+#### `repair(bbox, out_dir, spark=None, max_mpp=None, cache_dir=None) → DataFrame`
+
+The parameters are those of `download`. If this bbox's GeoTIFF exists and is not empty, `repair` returns its metadata without reading again. Otherwise it calls `download()`.
+
+#### `read(out_dir, spark=None, bbox=None, max_mpp=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Directory written by `download()` |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+| `bbox`, `max_mpp` | | With `bbox`, read only that window's file. Without it, read every window in `out_dir`, never the national copy. |
+
+Loads the GeoTIFFs via `raster_gbx`. Returns a DataFrame with a `tile` struct column (one band, `float32` people per pixel, nodata where nobody lives).
+
+---
+
+### `download_worldpop_aoi` (convenience function)
+
+Constructs a default `WorldPopDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample.worldpop import download_worldpop_aoi
+
+download_worldpop_aoi(
+    spark,
+    bbox,
+    out_dir,
+    max_mpp=None,
+    cache_dir=None,
+)
+```
+
+---
+
+## Copy-Paste Example
+
+The example below windows WorldPop to the Smokehouse Creek fire area in the Texas Panhandle. It then counts the people in the window with the RasterX statistics.
+
+```python
+from pyspark.sql import functions as F
+
+from databricks.labs.gbx.rasterx import functions as rx
+from databricks.labs.gbx.sample.worldpop import WorldPopDownloader
+
+# Texas Panhandle AOI (lon/lat, EPSG:4326)
+AOI_BBOX = (-101.4, 35.3, -100.0, 36.5)
+
+VOLUME = "/Volumes/main/default/geobrix_samples/worldpop"
+
+downloader = WorldPopDownloader()
+
+# Step 1 — download: the first call copies the national file once into VOLUME/_source
+meta = downloader.download(AOI_BBOX, VOLUME)
+meta.show(truncate=False)
+
+# Step 2 — read: one tile of people per pixel
+pop = downloader.read(VOLUME, bbox=AOI_BBOX)
+
+# Step 3 — people in the window: the mean of the valid pixels times their count
+pop.select(
+    F.round(
+        rx.rst_avg("tile")[0] * rx.rst_pixelcount("tile")[0]
+    ).alias("people"),
+).show()
+```
+
+### One-shot convenience
+
+```python
+from databricks.labs.gbx.sample.worldpop import download_worldpop_aoi
+
+meta = download_worldpop_aoi(spark, bbox=AOI_BBOX, out_dir=VOLUME)
+meta.show()
+```
+
+:::tip Count people inside a polygon
+Clip the tile to the polygon first (`rst_clip`, or `rst_fromfile` with a `geom`), then take the mean times the count. A large share of nodata pixels is normal: the constrained grid is nodata wherever nobody lives.
+:::
+
+---
+
+## Notebook Reference
+
+`WorldPopDownloader` is used in the [raster-genie example](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/raster-genie) (notebook 01). The notebook counts the people inside the Smokehouse Creek fire perimeter.

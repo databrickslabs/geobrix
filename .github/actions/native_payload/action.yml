@@ -9,7 +9,8 @@ description: 'The x86_64 native build this run found or made, laid out as the pa
 # scripts/native/jvm_payload.py lays out build/native/jvm-payload (_native/x86_64/lib with the JNI, _native/share),
 # the env wheel's native layout, every file checked against MANIFEST.json's sha256. Pass the `root` output to
 # .github/actions/scala_build (native_root), which links /usr/lib/libgdalalljni.so to that payload's JNI before the
-# first test JVM. No Python bindings are laid out: the jobs' Python processes keep the GDAL they install.
+# first test JVM. No Python bindings are laid out: the heavy jobs install no GDAL binding and their Python tests load
+# none (the light shards take GDAL's osgeo from the light payload, .github/actions/pyrx_build).
 outputs:
   root:
     description: 'The payload root (the GBX_NATIVE_ROOT layout): <root>/_native/x86_64/lib/libgdalalljni.so'

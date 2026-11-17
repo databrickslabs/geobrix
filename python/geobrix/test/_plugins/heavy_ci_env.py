@@ -8,8 +8,9 @@ those packages unimportable (``sys.modules[name] = None``), so ``import pandas``
 
 The blocked set is derived, not listed: the distributions in the light CI lock (``LIGHT_LOCK``, the primary light
 lock the ``pyrx`` CI job installs) that ``requirements-ci.txt`` lacks, mapped to their installed top-level modules.
-A module shared with a distribution that stays installed (a namespace package) is left alone, and so are the
-standard library and ``osgeo`` (GDAL is installed apart from the lock).
+A module shared with a distribution that stays installed (a namespace package) is left alone, and so is the
+standard library. GDAL's own bindings (``osgeo``, ``osgeo_utils``) are in no lock and are blocked as well: the heavy
+CI job installs no GDAL binding (no apt GDAL, no ``pip install gdal``).
 
 ``gbx:test:python --heavy-ci-env`` loads it. Limit: only the pytest process is affected; Spark worker
 processes still import what is installed.
@@ -26,8 +27,12 @@ LOCKS = Path(__file__).resolve().parents[2]  # python/geobrix
 CI_LOCK = LOCKS / "requirements-ci.txt"
 LIGHT_LOCK = LOCKS / "requirements-light-env6-ci.txt"
 
-# Modules that must stay importable whatever the locks say: GDAL's binding is installed apart from the lock.
-KEEP = frozenset({"osgeo"})
+# Modules that must stay importable whatever the locks say.
+KEEP = frozenset()
+
+# Modules the heavy CI job lacks that no lock names: GDAL's own bindings, which only the light shards have (from the
+# native payload). The dev container has them, so a heavy run there would otherwise see them.
+NOT_IN_HEAVY_CI = ("osgeo", "osgeo_utils")
 
 # Top-level names some wheels ship that are not importable packages (or, `test`, belong to the checkout's own tests).
 NOT_MODULES = frozenset({"test", "tests", "include", "lib64", "docs"})
@@ -68,8 +73,13 @@ def blocked_modules(distributions):
 
 def block():
     """Make the blocked modules unimportable; the sorted names."""
-    names = blocked_modules(
-        blocked_distributions(CI_LOCK.read_text(), LIGHT_LOCK.read_text())
+    names = sorted(
+        set(
+            blocked_modules(
+                blocked_distributions(CI_LOCK.read_text(), LIGHT_LOCK.read_text())
+            )
+        )
+        | set(NOT_IN_HEAVY_CI)
     )
     for name in names:
         sys.modules[name] = None

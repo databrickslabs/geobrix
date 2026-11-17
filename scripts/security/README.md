@@ -165,9 +165,10 @@ so pip refuses to install any dep whose hash doesn't match what was
 recorded at lock time. This protects against a compromised mirror
 substituting a same-version-but-different-bytes wheel.
 
-GDAL is the one exception — its Python wheel must match the system's
-apt-installed native version, which is dynamic per CI runner. It's
-installed separately with `pip install gdal[numpy]==<detected>`.
+There is no exception: CI installs no GDAL from apt or PyPI. The JVMs run
+on the native payload's GDAL (built from `scripts/native/pins.conf`, every
+source sha256-pinned), and the light jobs take GDAL's Python bindings from
+that same payload.
 
 ### Regenerating the lockfile
 

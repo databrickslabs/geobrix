@@ -59,15 +59,13 @@ The mirror is regenerated from scratch on every run — fast (~50 ms) because `.
 
 ## Deliberate local-act variations from CI
 
-The mirror's composite actions are patched in two ways for local-act runs only. Both are act-environment workarounds, NOT changes to CI behavior:
+The mirror's composite actions are patched for local-act runs only. The patches are act-environment workarounds, NOT changes to CI behavior:
 
 | What | Why | Visible at runtime |
 |---|---|---|
 | `${{ matrix.X }}` → literal value | act doesn't propagate matrix context into composite-action `run:` blocks (nektos/act#2206-class issue). Pin values come from `gbx:versions:audit`. | `🔧 Rewriting matrix refs in mirror's composite actions...` |
 
-The runner image also pre-installs `gdal[numpy]==3.11.4` into the tool-cache Python so the workflow's `pip install --no-build-isolation gdal[numpy]==X` step becomes a no-op. Reason: GDAL 3.11.4's `pyproject.toml` declares both `[project.license].file` and `[project.license].text`, which modern setuptools rejects (`invalid pyproject.toml config: project.license`). pip's "already satisfied" path skips the pyproject.toml validation entirely. See `Dockerfile.gha-runner`.
-
-Both edits live only in `.cache/act-workspace/.github/actions/`. The real `.github/actions/{scala,python}_build/action.yml` files on disk are unchanged.
+The edits live only in `.cache/act-workspace/.github/actions/`. The real `.github/actions/{scala,python}_build/action.yml` files on disk are unchanged.
 
 If a workflow change is suspected to be the source of a CI failure, check `gbx:versions:audit` and the run-act.sh patch list to make sure the variation isn't masking the real issue.
 

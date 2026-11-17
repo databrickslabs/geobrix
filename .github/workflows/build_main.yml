@@ -297,7 +297,7 @@ jobs:
 
   build:
     name: Heavy tests (Scala + JAR)
-    # Heavy: full Scala test + Python test+coverage + GDAL native install (mvn -T 1C, ~10–15 min). Standard runner is too small.
+    # Heavy: full Scala test + Python test+coverage on the native payload's GDAL (mvn -T 1C, ~10–15 min). Standard runner is too small.
     # Needs only the native payload: it runs in parallel with the light shards (they share no state), so the run takes as
     # long as the slower of the two, and a red light shard no longer hides the heavy result (nor the reverse).
     needs: native-payload
@@ -312,12 +312,12 @@ jobs:
       id-token: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    # The shared scala_build / python_build actions read matrix.python and matrix.gdal (and scripts/native/legacy-consumers.txt
-    # audits the gdal line), so those two stay a matrix; the explicit name above keeps them out of the job's title.
+    # The shared scala_build / python_build actions read matrix.python (setup-python's interpreter), so it stays a
+    # matrix; the explicit name above keeps it out of the job's title. There is no gdal dimension: the job installs no
+    # GDAL of its own (no apt GDAL, no PPA), its JVMs run on the native payload's (scripts/native/pins.conf GDAL_VERSION).
     strategy:
       matrix:
         python: [ 3.12.3 ]
-        gdal: [ 3.11.4 ]
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -325,7 +325,7 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Create pip cache key file
         run: |
-          echo "${{ github.ref }}-${{ matrix.python }}-numpy2.1.3-spark4.0.0-${{ matrix.gdal }}" > .ci-pip-cache-key
+          echo "${{ github.ref }}-${{ matrix.python }}-numpy2.1.3-spark4.0.0" > .ci-pip-cache-key
       - name: Cache apt packages
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:

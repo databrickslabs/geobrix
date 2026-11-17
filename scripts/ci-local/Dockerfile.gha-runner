@@ -145,17 +145,6 @@ RUN curl -fsSL -o /tmp/apache-maven.tar.gz https://archive.apache.org/dist/maven
     && tar -xzf /tmp/apache-maven.tar.gz -C /usr/share/maven --strip-components=1 \
     && rm /tmp/apache-maven.tar.gz
 
-# NOTE: previously tried to pre-install gdal[numpy]==3.11.4 here to dodge
-# GDAL's broken pyproject.toml (dual `[project.license]`). All variants
-# failed: setuptools 64+ rejects the dual-license schema; setuptools ≤ 63.x
-# is broken on Python 3.12 (pkgutil.ImpImporter removed). No setuptools
-# version satisfies BOTH Python 3.12 + lenient validation.
-#
-# This is a real workflow bug, not act-specific — real CI will hit it too
-# the moment the security branch is pushed. Workaround in run-act.sh: drop
-# `--no-build-isolation` from the gdal install line in the mirror so pip
-# gets to pick its own setuptools (whatever pip's bundled mechanism uses).
-
 # Optional Maven proxy. Injected from MAVEN_MIRROR_URL build arg when set;
 # left as the empty template otherwise (uses Maven Central).
 # IMPORTANT: drop the proxy <mirror> in Maven's GLOBAL settings.xml at

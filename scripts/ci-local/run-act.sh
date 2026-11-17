@@ -168,30 +168,8 @@ for af in "$WORKSPACE"/.github/actions/scala_build/action.yml \
         -e 's|\${{ matrix\.python }}|3.12.3|g' \
         -e 's|\${{ matrix\.numpy }}|2.1.3|g' \
         -e 's|\${{ matrix\.spark }}|4.0.0|g' \
-        -e 's|\${{ matrix\.gdal }}|3.11.4|g' \
         -e 's|\${{ matrix\.pytest }}|8.4.2|g' \
         "$af"
-    rm -f "$af.bak"
-done
-
-# DELIBERATE LOCAL-ACT VARIATION (experimental):
-# Workflow does `pip install --no-build-isolation --no-binary :all: gdal[numpy]==3.11.4`.
-# With --no-build-isolation, pip uses our env's setuptools (74.0.0 — strict
-# validate-pyproject) which rejects GDAL 3.11.4's invalid dual-key
-# `[project.license]`. Removing --no-build-isolation lets pip create an
-# isolated build env with whatever setuptools its own bootstrap uses, which
-# *might* end up being a lenient combo. --no-binary :all: stays — we still
-# want the sdist path locally so we exercise the same code path real CI runs.
-echo "🔧 Patching gdal install: drop --no-build-isolation in mirror (act-local variation)..."
-for af in "$WORKSPACE"/.github/actions/scala_build/action.yml \
-          "$WORKSPACE"/.github/actions/python_build/action.yml; do
-    [ -f "$af" ] || continue
-    sed -i.bak \
-        -e 's|pip install --no-build-isolation --no-binary :all: gdal\[numpy\]|pip install --no-binary :all: gdal[numpy]|g' \
-        "$af"
-    if ! diff -q "$af.bak" "$af" >/dev/null 2>&1; then
-        echo "   patched: $(basename "$(dirname "$af")")/$(basename "$af")"
-    fi
     rm -f "$af.bak"
 done
 

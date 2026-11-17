@@ -7,8 +7,8 @@
 #
 # Versions here are kept in sync with DBR 17.3 LTS where applicable; see
 # scripts/docker/Dockerfile ENV block and gbx:versions:audit. GDAL is NOT
-# included — it's installed separately with a version detected from the
-# system's `gdal-config --version` to match the apt-installed native.
+# included and the heavy CI job installs none: its JVMs run on the native
+# payload's GDAL, and its Python tests load no GDAL binding.
 build==1.6.1
 cython==3.0.12
 numpy==2.1.3

@@ -1,6 +1,7 @@
 name: build geobrix scala
 description: build geobrix scala
 # Shares env with python_build (apt + pip). When run before python_build in same job, caches are warm.
+# Reads matrix.python (the interpreter); no GDAL version: the JVMs' GDAL is the native payload's (native_root).
 inputs:
   skip_tests:
     description: 'Skip Scala Tests? true or false'
@@ -77,7 +78,10 @@ runs:
         - name: Verify Maven dependency PGP signatures
           shell: bash
           run: ./scripts/security/maven-pgp-verify
-        - name: Add packaged GDAL dependencies
+        # No GDAL comes from apt and no PPA is added: every JVM here runs on the native payload's GDAL (the link step
+        # below), the GDAL GeoBrix ships, and the heavy Python phase imports no GDAL binding. The packages left are
+        # the system libraries the build has always installed; none of them is a GDAL.
+        - name: Add packaged system dependencies
           shell: bash
           run : |
             # - restore apt cache from workspace (populated by actions/cache in workflow)
@@ -90,51 +94,19 @@ runs:
             sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates main universe multiverse restricted"
             sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-security main multiverse restricted universe"
             sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc) main multiverse restricted universe"
-            # - add ubuntugis PPA with fingerprint-pinned GPG key. We refuse the
-            #   PPA unless the vendored key in scripts/security/keys/ matches
-            #   the expected fingerprint, so a swapped/tampered key file fails
-            #   the build before any GDAL package gets installed through it.
-            sudo apt-get install -y software-properties-common gpg
-            ./scripts/security/apt-add-ubuntugis-ppa
-            # - install natives. GDAL packages exact-pinned to a single ubuntugis-unstable
-            #   build to keep CI deterministic against PPA drift. Bump GDAL_PPA_VERSION in
-            #   lockstep with matrix.gdal across action.yml files. Find current version at
-            #   https://launchpad.net/~ubuntugis/+archive/ubuntu/ubuntugis-unstable/+packages
-            GDAL_PPA_VERSION="3.11.4+dfsg-1~noble0"
-            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y unixodbc libcurl3-gnutls libsnappy-dev libopenjp2-7
-            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y \
-              "libgdal-dev=${GDAL_PPA_VERSION}" \
-              "gdal-bin=${GDAL_PPA_VERSION}" \
-              "python3-gdal=${GDAL_PPA_VERSION}" \
-              zip unzip
+            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y unixodbc libcurl3-gnutls libsnappy-dev libopenjp2-7 zip unzip
             # - install pip packages via hash-pinned lockfile (python/geobrix/requirements-ci.txt).
             #   Every transitive dep is sha256-verified; pip refuses to install on mismatch.
             #   Regenerate via: uv pip compile --generate-hashes python/geobrix/requirements-ci.in
             pip install --upgrade pip==25.0.1
             pip install --require-hashes -r python/geobrix/requirements-ci.txt
-            # GDAL is the one --require-hashes exception: the Python binding
-            # version must match the apt-installed libgdal (pinned by
-            # GDAL_PPA_VERSION above and signed by the fingerprint-pinned
-            # ubuntugis key), so the version is dynamic and can't live in a
-            # static lockfile. --no-binary :all: forces pip to fetch the sdist
-            # and compile it against those verified headers, instead of taking
-            # whatever pre-built manylinux wheel PyPI serves. Residual risk:
-            # the sdist's Python wrapper code itself is not byte-verified.
-            # --no-build-isolation reuses the host's setuptools so build
-            # bootstrapping stays inside the hash-pinned closure above.
-            export GDAL_CONFIG=/usr/bin/gdal-config
-            INSTALLED_GDAL_VERSION=$(gdal-config --version)
-            echo "System GDAL version: ${INSTALLED_GDAL_VERSION}"
-            echo "Matrix GDAL version: ${{ matrix.gdal }}"
-            GDAL_VERSION_TO_INSTALL="${INSTALLED_GDAL_VERSION:-${{ matrix.gdal }}}"
-            pip install --no-build-isolation --no-binary :all: gdal[numpy]==${GDAL_VERSION_TO_INSTALL}
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
         # The JVMs (Maven's test JVMs here, python_build's Spark JVMs after it in the same job) load GDAL's JNI from
         # /usr/lib/libgdalalljni.so: GDAL's Java classes load it by name from the library path, and it is
-        # GDALManager's fallback. The JAR's GDAL classes are the native build's and refuse another GDAL's JNI (the
-        # apt GDAL above stays for the Python bindings only), so the link goes to the native payload's JNI, with the
-        # script the dev container runs on every start; GDALManager then takes the payload's GDAL and PROJ data.
+        # GDALManager's fallback. The JAR's GDAL classes are the native build's and refuse another GDAL's JNI, so the
+        # link goes to the native payload's JNI, with the script the dev container runs on every start; GDALManager
+        # then takes the payload's GDAL and PROJ data. No system GDAL is installed, so this JNI is the only one.
         - name: Link the JVM's GDAL to the native payload's JNI
           shell: bash
           env:

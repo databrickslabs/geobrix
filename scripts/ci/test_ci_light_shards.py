@@ -194,8 +194,9 @@ def test_the_graph_and_the_labels():
     assert jobs["light"]["needs"] == "light-payload"
     assert jobs["build"]["name"] == "Heavy tests (Scala + JAR)"
     assert jobs["light"]["name"].startswith("Light tests - ${{ matrix.shard.name }} (py")
-    # the heavy actions read matrix.python and matrix.gdal: no other dimension is left in the job
-    assert set(jobs["build"]["strategy"]["matrix"]) == {"python", "gdal"}
+    # the heavy actions read matrix.python only (no gdal: the job installs no GDAL, its JVMs run on the native
+    # payload's): no other dimension is left in the job
+    assert set(jobs["build"]["strategy"]["matrix"]) == {"python"}
 
 
 def test_the_light_job_cannot_hide_a_shard_or_test_without_the_native_bindings():

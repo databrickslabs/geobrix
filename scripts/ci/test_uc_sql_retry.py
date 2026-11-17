@@ -84,10 +84,11 @@ class FakeApi:
 
     def __init__(self, submits, polls=()):
         self.submits, self.polls = list(submits), list(polls)
-        self.submitted, self.polled = [], []
+        self.submitted, self.polled, self.kwargs = [], [], []
 
     def execute_statement(self, statement, **kw):
         self.submitted.append(statement)
+        self.kwargs.append(kw)
         step = self.submits.pop(0)
         if isinstance(step, Exception):
             raise step
@@ -244,6 +245,33 @@ def test_main_exits_1_with_a_harness_error_line_and_still_writes_every_case(uc_s
     from databricks.labs.gbx.bench import oracles
 
     assert set(oracles.load_uc_results(str(out))) == {"c1", "c2"}
+
+
+# ---- a large statement is submitted without a synchronous wait ---------------------------------------------------------
+# The Statement API's front end answers 504 DEADLINE_EXCEEDED (an empty-message JSON body, which the SDK maps to
+# DeadlineExceeded) when a POST has not been answered after about a minute. The POST of a statement is its upload plus
+# the `wait_timeout` the server holds it for, so an 11.5 MB statement that is still PENDING at 50 s (upload 5-20 s) was
+# answered 504 after ~55 s, every try, with "statement not submitted". `wait_timeout="0s"` answers at once with the
+# id, and the poll loop does the waiting.
+
+
+def test_a_small_statement_waits_on_the_server_and_a_large_one_does_not(uc_sql):
+    small, large = "SELECT 7", "SELECT '" + "x" * uc_sql.LARGE_STATEMENT_BYTES + "'"
+    assert uc_sql.submit_wait_timeout(small) == "50s"
+    assert uc_sql.submit_wait_timeout(large) == "0s"
+    # a multi-byte character counts by its UTF-8 bytes, not by its length
+    edge = "\u00e9" * (uc_sql.LARGE_STATEMENT_BYTES // 2)
+    assert len(edge) < uc_sql.LARGE_STATEMENT_BYTES and uc_sql.submit_wait_timeout(edge) == "0s"
+
+
+def test_fail_on_revert_a_large_statement_is_submitted_with_no_wait_and_polled_to_its_result(uc_sql):
+    large = "SELECT '" + "x" * uc_sql.LARGE_STATEMENT_BYTES + "'"
+    api = FakeApi([_resp("s1", State.PENDING)], [_resp("s1", State.RUNNING), _resp("s1", State.SUCCEEDED, "7")])
+    entry = uc_sql.run_single(_w(api), "c1", large, _args())
+    assert entry["value"] in ("7", 7) and api.kwargs[0]["wait_timeout"] == "0s" and api.polled == ["s1", "s1"]
+    api = FakeApi([_resp("s2", State.SUCCEEDED, "7")])
+    uc_sql.run_single(_w(api), "c2", "SELECT 7", _args())
+    assert api.kwargs[0]["wait_timeout"] == "50s"
 
 
 # ---- a statement the API refuses as too long ------------------------------------------------------------------------

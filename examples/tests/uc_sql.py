@@ -46,6 +46,12 @@ DEFAULT_TIMEOUT_S = 600.0
 # The Statement API refuses a statement text over 16777216 bytes. A batch is closed at this many UTF-8 bytes of its
 # built statement, which leaves headroom below that limit.
 MAX_BATCH_BYTES = 12 * 1024 * 1024
+# The Statement API's front end answers a POST that has not been answered after about a minute with 504 DEADLINE_EXCEEDED
+# (a JSON body with no message: the SDK maps it to DeadlineExceeded). The POST of a statement lasts its upload plus the
+# `wait_timeout` the server holds it for. A statement over LARGE_STATEMENT_BYTES is submitted with `wait_timeout="0s"`
+# (answered at once with its id, PENDING) and the poll loop does the waiting; a small one waits SYNC_WAIT_S on the server.
+SYNC_WAIT_S = 50
+LARGE_STATEMENT_BYTES = 1024 * 1024
 # pip prints "Looking in indexes: <url>" in some failures; an index URL never reaches a log or a file.
 _INDEX_LINE = re.compile(r"(?m)^.*Looking in indexes:.*$")
 
@@ -116,6 +122,12 @@ def is_statement_too_long(exc: BaseException) -> bool:
     return "statement" in text and "exceed" in text and "length" in text
 
 
+def submit_wait_timeout(statement: str) -> str:
+    """The `wait_timeout` of a statement's submit: the server holds a small one SYNC_WAIT_S for its result; a large one
+    (its upload takes 5-20 s, and upload + 50 s passes the front end's ~60 s limit: 504 DEADLINE_EXCEEDED) returns at once."""
+    return "0s" if len(statement.encode("utf-8")) >= LARGE_STATEMENT_BYTES else f"{SYNC_WAIT_S}s"
+
+
 def _api_call(call, statement_id=None):
     """`call()`, tried again up to API_RETRIES times after a transient failure; one log line per retry.
 
@@ -160,7 +172,7 @@ def _execute(w, statement, warehouse_id, catalog, schema, timeout_s):
                 warehouse_id=warehouse_id,
                 catalog=catalog,
                 schema=schema,
-                wait_timeout="50s",
+                wait_timeout=submit_wait_timeout(statement),
             )
         )
     except Exception as exc:  # noqa: BLE001 - only the too-long refusal is translated

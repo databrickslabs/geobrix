@@ -317,19 +317,28 @@ def test_the_questions_are_plain_language():
 
 
 def test_the_runner_has_no_workspace_specific_literals():
-    src = Path(rq.__file__).read_text()
-    for literal in (
-        "de2336249255be4e",
-        "01f1e19c",
-        "01f1e1df",
-        "mjohns",
-        "fevm-geospatial",
-        "cloud.databricks.com",
-    ):
-        assert literal not in src, literal
-    seed = (Path(rq.__file__).parent / "seed_agent.py").read_text()
-    for literal in ("mjohns", "databricks.com/geobrix", "de2336249255be4e"):
-        assert literal not in seed, literal
+    from _workspace_literals import findings
+
+    genie = Path(rq.__file__).parent
+    for name in ("run_questions.py", "seed_agent.py", "agent_spec.py"):
+        assert not findings((genie / name).read_text()), name
+
+
+def test_the_literal_patterns_catch_real_shapes():
+    from _workspace_literals import findings
+
+    shapes = [
+        "0123456789abcdef",
+        "01f" + "0" * 29,
+        "/Users/someone@example.com/x",
+        "someone@example.com",
+        "https://x.cloud.databricks.com",
+        "--profile my-profile",
+        'profile="my-profile"',
+    ]
+    for shape in shapes:
+        assert findings(shape), shape
+    assert not findings("--profile <name> --warehouse-id <id>")
 
 
 def test_answers_are_cleaned_of_workspace_links():

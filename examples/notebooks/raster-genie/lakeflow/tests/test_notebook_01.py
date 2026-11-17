@@ -57,11 +57,12 @@ def test_config_ships_no_space_ids_and_no_host():
     cfg = "\n".join(_cells("config_nb.ipynb"))
     assert re.search(r'^GENIE_SPACE_ID = ""$', cfg, re.M)
     assert re.search(r'^GENIE_SPACE_ID_PRECOMPUTED = ""$', cfg, re.M)
+    from _workspace_literals import findings
+
     raw = (NB_DIR / "config_nb.ipynb").read_text() + (
         NB_DIR / "01_smokehouse_creek.ipynb"
     ).read_text()
-    assert "cloud.databricks.com" not in raw
-    assert "mjohns" not in raw
+    assert not findings(raw), findings(raw)[:5]
 
 
 def test_the_agent_cell_prints_titles_and_strips_links():

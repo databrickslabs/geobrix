@@ -1000,8 +1000,8 @@ def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
 
 
 def _file_span(value):
-    """``(offset, size)`` of a FILE value (a mapping or an object with ``uri``): the slice of its object the value
-    names. ``(0, None)`` for a value with no offset, or a zero one: the whole object. ``size`` is None when absent.
+    """``(offset, size)`` of a FILE value (a mapping or an object with ``uri``): the bytes ``[offset, offset + size)``
+    of its object the value names. ``offset`` is 0 when absent; ``size`` is None when absent.
     """
     from collections.abc import Mapping
 
@@ -1009,6 +1009,30 @@ def _file_span(value):
     offset = get("offset") or 0
     size = get("size")
     return int(offset), (None if size is None else int(size))
+
+
+def _slice_of(span, path, local):
+    """How ``rst_fromfile`` reads a FILE value of ``span`` ``(offset, size)``, as the Unity Catalog body does (it reads
+    ``[offset, offset + size)``, and only ``CASE WHEN path.size > 0``): ``"null"`` for a size of 0 or less, or a
+    non-zero offset with no size; the span for a non-zero offset, or a size smaller than the local object; None (the
+    plain path) for a whole object: offset 0 with no size, or with the object's own size. A remote object's size is
+    not looked up: offset 0 reads it whole. A path that is no FILE value (``span`` None) is the plain path.
+    """
+    if span is None:
+        return None
+    remote = _gdal_policy.remote_location(str(path)) is not None
+    offset, size = span
+    if size is not None and size <= 0:
+        return "null"
+    if offset:
+        return "null" if size is None else span
+    if size is None or remote:
+        return None
+    try:
+        whole = os.path.getsize(local)
+    except OSError:
+        return None  # a missing file is the plain path's NULL
+    return span if size < whole else None
 
 
 def _subfile(target, offset, size):
@@ -1080,14 +1104,12 @@ def _fromfile_clip_target(target, drv, cutline, clip_crs, resolution, cap_bytes)
     return None if out is None else _serde.build_tile(out, drv, 0)
 
 
-def _fromfile_clip(
-    path, local, drv, cap_bytes, geom, clip_crs, resolution, span=(0, None)
-):
+def _fromfile_clip(path, local, drv, cap_bytes, geom, clip_crs, resolution, span=None):
     """``rst_fromfile`` with a ``geom`` or a ``resolution``: a materialized tile of only the window the geometry covers
     (clipped by it, as ``rst_clip`` does), read from the overview ``resolution`` picks. A file on a Volume is read in
     place where it can be (see ``_stage_local_if_needed``); a VRT is opened by its path, where its sources resolve.
-    ``span`` is the ``(offset, size)`` of a FILE value that names a slice of its object: the slice is read as the
-    raster (``/vsisubfile/``), with no sidecars, as Unity Catalog reads it.
+    ``span`` is the ``(offset, size)`` of a FILE value that names a slice of its object (None: the whole object): the
+    slice is read as the raster (``/vsisubfile/``), with no sidecars, as Unity Catalog reads it.
     """
     from databricks.labs.gbx.ds.file_gbx import (
         StageTooLargeError,
@@ -1101,9 +1123,8 @@ def _fromfile_clip(
         return _serde.build_error_tile(str(exc), 0)
     if geom is not None and cutline is None:
         return None  # an empty geometry clips to nothing
-    offset, size = span
     try:
-        if offset:
+        if span is not None:
             return _fromfile_clip_slice(
                 path, local, drv, cap_bytes, cutline, clip_crs, resolution, span
             )
@@ -1151,40 +1172,79 @@ def _fromfile_clip(
         return None
 
 
+@contextlib.contextmanager
+def _staged_slice(local, span):
+    """A local copy of only the bytes ``span`` of ``local`` (one sequential read), removed when the block ends. A
+    slice over ``GBX_STAGE_MAX_BYTES`` raises ``StageTooLargeError``."""
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, stage_max_bytes
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        new_staged_local_file,
+        remove_staged,
+    )
+
+    offset, size = span
+    if size > stage_max_bytes():
+        raise StageTooLargeError(
+            f"rst_fromfile: the slice of {local!r} is {size:,} bytes, over GBX_STAGE_MAX_BYTES={stage_max_bytes():,}. "
+            "Fix: read it in place from a path GDAL can open directly, or raise GBX_STAGE_MAX_BYTES."
+        )
+    copy = new_staged_local_file(os.path.basename(str(local)) or "slice.tif")
+    try:
+        with open(local, "rb") as fin, open(copy, "wb") as fout:
+            fin.seek(offset)
+            left = size
+            while left > 0:
+                chunk = fin.read(min(left, 8 * 1024 * 1024))
+                if not chunk:
+                    break
+                fout.write(chunk)
+                left -= len(chunk)
+        yield copy
+    finally:
+        remove_staged(copy)
+
+
+def _on_slice(local, span, read):
+    """``read(target, whole)`` over the slice ``span`` of the local or FUSE file ``local``: in place first, with
+    ``target`` the ``/vsisubfile/`` name and ``whole`` None; for a FUSE path whose in-place read fails with an I/O
+    error, once more on a local copy of the slice alone (``target`` and ``whole`` both that copy). The raw object is
+    never probed or copied whole: its first bytes are no raster."""
+    from databricks.labs.gbx.ds.file_gbx import _is_fuse_path
+
+    try:
+        return read(_subfile(local, *span), None)
+    except OSError:  # RasterioIOError is one; a policy refusal or a cap error is not
+        if not _is_fuse_path(local):
+            raise
+    with _staged_slice(local, span) as copy:
+        return read(copy, copy)
+
+
 def _fromfile_clip_slice(
     path, local, drv, cap_bytes, cutline, clip_crs, resolution, span
 ):
     """The clip of ``_fromfile_clip`` over the slice ``span`` of a file: a remote one through GDAL's own reads (its
-    switch is on), a local or Volume one in place where it can be, else from a staged copy.
+    switch is on), a local or Volume one in place, else from a local copy of the slice.
     """
-    from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
-
     if _gdal_policy.remote_location(str(path)) is not None:
         return _fromfile_clip_target(
             _subfile(path, *span), drv, cutline, clip_crs, resolution, cap_bytes
         )
-    staged, is_temp = _stage_local_if_needed(local)
-    try:
-        return _fromfile_clip_target(
-            _subfile(staged, *span), drv, cutline, clip_crs, resolution, cap_bytes
-        )
-    finally:
-        if is_temp:
-            from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
-
-            remove_staged(staged)
+    return _on_slice(
+        local,
+        span,
+        lambda target, _whole: _fromfile_clip_target(
+            target, drv, cutline, clip_crs, resolution, cap_bytes
+        ),
+    )
 
 
 def _fromfile_slice(path, local, drv, materialize, cap_bytes, span):
-    """``rst_fromfile`` of the whole slice ``span`` of a file (a FILE value with an offset). Virtual: a tile that
+    """``rst_fromfile`` of the whole slice ``span`` of a file (a FILE value that names a slice). Virtual: a tile that
     points at the slice (``/vsisubfile/``), its header read. Materialized: the slice's decoded size is gated by the
-    cap from its header, then its bytes are read and re-encoded. A remote file is read by GDAL (its switch is on).
-    """
-    from databricks.labs.gbx.ds.file_gbx import (
-        StageTooLargeError,
-        _stage_local_if_needed,
-        materialize_decision,
-    )
+    cap from its header, read in place, then its bytes are read and re-encoded. A remote file is read by GDAL (its
+    switch is on)."""
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
 
     remote = _gdal_policy.remote_location(str(path)) is not None
     try:
@@ -1210,11 +1270,11 @@ def _fromfile_slice(path, local, drv, materialize, cap_bytes, span):
             ).to_row()
         if remote:
             return _fromfile_read_remote(_subfile(path, *span), drv, cap_bytes)
-        staged, is_temp = _stage_local_if_needed(local)
-        try:
+
+        def _read(target, whole):
             import numpy as _np_cap
 
-            with open_data(_subfile(staged, *span)) as head:
+            with open_data(target) as head:
                 decoded = (
                     head.count
                     * head.width
@@ -1227,15 +1287,12 @@ def _fromfile_slice(path, local, drv, materialize, cap_bytes, span):
                     f"Serverless materialize cap. Omit materialize=True (the virtual default is Serverless-safe) or "
                     f"split the source (sizeInMB=)."
                 )
-            offset, size = span
-            with open(staged, "rb") as fh:  # the slice, one sequential read
+            offset, size = (0, span[1]) if whole else span
+            with open(whole or local, "rb") as fh:  # the slice, one sequential read
                 fh.seek(offset)
-                blob = fh.read() if size is None else fh.read(size)
-        finally:
-            if is_temp:
-                from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
+                return fh.read(size)
 
-                remove_staged(staged)
+        blob = _on_slice(local, span, _read)
         from rasterio.io import MemoryFile
 
         with MemoryFile(blob) as mf, open_bytes(mf) as src:
@@ -1276,8 +1333,9 @@ def _fromfile_impl(
     None (the SQL UDF paths, which do not bake a driver cap), materialize_decision
     falls back to session resolution.
 
-    ``path`` is a path or a FILE value (anything ``path_of`` reads). A FILE value with a non-zero ``offset`` names
-    the slice ``[offset, offset + size)`` of its object, and that slice is read as the raster, as on Unity Catalog.
+    ``path`` is a path or a FILE value (anything ``path_of`` reads). A FILE value that names a slice of its object
+    (a non-zero ``offset``, or a ``size`` smaller than the object) reads ``[offset, offset + size)`` as the raster, as
+    on Unity Catalog; a size of 0 or less, or an offset with no size, is NULL (see ``_slice_of``).
     ``geom`` (WKB, EWKB, WKT, EWKT or a GEOMETRY value,
     its SRID winning
     over ``clip_crs``) and ``resolution`` (a pixel size in the raster's CRS units) each make the result a materialized
@@ -1291,7 +1349,7 @@ def _fromfile_impl(
         to_local_path,
     )
 
-    span = (0, None)
+    span = None
     if not isinstance(path, str):
         span = _file_span(path)
         path = path_of(path)
@@ -1302,12 +1360,15 @@ def _fromfile_impl(
     _env.configure_gdal_env()
     drv = ops_core.known_driver("GTiff" if driver is None else driver, "rst_fromfile")
     local = to_local_path(str(path))
+    span = _slice_of(span, path, local)
+    if span == "null":
+        return None  # as Unity Catalog: a FILE value whose slice has no positive size
 
     if geom is not None or resolution is not None:
         return _fromfile_clip(
             path, local, drv, cap_bytes, geom, clip_crs, resolution, span
         )
-    if span[0]:
+    if span is not None:
         return _fromfile_slice(path, local, drv, materialize, cap_bytes, span)
 
     if materialize and _names_a_vrt(local):

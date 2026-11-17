@@ -502,11 +502,16 @@ def test_a_remote_offset_file_is_judged_by_its_url(remote, tmp_path, monkeypatch
     (remote_dir / "pre.tif").write_bytes(b"\0" * n + _cog_bytes(600, 500))
     server = _Http(remote_dir)
     try:
-        vrt = {"uri": server.base + "/pre.vrt", "offset": n}
+        size = len(_REMOTE_VRT)
+        vrt = {"uri": server.base + "/pre.vrt", "offset": n, "size": size}
         for kw in ({"geom": BOX.wkb}, {}):
             msg = _error_of(_fromfile_impl(vrt, "GTiff", True, **kw))
             assert "Fix:" in msg, msg
-        tif = {"uri": server.base + "/pre.tif", "offset": n}
+        tif = {
+            "uri": server.base + "/pre.tif",
+            "offset": n,
+            "size": len(_cog_bytes(600, 500)),
+        }
         assert _arr(_fromfile_impl(tif, "GTiff", True, geom=BOX.wkb))[1:] == (300, 300)
     finally:
         server.close()
@@ -516,3 +521,99 @@ def test_an_offset_file_at_a_remote_url_is_refused_without_the_switch(monkeypatc
     monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
     with pytest.raises(_gdal_policy.RemotePathError):
         _fromfile_impl({"uri": "https://h.invalid/a.tif", "offset": 10}, "GTiff", True)
+
+
+# --- a slice on a FUSE path is read in place; the FILE value's size follows Unity Catalog --------------------------
+
+
+def test_an_offset_file_on_a_volume_is_read_in_place_and_fast(tmp_path, monkeypatch):
+    """On a Volume (``_is_fuse_path``) the slice is opened in place through /vsisubfile/: the raw object, whose first
+    bytes are no raster, is never probed (10 transient retries) nor copied whole."""
+    import time
+
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.pyrx.core import local_temp
+
+    _, value = _prefixed(tmp_path)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda path: True)
+    staged = []
+
+    def _no_stage(*a, **k):
+        staged.append(a)
+        raise AssertionError("the raw object was staged")
+
+    monkeypatch.setattr(file_gbx, "_stage_local_if_needed", _no_stage)
+    monkeypatch.setattr(file_gbx, "copy_source_with_sidecars", _no_stage)
+    monkeypatch.setattr(local_temp, "copy_source_with_sidecars", _no_stage)
+    box = sg.box(405000, 3990000, 412000, 3996000).wkb
+    t0 = time.monotonic()
+    whole = _fromfile_impl(value, "GTiff", True)
+    clip = _fromfile_impl(value, "GTiff", True, geom=box)
+    assert time.monotonic() - t0 < 2.0
+    assert whole is not None and whole["raster"] is not None, whole
+    assert clip is not None and _arr(clip)[1:] == (700, 600), clip
+    assert not staged
+
+
+def test_a_volume_slice_that_cannot_open_in_place_reads_a_copy_of_the_slice_only(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.ds import file_gbx
+
+    _, value = _prefixed(tmp_path)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda path: True)
+    real = prx.open_data
+    seen = []
+
+    def _no_subfile(target, *a, **k):  # as a mount that serves no random reads
+        if str(target).startswith("/vsisubfile/"):
+            raise rasterio.errors.RasterioIOError("no random reads here")
+        seen.append(os.path.getsize(target))
+        return real(target, *a, **k)
+
+    monkeypatch.setattr(prx, "open_data", _no_subfile)
+    whole = _fromfile_impl(value, "GTiff", True)
+    assert np.array_equal(_arr(whole)[0], _rc.cog_pixels())
+    assert seen and set(seen) == {
+        value["size"]
+    }  # the copy holds the slice, not the object
+
+
+def test_offset_zero_with_a_smaller_size_reads_only_that_slice(tmp_path):
+    cog = _cog_bytes()
+    p = tmp_path / "cog_trailer.tif"
+    p.write_bytes(cog + b"\0" * 5000)  # the object runs past the FILE's size
+    value = {"uri": "dbfs:" + str(p), "offset": 0, "size": len(cog)}
+    virtual = _fromfile_impl(value, "GTiff", False)
+    assert virtual["path"] == f"/vsisubfile/0_{len(cog)},{p}"
+    assert np.array_equal(
+        _arr(_fromfile_impl(value, "GTiff", True))[0], _rc.cog_pixels()
+    )
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        {"offset": 12345},
+        {"offset": 12345, "size": 0},
+        {"offset": 12345, "size": -1},
+        {"size": 0},
+    ],
+    ids=["offset-no-size", "offset-size-0", "offset-size-negative", "size-0"],
+)
+def test_a_file_value_with_no_positive_size_for_its_slice_is_null(tmp_path, span):
+    _, value = _prefixed(tmp_path)
+    got = {"uri": value["uri"], **span}
+    assert _fromfile_impl(got, "GTiff", True) is None
+    assert _fromfile_impl(got, "GTiff", False) is None
+    assert _fromfile_impl(got, "GTiff", True, geom=BOX.wkb) is None
+
+
+@pytest.mark.parametrize("size", ["whole", None], ids=["its-own-size", "no-size"])
+def test_a_plain_file_value_keeps_the_plain_path(tmp_path, size):
+    p = _write(tmp_path, _cog_bytes(width=600, height=500))
+    value = {"uri": "dbfs:" + p, "offset": 0}
+    if size == "whole":
+        value["size"] = os.path.getsize(p)
+    virtual = _fromfile_impl(value, "GTiff", False)
+    assert virtual["path"] == p  # no /vsisubfile/

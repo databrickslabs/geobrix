@@ -204,7 +204,9 @@ def test_the_grouped_core_runs_the_engine_on_the_open_tiles_bytes(monkeypatch):
     )
     row = core(b"ds", 9)
     assert row["raster"] == b"II*\x00out" and row["cellid"] == 9
-    assert calls[0][0] is SLOPE and calls[0][1] == [b"II*\x00ds"]
+    # by name, not identity: the manifest gates (check_surfaces.run) clear manifest.load's cache, so a test that runs
+    # after them gets freshly parsed Function objects for the same row
+    assert calls[0][0].sql_name == SLOPE.sql_name and calls[0][1] == [b"II*\x00ds"]
     assert calls[0][2] == {"unit": "percent", "xscale": None, "yscale": None}
 
 

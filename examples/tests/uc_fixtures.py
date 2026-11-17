@@ -3,7 +3,7 @@
 Run where rasterio is installed (the dev container): `python3 examples/tests/uc_fixtures.py --out DIR` writes the files of
 `FILES` into DIR. The gate stages DIR to `<volume folder>/fixtures/`. The files are deterministic, so a staged copy of the
 right size is the right file. Their layout is described beside the rows that read them
-(`bench/oracle_tables/raster_constructor.py`, `UC_FROMFILE`).
+(`bench/oracle_tables/raster_constructor.py`, `_UC_FROMFILE`).
 """
 
 import argparse

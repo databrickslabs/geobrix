@@ -393,7 +393,9 @@ _HEAD = (
     "least(f.size, CAST(4194304 AS BIGINT)), 'content_type', f.content_type, 'checksum', f.checksum) AS FILE) AS BINARY)"
 )
 
-UC_FROMFILE = (
+# Underscored so the oracle discovery does not list these rows as a table of their own: they run once, as part of
+# RASTER_CONSTRUCTOR below (a slice table of their own would run each twice).
+_UC_FROMFILE = (
     # a polygon clips the read to its window (a 700 x 600 pixel box); the window's blocks are past the head
     recipe(
         "uc_fromfile_clip",
@@ -497,7 +499,7 @@ UC_FROMFILE = (
 )
 
 
-# Unity Catalog serves fromcontent (the bytes are the argument) and fromfile (a FILE on a Volume: the UC_FROMFILE rows
+# Unity Catalog serves fromcontent (the bytes are the argument) and fromfile (a FILE on a Volume: the _UC_FROMFILE rows
 # above). Bytes GDAL cannot open are refused with the reason and a Fix, where the session answers an error tile.
 RASTER_CONSTRUCTOR = share(
     _SESSION_ROWS,
@@ -506,4 +508,4 @@ RASTER_CONSTRUCTOR = share(
 ) + (
     Case("uc_fromcontent_corrupt_refused", FC, (GARBAGE, "GTiff"), "uc_refused", None, ("uc",)),
     Case("uc_fromcontent_vrt_refused", FC, (VRT, "VRT"), "uc_refused", None, ("uc",)),
-) + UC_FROMFILE  # fmt: skip
+) + _UC_FROMFILE  # fmt: skip

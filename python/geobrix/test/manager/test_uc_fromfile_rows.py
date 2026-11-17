@@ -1,4 +1,4 @@
-"""The workspace rows of gbx_rst_fromfile (oracle_tables/raster_constructor.py, UC_FROMFILE): their `{vol}` fixtures, their
+"""The workspace rows of gbx_rst_fromfile (oracle_tables/raster_constructor.py, _UC_FROMFILE): their `{vol}` fixtures, their
 expected values, and the fixture files the gate stages. The rows run on a warehouse; these tests pin what does not need one.
 """
 
@@ -15,7 +15,7 @@ from databricks.labs.gbx.bench.oracle_tables import raster_constructor as rc
 from databricks.labs.gbx.pyrx.core import cog_ranges as cr
 
 REPO = Path(__file__).resolve().parents[4]
-UC_ROWS = {c.cid: c for c in rc.UC_FROMFILE}
+UC_ROWS = {c.cid: c for c in rc._UC_FROMFILE}
 
 
 def _fixtures_module():

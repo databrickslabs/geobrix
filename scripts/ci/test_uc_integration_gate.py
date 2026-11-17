@@ -904,6 +904,30 @@ def test_a_parted_run_resumes_across_a_commit_that_changes_no_uc_source_or_wheel
     assert ev["result"] == "pass" and calls[-1].startswith("cleanup geobrix_uc_it_" + "a" * 12)
 
 
+def test_a_resumed_part_stages_its_fixtures_in_the_installs_folder_not_heads(driver, monkeypatch, tmp_path):
+    """Fail on revert: a part resumed on an earlier commit's install kept the {vol} of HEAD's folder, so its fixture
+    files landed in uc-it/<HEAD sha12>/fixtures/ and the final cleanup (which deletes the install's folder) left them."""
+    calls = _parted(driver, monkeypatch, tmp_path)
+    monkeypatch.setattr(driver.uc_sources_hash, "sources_hash", lambda root: "h" * 64)
+    seen = []
+    plain = driver.Gate.step_warehouse
+
+    def watch(self, tables, known, part=(1, 1)):
+        seen.append((self.vol, self.folder))
+        return plain(self, tables, known, part)
+
+    monkeypatch.setattr(driver.Gate, "step_warehouse", watch)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "a" * 40)
+    assert driver.main(base + ["1/2"]) == 0
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "b" * 40)
+    monkeypatch.setattr(driver, "inputs_changed", lambda old, root=None: [])
+    assert driver.main(base + ["2/2"]) == 0
+    assert calls.count("install") == 1
+    assert len(seen) == 2 and seen[0][0] == seen[0][1] and seen[0][1].endswith("/uc-it/" + "a" * 12)
+    assert seen[1] == seen[0]  # part 2 runs at HEAD b..., and stages where part 1 did: the folder the cleanup deletes
+
+
 def test_a_parted_run_starts_again_when_a_wheel_input_changed(driver, monkeypatch, tmp_path):
     calls = _parted(driver, monkeypatch, tmp_path)
     monkeypatch.setattr(driver.uc_sources_hash, "sources_hash", lambda root: "h" * 64)

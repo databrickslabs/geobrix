@@ -1012,6 +1012,7 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
             say(f"resuming the parted run of {st['head_sha'][:12]}: no UC source or wheel input changed since")
             path, state = other, st
             g.run_dir, g.sha12, g.schema, g.folder = other.parent, other.parent.name, st["schema"], st["volume_dir"]
+            g.vol = g.folder  # the fixtures are staged in the install's folder, the one the cleanup deletes, not in HEAD's
             break
     if not state:
         state = {"head_sha": g.head, "sources_hash": src, "scope": a.scope, "parts": n, "catalog": a.catalog,

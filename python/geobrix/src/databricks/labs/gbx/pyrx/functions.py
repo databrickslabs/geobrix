@@ -1264,9 +1264,9 @@ def _fromfile_impl(
     clip_crs=None,
     resolution=None,
 ):
-    """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
-    virtual). Returns a v2 tile row (virtual by default, materialized when asked),
-    or None on a bad/missing path.
+    """Shared body of the Python-binding UDF (``_fromfile_udf``) and the SQL UDF
+    (``_build_fromfile_sql_materialized_udf``). Returns a v2 tile row (virtual by default,
+    materialized when asked), or None on a bad/missing path.
 
     ``cap_bytes`` is the DRIVER-captured connect-aware materialize cap (baked by
     ``rst_fromfile`` at Column-build time and carried in as an f.lit). It is used
@@ -1461,16 +1461,6 @@ def _fromfile_udf(
         geom=geom,
         clip_crs=clip_crs,
         resolution=resolution,
-    )
-
-
-@_tile_udf(tiles=())
-def _fromfile_sql_udf(path, driver, geom=None, clip_crs=None, resolution=None):
-    """SQL UDF registered by the LIGHT (pyrx) tier: (path, driver[, geom, clip_crs, resolution]) → a
-    VIRTUAL tile (materialize=False, the light-tier default) unless a geom or a resolution asks for a window. The tier
-    that registers decides virtual vs materialized."""
-    return _fromfile_impl(
-        path, driver, False, geom=geom, clip_crs=clip_crs, resolution=resolution
     )
 
 

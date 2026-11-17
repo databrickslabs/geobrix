@@ -2,13 +2,13 @@
 
 A notebook series that lands master Cloud Optimized GeoTIFFs in **FILE** columns, queries them with the `gbx_rst_*` functions in plain SQL, and then asks a **Genie Agent** the same questions in plain English, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks.
 
-![Raster is ready for Genie and SQL warehouses: sources, master COGs, the FILE table, GeoBrix Unity Catalog functions and the Genie Agent.](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/raster-genie/raster-genie-architecture-light.gif)
-
 The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek fire** in the Texas Panhandle. It answers *how much land burned, how severe was it, and how many people live there* from Sentinel-2 and WorldPop rasters.
 
 > **Runs on Serverless by default.** `config_nb` installs the `geobrix[stac,vizx,databricks]` env6 wheel, so the notebook runs on Serverless environment 6 with no JAR. The `gbx_rst_*` functions run in the session; the same calls run in Unity Catalog once the GeoBrix UC functions are installed (see [Query FILE columns from Unity Catalog](https://databrickslabs.github.io/geobrix/docs/readers/file#query-file-columns-from-unity-catalog)).
 
 > **Data sources.** Sentinel-2 L2A from Microsoft Planetary Computer (`StacClient`), the incident perimeter from NIFC WFIGS (`FirePerimeterDownloader`), population from WorldPop (`WorldPopDownloader`), and county and state boundaries from the US Census TIGER cartographic files. All are fetched over HTTPS, online only.
+
+![Raster is ready for Genie and SQL warehouses: sources, master COGs, the FILE table, GeoBrix Unity Catalog functions and the Genie Agent.](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/raster-genie/raster-genie-architecture-light.gif)
 
 ---
 

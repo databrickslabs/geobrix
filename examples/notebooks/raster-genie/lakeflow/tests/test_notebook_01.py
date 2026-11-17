@@ -68,10 +68,12 @@ def test_the_agent_cell_prints_titles_and_strips_links():
     cell = _nb01('step("Genie Agent")')
     assert "space_title" in cell and "plain(" in cell
     assert "how many people live inside the fire perimeter" in cell
-    md = "".join(
-        json.loads((NB_DIR / "01_smokehouse_creek.ipynb").read_text())["cells"][31][
-            "source"
-        ]
+    cells = json.loads((NB_DIR / "01_smokehouse_creek.ipynb").read_text())["cells"]
+    md = next(
+        "".join(c["source"])
+        for c in cells
+        if c["cell_type"] == "markdown"
+        and "".join(c["source"]).startswith("## 9. Ask the Genie Agents")
     )
     assert md.startswith("## 9. Ask the Genie Agents")  # two agents, plural
     assert "answers well under a minute" in md

@@ -36,6 +36,8 @@ def test_the_install_preview_is_one_create_per_function_plus_default_wrappers():
         helpers.update(h["name"] for h in (kernel[1] if kernel else ()))
     expected += len({f.levels["L4"]["tvf_over"] for f in man.functions.values() if f.levels.get("L4", {}).get("tvf_over") in man.private})
     expected += len(helpers)
+    # the private Python routines a SQL body calls (L4 `private`), once each
+    expected += len({p for n in _uc_names() for p in man.functions[n].levels["L4"].get("private", ())})
     assert len(statements) == expected
     assert all(s.startswith("CREATE OR REPLACE FUNCTION `main`.`geobrix`.") for s in statements)
     assert not any("LANGUAGE SCALA" in s for s in statements)
@@ -450,7 +452,7 @@ def test_the_routes_table_lists_each_session_function_with_a_stub_text():
     region = text.split("BEGIN GENERATED uc-routes", 1)[1].split("END GENERATED uc-routes", 1)[0]
     listed = set(re.findall(r"^\| `(gbx_\w+)` \|", region, re.M))
     stubs = {n for n, f in manifest.load().functions.items() if f.stub}
-    assert listed == stubs and len(stubs) == 30
+    assert listed == stubs and len(stubs) == 29  # gbx_rst_fromfile has a UC function, not a stub
     assert not stubs & _uc_names()
 
 

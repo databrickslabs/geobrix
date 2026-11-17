@@ -4,7 +4,8 @@ Reads the two built wheels (``gbx:build:wheel --env 5`` and ``--env 6``) as zip 
 against ``python/geobrix/envs/envN``, the tripwire extras, both architectures' payload, the JAR,
 the startup activation at the wheel root, the build record, the licence guard on every library
 name, Requires-Python 3.12 only, one zip timestamp for every member (SOURCE_DATE_EPOCH: the
-build is deterministic), and that the native payload is byte-identical in the two wheels.
+build is deterministic), and that the native payload, apart from each env's own pinned dependency lists
+(``_native/deps/env<N>-*.txt``), is byte-identical in the two wheels.
 """
 
 import base64
@@ -144,11 +145,23 @@ def _check_one(env, zf):
     libs = [n for n in names if re.search(r"\.so(\.|$)", n.rsplit("/", 1)[-1])]
     assert libs and not [n for n in libs if BANNED.search(n.rsplit("/", 1)[-1])]
 
+    # The pinned dependency lists are per env by design (``_native/deps/env<N>-*.txt``): the wheel
+    # carries its own env's lists and only those, so they are left out of the payload compared
+    # between the two wheels.
+    deps = f"{PKG}/_native/deps/"
+    own = {n for n in names if n.startswith(deps)}
+    assert own and all(
+        n.removeprefix(deps).startswith(f"env{env}-") for n in own
+    ), f"env{env} wheel: _native/deps holds another env's list: {sorted(own)}"
+    assert f"{deps}env{env}-base.txt" in own
+    for a in ARCHES:
+        assert f"{deps}env{env}-{a}.txt" in own, a
+
     payload = (f"{PKG}/_native/",) + tuple(f"{PKG}/_vendor/{a}/" for a in ARCHES)
     shas = {}
     for row in zf.read(f"geobrix-{v}+env{env}.dist-info/RECORD").decode().splitlines():
         path, digest, _size = row.rsplit(",", 2)
-        if path.startswith(payload):
+        if path.startswith(payload) and not path.startswith(deps):
             shas[path] = digest
     for path in list(shas)[
         :3

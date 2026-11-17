@@ -30,7 +30,7 @@ Each entry says what is different in 0.6.0 and what to do. A 0.5.x call that no 
 
 - **GeoBrix 0.6.0 has no GDAL init script and no GDAL bundle.** The JVM level takes GDAL, PROJ and GEOS from the env wheel.
 - **To migrate,** remove the init script and the GDAL bundle from the cluster. Then install the env wheel and the JAR as cluster libraries on a dedicated cluster.
-  - Stage the JAR with [`gbx.stage_jar`](./new.mdx#stage-jar). The release page no longer carries it.
+  - Stage the JAR with [`gbx.stage_jar`](./new.mdx#stage-jar), which copies the env wheel's own JAR. You no longer need to download it.
   - A 0.6.0 wheel beside the init script's system GDAL puts two GDAL stacks in one cluster.
 - See [Cluster libraries](../../installation.mdx#env-wheel-and-jar) and [Which functions run where](./changes.mdx#jar-levels).
 

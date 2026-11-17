@@ -114,7 +114,7 @@ step runs with no network, and no package index is needed.
 1. Put these in one empty directory:
    - `geobrix-<version>-dcs.Dockerfile`, from the release.
    - `geobrix-wheel/`, holding the env6 wheel `geobrix-<version>+env6-py3-none-any.whl`.
-   - `geobrix-<version>-jar-with-dependencies.jar`, the JAR from the release.
+   - `geobrix-<version>-jar-with-dependencies.jar`, the JAR from the release (or the env wheel's copy, from `gbx.stage_jar`).
    - `dcs.lock`, the hashed lock for the instance architecture: `python/geobrix/envs/env6/dcs-<arch>.lock` in the source tree of the release tag.
    - `wheelhouse/`, holding the locked wheels that the base image lacks (about 55), including GeoBrix's own `rasterio` build, which the lock pins by hash.
 2. Build from that directory. The Dockerfile needs BuildKit, the default in Docker 23 and later

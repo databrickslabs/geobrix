@@ -270,6 +270,19 @@ def test_q5n_takes_acres_only_from_a_value_labelled_moderate_low_or_worse():
     )[0]
 
 
+def test_q5n_reads_acres_of_moderate_low_severity_or_worse():
+    for phrase in (
+        "3,854 acres of moderate-low severity or worse",
+        "3,854 acres of moderate-low or worse",
+        "3,854 acres of moderate-low burn severity or higher",
+    ):
+        assert rq.check_q5n(f"The average is 0.029. {phrase} in the county.", [], Q5_SQL)[0], phrase
+    # the same phrasing with a wrong number, and a class alone, still fail
+    assert not rq.check_q5n("average 0.029. 381 acres of moderate-low severity or worse.", [], Q5_SQL)[0]
+    assert not rq.check_q5n("average 0.029. 3,854 acres of moderate-low severity.", [], Q5_SQL)[0]
+    assert not rq.check_q5n("average 0.029. 3,854 acres of high severity or worse.", [], Q5_SQL)[0]
+
+
 def test_q5n_reads_result_columns_too():
     rows = [{"mean_dnbr": "0.0291", "mod_low_or_worse_acres": "3841"}]
     assert rq.check_q5n("done", rows, Q5_SQL)[0]

@@ -535,6 +535,7 @@ def _near(text: str, pattern: str, value_re: str, span: int = 80) -> list[float]
 _OR_WORSE = r"(?:or|and|and/or)\s+(?:worse|higher|above|more severe|greater)|\+|or more"
 _MOD_LOW_OR_WORSE = rf"moderate.low(?:\s+(?:burn\s+)?(?:severity|class))?\s*(?:{_OR_WORSE})"
 _CLASS_AFTER = re.compile(r"(?i)\s*(?:of\s+)?(?:moderate|high|low|unburned)\b")
+_TOTAL_AFTER = re.compile(rf"(?i)\s*(?:of\s+)?{_MOD_LOW_OR_WORSE}")
 
 
 def mod_low_or_worse_acres(answer_text: str, rows: list[dict]) -> list[float]:
@@ -567,7 +568,9 @@ def mod_low_or_worse_acres(answer_text: str, rows: list[dict]) -> list[float]:
             # class's acres in a breakdown) is not the total
             best = None
             for n in re.finditer(rf"{_NUM}\s*acres", near):
-                if _CLASS_AFTER.match(near, n.end()):
+                if _CLASS_AFTER.match(near, n.end()) and not _TOTAL_AFTER.match(
+                    near, n.end()
+                ):
                     continue
                 dist = abs(n.start() - (m.start() - lo))
                 if best is None or dist < best[0]:

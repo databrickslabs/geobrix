@@ -617,3 +617,42 @@ def test_a_plain_file_value_keeps_the_plain_path(tmp_path, size):
         value["size"] = os.path.getsize(p)
     virtual = _fromfile_impl(value, "GTiff", False)
     assert virtual["path"] == p  # no /vsisubfile/
+
+
+def test_a_virtual_slice_tile_feeds_an_osgeo_and_a_rasterio_function(spark, tmp_path):
+    """A FILE struct column with an offset gives a virtual tile over /vsisubfile/; gbx_rst_summary (the GDAL engine,
+    osgeo's gdalinfo) and gbx_rst_avg (rasterio) both read it as the slice."""
+    import json
+
+    from databricks.labs.gbx import _osgeo
+
+    try:
+        _osgeo.bindings()
+    except (
+        _osgeo.OsgeoUnavailable
+    ) as exc:  # the GDAL engine needs the env wheel's osgeo (the dev container has it)
+        pytest.skip(str(exc))
+
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    _, value = _prefixed(tmp_path)
+    df = spark.createDataFrame(
+        [(value["uri"], value["offset"], value["size"])], ["uri", "offset", "size"]
+    ).select(F.struct("uri", "offset", "size").alias("file"))
+    row = (
+        df.select(rx.rst_fromfile("file").alias("t"))
+        .select(
+            F.col("t.path").alias("path"),
+            rx.rst_summary("t").alias("summary"),
+            rx.rst_avg("t").alias("avg"),
+        )
+        .first()
+    )
+    assert row["path"].startswith("/vsisubfile/12345_")
+    info = json.loads(row["summary"])
+    assert info["size"] == [2000, 1500] and len(info["bands"]) == 3
+    assert np.allclose(
+        row["avg"], [float(b.mean()) for b in _rc.cog_pixels()], rtol=1e-6
+    )

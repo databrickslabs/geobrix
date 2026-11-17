@@ -1,15 +1,16 @@
 """Create or update a raster-genie slice Genie Agent from `agent_spec` and print its space id.
 
     python seed_agent.py --profile <name> --warehouse-id <id> [--variant live|precomputed]
-                         [--space-id <id>] [--dry-run]
+                         [--catalog <c>] [--schema <s>] [--uc-schema <s>] [--space-id <id>] [--dry-run]
 
 Without `--space-id` the space with the variant's title under the parent folder is updated in place, or a new
 one is created when there is none; with it that space is updated (its serialized space and title are replaced
 by the ones built from `agent_spec`). `--variant live` (the default)
 builds the space that computes every answer from the COGs; `--variant precomputed` builds the one
 that also holds the saved severity table. `--dry-run` prints the instruction counts and touches
-nothing. Record the printed ids as `GENIE_SPACE_ID` (live) and `GENIE_SPACE_ID_PRECOMPUTED` in
-`config_nb`.
+nothing. `--catalog`, `--schema` and `--uc-schema` name where the tables and the GeoBrix
+functions live: pass the ones `config_nb` sets (the defaults are `agent_spec`'s). Record the printed
+ids as `GENIE_SPACE_ID` (live) and `GENIE_SPACE_ID_PRECOMPUTED` in `config_nb`.
 """
 
 from __future__ import annotations
@@ -95,9 +96,11 @@ def main(argv=None, client=None) -> str:
     ap.add_argument(
         "--dry-run", action="store_true", help="print the counts, change nothing"
     )
+    spec.add_location_args(ap)
     args = ap.parse_args(argv)
 
-    tables, functions, text, examples = spec.VARIANTS[args.variant]
+    built = spec.spec(args.catalog, args.schema, args.uc_schema)
+    tables, functions, text, examples = built.VARIANTS[args.variant]
     title = args.title or TITLES[args.variant]
     serialized = build_serialized_space(tables, functions, text, examples)
     count = len(functions) + len(examples) + 1

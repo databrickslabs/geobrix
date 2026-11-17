@@ -273,3 +273,61 @@ def test_find_space_matches_the_folder_with_or_without_the_workspace_prefix(stor
     assert seed_agent.find_space(client, "T", asked) == "s1"
     assert seed_agent.find_space(client, "Missing", asked) is None
     assert client.api_client.writes == []
+
+
+# --- another catalog and schema: every qualified name follows ----------------------------------------------------------
+
+_OTHER = ("my_cat", "my_data", "my_fns")
+
+
+def _qualified_names(built):
+    """Every catalog-qualified name in a built spec: tables, functions and each name in the text and the SQL."""
+    texts = [built.TEXT, built.TEXT_PRECOMPUTED]
+    texts += [sql for _, sql in built.EXAMPLES + built.EXAMPLES_PRECOMPUTED]
+    found = set(built.TABLES + built.TABLES_PRECOMPUTED + built.FUNCTIONS)
+    for t in texts:
+        found |= set(re.findall(r"\b\w+\.\w+\.\w+", t))
+    return found
+
+
+def test_the_defaults_are_the_module_constants():
+    built = spec.spec()
+    assert built.TABLES == spec.TABLES and built.FUNCTIONS == spec.FUNCTIONS
+    assert built.TEXT == spec.TEXT and built.EXAMPLES == spec.EXAMPLES
+    assert built.VARIANTS == spec.VARIANTS
+
+
+def test_an_override_reaches_every_qualified_name():
+    catalog, schema, uc_schema = _OTHER
+    built = spec.spec(catalog, schema, uc_schema)
+    names = _qualified_names(built)
+    assert names, "no qualified name found"
+    for name in names:
+        c, s, _ = name.split(".")
+        assert c == catalog and s in (schema, uc_schema), name
+    assert all(t.startswith(f"{catalog}.{schema}.") for t in built.TABLES_PRECOMPUTED)
+    assert all(f.startswith(f"{catalog}.{uc_schema}.gbx_rst_") for f in built.FUNCTIONS)
+    for variant in ("live", "precomputed"):
+        tables, functions, text, examples = built.VARIANTS[variant]
+        assert tables[0].startswith(f"{catalog}.{schema}.")
+        assert functions == built.FUNCTIONS
+        assert f"{catalog}.{uc_schema}.gbx_rst_fromfile" in text
+        assert all(f"{catalog}." in sql for _, sql in examples)
+    assert built.INSTRUCTION_COUNT == spec.INSTRUCTION_COUNT
+
+
+def test_no_default_name_leaks_when_overridden():
+    built = spec.spec(*_OTHER)
+    blob = "\n".join(
+        [built.TEXT, built.TEXT_PRECOMPUTED, *built.TABLES_PRECOMPUTED, *built.FUNCTIONS]
+        + [sql for _, sql in built.EXAMPLES + built.EXAMPLES_PRECOMPUTED]
+    )
+    for default in (spec.CATALOG, spec.DATA_SCHEMA, spec.UC_SCHEMA):
+        assert default not in blob, default
+    assert "{T}" not in blob and "{G}" not in blob
+
+
+@pytest.mark.parametrize("bad", ["", "a.b", "a b", "x`y", "c;DROP"])
+def test_a_name_that_is_not_plain_is_refused(bad):
+    with pytest.raises(ValueError, match="Fix:"):
+        spec.spec(catalog=bad)

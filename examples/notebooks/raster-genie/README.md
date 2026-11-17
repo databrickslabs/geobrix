@@ -61,7 +61,7 @@ Rebuilt master COGs cascade: when any master COG is written in a run, the `raste
 
 ### Asking the agents
 
-After a run, seed the two spaces (`genie/seed_agent.py`, once per variant) and ask them the headline questions:
+After a run, seed the two spaces (`genie/seed_agent.py`, once per variant) and ask them the headline questions. Run both scripts with the same catalog and schema you set in `config_nb`: pass `--catalog` and `--schema`, and `--uc-schema` for the schema of the GeoBrix UC functions (defaults `geospatial_catalog`, `raster_genie`, `geobrix_uc`).
 
 ```bash
 python examples/notebooks/raster-genie/genie/run_questions.py --profile <name> --space both \

@@ -461,3 +461,26 @@ def test_rejudge_recomputes_the_verdict_and_marks_the_rows(tmp_path):
     assert [r["correct"] for r in out] == [True, False]
     assert all(r["rejudged_offline"] and r["gate_version"] == rq.GATE_VERSION for r in out)
     assert json.loads(dst.read_text()) == out
+
+
+def test_the_location_flags_reach_the_gates_and_the_seed(monkeypatch, capsys):
+    import seed_agent
+
+    other = spec.spec("my_cat", "my_data", "my_fns")
+    other_sql = [s.replace(G, "my_cat.my_fns.").replace(T, "my_cat.my_data.") for s in LIVE_SQL]
+    # the default spec calls the other catalog's tables foreign; the other spec accepts them
+    assert not rq.chain_ok(other_sql)[0]
+    assert rq.chain_ok(other_sql, other.TABLES)[0]
+    assert rq.check_q3(HEAD + TABLE, [], other_sql, space_spec=other)[0]
+    assert not rq.check_q3(HEAD + TABLE, [], other_sql)[0]
+
+    seen = {}
+    monkeypatch.setattr(
+        seed_agent, "build_serialized_space", lambda *a: seen.setdefault("args", a)
+    )
+    seed_agent.main(
+        ["--warehouse-id", "w", "--dry-run", "--catalog", "my_cat", "--schema", "my_data", "--uc-schema", "my_fns"]
+    )
+    tables, functions, text, examples = seen["args"]
+    assert tables == other.TABLES and functions == other.FUNCTIONS
+    assert text == other.TEXT and examples == other.EXAMPLES

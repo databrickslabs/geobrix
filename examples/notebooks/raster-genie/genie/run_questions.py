@@ -3,9 +3,12 @@
     python run_questions.py --profile <name> --space live|precomputed|both
                             --live-id <id> [--precomputed-id <id>] --warehouse-id <id> [--runs 3]
                             [--questions Q3,Q1,Q5n] [--out test-logs/raster-genie/evidence.json]
+                            [--catalog <c>] [--schema <s>] [--uc-schema <s>]
 
 The ids and the warehouse come from the arguments or from the environment (`GENIE_SPACE_ID`,
-`GENIE_SPACE_ID_PRECOMPUTED`, `GENIE_WAREHOUSE_ID`); nothing is built in.
+`GENIE_SPACE_ID_PRECOMPUTED`, `GENIE_WAREHOUSE_ID`); nothing is built in. Pass `--catalog`, `--schema` and
+`--uc-schema` when `config_nb` sets other ones than `agent_spec`'s defaults: the gates judge the tables and
+the examples under those names.
 
 For each space and question it runs `--runs` times (one fresh conversation per run) after a pre-warm
 of one call per GeoBrix function family, and writes one row per run: space, question, run, status,
@@ -55,6 +58,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_spec as spec  # noqa: E402
 
 from databricks.labs.gbx.genie.agent import ask  # noqa: E402
+
+#: The agents' spec under the default catalog and schemas; `--catalog`, `--schema` and `--uc-schema` build another.
+DEFAULT_SPEC = spec.spec()
 
 Q3 = "How much land burned in the Smokehouse Creek fire, how severe, and how many people live inside the fire perimeter?"
 Q1 = "What imagery and elevation do we have for Hutchinson County, at what quality, and how recent?"
@@ -218,7 +224,7 @@ def chain_ok(sql: list[str], tables: list[str] | None = None) -> tuple[bool, str
     """The live chain: ONE statement calls `gbx_rst_fromfile` and `gbx_rst_nbr` (as calls, not as text in a
     comment or a literal), and no statement reads a table or view outside `tables` (default: the live space).
     """
-    allowed = _allowed_names(tables if tables is not None else spec.TABLES)
+    allowed = _allowed_names(tables if tables is not None else DEFAULT_SPEC.TABLES)
     chain = any(
         _calls(strip_sql(s), "gbx_rst_fromfile") and _calls(strip_sql(s), "gbx_rst_nbr")
         for s in sql
@@ -239,7 +245,9 @@ def novelty(
 ) -> tuple[bool, float]:
     """(differs from every example, token similarity to the closest example in 0..1)."""
     examples = (
-        examples if examples is not None else spec.EXAMPLES_PRECOMPUTED + spec.EXAMPLES
+        examples
+        if examples is not None
+        else DEFAULT_SPEC.EXAMPLES_PRECOMPUTED + DEFAULT_SPEC.EXAMPLES
     )
     ex = [_norm(e) for _, e in examples]
     best = 0.0
@@ -369,7 +377,11 @@ def burned_total_values(text: str, rows: list[dict]) -> list[float]:
 
 
 def check_q3(
-    answer_text: str, rows: list[dict], sql: list[str], chain_required: bool = True
+    answer_text: str,
+    rows: list[dict],
+    sql: list[str],
+    chain_required: bool = True,
+    space_spec=None,
 ) -> tuple[bool, str]:
     """Q3 is correct when the burned total (low or worse), EVERY class acres, each read from its own label or
     row, and the people count are right; with `chain_required` (the live space) the SQL must also be the
@@ -387,7 +399,7 @@ def check_q3(
         for v in burned_total_values(answer_text, rows)
     )
     people = any(_within(v, gt["people"]) for v in people_values(answer_text, rows))
-    chain, chain_why = chain_ok(sql)
+    chain, chain_why = chain_ok(sql, (space_spec or DEFAULT_SPEC).TABLES)
     ok = burned and not wrong and people and (chain or not chain_required)
     return (
         ok,
@@ -455,7 +467,11 @@ def denies_elevation(answer_text: str) -> bool:
 
 
 def check_q1(
-    answer_text: str, rows: list[dict], sql: list[str], chain_required: bool = True
+    answer_text: str,
+    rows: list[dict],
+    sql: list[str],
+    chain_required: bool = True,
+    space_spec=None,
 ) -> tuple[bool, str]:
     """Q1 is correct when the `coverage` rows the agent read (re-run on the warehouse) match `COVERAGE_TRUTH`
     (product, tier, resolution, dates, asset count) and hold no elevation product, the answer states the
@@ -505,7 +521,8 @@ def check_q1(
     joined = "\n".join(strip_sql(s) for s in sql)
     live = _calls(joined, "gbx_rst_fromfile") and "coverage" in joined.lower()
     foreign = sorted(
-        {t for s in sql for t in tables_read(s)} - _allowed_names(spec.TABLES)
+        {t for s in sql for t in tables_read(s)}
+        - _allowed_names((space_spec or DEFAULT_SPEC).TABLES)
     )
     ok = (
         not problems
@@ -581,7 +598,11 @@ def mod_low_or_worse_acres(answer_text: str, rows: list[dict]) -> list[float]:
 
 
 def check_q5n(
-    answer_text: str, rows: list[dict], sql: list[str], chain_required: bool = True
+    answer_text: str,
+    rows: list[dict],
+    sql: list[str],
+    chain_required: bool = True,
+    space_spec=None,
 ) -> tuple[bool, str]:
     """Q5n is correct when the mean dNBR is within `MEAN_TOLERANCE` (0.002) and the acres at moderate-low or
     worse within 2% (or two 80 m pixels) of `Q5N_TRUTH`, the acres taken only from a value labelled
@@ -610,8 +631,9 @@ def check_q5n(
     acres_ok = bool(acres) and all(
         abs(v - t["acres_moderate_low_or_worse"]) <= tol for v in acres
     )
-    chain, chain_why = chain_ok(sql)
-    novel, sim = novelty(sql)
+    sp = space_spec or DEFAULT_SPEC
+    chain, chain_why = chain_ok(sql, sp.TABLES)
+    novel, sim = novelty(sql, sp.EXAMPLES_PRECOMPUTED + sp.EXAMPLES)
     clip = any("hutchinson" in s.lower() for s in sql)
     ok = mean_ok and acres_ok and (chain or not chain_required)
     return (
@@ -671,19 +693,23 @@ def summarize(rows: list[dict]) -> list[dict]:
     return out
 
 
-def rejudge(src: Path, dst: Path) -> list[dict]:
+def rejudge(src: Path, dst: Path, space_spec=None) -> list[dict]:
     """Judge a saved evidence file again with the current gates, without asking Genie anything: the answers,
     SQL and re-run rows are kept, `correct` and `why` are recomputed. Every row is marked `rejudged_offline`."""
+    sp = space_spec or DEFAULT_SPEC
+    examples = sp.EXAMPLES_PRECOMPUTED + sp.EXAMPLES
     rows = json.loads(Path(src).read_text())
     for r in rows:
         if r["status"] != "COMPLETED":
             continue
         text = "\n".join(r["text"]) if isinstance(r["text"], list) else r["text"]
         ok, why = CHECKS[r["question"]](
-            text, r["rerun_rows"], r["sql"], r["space"] == "live"
+            text, r["rerun_rows"], r["sql"], r["space"] == "live", space_spec=sp
         )
         r.update(correct=ok, why=why, verified=bool(r["rerun_rows"]))
-        r["novel"], r["similarity"] = novelty(r["sql"]) if r["sql"] else (None, None)
+        r["novel"], r["similarity"] = (
+            novelty(r["sql"], examples) if r["sql"] else (None, None)
+        )
         r.update(gate_version=GATE_VERSION, rejudged_offline=True)
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     Path(dst).write_text(json.dumps(rows, indent=2, default=str))
@@ -722,10 +748,12 @@ def main(argv=None, client=None) -> list[dict]:
     )
     ap.add_argument("--timeout", type=int, default=420)
     ap.add_argument("--out", default="test-logs/raster-genie/evidence.json")
+    spec.add_location_args(ap)
     args = ap.parse_args(argv)
+    sp = spec.spec(args.catalog, args.schema, args.uc_schema)
 
     if args.rejudge:
-        rows_out = rejudge(Path(args.rejudge), Path(args.out))
+        rows_out = rejudge(Path(args.rejudge), Path(args.out), space_spec=sp)
         print(f"... re-judged {len(rows_out)} rows from {args.rejudge} into {args.out}")
         for r in summarize(rows_out):
             print(
@@ -778,12 +806,16 @@ def main(argv=None, client=None) -> list[dict]:
                 ok, why = (
                     (False, a["error"] or "no answer")
                     if a["status"] != "COMPLETED"
-                    else CHECKS[key](text, rows, a["sql"], strict)
+                    else CHECKS[key](text, rows, a["sql"], strict, space_spec=sp)
                 )
                 print(
                     f"... [{name}] {key} run {run}: {a['status']} in {a['seconds']} s, correct={ok} ({why})"
                 )
-                novel, sim = novelty(a["sql"]) if a["sql"] else (None, None)
+                novel, sim = (
+                    novelty(a["sql"], sp.EXAMPLES_PRECOMPUTED + sp.EXAMPLES)
+                    if a["sql"]
+                    else (None, None)
+                )
                 rows_out.append(
                     {
                         "space": name,

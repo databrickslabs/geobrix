@@ -103,9 +103,10 @@ Q5N_TRUTH = {
 #: The same numbers computed a second way, without GeoBrix SQL: rasterio and numpy on the 80 m overviews of the
 #: master COGs, tiles 14SKE, 14SLE and 14SLF, per-tile ring offsets from the 1 to 5 km ring (-0.0188, 0.0619,
 #: 0.0811), the county mask, classes by dNBR 0.1 / 0.27 / 0.44 / 0.66 (Serverless run 608824434882550).
-#: Where two tiles overlap inside the county the merge order decides: with the later tile winning, as in the
-#: notebook's merge, it gives these numbers (0.3% apart in acres); with the earlier tile winning it gives
-#: 0.0251 and 3,010 acres. The gate follows the notebook's method.
+#: Where two tiles overlap inside the county the merge order decides. gbx_rst_merge applies a fixed order (tiles
+#: sorted by their bytes) and the last tile in that order wins: with that tile winning, as in the notebook's merge,
+#: it gives these numbers (0.3% apart in acres); with the other tile winning it gives 0.0251 and 3,010 acres. The
+#: gate follows the notebook's method.
 Q5N_INDEPENDENT = {
     "mean_dnbr": 0.0286,
     "acres_moderate_low_or_worse": 3841,

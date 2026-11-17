@@ -60,7 +60,7 @@ gbx:versions:bump --from 0.5.0 --to 0.5.1
 ## Release flow (after the bump PR merges to `main`)
 
 ```bash
-git tag -a v<NEW> <merge-sha> -m "GeoBrix v<NEW> (Beta)" && git push origin v<NEW>
+git tag v<NEW> <merge-sha> && git push origin v<NEW>  # a plain tag on the main merge commit, as for v0.5.x
 gh release create v<NEW> --latest --title "GeoBrix v<NEW> (Beta)" --notes "..."
 gh workflow run "package geobrix artifacts" -f ref=v<NEW> -f attach_to_tag=v<NEW>
 ```

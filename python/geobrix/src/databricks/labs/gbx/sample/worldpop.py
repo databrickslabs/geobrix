@@ -173,7 +173,7 @@ class WorldPopDownloader:
 
     def _name(self, bbox, max_mpp) -> str:
         key = ",".join(f"{v:.6f}" for v in bbox) + f"|{max_mpp}"
-        return f"{self._item_id}_{hashlib.sha1(key.encode()).hexdigest()[:8]}.tif"
+        return f"{self._item_id}_{hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:8]}.tif"
 
     def _dest(self, out_dir: str, bbox, max_mpp=None) -> str:
         return os.path.join(out_dir, self._name(bbox, max_mpp))

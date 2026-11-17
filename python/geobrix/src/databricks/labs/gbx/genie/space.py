@@ -14,7 +14,9 @@ def _hid(*parts: str) -> str:
     Same derivation as the Genie Map seeder, so re-seeding a space is idempotent and the
     ids stay stable when that seeder moves onto this helper.
     """
-    return hashlib.md5("\x1e".join(parts).encode("utf-8")).hexdigest()
+    return hashlib.md5(
+        "\x1e".join(parts).encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
 
 
 def build_serialized_space(

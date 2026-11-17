@@ -678,6 +678,22 @@ def _fail_subfile_opens(monkeypatch, fail):
     return seen
 
 
+def test_a_volume_clip_that_cannot_open_in_place_reads_a_copy_of_the_slice_only(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.ds import file_gbx
+
+    _, value = _prefixed(tmp_path)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda path: True)
+    seen = _fail_subfile_opens(
+        monkeypatch, lambda n: rasterio.errors.RasterioIOError("no random reads here")
+    )
+    got = _fromfile_impl(value, "GTiff", True, geom=BOX.wkb)
+    assert got is not None and _arr(got)[1:] == (300, 300), got
+    copies = {size for kind, size in seen if kind == "copy"}
+    assert copies == {value["size"]}  # the copy holds the slice, not the object
+
+
 def test_a_transient_miss_of_the_in_place_open_is_retried(tmp_path, monkeypatch):
     import types
 
@@ -718,3 +734,21 @@ def test_a_volume_slice_that_is_no_raster_fails_fast_without_retries(
     assert [k for k, _ in seen].count(
         "subfile"
     ) == 2  # one in-place open per call, no retry
+
+
+def test_a_slice_over_the_stage_cap_is_refused(tmp_path, monkeypatch):
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
+
+    path, value = _prefixed(tmp_path)
+    monkeypatch.setenv("GBX_STAGE_MAX_BYTES", "1024")
+    with pytest.raises(StageTooLargeError, match="Fix:"):
+        with prx._staged_slice(path, (value["offset"], value["size"])):
+            pass
+    # through the read: an in-place open that fails on a Volume falls back to the copy, which the cap refuses
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)
+    _fail_subfile_opens(
+        monkeypatch, lambda n: rasterio.errors.RasterioIOError("no random reads here")
+    )
+    with pytest.raises(StageTooLargeError, match="GBX_STAGE_MAX_BYTES"):
+        _fromfile_impl(value, "GTiff", True)

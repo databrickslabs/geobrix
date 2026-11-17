@@ -16,7 +16,7 @@ def _write(tmp_path, blob):
 
 
 def _arr(tile):
-    with MemoryFile(tile["raster"]) as mf, mf.open() as ds:
+    with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as ds:
         return ds.read(), ds.width, ds.height
 
 
@@ -398,3 +398,37 @@ def test_the_overview_reopen_of_a_remote_source_is_judged_again_and_pinned(
         )
     assert len(opened) == 2
     assert opened[1].get("driver") == "GTiff" and opened[1].get("overview_level") == 1
+
+
+# --- a geom column through the Python API and the SQL binding ---------------------------------------------------------
+
+
+def _clip_frame(spark, tmp_path):
+    p = _write(tmp_path, _cog_bytes())
+    box = sg.box(405000, 3990000, 412000, 3996000)  # 700 x 600 pixels at 10 m
+    return spark.createDataFrame([(p, box.wkb)], ["path", "g"])
+
+
+@pytest.mark.parametrize("by", ["name", "col"])
+def test_the_python_api_reads_geom_as_a_column(spark, tmp_path, by):
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    df = _clip_frame(spark, tmp_path)
+    geom = "g" if by == "name" else F.col("g")
+    tile = df.select(rx.rst_fromfile("path", geom=geom).alias("t")).first()["t"]
+    assert tile is not None and tile["raster"] is not None, tile
+    assert _arr(tile)[1:] == (700, 600)
+
+
+def test_the_sql_binding_reads_a_geom_column(spark, tmp_path):
+    from databricks.labs.gbx import register
+
+    register(spark, only=["gbx_rst_fromfile"])
+    _clip_frame(spark, tmp_path).createOrReplaceTempView("fromfile_geoms")
+    tile = spark.sql(
+        "SELECT gbx_rst_fromfile(path, 'GTiff', g) AS t FROM fromfile_geoms"
+    ).first()["t"]
+    assert tile is not None and tile["raster"] is not None, tile
+    assert _arr(tile)[1:] == (700, 600)

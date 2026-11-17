@@ -32,6 +32,13 @@ class PermissionDenied(DatabricksError):
     pass
 
 
+class InvalidParameterValue(DatabricksError):
+    pass
+
+
+TOO_LONG = "The statement field must not exceed a length of 16777216 bytes."
+
+
 class HTTPError(OSError):  # requests' HTTPError is an OSError that carries the response
     def __init__(self, status):
         super().__init__(f"{status} error")
@@ -234,6 +241,49 @@ def test_main_exits_1_with_a_harness_error_line_and_still_writes_every_case(uc_s
     assert rc == 1
     err = capsys.readouterr().err
     assert "harness error (transient API): 1 of 2" in err and "c1" in err
+    from databricks.labs.gbx.bench import oracles
+
+    assert set(oracles.load_uc_results(str(out))) == {"c1", "c2"}
+
+
+# ---- a statement the API refuses as too long ------------------------------------------------------------------------
+
+
+def test_too_long_is_told_from_other_bad_requests(uc_sql):
+    assert uc_sql.is_statement_too_long(InvalidParameterValue(TOO_LONG, error_code="INVALID_PARAMETER_VALUE", status_code=400))
+    assert not uc_sql.is_statement_too_long(InvalidParameterValue("warehouse_id is invalid", status_code=400))
+    assert not uc_sql.is_statement_too_long(DeadlineExceeded(TOO_LONG))
+    assert not uc_sql.is_transient_api_error(InvalidParameterValue(TOO_LONG))
+
+
+def test_fail_on_revert_a_too_long_single_statement_is_that_cases_error_and_the_run_goes_on(uc_sql):
+    api = FakeApi([InvalidParameterValue(TOO_LONG), _resp("s2", State.SUCCEEDED, "2")])
+    pairs = [("big", "SELECT 1"), ("c2", "SELECT 2")]
+    results = uc_sql.run_statements(_w(api), pairs, _args())  # must not raise
+    assert list(results) == ["big", "c2"]
+    assert "error" in results["big"] and "16777216" in results["big"]["error"] and "harness_error" not in results["big"]
+    assert "value" in results["c2"] and len(api.submitted) == 2  # the refused statement was not tried again
+
+
+def test_a_too_long_batch_reruns_its_cases_one_by_one(uc_sql, monkeypatch, capsys):
+    monkeypatch.setattr(uc_sql.oracles, "uc_batch_item", lambda s: s.replace("SELECT ", ""))
+    api = FakeApi([InvalidParameterValue(TOO_LONG), _resp("s1", State.SUCCEEDED, "1"), _resp("s2", State.SUCCEEDED, "2")])
+    pairs = [("c1", "SELECT 1"), ("c2", "SELECT 2")]
+    results = uc_sql.run_statements(_w(api), pairs, _args(batch=2, batchable={"c1", "c2"}))
+    assert all("value" in r for r in results.values()) and list(results) == ["c1", "c2"]
+    assert api.submitted[0].startswith("SELECT 1 AS c0") and api.submitted[1:] == ["SELECT 1", "SELECT 2"]
+    assert "running its cases one by one" in capsys.readouterr().out
+
+
+def test_main_does_not_stop_on_a_too_long_rejection(uc_sql, monkeypatch, tmp_path, capsys):
+    f = tmp_path / "a.sql"
+    f.write_text("-- cid: c1\nSELECT 1\n\n-- cid: c2\nSELECT 2\n")
+    api = FakeApi([InvalidParameterValue(TOO_LONG), _resp("s2", State.SUCCEEDED, "2")])
+    monkeypatch.setitem(sys.modules, "databricks.sdk", types.SimpleNamespace(WorkspaceClient=lambda profile=None: _w(api)))
+    monkeypatch.setattr(uc_sql, "warehouse_problem", lambda *a, **k: None)
+    out = tmp_path / "o.json"
+    rc = uc_sql.main(["--file", str(f), "--profile", "p", "--warehouse-id", "w", "--out", str(out)])
+    assert rc == 0 and "stopped" not in capsys.readouterr().err
     from databricks.labs.gbx.bench import oracles
 
     assert set(oracles.load_uc_results(str(out))) == {"c1", "c2"}

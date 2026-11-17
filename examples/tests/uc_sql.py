@@ -43,6 +43,9 @@ from _uc_warehouse import warehouse_problem  # noqa: E402
 
 POLL_SECS = 1.0
 DEFAULT_TIMEOUT_S = 600.0
+# The Statement API refuses a statement text over 16777216 bytes. A batch is closed at this many UTF-8 bytes of its
+# built statement, which leaves headroom below that limit.
+MAX_BATCH_BYTES = 12 * 1024 * 1024
 # pip prints "Looking in indexes: <url>" in some failures; an index URL never reaches a log or a file.
 _INDEX_LINE = re.compile(r"(?m)^.*Looking in indexes:.*$")
 
@@ -53,6 +56,13 @@ def scrub(text: str) -> str:
 
 class StatementTimeout(Exception):
     """A statement was still pending or running when its deadline passed (it has been cancelled)."""
+
+
+class StatementTooLong(Exception):
+    """The API refused the statement text as longer than it accepts (`InvalidParameterValue`, 16777216 bytes).
+
+    Nothing ran. It is a result of that statement (a batch is rerun case by case), never a reason to stop the run.
+    """
 
 
 class TransientApiError(Exception):
@@ -96,6 +106,16 @@ def is_transient_api_error(exc: BaseException) -> bool:
     return isinstance(exc, (TimeoutError, OSError)) and not isinstance(exc, _LOCAL_FILE_ERRORS)
 
 
+def is_statement_too_long(exc: BaseException) -> bool:
+    """True for the API's refusal of a statement longer than its byte limit (matched by class name and message)."""
+    names = {c.__name__ for c in type(exc).__mro__}
+    code = str(getattr(exc, "error_code", "") or "").upper()
+    if not ("InvalidParameterValue" in names or code == "INVALID_PARAMETER_VALUE"):
+        return False
+    text = str(exc).lower()
+    return "statement" in text and "exceed" in text and "length" in text
+
+
 def _api_call(call, statement_id=None):
     """`call()`, tried again up to API_RETRIES times after a transient failure; one log line per retry.
 
@@ -127,20 +147,26 @@ def _execute(w, statement, warehouse_id, catalog, schema, timeout_s):
     A submit that fails in transit is tried again (nothing ran, or no id came back); once the statement has an id, a
     failed status fetch asks about that same id again and never submits it twice.
     Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted,
+    StatementTooLong when the API refuses the statement text as too long,
     and TransientApiError when a call keeps failing in transit.
     """
     from databricks.sdk.service.sql import StatementState
 
     api = w.statement_execution
-    resp = _api_call(
-        lambda: api.execute_statement(
-            statement=statement,
-            warehouse_id=warehouse_id,
-            catalog=catalog,
-            schema=schema,
-            wait_timeout="50s",
+    try:
+        resp = _api_call(
+            lambda: api.execute_statement(
+                statement=statement,
+                warehouse_id=warehouse_id,
+                catalog=catalog,
+                schema=schema,
+                wait_timeout="50s",
+            )
         )
-    )
+    except Exception as exc:  # noqa: BLE001 - only the too-long refusal is translated
+        if is_statement_too_long(exc):
+            raise StatementTooLong(f"{type(exc).__name__}: {exc} (statement of {len(statement.encode('utf-8'))} bytes)") from exc
+        raise
     deadline = time.monotonic() + timeout_s
     while resp.status.state in (StatementState.PENDING, StatementState.RUNNING):
         if time.monotonic() >= deadline:
@@ -231,11 +257,18 @@ class Unit:
         return self.items is not None
 
 
-def plan_units(pairs, batchable=(), size: int = 0) -> list:
+def batch_bytes(items) -> int:
+    """UTF-8 bytes of `oracles.uc_batch_statement(items)`, counted without building it."""
+    return len("SELECT ".encode()) + sum(len(f" AS c{i}".encode()) + len(it.encode("utf-8")) for i, it in enumerate(items)) + 2 * max(len(items) - 1, 0)
+
+
+def plan_units(pairs, batchable=(), size: int = 0, max_bytes: int = MAX_BATCH_BYTES) -> list:
     """The units that run `pairs`: batchable statements in chunks of `size`, every other statement alone.
 
     Every cid of `pairs` is in exactly one unit. A statement without a one-value form (`oracles.uc_batch_item`) and a
-    chunk of one are single units. `size` below 2 plans every statement alone.
+    chunk of one are single units. `size` below 2 plans every statement alone. A chunk is also closed before a member
+    would take the batch statement past `max_bytes` (UTF-8): the API refuses a statement over 16777216 bytes. A member
+    that alone reaches `max_bytes` is a single unit.
     """
     units, chunk = [], []
 
@@ -251,6 +284,12 @@ def plan_units(pairs, batchable=(), size: int = 0) -> list:
         if item is None:
             units.append(Unit([(cid, stmt)]))
             continue
+        if batch_bytes([item]) >= max_bytes:
+            flush()
+            units.append(Unit([(cid, stmt)]))
+            continue
+        if chunk and batch_bytes([i for _, _, i in chunk] + [item]) > max_bytes:
+            flush()
         chunk.append((cid, stmt, item))
         if len(chunk) >= size:
             flush()
@@ -275,7 +314,7 @@ def run_single(w, cid: str, statement: str, args) -> dict:
             state, error, cell, type_name = run_once(
                 w, statement, args.warehouse_id, args.catalog, args.schema, args.timeout_s, info
             )
-        except StatementTimeout as exc:
+        except (StatementTimeout, StatementTooLong) as exc:
             state, error, cell, type_name = None, str(exc), None, None
         except TransientApiError as exc:  # not a result of the case: a harness error, and the next statements go on
             return {"harness_error": scrub(str(exc))}
@@ -304,7 +343,7 @@ def run_unit(w, unit: Unit, args) -> dict:
         error, cells = run_batch_once(
             w, oracles.uc_batch_statement(unit.items), args.warehouse_id, args.catalog, args.schema, args.timeout_s
         )
-    except StatementTimeout as exc:
+    except (StatementTimeout, StatementTooLong) as exc:
         error, cells = str(exc), []
     except TransientApiError as exc:
         print(f"batch of {len(unit.members)} ({unit.members[0][0]} ...) lost to the API: {scrub(str(exc))[:160]}; running its cases one by one", flush=True)

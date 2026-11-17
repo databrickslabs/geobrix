@@ -206,6 +206,65 @@ def world(uc_sql, oracles, core_cases, core_pairs, monkeypatch):
     return Namespace(cases=cases, pairs=pairs, make=make, args=args, judge=judge)
 
 
+# ---- the byte cap: a batch statement stays under the API's statement limit -----------------------------------------------
+
+
+def _sized(n_bytes, tag):
+    """A `SELECT f('<pad>') AS out` statement of about `n_bytes` UTF-8 bytes (the pad is multi-byte)."""
+    pad = "\u00e9" * (n_bytes // 2)  # 2 bytes each
+    return f"{tag}", f"SELECT `c`.`s`.f('{pad}') AS out"
+
+
+def _batch_len(oracles, unit):
+    return len(oracles.uc_batch_statement(unit.items).encode("utf-8"))
+
+
+def test_batch_bytes_matches_the_statement_the_runner_builds(uc_sql, oracles):
+    items = ["f(1)", "f('\u00e9\u00e9')", "(SELECT 1)", "g(2)"]
+    for n in range(len(items) + 1):
+        assert uc_sql.batch_bytes(items[:n]) == len(oracles.uc_batch_statement(items[:n]).encode("utf-8"))
+
+
+def test_the_byte_cap_closes_a_chunk_before_a_member_would_pass_it(uc_sql, oracles):
+    cap = 100_000
+    pairs = [_sized(30_000, f"c{i}") for i in range(10)]
+    units = uc_sql.plan_units(pairs, {c for c, _ in pairs}, 25, cap)
+    assert [len(u.members) for u in units] == [3, 3, 3, 1] and [u.is_batch for u in units] == [True, True, True, False]
+    assert all(_batch_len(oracles, u) <= cap for u in units if u.is_batch)
+    assert max(len(u.members) for u in units) == 3
+    # without the cap the same statements are one batch of 10 (the count alone chunks)
+    assert len(uc_sql.plan_units(pairs, {c for c, _ in pairs}, 25, 10**9)) == 1
+
+
+def test_fail_on_revert_two_11mb_members_never_share_a_batch_over_the_api_limit(uc_sql, oracles):
+    big = [_sized(11_535_000, "maketiles_5mb"), _sized(11_535_000, "maketiles_fits")]
+    small = [(f"s{i}", f"SELECT `c`.`s`.f({i}) AS out") for i in range(5)]
+    pairs = small[:2] + big[:1] + small[2:4] + big[1:] + small[4:]
+    units = uc_sql.plan_units(pairs, {c for c, _ in pairs}, 25)
+    limit = 16_777_216
+    for u in units:
+        assert (_batch_len(oracles, u) if u.is_batch else len(u.members[0][1].encode("utf-8"))) < limit
+    assert not any({"maketiles_5mb", "maketiles_fits"} <= {c for c, _ in u.members} for u in units)
+
+
+def test_a_member_over_the_cap_alone_is_planned_alone(uc_sql, oracles):
+    cap = 50_000
+    pairs = [("a", "SELECT `c`.`s`.f(1) AS out"), _sized(80_000, "huge"), ("b", "SELECT `c`.`s`.f(2) AS out"), ("c", "SELECT `c`.`s`.f(3) AS out")]
+    units = uc_sql.plan_units(pairs, {c for c, _ in pairs}, 25, cap)
+    huge = [u for u in units if "huge" in [c for c, _ in u.members]]
+    assert len(huge) == 1 and [c for c, _ in huge[0].members] == ["huge"] and not huge[0].is_batch
+    assert sorted(len(u.members) for u in units) == [1, 1, 2]  # a (alone, before the huge one), and b+c
+
+
+def test_every_cid_is_in_exactly_one_unit_whatever_the_cap(uc_sql, oracles, core_cases, core_pairs):
+    batchable = oracles.uc_batchable(core_cases)
+    for cap in (200, 2_000, 20_000, uc_sql.MAX_BATCH_BYTES):
+        units = uc_sql.plan_units(core_pairs, batchable, 25, cap)
+        assert sorted(c for u in units for c, _ in u.members) == sorted(c for c, _ in core_pairs)
+        assert all(u.is_batch is False or len(u.members) >= 2 for u in units)
+        assert all(_batch_len(oracles, u) <= cap for u in units if u.is_batch)
+
+
 # ---- the runner -----------------------------------------------------------------------------------------------------------
 
 

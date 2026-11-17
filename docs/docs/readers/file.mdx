@@ -5,6 +5,7 @@ sidebar_label: File Lister
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
+import ucExamples from '!!raw-loader!../../tests/python/api/uc_functions_examples.py';
 
 # File Access — `file_gbx`
 
@@ -210,13 +211,9 @@ A SQL warehouse reads a window of a raster in a FILE column with `gbx_rst_fromfi
 2. Select the rows. Join the table to the polygons that you want to cut.
 3. Call `gbx_rst_fromfile` on the FILE column, with a `geom` or a `resolution`.
 
-The table then holds a FILE EXTERNAL column that points at each COG. The query assumes that `rasters` has a `footprint` GEOMETRY column, and that `aois` has a `geom` column.
+The table then holds a FILE EXTERNAL column that points at each COG. The query assumes that `rasters` has a `footprint` GEOMETRY column, and that `aois` has a `geom` column. The GeoBrix Unity Catalog functions are installed in `main.geobrix` (see [Unity Catalog functions](../api/uc-functions)).
 
-```sql
-SELECT gbx_rst_avg(gbx_rst_fromfile(r.file, 'GTiff', a.geom, NULL, 20.0)) AS mean_value
-FROM rasters r
-JOIN aois a ON st_intersects(r.footprint, a.geom)
-```
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_FILE_COLUMN_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 Pass the FILE column directly. `CAST(<col> AS FILE)` fails with `CAST_TO_FILE_TYPE.FROM_FILE`. A `GEOMETRY(4326)` column also passes directly as `geom`. The function reads only the COG blocks it needs. See [`rst_fromfile`](../api/raster-functions#rst_fromfile) for the refusals and their fixes.
 

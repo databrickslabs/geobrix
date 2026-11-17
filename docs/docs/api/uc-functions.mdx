@@ -470,12 +470,7 @@ To read a window of a large COG in a FILE column, see [Read a window of a raster
 
 `gbx_rst_fromfile` takes a FILE value and reads only the COG blocks it needs. Pass a FILE or FILE EXTERNAL column directly, with no cast. Add a `GEOMETRY` as `geom` to clip, or a `resolution` in the raster's CRS units to read an overview. The file must be a tiled GeoTIFF or a COG. The function refuses a window over 64 MiB decoded and raises a `Fix:` that says to pass a coarser `resolution` or a smaller `geom`.
 
-```sql
-SELECT r.name, gbx_rst_avg(gbx_rst_fromfile(r.file, 'GTiff', a.geom, NULL, 20.0)) AS mean_value
-FROM rasters r
-JOIN aois a ON st_intersects(r.footprint, a.geom)
-WHERE a.name = 'Hutchinson'
-```
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_FROMFILE_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 The query assumes that `rasters` has a `file` FILE column and a `footprint` GEOMETRY column, and that `aois` has a `name` and a `geom` column.
 

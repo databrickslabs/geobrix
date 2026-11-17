@@ -207,23 +207,82 @@ Q5_SQL = [
 ]
 
 
+Q5_OK = "The average burn severity (dNBR) in Hutchinson County is 0.029. {n} acres burned at moderate-low or worse."
+
+
+def _q5(n, mean="0.029", rows=(), sql=Q5_SQL, **kw):
+    return rq.check_q5n(
+        Q5_OK.format(n=n).replace("0.029", mean), list(rows), sql, **kw
+    )[0]
+
+
 def test_q5n_mean_and_acres_are_judged_against_the_direct_sql():
-    ok_text = "The average burn severity (dNBR) in Hutchinson County is 0.031, and 3,900 acres burned at moderate-low or worse."
-    assert rq.check_q5n(ok_text, [], Q5_SQL)[0]
-    assert not rq.check_q5n(ok_text.replace("0.031", "0.080"), [], Q5_SQL)[0]
-    assert not rq.check_q5n(ok_text.replace("3,900", "12,000"), [], Q5_SQL)[0]
-    assert not rq.check_q5n(ok_text, [], [f"SELECT 1 FROM {T}burn_severity_summary"])[0]
+    assert _q5("3,854")
+    assert _q5("3,900") and _q5("3,810")  # within 2%
+    assert not _q5("3,854", mean="0.080")
+    assert not _q5("3,854", mean="0.031")  # 0.002 is the limit: 0.031 is 0.0023 off
+    assert _q5("3,854", mean="0.030")
+    assert not _q5("12,000")
+    assert not _q5("3,854", sql=[f"SELECT 1 FROM {T}burn_severity_summary"])
+    assert _q5("3,854", sql=[f"SELECT 1 FROM {T}burn_severity_summary"], chain_required=False)
+
+
+def test_q5n_rejects_the_reviewers_wrong_acres():
+    for wrong in ("0", "200", "381", "9,500", "3,950", "3,700", "92"):
+        assert not _q5(wrong), wrong
+    # a High-only row of 92 acres is a class, not the total
+    assert not rq.check_q5n(
+        "done",
+        [{"mean_dnbr": "0.029", "severity": "High", "acres": "92"}],
+        Q5_SQL,
+    )[0]
+
+
+def test_q5n_takes_acres_only_from_a_value_labelled_moderate_low_or_worse():
+    mean = {"mean_dnbr": "0.0291"}
+    # a bare `acres` column is not labelled, even when it equals the truth
+    assert not rq.check_q5n("done", [{**mean, "acres": "3854"}], Q5_SQL)[0]
+    assert rq.check_q5n("done", [{**mean, "mod_low_or_worse_acres": "3841"}], Q5_SQL)[0]
     assert rq.check_q5n(
-        ok_text, [], [f"SELECT 1 FROM {T}burn_severity_summary"], chain_required=False
+        "done", [{**mean, "moderate_low_or_worse_acres": "3854"}], Q5_SQL
+    )[0]
+    assert rq.check_q5n(
+        "done",
+        [{**mean, "severity": "Moderate-low or worse", "acres": "3854"}],
+        Q5_SQL,
+    )[0]
+    # one class alone is not the total
+    assert not rq.check_q5n(
+        "average 0.029. Moderate-low severity covers 3,854 acres.", [], Q5_SQL
+    )[0]
+    # a right number beside a wrong one, both labelled, fails
+    assert not rq.check_q5n(
+        "average 0.029. 3,854 acres at moderate-low or worse. Moderate-low or worse: 9,500 acres.",
+        [],
+        Q5_SQL,
+    )[0]
+    # a class breakdown after the label is not read as the total
+    assert rq.check_q5n(
+        "average 0.029. **3,854 acres** burned at moderate-low severity or worse. "
+        "Moderate-low or worse: 3,532 acres moderate-low, 231 acres moderate-high and 92 acres high.",
+        [],
+        Q5_SQL,
     )[0]
 
 
 def test_q5n_reads_result_columns_too():
-    rows = [{"mean_dnbr": "0.0291", "acres_ml_or_worse": "3841"}]
+    rows = [{"mean_dnbr": "0.0291", "mod_low_or_worse_acres": "3841"}]
     assert rq.check_q5n("done", rows, Q5_SQL)[0]
     assert not rq.check_q5n(
-        "done", [{"mean_dnbr": "0.2", "acres_ml_or_worse": "3841"}], Q5_SQL
+        "done", [{"mean_dnbr": "0.2", "mod_low_or_worse_acres": "3841"}], Q5_SQL
     )[0]
+
+
+def test_the_independent_truth_agrees_with_the_gate_truth():
+    t, i = rq.Q5N_TRUTH, rq.Q5N_INDEPENDENT
+    assert abs(t["mean_dnbr"] - i["mean_dnbr"]) <= rq.MEAN_TOLERANCE
+    acres = abs(t["acres_moderate_low_or_worse"] - i["acres_moderate_low_or_worse"])
+    assert acres <= 0.02 * t["acres_moderate_low_or_worse"]
 
 
 def test_novelty_flags_a_copied_example_and_scores_a_new_chain():
@@ -296,3 +355,96 @@ def test_the_runner_requires_its_ids(monkeypatch, capsys):
             ["--space", "both", "--live-id", "a", "--warehouse-id", "w"],
             client=object(),
         )
+
+
+def test_q1_without_rerun_rows_is_unverified_not_correct():
+    ok, why = rq.check_q1(Q1_TEXT, [], Q1_SQL)
+    assert not ok and "unverified" in why
+
+
+def test_q1_accepts_curly_quote_and_lacks_denials():
+    base = "Sentinel-2 L2A, enhanced tier, 10 m, from 27 Jan to 12 Mar 2024. "
+    for denial in (
+        "We don\u2019t hold any elevation data.",
+        "The collection lacks elevation.",
+        "Elevation: none held.",
+        "Elevation data is not available.",
+    ):
+        assert rq.check_q1(base + denial, COV_ROWS, Q1_SQL)[0], denial
+
+
+def test_q1_rejects_an_invented_elevation_product():
+    base = "Sentinel-2 L2A, enhanced tier, 10 m, from 27 Jan to 12 Mar 2024. "
+    for invented in (
+        "Elevation: a 30 m DEM covers the county.",
+        "Elevation is available from a DEM at 30 m. We hold no soil data.",
+        "We hold no wells data, and elevation is 600 m.",
+    ):
+        assert not rq.check_q1(base + invented, COV_ROWS, Q1_SQL)[0], invented
+    dem = COV_ROWS + [
+        {**COV_ROWS[1], "product": "elevation", "best_resolution_m": "30.0"}
+    ]
+    assert not rq.check_q1(Q1_TEXT, dem, Q1_SQL)[0]
+
+
+def test_q1_compares_the_asset_count():
+    wrong = [dict(COV_ROWS[0]), {**COV_ROWS[1], "assets": "3"}]
+    assert not rq.check_q1(Q1_TEXT, wrong, Q1_SQL)[0]
+    right = [dict(COV_ROWS[0], assets="1"), {**COV_ROWS[1], "assets": "6"}]
+    assert rq.check_q1(Q1_TEXT, right, Q1_SQL)[0]
+
+
+def test_strip_sql_handles_double_quotes_escapes_and_identifier():
+    q = (
+        "SELECT 'a''b' AS x, \"gbx_rst_nbr(\" AS y, 'it\\'s gbx_rst_nbr(' AS z "
+        "-- gbx_rst_fromfile(\n FROM t"
+    )
+    clean = rq.strip_sql(q)
+    assert "gbx_rst_nbr" not in clean and "gbx_rst_fromfile" not in clean
+    assert not rq.chain_ok([q + " /* gbx_rst_nbr( */"], ["t"])[0]
+    ident = "SELECT * FROM IDENTIFIER('other.schema.tbl') x"
+    assert rq.tables_read(ident) == {"other.schema.tbl"}
+    assert not rq.chain_ok([ident + f" JOIN {T}rasters r"])[0]
+    dq = 'SELECT * FROM IDENTIFIER("geospatial_catalog.raster_genie.rasters")'
+    assert rq.tables_read(dq) == {"geospatial_catalog.raster_genie.rasters"}
+    call = f"SELECT IDENTIFIER('{G}gbx_rst_nbr')({G}gbx_rst_fromfile(f)) FROM {T}rasters"
+    assert rq.chain_ok([call])[0]
+
+
+def test_q3_burned_total_must_be_stated_not_summed():
+    rows = [
+        {"severity": n, "acres": str(a)}
+        for n, a in rq.GROUND_TRUTH["acres"].items()
+    ]
+    text = "\n".join(
+        f"{n} {a} acres" for n, a in rq.GROUND_TRUTH["acres"].items()
+    ) + "\nAbout 3,849 people live inside."
+    ok, why = rq.check_q3(text, rows, [], chain_required=False)
+    assert not ok and "burned=MISS" in why
+    stated = [{**r, "low_or_worse_acres": "631994"} for r in rows]
+    assert rq.check_q3(text, stated, [], chain_required=False)[0]
+
+
+def test_rejudge_recomputes_the_verdict_and_marks_the_rows(tmp_path):
+    import json
+
+    good = {
+        "space": "live",
+        "space_id": "x",
+        "question": "Q5n",
+        "run": 1,
+        "status": "COMPLETED",
+        "seconds": 5.0,
+        "correct": False,
+        "why": "old gate",
+        "sql": Q5_SQL,
+        "text": [Q5_OK.format(n="3,854")],
+        "rerun_rows": [],
+    }
+    bad = {**good, "run": 2, "correct": True, "text": [Q5_OK.format(n="381")]}
+    src, dst = tmp_path / "in.json", tmp_path / "out.json"
+    src.write_text(json.dumps([good, bad]))
+    out = rq.rejudge(src, dst)
+    assert [r["correct"] for r in out] == [True, False]
+    assert all(r["rejudged_offline"] and r["gate_version"] == rq.GATE_VERSION for r in out)
+    assert json.loads(dst.read_text()) == out

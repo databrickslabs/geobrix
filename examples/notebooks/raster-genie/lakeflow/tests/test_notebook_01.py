@@ -68,8 +68,28 @@ def test_the_agent_cell_prints_titles_and_strips_links():
     cell = _nb01('step("Genie Agent")')
     assert "space_title" in cell and "plain(" in cell
     assert "how many people live inside the fire perimeter" in cell
-    assert "answers in under half a minute" in "".join(
+    md = "".join(
         json.loads((NB_DIR / "01_smokehouse_creek.ipynb").read_text())["cells"][31][
             "source"
         ]
     )
+    assert md.startswith("## 9. Ask the Genie Agents")  # two agents, plural
+    assert "answers well under a minute" in md
+    assert "under half a minute" not in md and "as long as the query above" not in md
+    assert "space_id})" not in cell  # the title is printed, never the id
+
+
+def test_the_stack_version_check_is_the_tested_helper():
+    stack = _nb01('step("stack the master COGs")')
+    assert "table_stack_version(spark, RASTERS)" in stack
+    assert "def table_stack_version" not in stack  # one copy, in lakeflow/land/scenes.py
+    assert "table_stack_version" in _nb01("from land.scenes import")
+
+
+def test_no_genie_space_id_in_any_output():
+    nb = json.loads((NB_DIR / "01_smokehouse_creek.ipynb").read_text())
+    # a Genie space id is 32 hex digits starting 01f (file checksums are 32 hex digits too, and are not ids)
+    ids = re.compile(r"\b01f[0-9a-f]{29}\b")
+    for i, cell in enumerate(nb["cells"], 1):
+        for out in cell.get("outputs", []):
+            assert not ids.search(json.dumps(out)), f"cell {i} output holds a Genie space id"

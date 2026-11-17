@@ -56,6 +56,20 @@ def stack_version(path: str) -> int:
             return 0
 
 
+STACK_VERSION_PROPERTY = "gbx.stack_version"
+
+
+def table_stack_version(spark, table: str) -> str | None:
+    """The `gbx.stack_version` table property of `table` (a string), or None when the property is not set.
+
+    `SHOW TBLPROPERTIES <t> ('<key>')` returns one row `(key, value)`; a missing key does not raise but
+    returns a row whose value says so, which is not a version.
+    """
+    row = spark.sql(f"SHOW TBLPROPERTIES {table} ('{STACK_VERSION_PROPERTY}')").first()
+    value = None if row is None else str(row["value"])
+    return value if value and value.isdigit() else None
+
+
 def is_current(path: str) -> bool:
     """True when the file exists and was written by this version of `stack_scene` or a later one."""
     return os.path.exists(path) and stack_version(path) >= STACK_VERSION

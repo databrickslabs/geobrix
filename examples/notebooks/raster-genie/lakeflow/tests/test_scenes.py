@@ -345,3 +345,30 @@ def test_a_master_without_the_tag_or_with_a_lower_one_is_not_current(
 
 def test_a_missing_file_is_not_current(tmp_path):
     assert not is_current(str(tmp_path / "nope.tif"))
+
+
+@pytest.fixture(scope="module")
+def local_spark(tmp_path_factory):
+    pyspark_sql = pytest.importorskip("pyspark.sql")
+    spark = (
+        pyspark_sql.SparkSession.builder.master("local[1]")
+        .appName("table-stack-version")
+        .config("spark.sql.warehouse.dir", str(tmp_path_factory.mktemp("wh")))
+        .config("spark.ui.enabled", "false")
+        .getOrCreate()
+    )
+    yield spark
+    spark.stop()
+
+
+def test_table_stack_version_reads_the_property_value(local_spark):
+    from land.scenes import STACK_VERSION, table_stack_version
+
+    local_spark.sql(
+        f"CREATE TABLE tsv_set (a INT) USING parquet TBLPROPERTIES ('gbx.stack_version' = '{STACK_VERSION}')"
+    )
+    local_spark.sql("CREATE TABLE tsv_unset (a INT) USING parquet")
+    assert table_stack_version(local_spark, "tsv_set") == str(STACK_VERSION)
+    assert table_stack_version(local_spark, "tsv_unset") is None
+    local_spark.sql("ALTER TABLE tsv_unset SET TBLPROPERTIES ('gbx.stack_version' = '1')")
+    assert table_stack_version(local_spark, "tsv_unset") == "1"

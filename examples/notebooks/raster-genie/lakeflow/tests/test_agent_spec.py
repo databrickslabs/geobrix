@@ -185,7 +185,7 @@ def test_the_text_is_consistent_and_teaches_the_method():
         assert "one self-contained SQL statement for each part of a question" in t
         assert "Compute every number in SQL" in t
         assert "never convert it to WKB or WKT" in t
-        assert "1.5 to 2.5 minutes" in t
+        assert "1.3 to 2.5 minutes" in t
         assert "about a minute" not in t
         assert "as it is" not in t  # the example is adapted, not copied
         assert "adapt" in t and "aois" in t

@@ -77,7 +77,19 @@ def delta_session(warehouse_dir):
             .config("spark.sql.warehouse.dir", str(warehouse_dir))
             .config("spark.sql.shuffle.partitions", "2")
             .config("spark.databricks.delta.snapshotPartitions", "2")
+            # Delta keeps a DeltaLog (its snapshot, plans and cached state, about 1 MB here) per
+            # table path for an hour, up to 10000 paths. Every test writes new tables, so in
+            # one shared session the cache grew past 200 logs and, with the status tracker
+            # below, filled the 1 GB driver heap: Spark local mode then lost a task to the
+            # OutOfMemoryError and the job never finished (a toArrow that never returned).
+            # A small cache only means a reload of a log no test is still using.
+            .config("spark.databricks.delta.delta.log.cacheSize", "32")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+            # Spark local mode survives an OutOfMemoryError on its scheduler thread but loses
+            # the task it was launching, so the job waits forever. Exiting the JVM turns that
+            # into failing tests. It applies when this builder starts the JVM; a JVM already
+            # running keeps its own options.
+            .config("spark.driver.extraJavaOptions", "-XX:+ExitOnOutOfMemoryError")
             .config("spark.ui.enabled", "false")
             # the status tracker evicts the oldest stages past this many (default 1000); a
             # shared session runs thousands, and a test that counts a commit's tasks would

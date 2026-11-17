@@ -348,9 +348,9 @@ def _clip_4326_width():
     """
     import math
 
-    from pyproj import Transformer
+    from databricks.labs.gbx.core.crs import get_transformer
 
-    tr = Transformer.from_crs(4326, 32614, always_xy=True)
+    tr = get_transformer(4326, 32614)
     xs = [tr.transform(x, y)[0] for x, y in _CLIP_4326_RING]
     x0, x1 = (min(xs) - _COG_ORIGIN[0]) / _COG_PIXEL, (
         max(xs) - _COG_ORIGIN[0]

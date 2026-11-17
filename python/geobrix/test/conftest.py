@@ -245,8 +245,14 @@ def _split_run(config, items):
 # A test file that imports netCDF4 and writes with it leaves the process with GDAL's HDF5Image driver identifying
 # netCDF-4 bytes from memory ahead of the netCDF driver: a netCDF raster the same process reads afterwards from bytes
 # opens without its georeference (the manager's `bytes_class_netcdf_translated` rows fail). The driver order cannot
-# be put back from a fixture, so those files run after every other test of the process.
-_IMPORTS_NETCDF4 = re.compile(r"^[ \t]*(?:import netCDF4|from netCDF4 import)\b", re.M)
+# be put back from a fixture, so those files run after every other test of the process. A write also leaves the
+# process's GDAL netCDF driver unable to CreateCopy a netCDF file (SystemError "Unknown GDAL Error", the `dem_netcdf`
+# fixture of the bench plan), because the vendored netCDF4 carries its own libnetcdf/HDF5. A file that gets the module
+# from `pytest.importorskip("netCDF4")` uses it the same way, so that form counts too.
+_IMPORTS_NETCDF4 = re.compile(
+    r"^[ \t]*(?:import netCDF4|from netCDF4 import)\b|importorskip\(\s*[\"']netCDF4[\"']",
+    re.M,
+)
 
 
 @functools.lru_cache(maxsize=None)

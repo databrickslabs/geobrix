@@ -21,6 +21,9 @@ def _item(path, *keywords, fixturenames=()):
         ("def test_x():\n    import netCDF4, rasterio\n", True),
         ('"""Reads what netCDF4 wrote."""\nimport numpy\n', False),
         ("import netCDF4_extra_thing\n", False),
+        ('def _nc():\n    return pytest.importorskip("netCDF4", reason="x")\n', True),
+        ("nc4 = pytest.importorskip('netCDF4')\n", True),
+        ('pytest.importorskip("netCDF4_extra_thing")\n', False),
     ],
 )
 def test_a_file_that_imports_netcdf4_is_found(tmp_path, source, expected):

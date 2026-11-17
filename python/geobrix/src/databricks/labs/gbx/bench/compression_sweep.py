@@ -143,8 +143,6 @@ def _encode_worker(
     result_queue: "multiprocessing.Queue[Dict[str, Any]]",
 ) -> None:
     """Worker function: encode arr → MemoryFile, measure RSS + time."""
-    import platform as _plat
-    import resource
     import time as _time
 
     import numpy as _np
@@ -166,6 +164,7 @@ def _encode_worker(
 
     # Route through canonical creation_opts.  Import is local: _encode_worker runs
     # in a subprocess and all imports must be inside the function body.
+    from databricks.labs.gbx.pyrx.core.budget import peak_rss_mib
     from databricks.labs.gbx.pyrx.core.compression import (
         creation_opts as _creation_opts_fn,
     )
@@ -177,7 +176,7 @@ def _encode_worker(
             )
         )
 
-    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    rss_before = peak_rss_mib()
     t0 = _time.perf_counter()
     encoded_buf: bytes = b""
     with MemoryFile() as mf:
@@ -185,9 +184,12 @@ def _encode_worker(
             ds.write(arr, 1)
         encoded_buf = mf.read()
     t_write = (_time.perf_counter() - t0) * 1000  # ms
-    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    divisor = (1024 * 1024) if _plat.system() == "Darwin" else 1024
-    delta_rss_mib = (rss_after - rss_before) / divisor
+    rss_after = peak_rss_mib()
+    delta_rss_mib = (
+        float("nan")
+        if rss_before is None or rss_after is None
+        else rss_after - rss_before
+    )
 
     # Read back (full decode)
     t1 = _time.perf_counter()

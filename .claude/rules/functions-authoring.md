@@ -68,6 +68,9 @@ Python-only keywords (the force-output trio) are declared in the row's `python` 
   of 64 or more, and cast a count to BIGINT before `shiftleft(.., 52)`. Write a refusal text's semicolon as `chr(59)`.
 - Keep `;` out of a probe function's text (a candidate body, helper summary or message): the warehouse statement file
   splits on it.
+- A body can call Python: L4 `private` lists `uc_private` routines, called as `{q}gbx__<name>(...)`. `install` creates
+  them before the function. Use it only with a literal L4 `sql` (not `"L0"`). Spark refuses a Python call anywhere in a
+  lambda body, so call one only at the top level or as a helper argument (see `gbx_rst_fromfile`).
 - Known limits (documented, not fixed): `install` does not check that a form the caller forces is one the row can be
   (the DDL builder raises instead); a kernel rename of a parameter reaches a helper's body only through inlining, so a
   helper that spells the same name for another purpose is rewritten too; code that reads `functions.json` directly sees

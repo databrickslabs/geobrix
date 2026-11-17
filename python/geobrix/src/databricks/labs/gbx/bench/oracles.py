@@ -4069,7 +4069,9 @@ def _check_approx(case: Case, out) -> Optional[str]:
 
     if out is None:
         return f"{case.cid}: got NULL, want {case.expect}"
-    got, want = flat(out), flat(case.expect)
+    # a recipe's list answer arrives as the API's JSON text: its DOUBLEs are strings (the coercion by the function's declared
+    # return type does not apply to a recipe, whose answer is the statement's own)
+    got, want = [float(g) for g in flat(out)], flat(case.expect)
     if len(got) != len(want) or not all(
         math.isclose(g, w, rel_tol=1e-9, abs_tol=1e-12) for g, w in zip(got, want)
     ):
@@ -5136,11 +5138,22 @@ def _projection(case: Case, params, rows, surface: str) -> str:
     return ", ".join(cols)
 
 
-def render_recipe(sql: str, prefix: str = "", tmpdir: Optional[str] = None) -> str:
+# Where a recipe's ``{vol}`` points when the run gives no folder: a path that exists nowhere, so a statement that
+# reads it fails by name instead of reading another run's file.
+FIXTURES_VOL_UNSET = "/Volumes/gbx_fixtures_not_staged"
+
+
+def render_recipe(
+    sql: str, prefix: str = "", tmpdir: Optional[str] = None, vol: Optional[str] = None
+) -> str:
     """A recipe row's statement with every ``{q}`` replaced by ``prefix`` (the 3-level schema prefix on UC, "" in a
-    session) and every ``{tile:<builder>}`` by the tile struct that fixture builder makes, as a SQL literal (built when
-    the row runs, in ``tmpdir``, so a table needs no raster library to be imported)."""
-    out = sql.replace("{q}", prefix)
+    session), every ``{vol}`` by ``vol`` (the Volume folder the gate staged its fixture files into; a row reads them as
+    ``to_file('{vol}/fixtures/cog.tif')``) and every ``{tile:<builder>}`` by the tile struct that fixture builder makes,
+    as a SQL literal (built when the row runs, in ``tmpdir``, so a table needs no raster library to be imported).
+    """
+    out = sql.replace("{q}", prefix).replace(
+        "{vol}", (vol or FIXTURES_VOL_UNSET).rstrip("/")
+    )
     if "{tile:" not in out:
         return out
     from databricks.labs.gbx import manifest
@@ -7000,8 +7013,11 @@ def _sql_literal(value, param, case: Case) -> str:
     return repr(value)
 
 
-def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str]]:
-    """(cid, statement) per UC case: one SELECT each, so a refusal can't hide another case."""
+def uc_sql(
+    cases, catalog: str, schema: str, tmpdir: str, vol: Optional[str] = None
+) -> List[Tuple[str, str]]:
+    """(cid, statement) per UC case: one SELECT each, so a refusal can't hide another case. ``vol`` is the folder a
+    recipe's ``{vol}`` names (see ``render_recipe``)."""
     from databricks.labs.gbx import manifest
 
     man = manifest.load()
@@ -7011,7 +7027,10 @@ def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str
             continue
         if case.sql is not None:
             stmts.append(
-                (case.cid, render_recipe(case.sql, f"`{catalog}`.`{schema}`.", tmpdir))
+                (
+                    case.cid,
+                    render_recipe(case.sql, f"`{catalog}`.`{schema}`.", tmpdir, vol),
+                )
             )
             continue
         fn = man.functions[case.fn]

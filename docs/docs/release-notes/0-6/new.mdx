@@ -193,6 +193,7 @@ See [Zarr Stores](../../api/zarr-stores.mdx), [Zarr Reader](../../readers/zarr.m
 - **Cell rasterizers without a `GROUP BY`**. `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize` and `gbx_rst_custom_rasterize` burn an array of cells into one GeoTIFF.
 - **Table functions for large groups.** `gbx_rst_merge_tvf` merges each key's tiles into one raster. `gbx_rst_bng_rasterize_tvf` burns each key's BNG cells into one raster. Both read a row at a time. Call them as `TABLE(...) PARTITION BY (key)`.
 - **`gbx_drivers()`** lists the GDAL drivers. See [above](#gbx-drivers).
+- **`gbx_rst_fromfile` reads a FILE value.** With a clip or a target resolution, it reads only the COG blocks it needs, in notebooks, SQL warehouses and Unity Catalog. See [`rst_fromfile`](../../api/raster-functions.mdx#rst_fromfile).
 - **The Unity Catalog forms** listed under [Forms that need no session](#uc-no-session-forms).
 - **`segment_raster(..., weights=)` loads a GeoSAM checkpoint from a Volume**. A workspace that blocks internet egress then needs no download. See [GeoSAM](../../models/geosam.mdx).
 - **`run_sfm(..., prior_sigma_m=)` sets the accuracy of GPS pose priors** when EXIF gives none. See [Orthomosaic](../../notebooks/orthomosaic.mdx).
@@ -220,6 +221,12 @@ See [Databricks Container Service](../../installation/dcs.mdx).
 - **Zarr reads spread over the session's cores** in tasks of about 16 MiB decoded.
 
 [Performance](../../api/performance.mdx) has the measurements.
+
+## Sample-data downloaders and Genie helpers {#downloaders-genie}
+
+- **`FirePerimeterDownloader` fetches a wildfire perimeter by name** from the NIFC WFIGS service, with an optional year and state. See [Fire Perimeter Downloader](../../sample-data/fire-perimeter-downloader.mdx).
+- **`WorldPopDownloader` windows the WorldPop 2020 population grid** of the USA to a bbox. See [WorldPop Downloader](../../sample-data/worldpop-downloader.mdx).
+- **`databricks.labs.gbx.genie` builds a Genie space and asks a Genie Agent.** `build_serialized_space` and `apply_space` create or update a space, and `ask` returns the answer and its SQL. See [Genie Helpers](../../api/genie.mdx).
 
 ## Examples {#examples}
 

@@ -32,6 +32,13 @@ class PermissionDenied(DatabricksError):
     pass
 
 
+class InvalidParameterValue(DatabricksError):
+    pass
+
+
+TOO_LONG = "The statement field must not exceed a length of 16777216 bytes."
+
+
 class HTTPError(OSError):  # requests' HTTPError is an OSError that carries the response
     def __init__(self, status):
         super().__init__(f"{status} error")
@@ -77,10 +84,11 @@ class FakeApi:
 
     def __init__(self, submits, polls=()):
         self.submits, self.polls = list(submits), list(polls)
-        self.submitted, self.polled = [], []
+        self.submitted, self.polled, self.kwargs = [], [], []
 
     def execute_statement(self, statement, **kw):
         self.submitted.append(statement)
+        self.kwargs.append(kw)
         step = self.submits.pop(0)
         if isinstance(step, Exception):
             raise step
@@ -234,6 +242,76 @@ def test_main_exits_1_with_a_harness_error_line_and_still_writes_every_case(uc_s
     assert rc == 1
     err = capsys.readouterr().err
     assert "harness error (transient API): 1 of 2" in err and "c1" in err
+    from databricks.labs.gbx.bench import oracles
+
+    assert set(oracles.load_uc_results(str(out))) == {"c1", "c2"}
+
+
+# ---- a large statement is submitted without a synchronous wait ---------------------------------------------------------
+# The Statement API's front end answers 504 DEADLINE_EXCEEDED (an empty-message JSON body, which the SDK maps to
+# DeadlineExceeded) when a POST has not been answered after about a minute. The POST of a statement is its upload plus
+# the `wait_timeout` the server holds it for, so an 11.5 MB statement that is still PENDING at 50 s (upload 5-20 s) was
+# answered 504 after ~55 s, every try, with "statement not submitted". `wait_timeout="0s"` answers at once with the
+# id, and the poll loop does the waiting.
+
+
+def test_a_small_statement_waits_on_the_server_and_a_large_one_does_not(uc_sql):
+    small, large = "SELECT 7", "SELECT '" + "x" * uc_sql.LARGE_STATEMENT_BYTES + "'"
+    assert uc_sql.submit_wait_timeout(small) == "50s"
+    assert uc_sql.submit_wait_timeout(large) == "0s"
+    # a multi-byte character counts by its UTF-8 bytes, not by its length
+    edge = "\u00e9" * (uc_sql.LARGE_STATEMENT_BYTES // 2)
+    assert len(edge) < uc_sql.LARGE_STATEMENT_BYTES and uc_sql.submit_wait_timeout(edge) == "0s"
+
+
+def test_fail_on_revert_a_large_statement_is_submitted_with_no_wait_and_polled_to_its_result(uc_sql):
+    large = "SELECT '" + "x" * uc_sql.LARGE_STATEMENT_BYTES + "'"
+    api = FakeApi([_resp("s1", State.PENDING)], [_resp("s1", State.RUNNING), _resp("s1", State.SUCCEEDED, "7")])
+    entry = uc_sql.run_single(_w(api), "c1", large, _args())
+    assert entry["value"] in ("7", 7) and api.kwargs[0]["wait_timeout"] == "0s" and api.polled == ["s1", "s1"]
+    api = FakeApi([_resp("s2", State.SUCCEEDED, "7")])
+    uc_sql.run_single(_w(api), "c2", "SELECT 7", _args())
+    assert api.kwargs[0]["wait_timeout"] == "50s"
+
+
+# ---- a statement the API refuses as too long ------------------------------------------------------------------------
+
+
+def test_too_long_is_told_from_other_bad_requests(uc_sql):
+    assert uc_sql.is_statement_too_long(InvalidParameterValue(TOO_LONG, error_code="INVALID_PARAMETER_VALUE", status_code=400))
+    assert not uc_sql.is_statement_too_long(InvalidParameterValue("warehouse_id is invalid", status_code=400))
+    assert not uc_sql.is_statement_too_long(DeadlineExceeded(TOO_LONG))
+    assert not uc_sql.is_transient_api_error(InvalidParameterValue(TOO_LONG))
+
+
+def test_fail_on_revert_a_too_long_single_statement_is_that_cases_error_and_the_run_goes_on(uc_sql):
+    api = FakeApi([InvalidParameterValue(TOO_LONG), _resp("s2", State.SUCCEEDED, "2")])
+    pairs = [("big", "SELECT 1"), ("c2", "SELECT 2")]
+    results = uc_sql.run_statements(_w(api), pairs, _args())  # must not raise
+    assert list(results) == ["big", "c2"]
+    assert "error" in results["big"] and "16777216" in results["big"]["error"] and "harness_error" not in results["big"]
+    assert "value" in results["c2"] and len(api.submitted) == 2  # the refused statement was not tried again
+
+
+def test_a_too_long_batch_reruns_its_cases_one_by_one(uc_sql, monkeypatch, capsys):
+    monkeypatch.setattr(uc_sql.oracles, "uc_batch_item", lambda s: s.replace("SELECT ", ""))
+    api = FakeApi([InvalidParameterValue(TOO_LONG), _resp("s1", State.SUCCEEDED, "1"), _resp("s2", State.SUCCEEDED, "2")])
+    pairs = [("c1", "SELECT 1"), ("c2", "SELECT 2")]
+    results = uc_sql.run_statements(_w(api), pairs, _args(batch=2, batchable={"c1", "c2"}))
+    assert all("value" in r for r in results.values()) and list(results) == ["c1", "c2"]
+    assert api.submitted[0].startswith("SELECT 1 AS c0") and api.submitted[1:] == ["SELECT 1", "SELECT 2"]
+    assert "running its cases one by one" in capsys.readouterr().out
+
+
+def test_main_does_not_stop_on_a_too_long_rejection(uc_sql, monkeypatch, tmp_path, capsys):
+    f = tmp_path / "a.sql"
+    f.write_text("-- cid: c1\nSELECT 1\n\n-- cid: c2\nSELECT 2\n")
+    api = FakeApi([InvalidParameterValue(TOO_LONG), _resp("s2", State.SUCCEEDED, "2")])
+    monkeypatch.setitem(sys.modules, "databricks.sdk", types.SimpleNamespace(WorkspaceClient=lambda profile=None: _w(api)))
+    monkeypatch.setattr(uc_sql, "warehouse_problem", lambda *a, **k: None)
+    out = tmp_path / "o.json"
+    rc = uc_sql.main(["--file", str(f), "--profile", "p", "--warehouse-id", "w", "--out", str(out)])
+    assert rc == 0 and "stopped" not in capsys.readouterr().err
     from databricks.labs.gbx.bench import oracles
 
     assert set(oracles.load_uc_results(str(out))) == {"c1", "c2"}

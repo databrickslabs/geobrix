@@ -582,3 +582,254 @@ def test_a_windowed_read_of_an_href_without_slashes_is_refused_before_gdal_opens
     with pytest.raises(_http.RefusedHref, match="only as an http"):
         windowed_download(href, str(tmp_path / "w.tif"), (2, 2, 5, 6))
     assert server.hits == []
+
+
+# ---------------------------------------------------------------------------
+# Range probe and the checked streaming download (a server with no range support, like data.worldpop.org).
+# ---------------------------------------------------------------------------
+
+
+def test_probe_range_sees_a_server_that_ignores_range(server, public_test, served_tif):
+    info = _http.probe_range(f"{public_test}/a.tif", allowed_hosts=[".public.test"])
+    assert info.supports_range is False and info.size == len(served_tif)
+    assert server.hits[0][1].get("Range") == "bytes=0-0"  # one byte was asked for
+
+
+def test_probe_range_sees_a_server_that_honors_range(monkeypatch):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes 0-0/12345")
+            self.send_header("ETag", '"e1"')
+            self.send_header("Content-Length", "1")
+            self.end_headers()
+            self.wfile.write(b"x")
+
+        def log_message(self, *args):
+            pass
+
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    local = ("127.0.0.1", srv.server_address[1])
+    _network(
+        monkeypatch,
+        {"public.test": ["93.184.216.34"]},
+        {"public.test": local, "93.184.216.34": local},
+    )
+    try:
+        info = _http.probe_range(f"http://public.test:{local[1]}/a.tif")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert info == _http.RangeProbe(True, 12345, '"e1"')
+
+
+def test_probe_range_applies_the_allow_list_before_any_request(server, public_test):
+    with pytest.raises(_http.RefusedHref, match="not in allowed_hosts"):
+        _http.probe_range(f"{public_test}/a.tif", allowed_hosts=["other.test"])
+    assert server.hits == []
+
+
+def test_download_refuses_a_size_mismatch_and_accepts_a_match(
+    server, public_test, tmp_path, served_tif
+):
+    url = f"{public_test}/a.tif"
+    with pytest.raises(OSError, match="expected"):
+        _http.download(url, str(tmp_path / "x.tif"), expected_size=len(served_tif) + 1)
+    out = tmp_path / "ok.tif"
+    _http.download(url, str(out), expected_size=len(served_tif))
+    assert out.stat().st_size == len(served_tif)
+
+
+def test_local_source_copy_publishes_only_a_full_copy(
+    server, public_test, tmp_path, served_tif
+):
+    from databricks.labs.gbx.stac._download import local_source_copy
+
+    url = f"{public_test}/a.tif"
+    cache = tmp_path / "cache"
+    short = _http.RangeProbe(False, len(served_tif) + 5, None)
+    with pytest.raises(OSError):
+        local_source_copy(url, str(cache), short, allowed_hosts=[".public.test"])
+    assert not (cache / "a.tif").exists()
+    assert not (cache / ".gbx_scratch").exists()
+    good = _http.RangeProbe(False, len(served_tif), None)
+    path = local_source_copy(url, str(cache), good, allowed_hosts=[".public.test"])
+    assert os.path.getsize(path) == len(served_tif)
+    n = len(server.hits)
+    assert (
+        local_source_copy(url, str(cache), good, allowed_hosts=[".public.test"]) == path
+    )
+    assert len(server.hits) == n  # reused by size: no second fetch
+
+
+# ---------------------------------------------------------------------------
+# Download bounds and ETag handling: a server that streams a body of its own size, with or without a
+# Content-Length, and says what ETag it likes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stream_server(monkeypatch):
+    """``make(total, length=True, etag=None)`` -> (url, state): a server that streams ``total`` bytes in 64 KiB
+    pieces (state.sent counts what left it), with a Content-Length only when ``length``.
+    """
+    servers = []
+
+    def make(total, length=True, etag=None):
+        state = types.SimpleNamespace(sent=0)
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                if etag is not None:
+                    self.send_header("ETag", etag)
+                if length:
+                    self.send_header("Content-Length", str(total))
+                self.end_headers()  # without a length the body ends when the connection closes (HTTP/1.0)
+                piece = b"x" * 65536
+                try:
+                    while state.sent < total:
+                        n = min(len(piece), total - state.sent)
+                        self.wfile.write(piece[:n])
+                        state.sent += n
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+            monkeypatch.delenv(var.lower(), raising=False)
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        servers.append(srv)
+        local = ("127.0.0.1", srv.server_address[1])
+        _network(
+            monkeypatch,
+            {"public.test": ["93.184.216.34"]},
+            {"public.test": local, "93.184.216.34": local},
+        )
+        return f"http://public.test:{local[1]}/big.tif", state
+
+    yield make
+    for srv in servers:
+        srv.shutdown()
+        srv.server_close()
+
+
+MIB = 1 << 20
+
+
+def test_stream_with_no_content_length_is_cut_off_at_max_bytes(stream_server, tmp_path):
+    url, state = stream_server(64 * MIB, length=False)
+    out = tmp_path / "x.tif"
+    with pytest.raises(OSError, match="Fix:"):
+        _http.download(url, str(out), max_bytes=2 * MIB)
+    assert not out.exists()  # the partial file is removed
+    assert state.sent < 32 * MIB  # the stream was dropped long before it ended
+
+
+def test_body_longer_than_the_probed_size_is_cut_off_early(stream_server, tmp_path):
+    url, state = stream_server(64 * MIB, length=False)
+    out = tmp_path / "x.tif"
+    with pytest.raises(OSError, match="Fix:"):
+        _http.download(
+            url, str(out), expected_size=1 * MIB
+        )  # the file grew past the probe
+    assert not out.exists() and state.sent < 32 * MIB
+
+
+def test_content_length_over_the_limit_is_refused_before_a_byte_is_read(
+    stream_server, tmp_path
+):
+    url, state = stream_server(8 * MIB, length=True)
+    with pytest.raises(OSError, match="limit"):
+        _http.download(url, str(tmp_path / "x.tif"), max_bytes=1 * MIB)
+    assert not (tmp_path / "x.tif").exists()
+
+
+def test_download_without_bounds_is_unchanged(stream_server, tmp_path):
+    url, _ = stream_server(3 * MIB, length=False)
+    out = tmp_path / "x.tif"
+    _http.download(url, str(out))  # no max_bytes, no expected_size: as before
+    assert out.stat().st_size == 3 * MIB
+
+
+def test_a_weak_etag_equal_to_the_probes_is_accepted(stream_server, tmp_path):
+    url, _ = stream_server(1000, etag='W/"abc"')
+    out = tmp_path / "x.tif"
+    _http.download(url, str(out), expected_size=1000, expected_etag='"abc"')
+    assert out.stat().st_size == 1000
+
+
+def test_a_different_etag_with_the_right_size_warns_and_keeps_the_file(
+    stream_server, tmp_path
+):
+    url, _ = stream_server(1000, etag='"other"')
+    out = tmp_path / "x.tif"
+    with pytest.warns(UserWarning, match="ETag"):
+        _http.download(url, str(out), expected_size=1000, expected_etag='"abc"')
+    assert out.stat().st_size == 1000
+
+
+def test_a_size_mismatch_is_still_refused_whatever_the_etag(stream_server, tmp_path):
+    url, _ = stream_server(1000, etag='"abc"')
+    out = tmp_path / "x.tif"
+    with pytest.raises(OSError, match="expected 1001"):
+        _http.download(url, str(out), expected_size=1001, expected_etag='"abc"')
+    assert not out.exists()
+
+
+def test_a_different_etag_with_no_size_to_vouch_is_refused(stream_server, tmp_path):
+    url, _ = stream_server(1000, etag='"other"')
+    with pytest.raises(OSError, match="ETag"):
+        _http.download(url, str(tmp_path / "x.tif"), expected_etag='"abc"')
+
+
+def test_a_response_with_no_etag_is_not_checked_against_one(stream_server, tmp_path):
+    url, _ = stream_server(1000)
+    out = tmp_path / "x.tif"
+    _http.download(url, str(out), expected_size=1000, expected_etag='"a"')
+    assert (
+        out.read_bytes() == b"x" * 1000
+    )  # the bytes landed, unchecked against the absent ETag
+
+
+def test_local_source_copy_caps_an_unsized_stream(stream_server, tmp_path):
+    from databricks.labs.gbx.stac._download import local_source_copy
+
+    url, state = stream_server(64 * MIB, length=False)
+    cache = tmp_path / "cache"
+    with pytest.raises(OSError, match="Fix:"):
+        local_source_copy(
+            url,
+            str(cache),
+            _http.RangeProbe(False, None, None),
+            allowed_hosts=[".public.test"],
+            max_bytes=2 * MIB,
+        )
+    assert not list(cache.rglob("*.tif")) and not (cache / ".gbx_scratch").exists()
+    assert state.sent < 32 * MIB
+
+
+def test_cached_copy_is_redownloaded_when_the_etag_differs(stream_server, tmp_path):
+    from databricks.labs.gbx.stac._download import local_source_copy
+
+    url, state = stream_server(1000, etag='"v1"')
+    cache = str(tmp_path / "cache")
+    kw = {"allowed_hosts": [".public.test"]}
+    path = local_source_copy(url, cache, _http.RangeProbe(False, 1000, '"v1"'), **kw)
+    assert open(path + ".etag").read() == '"v1"'
+    state.sent = 0
+    # same size, a weak form of the same ETag: reused, nothing sent
+    local_source_copy(url, cache, _http.RangeProbe(False, 1000, 'W/"v1"'), **kw)
+    assert state.sent == 0
+    # same size, a new ETag: the file changed, so it comes down again
+    local_source_copy(url, cache, _http.RangeProbe(False, 1000, '"v2"'), **kw)
+    assert state.sent == 1000
+    assert open(path + ".etag").read() == '"v2"'

@@ -2069,24 +2069,57 @@ _Constructor — builds a tile from binary content. Example uses Spark's `binary
 ### rst_fromfile
 
 {/* BEGIN GENERATED gbx_rst_fromfile: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
-| SQL (session) | `gbx_rst_fromfile(path, [driver])` | `TILE` |
-| Python | `rasterx.functions.rst_fromfile(path, driver=None, materialize=None)` | Column |
+| SQL (session) | `gbx_rst_fromfile(path, [driver], [geom], [clip_crs], [resolution])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_fromfile(path, [driver], [geom], [clip_crs], [resolution])` | `TILE` |
+| Python | `rasterx.functions.rst_fromfile(path, driver=None, geom=None, clip_crs=None, resolution=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `path` | `STRING` |  | The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A remote URL is refused unless the driver's remote-read switch is on. |
-| `driver` | `STRING` | `'GTiff'` | The GDAL driver short name hint, in any case. It goes into the tile's `driver` metadata; a name that is no raster driver (no driver of that name, or a vector-only one such as `'GeoJSON'`) raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `path` | `STRING` or `FILE` | `FILE` |  | The raster file: a path (local, `/Volumes/...`, `/Workspace/...`) or a FILE value. A remote URL is refused unless the driver's remote-read switch is on. |
+| `driver` | `STRING` | `STRING` | `'GTiff'` | The GDAL driver short name hint, in any case. It goes into the tile's `driver` metadata; a name that is no raster driver (no driver of that name, or a vector-only one such as `'GeoJSON'`) raises. |
+| `geom` | `BINARY` or `STRING` or `GEOMETRY` | `GEOMETRY` | `NULL` | An optional polygon to clip to, as WKB, EWKB, WKT or EWKT, or a GEOMETRY. Only the blocks the polygon covers are read. |
+| `clip_crs` | `STRING` | `STRING` | `NULL` | The CRS of a `geom` that carries no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The CRS of the raster when NULL. An EWKB or EWKT SRID wins. |
+| `resolution` | `DOUBLE` | `DOUBLE` | `NULL` | An optional target pixel size in the raster's CRS units. The coarsest overview that is still at least this fine is read. Full resolution when NULL. |
 {/* END GENERATED gbx_rst_fromfile */}
 
-Read a raster file by path into a tile.
+Read a raster file into a tile. Pass a path, or a FILE value, as `path`. Add `geom` or `resolution` to read only part of the file.
 
 In Python, `rst_fromfile` returns a _virtual_ tile by default. It holds no bytes, points at `path` over the whole-file window and reads `width`, `height` and the CRS from the header. No pixel is read until a later function needs it, so it is the way to load large rasters lazily. Pass `materialize=True` to read the pixels now. There is no `virtualize_dir` or `virtualize_prefix` argument, because the source file is the durable store.
 
 The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function and needs the env wheel. It reads UC Volume `/Volumes/...` paths with the credential held by the Spark Python worker. A path that cannot be opened gives null.
+
+#### Read a window: `geom` and `resolution`
+
+- **`geom` clips to a polygon.** Pass a `GEOMETRY`, or WKB, EWKB, WKT or EWKT, in a session and on Unity Catalog alike, so one SQL text runs in both. A `geom` that misses the raster gives NULL.
+- **An SRID in the geometry wins over `clip_crs`.** A `geom` without an SRID takes `clip_crs`, or the raster's CRS when `clip_crs` is NULL.
+- **`resolution` is a pixel size in the raster's CRS units.** The function reads the coarsest overview that is still at least this fine. NULL reads full resolution.
+- **Either argument reads only the COG blocks the window needs.** The result is a materialized tile, in Python and in SQL.
+- **With neither argument, the Python level returns a virtual tile and SQL returns a materialized tile.**
+- **A FILE value with its own offset reads only its slice of the object,** in a session as on Unity Catalog.
+
+#### On Unity Catalog
+
+The Unity Catalog function takes a FILE value as `path`. A path string is not accepted.
+
+- **Pass a FILE or a FILE EXTERNAL column directly.** Do not write `CAST(<col> AS FILE)`: from a FILE EXTERNAL column it fails with `CAST_TO_FILE_TYPE.FROM_FILE`.
+- **Pass a `GEOMETRY(4326)` column directly as `geom`.** No cast is needed.
+- **The function reads FILE byte ranges, so the file must be a tiled GeoTIFF or a COG.** A FILE value with its own offset, a slice of an object, reads correctly.
+- **The function has no error tile.** A refused read raises an error with a `Fix:`.
+
+| Refused | Fix |
+|---|---|
+| A window over 64 MiB decoded | Pass a coarser `resolution` or a smaller `geom`. |
+| A striped GeoTIFF | Write the file as a COG with [`cog_gbx`](../writers/cog). |
+| A file that is not a TIFF | Run the function in a notebook or job session. Or read the bytes with `read_files` and call `gbx_rst_fromcontent`. |
+| A header over 4 MiB | Write smaller COGs with `cog_gbx`, with a smaller raster per file. |
+| A block table that names bytes outside the file | Write the file again as a COG with `cog_gbx`. |
+| A fetch over 256 MiB | Pass a coarser `resolution` or a smaller `geom`, or run the function in a notebook or job session. |
+
+[Query FILE columns from Unity Catalog](../readers/file#query-file-columns-from-unity-catalog) lists the steps from a Volume of files to a query.
 
 :::note Remote paths
 A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here. `rst_fromfile` refuses it at its first evaluation, with the location and a `Fix:`. Set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's environment before `register()` and before the column is built to allow it (see [Security § 7](../security#7-raster-data-other-principals-can-write)).

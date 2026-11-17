@@ -209,6 +209,7 @@ _INSTALLS: Dict[object, List[str]] = {
 WORKSPACE_ONLY: Dict[str, str] = {
     "gbx_bng_cellunion_array": "folds with the product st_union inside aggregate()",
     "gbx_bng_cellintersection_array": "folds with the product st_intersection inside aggregate()",
+    "gbx_rst_fromfile": "takes a FILE (no host type) and calls private Python routines; test_uc_fromfile runs its body on stand-ins",
 }
 
 

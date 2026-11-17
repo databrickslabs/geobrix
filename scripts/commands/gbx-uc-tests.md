@@ -11,6 +11,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
   - `core` runs the grid and vector oracle tables and all example files.
   - `full` adds the raster tables to `core`.
 - `--against SCHEMA` - run the scope against the existing install in `SCHEMA`. No build, stage, install or cleanup. It writes `evidence-adhoc.json`, never `evidence.json`.
+- `--tables A,B` - with `--against`, run only these slice tables (for example `RASTER_CONSTRUCTOR`). Not evidence, so a gated run refuses it. A recipe row that reads `{vol}` needs fixture files. The run builds them in the dev container (`examples/tests/uc_fixtures.py`). It stages them into `<volroot>/uc-it/adhoc/fixtures/`; a gated run stages them into `<its folder>/fixtures/` and drops them with it.
 - `--warehouse-id ID` - SQL warehouse. Default `GBX_UC_GATE_WAREHOUSE_ID__<profile>` in `examples/tests/databricks_cluster_config.env`.
   - If that key is absent, the default is `GBX_UC_GATE_WAREHOUSE_ID`, then `GBX_UC_WAREHOUSE_ID`.
   - The ID is local config: it lives in that untracked file, never in a committed file.
@@ -84,6 +85,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - The first part to run builds, stages and installs. The other parts reuse that install. A part installs again when the schema is gone.
 - The record of the run is `test-logs/uc-integration/<sha12>/parts-<scope>-of-<N>.json`.
 - Commits may land between parts. A part resumes the record of an earlier commit when no UC source and no wheel input changed since.
+- A resumed part stages its fixture files in the install's folder `uc-it/<install sha12>/fixtures/`, never in a folder named for HEAD. The last part's cleanup and `--drop-parts` delete that one folder, so nothing the run staged is left.
 - Then `evidence.json` names HEAD in `head_sha` and the install's commit in `install_head_sha`. Each entry of `part_runs` names its commit.
 - Never run two parts at once: each part rewrites the record when it ends.
 - A part that stops or fails can run again. Its new result replaces the old one.

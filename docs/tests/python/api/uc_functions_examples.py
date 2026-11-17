@@ -55,6 +55,18 @@ UC_RASTER_TILE_SQL = """SELECT main.geobrix.gbx_rst_ndvi(tile, 3, 4) AS ndvi,
        main.geobrix.gbx_rst_slope(tile, 'percent') AS slope
 FROM rasters"""
 
+# Read a window of a COG in a FILE column: the FILE and GEOMETRY columns pass directly, and only the COG blocks the
+# polygon covers are read, at the overview the resolution picks.
+UC_FROMFILE_WINDOW_SQL = """SELECT r.name, main.geobrix.gbx_rst_avg(main.geobrix.gbx_rst_fromfile(r.file, 'GTiff', a.geom, NULL, 20.0)) AS mean_value
+FROM rasters r
+JOIN aois a ON st_intersects(r.footprint, a.geom)
+WHERE a.name = 'Hutchinson'"""
+
+# The same read from a SQL warehouse over every polygon a raster meets (the File Lister page).
+UC_FILE_COLUMN_WINDOW_SQL = """SELECT main.geobrix.gbx_rst_avg(main.geobrix.gbx_rst_fromfile(r.file, 'GTiff', a.geom, NULL, 20.0)) AS mean_value
+FROM rasters r
+JOIN aois a ON st_intersects(r.footprint, a.geom)"""
+
 # An array function takes an ARRAY of tiles, so it needs no aggregate.
 UC_RASTER_MERGE_SQL = """SELECT main.geobrix.gbx_rst_merge(collect_list(tile)) AS mosaic
 FROM rasters

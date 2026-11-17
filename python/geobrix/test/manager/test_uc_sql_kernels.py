@@ -247,7 +247,7 @@ def test_a_helper_is_created_after_every_helper_it_calls():
         src = sqlbody.l4_source(fn)
         if not src:
             continue
-        seen = set()
+        seen = set(fn.levels["L4"].get("private", ()))  # install creates these first
         for h in src[1]:
             called = set(sqlbody._CALL.findall(h["sql"]))
             assert called <= seen, (fn.sql_name, h["name"], sorted(called - seen))
@@ -280,6 +280,8 @@ def _host_kernels():
         if (
             src
             and src[1]
+            # a body that calls a private Python routine reads a FILE: test_uc_fromfile stands it in on the host
+            and not fn.levels["L4"].get("private")
             and not any(
                 _PRODUCT_CALL.search(t) for t in [src[0]] + [h["sql"] for h in src[1]]
             )

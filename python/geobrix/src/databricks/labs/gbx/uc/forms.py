@@ -1555,3 +1555,9 @@ HANDLERS.update(
 from databricks.labs.gbx.engine import uc as _engine_uc  # noqa: E402
 
 HANDLERS["gbx__rst_polygonize_features"] = _engine_uc.rst_polygonize_features
+
+# the private routines the SQL body of gbx_rst_fromfile calls are tier_b handlers (the planner and the reader)
+from databricks.labs.gbx.uc import tier_b as _tier_b  # noqa: E402
+
+HANDLERS["gbx__fromfile_plan"] = _tier_b.fromfile_plan
+HANDLERS["gbx__fromfile_read"] = _tier_b.fromfile_read

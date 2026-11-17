@@ -107,6 +107,7 @@ These changes affect callers that pass keywords or named arguments, or the chang
 - **`rst_derivedband` and `rst_derivedband_agg` take the pixel function as a Python string only** in Python. SQL is unchanged.
 - **`rst_fillnodata` takes whole numbers for `max_search_dist` and `smoothing_iter`.**
 - **The `rst_fromfile` Python default is a virtual tile.** Pass `materialize=True` for a materialized tile.
+- **In Python, `rasterx.functions.rst_fromfile` takes `geom`, `clip_crs` and `resolution` before `materialize`.** Pass `materialize` by keyword.
 - **String arguments are literals.** These names read a string as its value, not as a column name: `format`, `resampling`, `rescale`, `compression`, `overview_resampling`, `color_table`, `crs`, `metadata_json`, `new_format`, `operation`, `python_func`, `func_name`, `subset_name`, `new_type`, `method`, `driver`, `coverage`, `assignment`, `layer_name`, `attr_field`, `statistic`, `mode`, `algorithm`, `command`, `expression`, `formula_name`, `level`, `op`, `unit`, `dist_units`, `target_values`, `clip_crs`, `source_crs` and `target_crs`.
   - Also every `out_crs` except that of `h3_cell_bbox`, the BNG `resolution`, and the TIN `split_point_finder` and `grid_origin`.
   - A column can no longer supply those arguments row by row.

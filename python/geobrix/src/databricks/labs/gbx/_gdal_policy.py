@@ -112,9 +112,9 @@ class RemotePathError(DriverPolicyError):
 
 # The remote-path gate: what a path that comes from data may name. Local and FUSE paths (no scheme: /Volumes,
 # /Workspace, /dbfs, a relative path; the dbfs: and file: spellings), the cloud object stores (and their streaming
-# and Azure URI forms), the archive and gzip wrappers around an allowed path, and GeoBrix's own /vsimem/. Anything
-# else that names a location (/vsicurl/, http(s)://, ftp://, another GDAL virtual file system), at any depth of a
-# wrapper, is refused unless the switch (REMOTE_ENV) allows it.
+# and Azure URI forms), the archive, gzip and /vsisubfile/ (a byte slice) wrappers around an allowed path, and
+# GeoBrix's own /vsimem/. Anything else that names a location (/vsicurl/, http(s)://, ftp://, another GDAL virtual
+# file system), at any depth of a wrapper, is refused unless the switch (REMOTE_ENV) allows it.
 REMOTE_ENV = "GBX_ALLOW_REMOTE_PATHS"
 _DATA_SCHEMES = frozenset(
     {
@@ -145,6 +145,7 @@ _DATA_VSI = frozenset(
         "zip",
         "tar",
         "gzip",
+        "subfile",
     }
 )
 _SCHEME = re.compile(r"(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://", re.IGNORECASE)

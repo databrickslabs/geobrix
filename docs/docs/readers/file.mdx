@@ -5,6 +5,7 @@ sidebar_label: File Lister
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
+import ucExamples from '!!raw-loader!../../tests/python/api/uc_functions_examples.py';
 
 # File Access — `file_gbx`
 
@@ -201,6 +202,20 @@ ingest_files(
 `ingest_files` requires a FILE-capable runtime (DBR 13.3+). On FUSE-only runtimes it
 raises `ValueError` with an upgrade message — use
 [`open_for_write(file_mode="fuse")`](../writers/file) for a plain Delta write instead.
+
+## Query FILE columns from Unity Catalog
+
+A SQL warehouse reads a window of a raster in a FILE column with `gbx_rst_fromfile`. It needs no session.
+
+1. Write COGs with [`cog_gbx`](../writers/cog). Land them with [`gbx_file_write`](../common-functions), using `file_mode="external"` and `file_col="file"`.
+2. Select the rows. Join the table to the polygons that you want to cut.
+3. Call `gbx_rst_fromfile` on the FILE column, with a `geom` or a `resolution`.
+
+The table then holds a FILE EXTERNAL column that points at each COG. The query assumes that `rasters` has a `footprint` GEOMETRY column, and that `aois` has a `geom` column. The GeoBrix Unity Catalog functions are installed in `main.geobrix` (see [Unity Catalog functions](../api/uc-functions)).
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_FILE_COLUMN_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Pass the FILE column directly. `CAST(<col> AS FILE)` fails with `CAST_TO_FILE_TYPE.FROM_FILE`. A `GEOMETRY(4326)` column also passes directly as `geom`. The function reads only the COG blocks it needs. See [`rst_fromfile`](../api/raster-functions#rst_fromfile) for the refusals and their fixes.
 
 ## Next steps
 

@@ -217,6 +217,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmedian`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance`, `gbx_rst_quadbin_rastertogrid_partial`, `gbx_rst_quadbin_rastertogridavg`, `gbx_rst_quadbin_rastertogridcount`, `gbx_rst_quadbin_rastertogridmax`, `gbx_rst_quadbin_rastertogridmedian`, `gbx_rst_quadbin_rastertogridmin`, `gbx_rst_quadbin_rastertogridstddev`, `gbx_rst_quadbin_rastertogridsum`, `gbx_rst_quadbin_rastertogridvariance`, `gbx_rst_bng_rastertogrid_partial`, `gbx_rst_bng_rastertogridavg`, `gbx_rst_bng_rastertogridcount`, `gbx_rst_bng_rastertogridmax`, `gbx_rst_bng_rastertogridmedian`, `gbx_rst_bng_rastertogridmin`, `gbx_rst_bng_rastertogridstddev`, `gbx_rst_bng_rastertogridsum`, `gbx_rst_bng_rastertogridvariance`, `gbx_rst_custom_rastertogrid_partial`, `gbx_rst_custom_rastertogridavg`, `gbx_rst_custom_rastertogridcount`, `gbx_rst_custom_rastertogridmax`, `gbx_rst_custom_rastertogridmedian`, `gbx_rst_custom_rastertogridmin`, `gbx_rst_custom_rastertogridstddev`, `gbx_rst_custom_rastertogridsum`, `gbx_rst_custom_rastertogridvariance` |
 | Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband`, `gbx_rst_polygonize` (table function) |
 | From file bytes | `gbx_rst_fromcontent` |
+| From a FILE value, by window | `gbx_rst_fromfile` |
 | Tessellation (table functions) | `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate`, `gbx_rst_custom_tessellate` |
 | Web tiles | `gbx_rst_tilexyz`, `gbx_rst_xyzpyramid` (table function) |
 
@@ -394,7 +395,6 @@ Some session functions have no UC function of the same name. The table says what
 | `gbx_rst_derivedband_agg` | aggregate | UC does not run caller-supplied Python. Run the aggregate in a notebook or job session. |
 | `gbx_rst_dtmfromgeoms_agg` | aggregate | GROUP BY the key and call `gbx_rst_dtmfromgeoms` on `collect_list(CAST(geom AS GEOMETRY(ANY)))`. |
 | `gbx_rst_frombands_agg` | aggregate | GROUP BY the key and call `gbx_rst_frombands` on `collect_list(tile)`. |
-| `gbx_rst_fromfile` | scalar | UC reads no raw path. Ingest the file in a notebook or job session into a Delta table, or read its bytes with `read_files` in `binaryFile` format and call `gbx_rst_fromcontent`. |
 | `gbx_rst_gridfrompoints_agg` | aggregate | GROUP BY the key and call `gbx_rst_gridfrompoints` on the collected points and the collected values. |
 | `gbx_rst_h3_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_h3_rasterize` on `collect_list(struct(cellid, value))`. |
 | `gbx_rst_merge_agg` | aggregate | GROUP BY the key and call `gbx_rst_merge` on `collect_list(tile)`. For many tiles, use the `gbx_mosaic_by_key` procedure. |
@@ -411,7 +411,7 @@ Some session functions have no UC function of the same name. The table says what
 
 UC has no user-defined aggregate, so a group goes to an array function: `GROUP BY` the key, then `collect_list` the members.
 
-`gbx.uc.install(..., stubs=True)` also creates a raising function for each scalar in the table: `gbx_st_crs`, `gbx_st_setcrs`, `gbx_st_transformcrs`, `gbx_rst_fromfile` and `gbx_rst_derivedband`. A call to a stub fails with the route in its message, not with a missing-function error. Stubs are off by default. A session function wins for an unqualified name, so a stub never hides it.
+`gbx.uc.install(..., stubs=True)` also creates a raising function for each scalar in the table: `gbx_st_crs`, `gbx_st_setcrs`, `gbx_st_transformcrs` and `gbx_rst_derivedband`. A call to a stub fails with the route in its message, not with a missing-function error. Stubs are off by default. A session function wins for an unqualified name, so a stub never hides it.
 
 ## Recipes on UC
 
@@ -465,6 +465,18 @@ Header functions are cheap, but a dashboard should not call them on every refres
 
 The route works for files up to 64 MiB. Files of 1, 16 and 64 MiB were tested. A larger file is over the 64 MiB limit of a UC function. Ingest it in a notebook or job session, or cut it into smaller files first.
 
+To read a window of a large COG in a FILE column, see [Read a window of a raster file](#read-a-window-of-a-raster-file).
+
+### Read a window of a raster file
+
+`gbx_rst_fromfile` takes a FILE value and reads only the COG blocks it needs. Pass a FILE or FILE EXTERNAL column directly, with no cast. Add a `GEOMETRY` as `geom` to clip, or a `resolution` in the raster's CRS units to read an overview. The file must be a tiled GeoTIFF or a COG. The function refuses a window over 64 MiB decoded and raises a `Fix:` that says to pass a coarser `resolution` or a smaller `geom`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_FROMFILE_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The query assumes that `rasters` has a `file` FILE column and a `footprint` GEOMETRY column, and that `aois` has a `name` and a `geom` column.
+
+See [`rst_fromfile`](./raster-functions#rst_fromfile) for every argument and refusal.
+
 ## Cost
 
 Measured on an X-Small pro serverless warehouse. Treat the figures as orders of magnitude.
@@ -502,6 +514,7 @@ A UC Python function holds about 10 tiles of 512 by 512 pixels, at 4.2 MB each. 
 | A tile cut by `gbx_rst_retile`, `gbx_rst_maketiles` or `gbx_rst_tooverlappingtiles` | 256 MiB decoded, in windows of at most 64 MiB |
 | A tile cut by `gbx_rst_separatebands` | 64 MiB decoded |
 | A tile from `read_files` and `gbx_rst_fromcontent` | a file of 64 MiB |
+| A window from `gbx_rst_fromfile` | 64 MiB decoded |
 | An array argument, or a merged or combined tile | 64 MiB |
 | A tile sent between SQL and a UC function | tested up to 256 MiB |
 

@@ -28,6 +28,9 @@ Options:
   --against SCHEMA        Run the scope against the existing install in SCHEMA. No build, stage, install or
                           cleanup. Writes evidence-adhoc.json, never evidence.json: the installed code may
                           not match HEAD, so the run is not evidence for a pull request.
+  --tables A,B            With --against: run only these slice tables (names as in probes.UC_SLICE_TABLES, e.g.
+                          RASTER_CONSTRUCTOR), with no example files. A row that reads `{vol}` fixture files stages them
+                          into <volroot>/uc-it/adhoc/fixtures/ first (a gated run: into its own folder)
   --warehouse-id ID       SQL warehouse. Default: GBX_UC_GATE_WAREHOUSE_ID__<profile> in
                           examples/tests/databricks_cluster_config.env (untracked: keep the ID there), then
                           GBX_UC_GATE_WAREHOUSE_ID, then GBX_UC_WAREHOUSE_ID. <profile> is the profile name
@@ -103,7 +106,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--volroot|--deps|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts|--republish)
+    --profile|--catalog|--volroot|--deps|--scope|--against|--tables|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts|--republish)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --rebuild|--keep|--dry-run) ARGS+=("$1"); shift ;;

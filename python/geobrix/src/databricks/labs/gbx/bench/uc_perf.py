@@ -184,16 +184,26 @@ def _drops_for(stmts: Sequence[str]) -> List[Tuple[str, str]]:
 
 def _probe_helpers(fn):
     """``fn`` with its SQL kernel's helpers renamed ``gbx__<x>`` -> ``gbx_probe_perf_<x>``: the probe copy creates (and
-    drops) helpers of its own and never replaces the product's. A row with no SQL kernel is returned as it is.
+    drops) helpers of its own and never replaces the product's. A row with no SQL kernel is returned as it is. A call of
+    a private Python routine the row lists (L4 ``private``) keeps its name: ``gbx.uc.install`` creates those, the probe
+    does not.
     """
     from databricks.labs.gbx.uc import sqlbody
 
     src = sqlbody.l4_source(fn)
     if src is None:
         return fn
+    private = set(fn.levels["L4"].get("private", ()))
 
     def rename(text: str) -> str:
-        return _HELPER_CALL.sub(lambda m: f"{{q}}{PERF}{m.group(1)}(", text)
+        return _HELPER_CALL.sub(
+            lambda m: (
+                m.group(0)
+                if f"gbx__{m.group(1)}" in private
+                else f"{{q}}{PERF}{m.group(1)}("
+            ),
+            text,
+        )
 
     body, helpers = src
     helpers = tuple(

@@ -151,6 +151,9 @@ jobs:
     runs-on:
       group: databrickslabs-protected-runner-group
       labels: linux-ubuntu-latest
+    # A shard takes up to ~15 min. A test that never returns (a Spark job that lost its task)
+    # would otherwise hold the runner for GitHub's 6 h default.
+    timeout-minutes: 45
     # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret); jfrog-auth uses OIDC.
     environment: runtime
     permissions:

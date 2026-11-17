@@ -307,8 +307,19 @@ def copy_source_with_sidecars(
         raise
 
 
+def copy_overviews(source_path: str, local_path: str) -> List[str]:
+    """Copy the external overview files (``.ovr``) beside *source_path* next to the staged *local_path*, named as
+    :func:`_copy_sidecars` names a sidecar. A staged copy leaves them out (a full-resolution read needs none); a read
+    at a coarser resolution does. Returns the paths copied, which :func:`remove_staged` finds by the shared prefix.
+    """
+    return _copy_sidecars(source_path, local_path, False, overviews_only=True)
+
+
 def _copy_sidecars(
-    source_path: str, local_path: str, listed: bool = False
+    source_path: str,
+    local_path: str,
+    listed: bool = False,
+    overviews_only: bool = False,
 ) -> List[str]:
     """Copy the sidecar files beside *source_path* (``pyrx._env.copied_sidecar_files``) next to the staged *local_path*,
     named as the staged file is: the staged name is a prefix plus the source's name, and a sidecar keeps the rest of its
@@ -325,7 +336,16 @@ def _copy_sidecars(
     prefix = local_name[: len(local_name) - len(staged)]
     folder = os.path.dirname(local_path)
     copied: List[str] = []
-    for side in _env.copied_sidecar_files(source_path, listed):
+    sides = (
+        [
+            f
+            for f in _env.sidecar_files(source_path, listed)
+            if f.lower().endswith(".ovr")
+        ]
+        if overviews_only
+        else _env.copied_sidecar_files(source_path, listed)
+    )
+    for side in sides:
         name = staged_sidecar_name(src_name, os.path.basename(side))
         if name is None:
             continue

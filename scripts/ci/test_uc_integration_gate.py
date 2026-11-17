@@ -573,7 +573,7 @@ def test_the_driver_refuses_a_dirty_uc_source_and_runs_nothing(driver, monkeypat
 def test_the_driver_dry_run_reports_counts_without_a_workspace_call(driver, monkeypatch, capsys):
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(20)])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: [(f"c{i}", "SELECT 1") for i in range(20)])
     monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
     assert driver.main(["--profile", "p", "--dry-run", "--shards", "4"]) == 0
@@ -589,7 +589,7 @@ def test_scope_selects_the_tables_and_the_smoke_sample(driver, monkeypatch, caps
     assert driver.slice_tables("smoke") == probes.UC_CORE_TABLES
     assert driver.slice_tables("full") == probes.UC_SLICE_TABLES and len(probes.UC_SLICE_TABLES) > len(probes.UC_CORE_TABLES)
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(40)])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: [(f"c{i}", "SELECT 1") for i in range(40)])
     monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     seen = []
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: seen.append(prefixes) or {Path("a.sql"): [("x", "SELECT 1")]})
@@ -647,7 +647,7 @@ def test_the_driver_dry_run_counts_the_batched_warehouse_statements(driver, monk
     pairs = [(f"v{i}", f"SELECT f({i}) AS out") for i in range(60)] + [(f"r{i}", f"SELECT bad({i}) AS out") for i in range(5)]
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: pairs)
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: pairs)
     monkeypatch.setattr(driver, "slice_batchable", lambda t: {c for c, _ in pairs if c.startswith("v")})
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")]})
     assert driver.main(["--profile", "p", "--dry-run", "--batch", "25"]) == 0
@@ -834,7 +834,7 @@ def test_drop_parts_cleans_up_an_unfinished_parted_run_of_another_commit(driver,
 def test_the_dry_run_prints_the_plan_of_every_part(driver, monkeypatch, capsys):
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
-    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(10)])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t, v=None: [(f"c{i}", "SELECT 1") for i in range(10)])
     monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
     assert driver.main(["--profile", "p", "--dry-run", "--scope", "full", "--run-part", "1/3"]) == 0
@@ -902,6 +902,30 @@ def test_a_parted_run_resumes_across_a_commit_that_changes_no_uc_source_or_wheel
     assert ev["head_sha"] == "b" * 40 and ev["install_head_sha"] == "a" * 40 and ev["schema"] == "geobrix_uc_it_" + "a" * 12
     assert [r["head_sha"] for r in ev["part_runs"].values()] == ["a" * 40, "b" * 40]
     assert ev["result"] == "pass" and calls[-1].startswith("cleanup geobrix_uc_it_" + "a" * 12)
+
+
+def test_a_resumed_part_stages_its_fixtures_in_the_installs_folder_not_heads(driver, monkeypatch, tmp_path):
+    """Fail on revert: a part resumed on an earlier commit's install kept the {vol} of HEAD's folder, so its fixture
+    files landed in uc-it/<HEAD sha12>/fixtures/ and the final cleanup (which deletes the install's folder) left them."""
+    calls = _parted(driver, monkeypatch, tmp_path)
+    monkeypatch.setattr(driver.uc_sources_hash, "sources_hash", lambda root: "h" * 64)
+    seen = []
+    plain = driver.Gate.step_warehouse
+
+    def watch(self, tables, known, part=(1, 1)):
+        seen.append((self.vol, self.folder))
+        return plain(self, tables, known, part)
+
+    monkeypatch.setattr(driver.Gate, "step_warehouse", watch)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "a" * 40)
+    assert driver.main(base + ["1/2"]) == 0
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "b" * 40)
+    monkeypatch.setattr(driver, "inputs_changed", lambda old, root=None: [])
+    assert driver.main(base + ["2/2"]) == 0
+    assert calls.count("install") == 1
+    assert len(seen) == 2 and seen[0][0] == seen[0][1] and seen[0][1].endswith("/uc-it/" + "a" * 12)
+    assert seen[1] == seen[0]  # part 2 runs at HEAD b..., and stages where part 1 did: the folder the cleanup deletes
 
 
 def test_a_parted_run_starts_again_when_a_wheel_input_changed(driver, monkeypatch, tmp_path):
@@ -1208,3 +1232,83 @@ def test_an_unknown_install_and_dirty_sources_are_refused(republish, driver, mon
     put(_record())
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: ["python/geobrix/src/x.py"])
     assert run() == 1 and "uncommitted" in capsys.readouterr().err and not (out / "evidence.json").exists()
+
+
+def test_slice_tables_narrows_to_the_named_tables(driver):
+    from databricks.labs.gbx.bench import probes
+
+    assert driver.narrow_tables("raster_constructor, RASTER_STAT") == ("RASTER_CONSTRUCTOR", "RASTER_STAT")
+    assert driver.slice_tables("full") == probes.UC_SLICE_TABLES
+    with pytest.raises(ValueError, match="names no slice table"):
+        driver.narrow_tables("NO_SUCH_TABLE")
+
+
+def test_the_container_slice_carries_the_tables_and_the_fixture_folder(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import t28
+
+    class OsgeoUnavailable(Exception):
+        pass
+
+    calls = []
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        calls.append(argv)
+        (tmp_path / "slice-custom.json").write_text(json.dumps({"pairs": [["c1", "SELECT 1"]]}))
+        return 0, ""
+
+    monkeypatch.setattr(t28, "_slice_pairs", lambda *a, **k: (_ for _ in ()).throw(OsgeoUnavailable("x")))
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "_CONTAINER_SLICE", {})
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    assert driver.slice_pairs("cat", "sch", ("RASTER_CONSTRUCTOR",), "/Volumes/c/s/v/uc-it/adhoc") == [("c1", "SELECT 1")]
+    inner = calls[0][-1]
+    assert "--tables RASTER_CONSTRUCTOR" in inner and "--fixtures-vol /Volumes/c/s/v/uc-it/adhoc" in inner
+
+
+def test_a_recipe_that_reads_vol_needs_the_fixture_files(driver):
+    from databricks.labs.gbx.bench import probes
+
+    cases = probes.uc_slice_cases(("RASTER_CONSTRUCTOR",))
+    assert driver.needs_fixtures(cases)
+    assert not driver.needs_fixtures(probes.uc_slice_cases(("GRID_SCALAR",)))
+
+
+def test_the_tables_option_needs_against(driver):
+    a = driver.parse_args(["--profile", "p", "--scope", "full", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--tables", "RASTER_STAT"])
+    assert a.tables == "RASTER_STAT" and a.against is None
+    assert driver.main(["--profile", "p", "--scope", "full", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--tables", "RASTER_STAT", "--dry-run"]) == 2
+
+
+def test_a_deferred_row_is_judged_in_the_container_with_the_runs_tables(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import oracles
+
+    calls = []
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        calls.append(argv[-1])
+        out = [a for a in argv[-1].split() if a.endswith("-out.json")][0]
+        (tmp_path / Path(out).name).write_text(json.dumps({"failures": ["c1: still red"]}))
+        return 0, ""
+
+    monkeypatch.setattr(oracles, "check_uc_results", lambda cases, results, d: ["c1: x (OsgeoUnavailable: no osgeo)", "c2: red"])
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    got = driver.judge_uc([], {"c1": {"value": 1}, "c2": {"value": 2}}, "full", "RASTER_CONSTRUCTOR")
+    assert "--tables RASTER_CONSTRUCTOR" in calls[0] and "--scope full" in calls[0]
+    assert got == ["c2: red", "c1: still red"]  # the container's verdict replaces the deferred line
+
+
+def test_the_container_judge_finds_a_narrowed_table_and_fails_a_result_with_no_case(driver, tmp_path):
+    inp, out = tmp_path / "in.json", tmp_path / "out.json"
+    inp.write_text(json.dumps({"uc_fromfile_clip": {"value": 700}, "uc_fromfile_resolution": {"value": 7}, "no_such_row": {"value": 1}}))
+    base = ["--judge-uc", str(inp), "--judge-out", str(out), "--scope", "core"]
+    assert driver.main(base + ["--tables", "RASTER_CONSTRUCTOR"]) == 0
+    failures = json.loads(out.read_text())["failures"]
+    assert len(failures) == 2
+    assert any(f.startswith("uc_fromfile_resolution:") for f in failures)  # judged, and red
+    assert any(f.startswith("no_such_row:") and "no case" in f for f in failures)  # never a silent pass
+    # without the run's tables the core slice has no case for the rows: each is a failure, not a pass
+    assert driver.main(base) == 0
+    assert len(json.loads(out.read_text())["failures"]) == 3

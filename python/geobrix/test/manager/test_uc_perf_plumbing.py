@@ -263,13 +263,31 @@ def test_an_argument_a_helper_reads_twice_is_inlined_once():
     assert text.count("length(") == 1, text
 
 
+def test_a_probe_copy_renames_its_sql_helpers_and_keeps_the_private_routines():
+    # install creates the private Python routines a body calls (L4 `private`); the probe creates only the SQL helpers,
+    # so a renamed private call would name a routine that does not exist
+    from databricks.labs.gbx.bench import uc_perf
+
+    fn = uc_perf._probe_helpers(manifest.load().functions["gbx_rst_fromfile"])
+    body, helpers = sqlbody.l4_source(fn)
+    texts = [body] + [h["sql"] for h in helpers]
+    assert all(h["name"].startswith(uc_perf.PERF) for h in helpers)
+    assert "{q}gbx__fromfile_plan(" in "".join(texts)
+    assert "{q}gbx__fromfile_read(" in "".join(texts)
+    assert "{q}gbx__fromfile_window(" not in "".join(texts)
+    assert f"{{q}}{uc_perf.PERF}fromfile_window(" in "".join(texts)
+
+
 def test_no_sql_kernel_grows_by_copying_an_argument_when_inlined():
     # The session's L0 function and a table function carry the body inlined. A helper argument copied into each place
     # the helper reads it multiplies down a chain of helpers: gbx_bng_eastnorthasbng once grew 28 times (80 KB), a plan
     # Spark could not compile, ~2 s per query on DBR 19.
     man = manifest.load()
     for fn in man.functions.values():
-        for src in (sqlbody.l0_source(fn), sqlbody.l4_source(fn)):
+        # a body that calls a private Python routine (L4 `private`) is never inlined: a lambda cannot hold a Python
+        # call, and the manifest refuses it as the session's L0 body
+        private = bool(fn.levels.get("L4", {}).get("private"))
+        for src in (sqlbody.l0_source(fn), None if private else sqlbody.l4_source(fn)):
             if src is None:
                 continue
             body, helpers = src
@@ -386,7 +404,7 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
     extra = with_stubs[len(plain) :]
     # the aggregate gets none; the shipped stub rows come along
     (stub,) = [s for s in extra if ".gbx_st_crs(" in s]
-    assert len(extra) == 5 and not any("gbx_h3_cellfill" in s for s in extra)
+    assert len(extra) == 4 and not any("gbx_h3_cellfill" in s for s in extra)
     assert stub.startswith(
         "CREATE OR REPLACE FUNCTION `c`.`s`.gbx_st_crs(geom GEOMETRY(ANY))\nRETURNS STRING\nLANGUAGE SQL"
     )
@@ -421,13 +439,11 @@ def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_sca
         "gbx_st_crs",
         "gbx_st_setcrs",
         "gbx_st_transformcrs",
-        "gbx_rst_fromfile",
         "gbx_rst_derivedband",
     }
     assert "st_srid" in stubs["gbx_st_crs"]
     assert "st_setsrid" in stubs["gbx_st_setcrs"]
     assert "st_transform(" in stubs["gbx_st_transformcrs"]
-    assert "gbx_rst_fromcontent" in stubs["gbx_rst_fromfile"]
     assert "gbx_rst_mapalgebra" in stubs["gbx_rst_derivedband"]
     assert "gbx_probe_rst_materialize" not in stubs  # a probe name gets none
     # opt-in: a plain install creates none, stubs=True adds one statement for each
@@ -435,7 +451,7 @@ def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_sca
     with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)
     assert not any("runs in a notebook or job session" in s for s in plain)
     added = with_stubs[len(plain) :]
-    assert with_stubs[: len(plain)] == plain and len(added) == 5
+    assert with_stubs[: len(plain)] == plain and len(added) == 4
     for n, fix in stubs.items():
         (stmt,) = [s for s in added if f".{n}(" in s.split("\n")[0]]
         assert (

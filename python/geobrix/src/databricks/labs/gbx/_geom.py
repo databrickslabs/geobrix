@@ -128,6 +128,20 @@ def _from_wkt_mixed_dim(text: str) -> BaseGeometry:
             raise exc from None
 
 
+def geometry_value_as_ewkb(x: Any) -> Any:
+    """A GEOMETRY value of a Python UDF (``pyspark.sql.types.Geometry``, with ``getBytes()`` and ``getSrid()``) as EWKB
+    bytes, its SRID kept; anything else is returned as it is.
+
+    Measured on Serverless env 6: a GEOMETRY column passed to a Python UDF arrives as a ``Geometry`` whose WKB carries no
+    SRID and whose ``getSrid()`` is the SRID, the same as the Unity Catalog handlers receive it.
+    """
+    get_wkb, get_srid = getattr(x, "getBytes", None), getattr(x, "getSrid", None)
+    if callable(get_wkb) and callable(get_srid):
+        g = from_wkb(bytes(get_wkb()))
+        return shapely.to_wkb(set_srid(g, int(get_srid())), include_srid=True)
+    return x
+
+
 def parse_geom(x: Any) -> Optional[BaseGeometry]:
     """Parse a geometry from WKB/EWKB bytes or WKT/EWKT text. None -> None.
 

@@ -762,10 +762,11 @@ def _fromcontent_udf(raster, drv):
         return _serde.build_error_tile(ops_core.content_refusal(exc), 0)
 
 
-def _fromfile_extra(path, driver, materialize):
+def _fromfile_extra(path, driver, geom, clip_crs, resolution, materialize):
     """The Python entry of ``rst_fromfile``: columns in, a tile Column out. ``materialize`` unset (None) or ``False`` is
     a virtual tile of the file (no pixel is read), as the light API always returned; ``True`` reads the pixels now, as
-    the SQL name does, with the driver's materialize cap carried in (a worker cannot measure it).
+    the SQL name does, with the driver's materialize cap carried in (a worker cannot measure it). A ``geom`` or a
+    ``resolution`` reads only that window or overview, and gives a materialized tile whatever ``materialize`` says.
     """
     from databricks.labs.gbx.ds.file_gbx import (
         _connect_aware_lru_sizing,
@@ -774,7 +775,7 @@ def _fromfile_extra(path, driver, materialize):
 
     _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
     udf = carrying_call(_fromfile_udf, driver_switch())
-    return udf(path, driver, materialize, f.lit(_cap))
+    return udf(path, driver, materialize, f.lit(_cap), geom, clip_crs, resolution)
 
 
 # rst_fromfile: reference a raster on disk as a tile. LIGHT-TIER DEFAULT is a
@@ -896,6 +897,13 @@ def _remote_vrt_refusal(path) -> str:
     )
 
 
+def _refuse_remote_vrt(src, url):
+    """Raise ``DriverPolicyError`` when the opened remote ``src`` is a VRT, or a driver the byte-open policy refuses
+    because it can name other files."""
+    if src.driver == "VRT" or src.driver in _gdal_policy.bytes_refused_light_names():
+        raise DriverPolicyError(_remote_vrt_refusal(url))
+
+
 def _fromfile_read_remote(url, drv, cap_bytes):
     """``rst_fromfile`` materialized over a remote location the driver's switch allows: open it through GDAL, gate the
     DECODED size by the same cap as a local file (header only, before any pixel), then read and re-encode it.
@@ -908,11 +916,7 @@ def _fromfile_read_remote(url, drv, cap_bytes):
         # the name says nothing of what a remote file is (``a.vrt?token=x``, a VRT served as ``.tif``): the opened
         # driver does. A VRT, or any driver the byte-open policy refuses because it can name other files, names its
         # own sources, which the remote-path gate never sees: refused before any pixel is read
-        if (
-            src.driver == "VRT"
-            or src.driver in _gdal_policy.bytes_refused_light_names()
-        ):
-            raise DriverPolicyError(_remote_vrt_refusal(url))
+        _refuse_remote_vrt(src, url)
         decoded = (
             src.count
             * src.width
@@ -933,18 +937,14 @@ def _fromfile_read_remote(url, drv, cap_bytes):
     return _serde.build_tile(new_bytes, drv, 0)
 
 
-def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
-    """``rst_fromfile`` materialized for a file with sidecars: the file and its sidecars are copied, under their own
-    names, to one local folder (a sequential read of each, as every Volume read is), opened there by path under the
-    driver policy, and written as a GeoTIFF with the CRS, NoData and georeferencing GDAL reads from them. The decoded
-    size is gated first, from the header, as for a file with none."""
+@contextlib.contextmanager
+def _sidecar_folder(local, sides):
+    """The path of ``local`` copied, with its sidecars and under their own names, to one local folder (a sequential read
+    of each, as every Volume read is); the folder is removed when the block ends."""
     import os
     import shutil
 
-    import numpy as _np_cap
-
     from databricks.labs.gbx.ds import _listing
-    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
     from databricks.labs.gbx.pyrx.core.local_temp import (
         new_local_temp_dir,
         retried_source_signature,
@@ -963,7 +963,22 @@ def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
                     shutil.copyfileobj(fin, fout, length=8 * 1024 * 1024)
 
             _listing._retry_transient(_copy)
-        with open_data(os.path.join(folder, os.path.basename(local))) as src:
+        yield os.path.join(folder, os.path.basename(local))
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
+    """``rst_fromfile`` materialized for a file with sidecars: the file and its sidecars are copied, under their own
+    names, to one local folder (a sequential read of each, as every Volume read is), opened there by path under the
+    driver policy, and written as a GeoTIFF with the CRS, NoData and georeferencing GDAL reads from them. The decoded
+    size is gated first, from the header, as for a file with none."""
+    import numpy as _np_cap
+
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
+
+    with _sidecar_folder(local, sides) as copied:
+        with open_data(copied) as src:
             decoded = (
                 src.count
                 * src.width
@@ -981,15 +996,352 @@ def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
             new_bytes = write_gtiff(
                 src.profile, data, alpha_like=src.colorinterp, mask=mask
             )
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
     return _serde.build_tile(new_bytes, drv, 0)
 
 
-def _fromfile_impl(path, driver, materialize, cap_bytes=None):
-    """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
-    virtual). Returns a v2 tile row (virtual by default, materialized when asked),
-    or None on a bad/missing path.
+def _file_span(value):
+    """``(offset, size)`` of a FILE value (a mapping or an object with ``uri``): the bytes ``[offset, offset + size)``
+    of its object the value names. ``offset`` is 0 when absent; ``size`` is None when absent.
+    """
+    from collections.abc import Mapping
+
+    get = value.get if isinstance(value, Mapping) else lambda k: getattr(value, k, None)
+    offset = get("offset") or 0
+    size = get("size")
+    return int(offset), (None if size is None else int(size))
+
+
+def _slice_of(span, path, local):
+    """How ``rst_fromfile`` reads a FILE value of ``span`` ``(offset, size)``, as the Unity Catalog body does (it reads
+    ``[offset, offset + size)``, and only ``CASE WHEN path.size > 0``): ``"null"`` for a size of 0 or less, or a
+    non-zero offset with no size; the span for a non-zero offset, or a size smaller than the local object; None (the
+    plain path) for a whole object: offset 0 with no size, or with the object's own size. A remote object's size is
+    not looked up: offset 0 reads it whole. A path that is no FILE value (``span`` None) is the plain path.
+    """
+    if span is None:
+        return None
+    remote = _gdal_policy.remote_location(str(path)) is not None
+    offset, size = span
+    if size is not None and size <= 0:
+        return "null"
+    if offset:
+        return "null" if size is None else span
+    if size is None or remote:
+        return None
+    try:
+        whole = os.path.getsize(local)
+    except OSError:
+        return None  # a missing file is the plain path's NULL
+    return span if size < whole else None
+
+
+def _subfile(target, offset, size):
+    """GDAL's name for the bytes ``[offset, offset + size)`` of ``target`` (to its end when ``size`` is None):
+    ``/vsisubfile/<offset>[_<size>],<target>``, the target in its GDAL form (a URL as ``/vsicurl/...``). The
+    remote-path gate judges the wrapped target, so a slice of a remote file is refused as the file is.
+    """
+    from rasterio._path import _parse_path
+
+    span = str(int(offset)) if size is None else f"{int(offset)}_{int(size)}"
+    return f"/vsisubfile/{span},{_parse_path(str(target)).as_vsi()}"
+
+
+def _fromfile_cutline(geom, clip_crs):
+    """The ``geom`` of ``rst_fromfile`` as a shapely geometry (an empty value is None). An unreadable geometry, or a
+    ``clip_crs`` that names no CRS, raises ``ValueError`` with a Fix. An SRID the geometry carries wins over
+    ``clip_crs``."""
+    import shapely
+
+    from databricks.labs.gbx._geom import geometry_value_as_ewkb, parse_geom
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+    try:
+        # a GEOMETRY column arrives as a Geometry value (WKB without the SRID, and the SRID): EWKB keeps both
+        cut = parse_geom(geometry_value_as_ewkb(geom))
+        if cut is not None:
+            resolve_source_crs(shapely.get_srid(cut), crs=clip_crs)
+    except Exception as exc:  # noqa: BLE001 - the reason is the answer
+        raise ValueError(
+            f"gbx_rst_fromfile: the geom cannot be used: {exc}. Fix: pass the polygon as WKB, EWKB, WKT or EWKT, and "
+            "clip_crs as EPSG:<code>, ESRI:<code>, WKT or an integer code."
+        ) from exc
+    return cut
+
+
+def _fromfile_clip_target(target, drv, cutline, clip_crs, resolution, cap_bytes):
+    """The tile of the window ``cutline`` covers in the raster at ``target``, read from the coarsest overview that is
+    still at least ``resolution`` fine (full resolution when None), or None when the cutline misses the raster.
+
+    A remote target is opened as few times as it can be, and each open is judged: the first (the header, which
+    ``pick_overview`` reads) is refused when it is a VRT; the reopen at an overview level is pinned to the driver the
+    first open reported and judged again, so a source that changed between the opens is never read.
+    """
+    from databricks.labs.gbx.pyrx.core.clip_read import read_clip
+    from databricks.labs.gbx.pyrx.core.cog_ranges import pick_overview
+
+    cap = cap_bytes
+    if cap is None:
+        from databricks.labs.gbx.ds.file_gbx import (
+            _connect_aware_lru_sizing,
+            _resolve_session_for_cap,
+        )
+
+        # the cap ``materialize_decision`` resolves when it is carried none: the connect-aware stream cap
+        cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+    remote = _gdal_policy.remote_location(str(target)) is not None
+    with open_data(target) as head:
+        if remote:
+            _refuse_remote_vrt(head, target)
+        level = pick_overview(head, resolution)
+        if level is None:
+            out = read_clip(head, cutline, clip_crs, False, cap)
+            return None if out is None else _serde.build_tile(out, drv, 0)
+        driver = head.driver
+    with open_data(target, driver=driver, overview_level=level) as src:
+        if remote:
+            _refuse_remote_vrt(src, target)
+        out = read_clip(src, cutline, clip_crs, False, cap)
+    return None if out is None else _serde.build_tile(out, drv, 0)
+
+
+def _fromfile_clip(path, local, drv, cap_bytes, geom, clip_crs, resolution, span=None):
+    """``rst_fromfile`` with a ``geom`` or a ``resolution``: a materialized tile of only the window the geometry covers
+    (clipped by it, as ``rst_clip`` does), read from the overview ``resolution`` picks. A file on a Volume is read in
+    place where it can be (see ``_stage_local_if_needed``); a VRT is opened by its path, where its sources resolve.
+    ``span`` is the ``(offset, size)`` of a FILE value that names a slice of its object (None: the whole object): the
+    slice is read as the raster (``/vsisubfile/``), with no sidecars, as Unity Catalog reads it.
+    """
+    from databricks.labs.gbx.ds.file_gbx import (
+        StageTooLargeError,
+        _stage_local_if_needed,
+    )
+    from databricks.labs.gbx.pyrx import _env
+
+    try:
+        cutline = None if geom is None else _fromfile_cutline(geom, clip_crs)
+    except ValueError as exc:
+        return _serde.build_error_tile(str(exc), 0)
+    if geom is not None and cutline is None:
+        return None  # an empty geometry clips to nothing
+    try:
+        if span is not None:
+            return _fromfile_clip_slice(
+                path, local, drv, cap_bytes, cutline, clip_crs, resolution, span
+            )
+        if _gdal_policy.remote_location(str(path)) is not None:
+            # the driver's remote-path switch is on (data_path refused it otherwise): GDAL reads the URL's own blocks
+            return _fromfile_clip_target(
+                str(path), drv, cutline, clip_crs, resolution, cap_bytes
+            )
+        if _names_a_vrt(local):
+            return _fromfile_clip_target(
+                local, drv, cutline, clip_crs, resolution, cap_bytes
+            )
+        sides = _env.copied_sidecar_files(local)
+        if sides:
+            if (
+                resolution is not None
+            ):  # a coarser read needs the external overviews too
+                sides = _env.sidecar_files(local)
+            with _sidecar_folder(local, sides) as copied:
+                return _fromfile_clip_target(
+                    copied, drv, cutline, clip_crs, resolution, cap_bytes
+                )
+        staged, is_temp = _stage_local_if_needed(local)
+        try:
+            if is_temp and resolution is not None:
+                # the staged copy leaves the external overviews out, and a coarser read needs them
+                from databricks.labs.gbx.pyrx.core.local_temp import copy_overviews
+
+                copy_overviews(local, staged)
+            return _fromfile_clip_target(
+                staged, drv, cutline, clip_crs, resolution, cap_bytes
+            )
+        finally:
+            if is_temp:
+                from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
+
+                remove_staged(staged)
+    except StageTooLargeError:
+        raise  # an actionable, user-visible refusal, not a bad path
+    except DriverPolicyError as exc:
+        return _serde.build_error_tile(str(exc), 0)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a bad/missing path is NULL, matching the whole-file read
+        return None
+
+
+@contextlib.contextmanager
+def _staged_slice(local, span):
+    """A local copy of only the bytes ``span`` of ``local`` (one sequential read), removed when the block ends. A
+    slice over ``GBX_STAGE_MAX_BYTES`` raises ``StageTooLargeError``."""
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, stage_max_bytes
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        new_staged_local_file,
+        remove_staged,
+    )
+
+    offset, size = span
+    if size > stage_max_bytes():
+        raise StageTooLargeError(
+            f"rst_fromfile: the slice of {local!r} is {size:,} bytes, over GBX_STAGE_MAX_BYTES={stage_max_bytes():,}. "
+            "Fix: read it in place from a path GDAL can open directly, or raise GBX_STAGE_MAX_BYTES."
+        )
+    copy = new_staged_local_file(os.path.basename(str(local)) or "slice.tif")
+    try:
+        with open(local, "rb") as fin, open(copy, "wb") as fout:
+            fin.seek(offset)
+            left = size
+            while left > 0:
+                chunk = fin.read(min(left, 8 * 1024 * 1024))
+                if not chunk:
+                    break
+                fout.write(chunk)
+                left -= len(chunk)
+        yield copy
+    finally:
+        remove_staged(copy)
+
+
+def _on_slice(local, span, read):
+    """``read(target, whole)`` over the slice ``span`` of the local or FUSE file ``local``: in place first, with
+    ``target`` the ``/vsisubfile/`` name and ``whole`` None; for a FUSE path whose in-place read fails with an I/O
+    error, once more on a local copy of the slice alone (``target`` and ``whole`` both that copy). The raw object is
+    never probed or copied whole: its first bytes are no raster.
+
+    On a FUSE path the in-place read is retried (``core._retry._retry_transient``) only on a missing file
+    (``_retry._is_missing``: the mount's eventual consistency); a slice that is no raster fails at once, never waiting
+    out the retries."""
+    from databricks.labs.gbx.core._retry import _is_missing, _retry_transient
+    from databricks.labs.gbx.ds.file_gbx import _is_fuse_path
+
+    fuse = _is_fuse_path(local)
+    target = _subfile(local, *span)
+
+    def in_place():
+        try:
+            return read(target, None), None
+        except (
+            OSError
+        ) as exc:  # RasterioIOError is one; a policy refusal or a cap error is not
+            if fuse and _is_missing(exc):
+                raise  # a transient miss of the mount: retried
+            return None, exc
+
+    out, error = _retry_transient(in_place, path=local) if fuse else in_place()
+    if error is None:
+        return out
+    if not fuse:
+        raise error
+    with _staged_slice(local, span) as copy:
+        return read(copy, copy)
+
+
+def _fromfile_clip_slice(
+    path, local, drv, cap_bytes, cutline, clip_crs, resolution, span
+):
+    """The clip of ``_fromfile_clip`` over the slice ``span`` of a file: a remote one through GDAL's own reads (its
+    switch is on), a local or Volume one in place, else from a local copy of the slice.
+    """
+    if _gdal_policy.remote_location(str(path)) is not None:
+        return _fromfile_clip_target(
+            _subfile(path, *span), drv, cutline, clip_crs, resolution, cap_bytes
+        )
+    return _on_slice(
+        local,
+        span,
+        lambda target, _whole: _fromfile_clip_target(
+            target, drv, cutline, clip_crs, resolution, cap_bytes
+        ),
+    )
+
+
+def _fromfile_slice(path, local, drv, materialize, cap_bytes, span):
+    """``rst_fromfile`` of the whole slice ``span`` of a file (a FILE value that names a slice). Virtual: a tile that
+    points at the slice (``/vsisubfile/``), its header read. Materialized: the slice's decoded size is gated by the
+    cap from its header, read in place, then its bytes are read and re-encoded. A remote file is read by GDAL (its
+    switch is on)."""
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
+
+    remote = _gdal_policy.remote_location(str(path)) is not None
+    try:
+        if not materialize:
+            target = _subfile(path if remote else local, *span)
+            with open_data(target) as src:
+                if remote:
+                    _refuse_remote_vrt(src, target)
+                width, height, count = src.width, src.height, src.count
+            meta = {
+                "sourcePath": str(path),
+                "driver": drv,
+                "width": str(width),
+                "height": str(height),
+                "count": str(count),
+            }
+            return VirtualTile(
+                cellid=0,
+                raster=None,
+                path=target,
+                window=(0, 0, width, height),
+                metadata=meta,
+            ).to_row()
+        if remote:
+            return _fromfile_read_remote(_subfile(path, *span), drv, cap_bytes)
+
+        def _read(target, whole):
+            import numpy as _np_cap
+
+            with open_data(target) as head:
+                decoded = (
+                    head.count
+                    * head.width
+                    * head.height
+                    * int(_np_cap.dtype(head.dtypes[0]).itemsize)
+                )
+            if materialize_decision(decoded, "ingest", cap_bytes=cap_bytes) == "error":
+                raise StageTooLargeError(
+                    f"rst_fromfile materialize=True unsuccessful: {decoded / 1024 ** 2:.1f} MiB decoded exceeds the "
+                    f"Serverless materialize cap. Omit materialize=True (the virtual default is Serverless-safe) or "
+                    f"split the source (sizeInMB=)."
+                )
+            offset, size = (0, span[1]) if whole else span
+            with open(whole or local, "rb") as fh:  # the slice, one sequential read
+                fh.seek(offset)
+                return fh.read(size)
+
+        blob = _on_slice(local, span, _read)
+        from rasterio.io import MemoryFile
+
+        with MemoryFile(blob) as mf, open_bytes(mf) as src:
+            data = src.read()
+            mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
+            new_bytes = write_gtiff(
+                src.profile, data, alpha_like=src.colorinterp, mask=mask
+            )
+        return _serde.build_tile(new_bytes, drv, 0)
+    except StageTooLargeError:
+        raise  # an actionable, user-visible refusal, not a bad path
+    except DriverPolicyError as exc:
+        return _serde.build_error_tile(str(exc), 0)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a bad/missing path is NULL, matching the whole-file read
+        return None
+
+
+def _fromfile_impl(
+    path,
+    driver,
+    materialize,
+    cap_bytes=None,
+    geom=None,
+    clip_crs=None,
+    resolution=None,
+):
+    """Shared body of the Python-binding UDF (``_fromfile_udf``) and the SQL UDF
+    (``_build_fromfile_sql_materialized_udf``). Returns a v2 tile row (virtual by default,
+    materialized when asked), or None on a bad/missing path.
 
     ``cap_bytes`` is the DRIVER-captured connect-aware materialize cap (baked by
     ``rst_fromfile`` at Column-build time and carried in as an f.lit). It is used
@@ -997,10 +1349,28 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     session-less Serverless worker, so it must NOT re-resolve the cap from a live
     session (that would wrongly use the 256 MiB classic cap). When ``cap_bytes`` is
     None (the SQL UDF paths, which do not bake a driver cap), materialize_decision
-    falls back to session resolution."""
+    falls back to session resolution.
+
+    ``path`` is a path or a FILE value (anything ``path_of`` reads). A FILE value that names a slice of its object
+    (a non-zero ``offset``, or a ``size`` smaller than the object) reads ``[offset, offset + size)`` as the raster, as
+    on Unity Catalog; a size of 0 or less, or an offset with no size, is NULL (see ``_slice_of``).
+    ``geom`` (WKB, EWKB, WKT, EWKT or a GEOMETRY value,
+    its SRID winning
+    over ``clip_crs``) and ``resolution`` (a pixel size in the raster's CRS units) each make the result a materialized
+    tile of only the window read: clipped by ``geom``, from the overview ``resolution`` picks. A geometry that misses
+    the raster is None."""
     if path is None:
         return None
-    from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed, to_local_path
+    from databricks.labs.gbx.ds.file_gbx import (
+        _stage_local_if_needed,
+        path_of,
+        to_local_path,
+    )
+
+    span = None
+    if not isinstance(path, str):
+        span = _file_span(path)
+        path = path_of(path)
     from databricks.labs.gbx.pyrx import _env
 
     # a column's path is data: a remote URL is refused here, at once, unless the driver's switch was carried in
@@ -1008,6 +1378,16 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     _env.configure_gdal_env()
     drv = ops_core.known_driver("GTiff" if driver is None else driver, "rst_fromfile")
     local = to_local_path(str(path))
+    span = _slice_of(span, path, local)
+    if span == "null":
+        return None  # as Unity Catalog: a FILE value whose slice has no positive size
+
+    if geom is not None or resolution is not None:
+        return _fromfile_clip(
+            path, local, drv, cap_bytes, geom, clip_crs, resolution, span
+        )
+    if span is not None:
+        return _fromfile_slice(path, local, drv, materialize, cap_bytes, span)
 
     if materialize and _names_a_vrt(local):
         if _gdal_policy.remote_location(str(path)) is not None:
@@ -1143,26 +1523,28 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
 
 
 @_tile_udf(tiles=())
-def _fromfile_udf(path, driver, materialize, cap_bytes):
-    """Python-binding UDF: 4-arg (path, driver, materialize, cap_bytes).
+def _fromfile_udf(
+    path, driver, materialize, cap_bytes, geom=None, clip_crs=None, resolution=None
+):
+    """Python-binding UDF: (path, driver, materialize, cap_bytes, geom, clip_crs, resolution).
 
     ``cap_bytes`` is the DRIVER-captured connect-aware materialize cap baked by
     ``rst_fromfile`` as an f.lit — passed through so the worker-side cap guard
     uses the correct 64 MiB Serverless cap instead of re-resolving (session-less
     worker → wrong 256 MiB classic cap)."""
-    return _fromfile_impl(path, driver, bool(materialize), cap_bytes=cap_bytes)
-
-
-@_tile_udf(tiles=())
-def _fromfile_sql_udf(path, driver):
-    """SQL UDF registered by the LIGHT (pyrx) tier: 2-arg (path, driver) → a
-    VIRTUAL tile (materialize=False, the light-tier default). Keeps the historical
-    2-arg SQL surface; the tier that registers decides virtual vs materialized."""
-    return _fromfile_impl(path, driver, False)
+    return _fromfile_impl(
+        path,
+        driver,
+        bool(materialize),
+        cap_bytes=cap_bytes,
+        geom=geom,
+        clip_crs=clip_crs,
+        resolution=resolution,
+    )
 
 
 def _build_fromfile_sql_materialized_udf(cap_bytes=None):
-    """The SQL UDF behind ``gbx_rst_fromfile``: 2-arg (path, driver) → a MATERIALIZED tile (bytes present). Same call
+    """The SQL UDF behind ``gbx_rst_fromfile``: (path, driver, geom, clip_crs, resolution) → a MATERIALIZED tile (bytes present). Same call
     text as the light registration; the heavyweight tier reads the pixels because JVM/heavy expressions cannot use a
     virtual path-only tile. Whichever tier's register() ran last wins.
 
@@ -1171,8 +1553,18 @@ def _build_fromfile_sql_materialized_udf(cap_bytes=None):
     """
 
     @_tile_udf(tiles=())
-    def fromfile_sql_materialized_udf(path, driver="GTiff"):
-        return _fromfile_impl(path, driver, True, cap_bytes=cap_bytes)
+    def fromfile_sql_materialized_udf(
+        path, driver="GTiff", geom=None, clip_crs=None, resolution=None
+    ):
+        return _fromfile_impl(
+            path,
+            driver,
+            True,
+            cap_bytes=cap_bytes,
+            geom=geom,
+            clip_crs=clip_crs,
+            resolution=resolution,
+        )
 
     return fromfile_sql_materialized_udf
 

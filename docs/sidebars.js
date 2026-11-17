@@ -98,6 +98,8 @@ const sidebars = {
         'sample-data/nasanex-downloader',
         'sample-data/emit-downloader',
         'sample-data/wells-downloader',
+        'sample-data/fire-perimeter-downloader',
+        'sample-data/worldpop-downloader',
       ],
     },
     {
@@ -223,6 +225,7 @@ const sidebars = {
           ],
         },
         { type: 'doc', id: 'api/stac', label: 'STAC' },
+        { type: 'doc', id: 'api/genie', label: 'Genie' },
         {
           type: 'category',
           label: 'Performance & Benchmarking',

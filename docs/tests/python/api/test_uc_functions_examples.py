@@ -36,6 +36,8 @@ def test_the_install_preview_is_one_create_per_function_plus_default_wrappers():
         helpers.update(h["name"] for h in (kernel[1] if kernel else ()))
     expected += len({f.levels["L4"]["tvf_over"] for f in man.functions.values() if f.levels.get("L4", {}).get("tvf_over") in man.private})
     expected += len(helpers)
+    # the private Python routines a SQL body calls (L4 `private`), once each
+    expected += len({p for n in _uc_names() for p in man.functions[n].levels["L4"].get("private", ())})
     assert len(statements) == expected
     assert all(s.startswith("CREATE OR REPLACE FUNCTION `main`.`geobrix`.") for s in statements)
     assert not any("LANGUAGE SCALA" in s for s in statements)
@@ -450,5 +452,56 @@ def test_the_routes_table_lists_each_session_function_with_a_stub_text():
     region = text.split("BEGIN GENERATED uc-routes", 1)[1].split("END GENERATED uc-routes", 1)[0]
     listed = set(re.findall(r"^\| `(gbx_\w+)` \|", region, re.M))
     stubs = {n for n, f in manifest.load().functions.items() if f.stub}
-    assert listed == stubs and len(stubs) == 30
+    assert listed == stubs and len(stubs) == 29  # gbx_rst_fromfile has a UC function, not a stub
     assert not stubs & _uc_names()
+
+
+_WINDOW_SQL = [ex.UC_FROMFILE_WINDOW_SQL, ex.UC_FILE_COLUMN_WINDOW_SQL]
+
+
+def _calls(sql):
+    """(name, args) of every main.geobrix call in ``sql``, nested calls included."""
+    out = []
+    for m in re.finditer(r"main\.geobrix\.(gbx_\w+)\(", sql):
+        depth, i = 1, m.end()
+        while depth:
+            depth += {"(": 1, ")": -1}.get(sql[i], 0)
+            i += 1
+        out.append((m.group(1), _split_args(sql[m.end() : i - 1])))
+    return out
+
+
+@pytest.mark.parametrize("sql", _WINDOW_SQL)
+def test_the_window_reads_pass_the_file_and_geometry_columns_directly(sql):
+    man = manifest.load()
+    calls = dict(_calls(sql))
+    assert set(calls) == {"gbx_rst_avg", "gbx_rst_fromfile"}
+    for name, args in calls.items():
+        fn = man.functions[name]
+        assert name in _uc_names() and fn.min_args <= len(args) <= len(fn.params)
+    assert [a.strip() for a in calls["gbx_rst_fromfile"]] == ["r.file", "'GTiff'", "a.geom", "NULL", "20.0"]
+    assert "CAST(" not in sql  # a FILE EXTERNAL column refuses CAST(... AS FILE)
+
+
+@pytest.mark.parametrize("sql", _WINDOW_SQL)
+def test_the_session_form_of_the_window_read_runs(spark, tmp_path, sql):
+    """The statement in a session: the same calls without the schema, on a path column and a WKT polygon. The local
+    Spark has no st_intersects, so the join keeps every pair; the polygon lies inside the raster."""
+    import numpy as np
+    import rasterio
+
+    from path_config import SAMPLE_DATA_BASE
+
+    src = f"{SAMPLE_DATA_BASE}/london/sentinel2/london_sentinel2_red.tif"
+    with rasterio.open(src) as ds:
+        x0, _, _, y1 = ds.bounds
+        box = (x0 + 1000, y1 - 2000, x0 + 2000, y1 - 1000)  # 100 x 100 pixels at 10 m
+        window = ds.window(*box)
+        want = ds.read(1, window=window, masked=True).mean()
+    wkt = "POLYGON(({0} {1},{2} {1},{2} {3},{0} {3},{0} {1}))".format(*box)
+    spark.createDataFrame([("london_red", src)], ["name", "file"]).createOrReplaceTempView("rasters")
+    spark.createDataFrame([("Hutchinson", wkt)], ["name", "geom"]).createOrReplaceTempView("aois")
+    session_sql = re.sub(r"ON st_intersects\([^()]*\)", "ON TRUE", sql.replace("main.geobrix.", ""))
+    row = spark.sql(session_sql).first()
+    assert row is not None and row["mean_value"] is not None, session_sql
+    assert np.isclose(row["mean_value"][0], float(want), rtol=1e-6)

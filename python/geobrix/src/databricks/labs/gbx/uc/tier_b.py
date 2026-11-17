@@ -1549,6 +1549,167 @@ def rst_fromcontent(content, driver):
 HANDLERS["gbx_rst_fromcontent"] = rst_fromcontent
 
 
+# --- gbx_rst_fromfile: a window of a FILE, read from the byte ranges its SQL body fetches ---------------------------
+# The UC function is LANGUAGE SQL (its manifest L4 `sql`): it fetches the head of the FILE with a ranged cast, the
+# planner below names the COG block ranges the window needs, SQL fetches them, and the reader below makes the tile.
+# Both are private routines (uc_private), not in HANDLERS: that table holds the public rows of this module.
+_FROMFILE = "gbx_rst_fromfile"
+# The bytes SQL may fetch for one window: the compressed blocks of a window decoded under DECODED_CAP, with room for data
+# that does not compress and for the gaps the planner joins. A block table that names more is refused, not fetched.
+FETCH_CAP = UC_WINDOWED_DECODED_CAP
+_TIFF_MAGIC = (
+    b"II*\x00",
+    b"MM\x00*",
+    b"II+\x00",
+    b"MM\x00+",
+)  # TIFF and BigTIFF, both byte orders
+_NOT_TIFF = (
+    f"{_FROMFILE}: the Unity Catalog function reads tiled GeoTIFF/COG files only. Fix: run it in a notebook or job "
+    "session, or read the bytes with read_files binaryFile and call gbx_rst_fromcontent."
+)
+
+
+def _check_fetch(fn: str, ranges, size: int) -> None:
+    """Refuse byte ranges that a file's own header names outside the file, or more bytes in all than FETCH_CAP: the
+    header is data, and it must not steer what SQL fetches."""
+    total = 0
+    for off, n in ranges:
+        if off < 0 or n <= 0 or off + n > size:
+            raise _Refusal(
+                f"{fn}: the file's block table names bytes {off}..{off + n} of a {size}-byte file. "
+                "Fix: write the file again as a COG with cog_gbx."
+            )
+        total += n
+    if total > FETCH_CAP:
+        raise _Refusal(
+            f"{fn}: the window needs {size_text(total)} of the file, over the {size_text(FETCH_CAP)} a Unity Catalog "
+            "function fetches. Fix: pass a coarser resolution or a smaller geom, or run it in a notebook or job session."
+        )
+
+
+def _fromfile_cut(geom, clip_crs):
+    """``(polygon, CRS)`` of a GEOMETRY argument, ``(None, None)`` without one. The SRID the geometry carries wins over
+    ``clip_crs`` (an SRID, ``EPSG:<n>`` or ``ESRI:<n>``); with neither, the polygon is in the raster's CRS.
+    """
+    if geom is None:
+        return None, None
+    import shapely
+
+    from databricks.labs.gbx.core.crs import parse_uc_crs, resolve_source_crs
+
+    source = None if clip_crs is None else parse_uc_crs(clip_crs, fn=_FROMFILE).code
+    cut = shapely.from_wkb(_geom_bytes(geom))
+    return cut, resolve_source_crs(shapely.get_srid(cut), crs=source)
+
+
+def fromfile_plan(head, size, geom, clip_crs, resolution):
+    """gbx__fromfile_plan: the overview level and the COG block ranges of the window gbx_rst_fromfile reads, from the
+    fetched head of the file. ``level`` is -1 for full resolution; ``empty`` is true when the geometry misses the
+    raster (NULL out, nothing more fetched). Ranges inside the head are left out: SQL has those bytes.
+
+    These are refused with a Fix here, before SQL fetches a byte of the window: bytes that are no TIFF, a striped
+    GeoTIFF, a header longer than the head, a window decoded over :data:`DECODED_CAP`, and block ranges outside the
+    file or over :data:`FETCH_CAP` in all. A TIFF that cannot be read is NULL.
+    """
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
+    from databricks.labs.gbx.pyrx.core import cog_ranges as cr
+    from databricks.labs.gbx.pyrx.core.clip_read import check_window_cap
+
+    if head is None or size is None:
+        return None
+    head = bytes(head)
+    cut, cut_crs = _fromfile_cut(geom, clip_crs)
+    empty = {"level": -1, "offs": [], "lens": [], "empty": True}
+    if cut is not None and cut.is_empty:
+        return empty
+    if head[:4] not in _TIFF_MAGIC:
+        raise _Refusal(_NOT_TIFF)
+    try:
+        plan = cr.plan_ranges(
+            head,
+            int(size),
+            cut,
+            cut_crs,
+            None if resolution is None else float(resolution),
+        )
+        level = -1 if plan.overview_level is None else int(plan.overview_level)
+        if plan.window is None:
+            return {**empty, "level": level}
+        with cr.open_ranges(int(size), [(0, head)], plan.overview_level) as ds:
+            check_window_cap(ds, plan.window[2], plan.window[3], DECODED_CAP)
+    except (cr.HeaderTooLargeError, cr.NotTiledError) as exc:
+        raise _Refusal(f"{_FROMFILE}: {exc}") from exc
+    except StageTooLargeError as exc:
+        raise _Refusal(str(exc)) from exc
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - a TIFF that cannot be read is data a UC function cannot read: NULL
+        return None
+    _check_fetch(_FROMFILE, plan.ranges, int(size))
+    offs, lens = [], []
+    for off, n in plan.ranges:  # the head already holds the bytes before len(head)
+        if off + n <= len(head):
+            continue
+        if off < len(head):
+            off, n = len(head), off + n - len(head)
+        offs.append(int(off))
+        lens.append(int(n))
+    return {"level": level, "offs": offs, "lens": lens, "empty": False}
+
+
+def fromfile_read(head, size, offs, chunks, geom, clip_crs, level, driver):
+    """gbx__fromfile_read: the tile of the window gbx_rst_fromfile reads, from the head and the ranges SQL fetched
+    (``chunks[i]`` holds the bytes at ``offs[i]``), clipped by the polygon as gbx_rst_clip clips. NULL when the
+    geometry misses the raster. A read that needs bytes that were not fetched is refused, never read as zeros.
+    """
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
+    from databricks.labs.gbx.pyrx.core import cog_ranges as cr
+    from databricks.labs.gbx.pyrx.core.clip_read import read_clip
+
+    if head is None or size is None:
+        return None
+    try:
+        drv = _kernel("ops", "known_driver")(
+            "GTiff" if driver is None else driver, "rst_fromfile"
+        )
+    except ValueError as exc:
+        raise _Parameter(str(exc)) from exc
+    cut, cut_crs = _fromfile_cut(geom, clip_crs)
+    if cut is not None and cut.is_empty:
+        return None
+    fetched = [
+        (int(o), bytes(c)) for o, c in zip(offs or (), chunks or ()) if c is not None
+    ]
+    _check_fetch(
+        _FROMFILE, [(o, len(c)) for o, c in fetched if len(c)], int(size)
+    )  # the same bound as the plan's, on what SQL passed in
+    pieces = [(0, bytes(head))] + fetched
+    overview = None if level is None or int(level) < 0 else int(level)
+    misses: list = []
+    unfetched = _Refusal(
+        f"{_FROMFILE}: the read needs bytes of the file that were not fetched. Fix: run {_FROMFILE} in a notebook or "
+        "job session, or write the file as a COG with cog_gbx."
+    )
+    try:
+        with cr.open_ranges(int(size), pieces, overview, misses) as ds:
+            out = read_clip(ds, cut, cut_crs, False, DECODED_CAP)
+    except StageTooLargeError as exc:
+        raise _Refusal(str(exc)) from exc
+    except (MemoryError, RecursionError, ImportError, _Refusal, _Parameter):
+        raise
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - unreadable bytes are NULL; a miss is the plan's, so it is refused
+        if misses:
+            raise unfetched from exc
+        return None
+    if misses:  # GDAL can swallow a failed read and answer with what it has
+        raise unfetched
+    return tile_row(_FROMFILE, {"cellid": 0}, out, drv)
+
+
 def rst_tilexyz(tile, z, x, y, format, size, resampling, rescale):
     """gbx_rst_tilexyz: the image bytes of web tile (z, x, y) of the tile. As the session does, it never answers NULL for
     a tile: a NULL, error or unreadable tile, and a tile outside the raster, give a transparent image of the size.

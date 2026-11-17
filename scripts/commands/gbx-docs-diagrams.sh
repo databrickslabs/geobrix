@@ -9,9 +9,14 @@ source "$SCRIPT_DIR/common.sh"
 GEN_DIR="resources/images/generators"
 EXPORTER="$GEN_DIR/diagrams/export_diagrams.py"
 # name -> generator script and the folder for its HTML and PNGs
-DIAGRAMS=("rasterx-function-categories")
+DIAGRAMS=("rasterx-function-categories" "raster-genie-architecture")
 gen_script() { echo "$GEN_DIR/$1.py"; }
-out_dir() { case "$1" in rasterx-*) echo "resources/images/diagrams/rasterx" ;; esac; }
+out_dir() {
+    case "$1" in
+        rasterx-*) echo "resources/images/diagrams/rasterx" ;;
+        raster-genie-*) echo "resources/images/diagrams/raster-genie" ;;
+    esac
+}
 
 show_help() {
     show_banner "GeoBrix: Docs Diagrams"
@@ -26,6 +31,8 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--html-only${NC}         Write the HTML only; skip the PNG export (needs no Chrome)"
     echo -e "  ${GREEN}--theme <t>${NC}         light, dark or both (default: both)"
+    echo -e "  ${GREEN}--slide${NC}             Also export the full-bleed 16:9 slide PNG, 2560 x 1440 (<name>-slide-<theme>.png)"
+    echo -e "  ${GREEN}--gif${NC}               Also export animated GIFs (<name>-<theme>.gif; with --slide also <name>-slide-<theme>.gif)"
     echo -e "  ${GREEN}--log <path>${NC}        Write output to a log file"
     echo -e "  ${GREEN}--help${NC}              Show this help"
     echo ""
@@ -35,11 +42,15 @@ show_help() {
 
 LOG_PATH=""
 HTML_ONLY=false
+SLIDE=false
+GIF=false
 THEME="both"
 TARGETS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --html-only) HTML_ONLY=true; shift ;;
+        --slide) SLIDE=true; shift ;;
+        --gif) GIF=true; shift ;;
         --theme)
             THEME="${2:-}"
             [[ "$THEME" =~ ^(light|dark|both)$ ]] || { echo -e "${RED}--theme needs light, dark or both${NC}"; exit 2; }
@@ -60,6 +71,10 @@ cd "$PROJECT_ROOT" || exit 1
 show_banner "GeoBrix: Docs Diagrams"
 setup_log_file "$LOG_PATH"
 
+if $HTML_ONLY && { $SLIDE || $GIF; }; then
+    echo -e "${YELLOW}Note: --html-only writes no images, so --slide and --gif are ignored.${NC}"
+fi
+
 if ! $HTML_ONLY; then
     command -v uvx >/dev/null || { echo -e "${RED}uvx not found; install uv: https://docs.astral.sh/uv/${NC}"; exit 1; }
     [[ -d "/Applications/Google Chrome.app" ]] || command -v google-chrome >/dev/null \
@@ -74,7 +89,15 @@ for t in "${TARGETS[@]}"; do
     python3 "$(gen_script "$t")" "$html" || exit 1
     if ! $HTML_ONLY; then
         echo -e "${CYAN}==> $t: PNG ($THEME)${NC}"
-        uvx --quiet --with playwright python -I "$EXPORTER" "$html" --out-dir "$dir" --theme "$THEME" || exit 1
+        run_args=("$html" --out-dir "$dir" --theme "$THEME")
+        deps=(--with playwright)
+        $SLIDE && run_args+=(--slide)
+        if $GIF; then
+            run_args+=(--gif)
+            deps+=(--with imageio-ffmpeg)
+            echo -e "${CYAN}==> $t: GIF (12 fps, 4.8 s loop)${NC}"
+        fi
+        uvx --quiet "${deps[@]}" python -I "$EXPORTER" "${run_args[@]}" || exit 1
     fi
 done
 show_separator

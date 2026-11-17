@@ -367,6 +367,23 @@ def install(
                 )
             )
         fn = man.functions[n]
+        for pname in fn.levels["L4"].get(
+            "private", ()
+        ):  # the Python routines a SQL body calls, once each, before it
+            if pname not in made_private:
+                made_private.add(pname)
+                stmts.append(
+                    ddl.private_ddl(
+                        man.private[pname],
+                        catalog,
+                        schema,
+                        "file://" + wheel,
+                        man.uc_dependencies,
+                        _public_version(),
+                        shared_deps=shared,
+                        pip_options=opts,
+                    )
+                )
         src = sqlbody.l4_source(fn)
         for h in (
             src[1] if src else ()

@@ -252,6 +252,14 @@ OPEN_SITES = {
         1,
         "the cross-libgdal check's /vsimem fixture, which osgeo wrote a line above",
     ),
+    (
+        "pyrx/core/cog_ranges.py",
+        'with rasterio.open(_NAME, driver="GTiff", opener=opener, **kw) as ds:',
+    ): (
+        1,
+        "a GeoTIFF opened over byte ranges the caller fetched under its own gate (a FILE read), with GTiff named as "
+        "the only driver; no path is opened",
+    ),
     ("bench/runner.py", "with _rasterio.open(abs_p) as ds:"): (
         2,
         "the bench harness reads the rasters its own _synth step wrote (GeoBrix's outputs, never user data)",

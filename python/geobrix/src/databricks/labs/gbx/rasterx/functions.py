@@ -2722,31 +2722,50 @@ def rst_fromcontent(
 def rst_fromfile(
     path: ColLike,
     driver: ColLike = None,
+    geom: ColLike = None,
+    clip_crs: ColLike = None,
+    resolution: ColLike = None,
     materialize: Optional[bool] = None,
 ) -> Column:
     """Read the raster file at a path into a tile.
 
     Args:
-        path: The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A
-            remote URL is refused unless the driver's remote-read switch is on.
+        path: The raster file: a path (local, `/Volumes/...`, `/Workspace/...`) or a
+            FILE value. A remote URL is refused unless the driver's remote-read switch is
+            on.
         driver: The GDAL driver short name hint, in any case. It goes into the tile's
             `driver` metadata; a name that is no raster driver (no driver of that name, or a
             vector-only one such as `'GeoJSON'`) raises. SQL default: ``'GTiff'``.
+        geom: An optional polygon to clip to, as WKB, EWKB, WKT or EWKT, or a GEOMETRY.
+            Only the blocks the polygon covers are read. SQL default: ``NULL``.
+        clip_crs: The CRS of a `geom` that carries no SRID: `EPSG:<code>`,
+            `ESRI:<code>`, WKT or an integer code. The CRS of the raster when NULL. An EWKB
+            or EWKT SRID wins. SQL default: ``NULL``.
+        resolution: An optional target pixel size in the raster's CRS units. The
+            coarsest overview that is still at least this fine is read. Full resolution when
+            NULL. SQL default: ``NULL``.
         materialize: Python only: unset or ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.
 
     Returns:
-        A tile that holds the file's bytes, re-encoded as a GeoTIFF. NULL for a NULL
-        path or a file that cannot be opened; an error tile with a `Fix:` for a format
-        GeoBrix refuses. A file whose decoded size is over the materialize cap fails the
-        call with an error that says how to fix it.
+        A tile that holds the file's bytes, re-encoded as a GeoTIFF. With `geom` or
+        `resolution` it holds only that window, clipped as `gbx_rst_clip` clips, or that
+        overview. NULL for a NULL path, a file that cannot be opened, or a `geom` that
+        misses the raster; an error tile with a `Fix:` for a format GeoBrix refuses or a
+        `geom` that cannot be read. A file, or a window, whose decoded size is over the
+        materialize cap fails the call with an error that says how to fix it. On Unity
+        Catalog there is no error tile: a format the function refuses, or a window over
+        its cap, fails the call with a `Fix:` error.
 
-    SQL: ``gbx_rst_fromfile(path, [driver])``
+    SQL: ``gbx_rst_fromfile(path, [driver], [geom], [clip_crs], [resolution])``
     """
     return _api.extra_call(
         "gbx_rst_fromfile",
         (materialize,),
         path,
         driver,
+        geom,
+        clip_crs,
+        resolution,
     )
 
 

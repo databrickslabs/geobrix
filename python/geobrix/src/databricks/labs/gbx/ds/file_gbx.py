@@ -49,8 +49,12 @@ from databricks.labs.gbx.pyrx.core.local_temp import (
     new_staged_local_file,
     remove_staged,
 )
+from databricks.labs.gbx.zarr._filemode import (  # noqa: F401  (re-exported: the FILE-value reader)
+    path_of,
+)
 
 __all__ = [
+    "path_of",
     "to_local_path",
     "to_spark_uri",
     "list_files",

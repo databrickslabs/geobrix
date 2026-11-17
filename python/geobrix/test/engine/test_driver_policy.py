@@ -834,6 +834,11 @@ DATA_PATHS = [
     ("/vsigzip//Volumes/c/s/v/a.tif.gz", None),
     ("/vsigzip//vsis3/b/a.tif.gz", None),
     ("/vsigzip//vsicurl/http://h/a.tif.gz", "/vsicurl/"),
+    # a byte slice of an allowed path, as rst_fromfile reads a FILE value with an offset; the slice is judged by its path
+    ("/vsisubfile/12345_678,/Volumes/c/s/v/a.tif", None),
+    ("/vsisubfile/12345,/vsis3/b/a.tif", None),
+    ("/vsisubfile/12345_678,/vsicurl/http://h/a.tif", "/vsicurl/"),
+    ("/vsisubfile/12345,https://h/a.tif", "https://"),
     ("/vsiadls_streaming/c/a.tif", "/vsiadls_streaming/"),
     (_URL, "/vsicurl/"),
     ("/vsicurl_streaming/https://h/a.tif", "/vsicurl_streaming/"),

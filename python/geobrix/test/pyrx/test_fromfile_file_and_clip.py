@@ -432,3 +432,87 @@ def test_the_sql_binding_reads_a_geom_column(spark, tmp_path):
     ).first()["t"]
     assert tile is not None and tile["raster"] is not None, tile
     assert _arr(tile)[1:] == (700, 600)
+
+
+# --- a FILE value with an offset: the slice is the raster, as the Unity Catalog gate row uc_fromfile_offset_file ------
+
+from databricks.labs.gbx.bench.oracle_tables import (  # noqa: E402
+    raster_constructor as _rc,
+)
+
+
+def _prefixed(tmp_path):
+    """cog_prefixed.tif of the UC gate (examples/tests/uc_fixtures.py): FIXTURE_PREFIX_BYTES of other bytes, then
+    cog.tif. Returns (path, the FILE value that names the cog.tif slice)."""
+    n = _rc.FIXTURE_PREFIX_BYTES
+    cog = _cog_bytes()
+    p = tmp_path / "cog_prefixed.tif"
+    p.write_bytes((bytes(range(256)) * (n // 256 + 1))[:n] + cog)
+    return str(p), {"uri": "dbfs:" + str(p), "offset": n, "size": len(cog)}
+
+
+def _band_means(tile):
+    data, _, _ = _arr(tile)
+    with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as ds:
+        masked = ds.read(masked=True)
+    return [float(masked[b].mean()) for b in range(data.shape[0])]
+
+
+def test_an_offset_file_clips_like_the_uc_gate_row(tmp_path):
+    _, value = _prefixed(tmp_path)
+    got = _fromfile_impl(value, "GTiff", True, geom=sg.Polygon(
+        [(405000, 3990000), (412000, 3990000), (412000, 3996000), (405000, 3996000)]
+    ).wkb)  # fmt: skip
+    assert got is not None and got["raster"] is not None, got
+    assert _arr(got)[1:] == (700, 600)
+    assert np.allclose(_band_means(got), _rc._clip_avg(), rtol=1e-6)
+
+
+def test_an_offset_file_reads_whole_like_its_slice(tmp_path):
+    _, value = _prefixed(tmp_path)
+    whole = _fromfile_impl(value, "GTiff", True)
+    assert whole is not None and whole["raster"] is not None, whole
+    assert np.array_equal(_arr(whole)[0], _rc.cog_pixels())
+    virtual = _fromfile_impl(value, "GTiff", False)
+    assert virtual["raster"] is None and virtual["path"].startswith("/vsisubfile/")
+    assert (virtual["window"]["width"], virtual["window"]["height"]) == (2000, 1500)
+    with rasterio.open(virtual["path"]) as ds:
+        assert np.array_equal(
+            ds.read(1, window=((0, 4), (0, 4))), _rc.cog_pixels()[0, :4, :4]
+        )
+
+
+def test_an_offset_file_reads_an_overview_of_its_slice(tmp_path):
+    _, value = _prefixed(tmp_path)
+    assert _arr(_fromfile_impl(value, "GTiff", True, resolution=40.0))[1:] == (500, 375)
+
+
+def test_the_same_path_without_the_offset_is_not_that_raster(tmp_path):
+    path, value = _prefixed(tmp_path)
+    assert (
+        _fromfile_impl({"uri": value["uri"]}, "GTiff", True) is None
+    )  # the prefix is no TIFF
+    assert _fromfile_impl({**value, "offset": 0}, "GTiff", True) is None
+
+
+def test_a_remote_offset_file_is_judged_by_its_url(remote, tmp_path, monkeypatch):
+    n = 100
+    (remote_dir := tmp_path / "srv").mkdir()
+    (remote_dir / "pre.vrt").write_bytes(b"\0" * n + _REMOTE_VRT)
+    (remote_dir / "pre.tif").write_bytes(b"\0" * n + _cog_bytes(600, 500))
+    server = _Http(remote_dir)
+    try:
+        vrt = {"uri": server.base + "/pre.vrt", "offset": n}
+        for kw in ({"geom": BOX.wkb}, {}):
+            msg = _error_of(_fromfile_impl(vrt, "GTiff", True, **kw))
+            assert "Fix:" in msg, msg
+        tif = {"uri": server.base + "/pre.tif", "offset": n}
+        assert _arr(_fromfile_impl(tif, "GTiff", True, geom=BOX.wkb))[1:] == (300, 300)
+    finally:
+        server.close()
+
+
+def test_an_offset_file_at_a_remote_url_is_refused_without_the_switch(monkeypatch):
+    monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
+    with pytest.raises(_gdal_policy.RemotePathError):
+        _fromfile_impl({"uri": "https://h.invalid/a.tif", "offset": 10}, "GTiff", True)

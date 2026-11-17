@@ -2099,6 +2099,7 @@ The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a
 - **`resolution` is a pixel size in the raster's CRS units.** The function reads the coarsest overview that is still at least this fine. NULL reads full resolution.
 - **Either argument reads only the COG blocks the window needs.** The result is a materialized tile, in Python and in SQL.
 - **With neither argument, the Python level returns a virtual tile and SQL returns a materialized tile.**
+- **A FILE value with its own offset reads only its slice of the object,** in a session as on Unity Catalog.
 
 #### On Unity Catalog
 

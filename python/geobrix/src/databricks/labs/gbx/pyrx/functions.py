@@ -1208,14 +1208,32 @@ def _on_slice(local, span, read):
     """``read(target, whole)`` over the slice ``span`` of the local or FUSE file ``local``: in place first, with
     ``target`` the ``/vsisubfile/`` name and ``whole`` None; for a FUSE path whose in-place read fails with an I/O
     error, once more on a local copy of the slice alone (``target`` and ``whole`` both that copy). The raw object is
-    never probed or copied whole: its first bytes are no raster."""
+    never probed or copied whole: its first bytes are no raster.
+
+    On a FUSE path the in-place read is retried (``core._retry._retry_transient``) only on a missing file
+    (``_retry._is_missing``: the mount's eventual consistency); a slice that is no raster fails at once, never waiting
+    out the retries."""
+    from databricks.labs.gbx.core._retry import _is_missing, _retry_transient
     from databricks.labs.gbx.ds.file_gbx import _is_fuse_path
 
-    try:
-        return read(_subfile(local, *span), None)
-    except OSError:  # RasterioIOError is one; a policy refusal or a cap error is not
-        if not _is_fuse_path(local):
-            raise
+    fuse = _is_fuse_path(local)
+    target = _subfile(local, *span)
+
+    def in_place():
+        try:
+            return read(target, None), None
+        except (
+            OSError
+        ) as exc:  # RasterioIOError is one; a policy refusal or a cap error is not
+            if fuse and _is_missing(exc):
+                raise  # a transient miss of the mount: retried
+            return None, exc
+
+    out, error = _retry_transient(in_place, path=local) if fuse else in_place()
+    if error is None:
+        return out
+    if not fuse:
+        raise error
     with _staged_slice(local, span) as copy:
         return read(copy, copy)
 

@@ -656,3 +656,65 @@ def test_a_virtual_slice_tile_feeds_an_osgeo_and_a_rasterio_function(spark, tmp_
     assert np.allclose(
         row["avg"], [float(b.mean()) for b in _rc.cog_pixels()], rtol=1e-6
     )
+
+
+def _fail_subfile_opens(monkeypatch, fail):
+    """Replace ``open_data`` so a ``/vsisubfile/`` open raises ``fail(n)`` (the n-th such open; None: open it). Returns
+    the list of the (kind, size) of every open."""
+    real = prx.open_data
+    seen = []
+
+    def _open(target, *a, **k):
+        if str(target).startswith("/vsisubfile/"):
+            seen.append(("subfile", None))
+            exc = fail(len([s for s in seen if s[0] == "subfile"]))
+            if exc is not None:
+                raise exc
+        else:
+            seen.append(("copy", os.path.getsize(target)))
+        return real(target, *a, **k)
+
+    monkeypatch.setattr(prx, "open_data", _open)
+    return seen
+
+
+def test_a_transient_miss_of_the_in_place_open_is_retried(tmp_path, monkeypatch):
+    import types
+
+    from databricks.labs.gbx.core import _retry
+    from databricks.labs.gbx.ds import file_gbx
+
+    _, value = _prefixed(tmp_path)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda path: True)
+    monkeypatch.setattr(_retry, "time", types.SimpleNamespace(sleep=lambda s: None))
+    miss = rasterio.errors.RasterioIOError(f"{value['uri']}: No such file or directory")
+    seen = _fail_subfile_opens(monkeypatch, lambda n: miss if n == 1 else None)
+    for kw in ({}, {"geom": BOX.wkb}):
+        seen.clear()
+        got = _fromfile_impl(value, "GTiff", True, **kw)
+        assert got is not None and got["raster"] is not None, (kw, got)
+        assert [k for k, _ in seen][:2] == [
+            "subfile",
+            "subfile",
+        ]  # the miss, then the retry in place
+        assert "copy" not in [k for k, _ in seen]  # no fallback copy for a miss
+
+
+def test_a_volume_slice_that_is_no_raster_fails_fast_without_retries(
+    tmp_path, monkeypatch
+):
+    import time
+
+    from databricks.labs.gbx.ds import file_gbx
+
+    _, value = _prefixed(tmp_path)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda path: True)
+    seen = _fail_subfile_opens(monkeypatch, lambda n: None)
+    bad = {**value, "offset": 100, "size": 5000}  # inside the prefix: no raster
+    t0 = time.monotonic()
+    assert _fromfile_impl(bad, "GTiff", True) is None
+    assert _fromfile_impl(bad, "GTiff", True, geom=BOX.wkb) is None
+    assert time.monotonic() - t0 < 2.0
+    assert [k for k, _ in seen].count(
+        "subfile"
+    ) == 2  # one in-place open per call, no retry

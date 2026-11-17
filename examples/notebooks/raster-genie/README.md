@@ -2,6 +2,8 @@
 
 A notebook series that lands master Cloud Optimized GeoTIFFs in **FILE** columns, queries them with the `gbx_rst_*` functions in plain SQL, and then asks a **Genie Agent** the same questions in plain English, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks.
 
+![Raster is ready for Genie and SQL warehouses: sources, master COGs, the FILE table, GeoBrix Unity Catalog functions and the Genie Agent.](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/raster-genie/raster-genie-architecture-light.gif)
+
 The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek fire** in the Texas Panhandle. It answers *how much land burned, how severe was it, and how many people live there* from Sentinel-2 and WorldPop rasters.
 
 > **Runs on Serverless by default.** `config_nb` installs the `geobrix[stac,vizx,databricks]` env6 wheel, so the notebook runs on Serverless environment 6 with no JAR. The `gbx_rst_*` functions run in the session; the same calls run in Unity Catalog once the GeoBrix UC functions are installed (see [Query FILE columns from Unity Catalog](https://databrickslabs.github.io/geobrix/docs/readers/file#query-file-columns-from-unity-catalog)).
@@ -66,7 +68,7 @@ python examples/notebooks/raster-genie/genie/run_questions.py --profile <name> -
   --live-id <id> --precomputed-id <id> --warehouse-id <id> --runs 3
 ```
 
-Run it after the notebook, not during it: the notebook rewrites the tables the agents read. Q3 (the fire's burned land, severity and people) and Q1 (the coverage of Hutchinson County) are judged against the notebook's own numbers; Q5n is a question no example answers, judged against a direct GeoBrix SQL run with the same method (mean dNBR within 0.002, acres within 2%), which a rasterio/numpy computation without GeoBrix reproduces. For Q5n the agent applies the method its instructions teach (dNBR, the per-tile ring offset, the USGS classes) to a new area and a new aggregate; there is no worked example for it, but it does not invent the method, and the evidence records how close its SQL is to the examples. Where Sentinel-2 tiles overlap, a result depends on which tile's pixels win the merge: for Hutchinson County the independent check gives 3,841 acres at moderate-low or worse with the later tile winning and 3,010 acres with the earlier tile, while the headline perimeter numbers are less sensitive. Averaging overlapping tiles is planned.
+Run it after the notebook, not during it: the notebook rewrites the tables the agents read. Q3 (the fire's burned land, severity and people) and Q1 (the coverage of Hutchinson County) are judged against the notebook's own numbers; Q5n is a question no example answers, judged against a direct GeoBrix SQL run with the same method (mean dNBR within 0.002, acres within 2%), which a rasterio/numpy computation without GeoBrix reproduces. For Q5n the agent applies the method its instructions teach (dNBR, the per-tile ring offset, the USGS classes) to a new area and a new aggregate; there is no worked example for it, but it does not invent the method, and the evidence records how close its SQL is to the examples. Where Sentinel-2 tiles overlap, a result depends on which tile's pixels win the merge: for Hutchinson County the independent check gives 3,841 acres at moderate-low or worse with the later tile winning and 3,010 acres with the earlier tile; the effect on the perimeter totals has not been measured. Averaging overlapping tiles is planned.
 
 ---
 

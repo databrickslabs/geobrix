@@ -17,7 +17,8 @@ AGENT_SPEC = ROOT / "examples/notebooks/raster-genie/genie/agent_spec.py"
 RUN_QUESTIONS = ROOT / "examples/notebooks/raster-genie/genie/run_questions.py"
 
 pytestmark = pytest.mark.skipif(
-    not GENERATOR.exists(), reason="repo resources/ not mounted"
+    not all(p.exists() for p in (GENERATOR, DIAGRAM, AGENT_SPEC, RUN_QUESTIONS)),
+    reason="repo resources/ or examples/raster-genie not present",
 )
 
 

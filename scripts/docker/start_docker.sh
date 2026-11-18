@@ -32,7 +32,7 @@ esac
 #   -e JAVA_TOOL_OPTIONS="-agentlib:jdwp=transport=dt_socket,address=5005,server=y,suspend=n" \
 #
 # Platform: the host's architecture, or $GBX_DOCKER_PLATFORM (linux/arm64 | linux/amd64). The image is
-# geobrix-dev:ubuntu24-gdal311-spark-<arch> (see gbx-platform.sh).
+# geobrix-dev:ubuntu24-gbxnative-spark-<arch> (see gbx-platform.sh).
 # Container name, ports and mounts: gbx-container.sh (the defaults above are the main checkout's).
 source "$SCRIPT_DIR/gbx-container.sh"
 gbx_load_local_env "$REPO_ROOT" || exit 1

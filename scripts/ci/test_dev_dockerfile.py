@@ -1,7 +1,7 @@
-"""Static checks of scripts/docker/Dockerfile (the geobrix-dev image) for the invariants of the
+"""Static checks of scripts/docker/Dockerfile (the geobrix-dev base image) for the invariants of the
 native arm64 image: nothing is hard-wired to amd64, each architecture gets its own pip lock,
-Hadoop native libraries and library path, and the package index can only arrive as a BuildKit
-secret and is never echoed.
+Hadoop native libraries and library path, the package index can only arrive as a BuildKit
+secret and is never echoed, and the base builds no GDAL of its own (the native overlay brings it).
 
 The checks are functions of the Dockerfile text. The real file must have no problems, and each
 regression the checks exist for is reproduced on a copy of the text and must be reported, so a
@@ -270,6 +270,21 @@ def problems(text: str) -> list:
                 f"({stage}); declared in {[i.stage for i in fpr]}"
             )
 
+    # --- no GDAL of its own: no GDAL stage, version or checksum, no source build, no osgeo from sdist
+    stages = [i.stage for i in instrs if i.keyword == "FROM"]
+    if "gdal-builder" in stages:
+        out.append("the base image has a gdal-builder stage")
+    for i in instrs:
+        if i.keyword in ("ARG", "ENV") and re.match(r"GDAL_(VERSION|SHA256)\b", i.rest):
+            out.append(f"the base image pins a GDAL: {i.text.split('=')[0]}")
+        if i.keyword == "RUN" and re.search(
+            r"download\.osgeo\.org/gdal|gdal-config|\bgdal==|-DBUILD_JAVA_BINDINGS", i.rest
+        ):
+            out.append(f"the base image builds or installs GDAL: {i.rest[:60]}")
+    final_base = [i for i in instrs if i.keyword == "FROM" and i.stage == "final-base"]
+    if not final_base or not re.match(r"hadoop-builder\s+AS\b", final_base[0].rest):
+        out.append("final-base is not FROM hadoop-builder")
+
     # --- no x86/amd64 literal outside the places that select by architecture
     def exempt(i):
         return (
@@ -447,19 +462,51 @@ MUTATIONS = {
         mutate("ARG GBX_PIP_INDEX_FPR=none\n", ""),
         "GBX_PIP_INDEX_FPR is not declared",
     ),
-    "fingerprint moved to the GDAL stage": (
+    "fingerprint moved to the Hadoop stage": (
         mutate("ARG GBX_PIP_INDEX_FPR=none\n", "").replace(
-            "FROM hadoop-builder AS gdal-builder\n",
-            "FROM hadoop-builder AS gdal-builder\nARG GBX_PIP_INDEX_FPR=none\n",
+            "FROM system-deps AS hadoop-builder\n",
+            "FROM system-deps AS hadoop-builder\nARG GBX_PIP_INDEX_FPR=none\n",
         ),
         "GBX_PIP_INDEX_FPR must be declared once, in the stage of the secret-reading RUN",
     ),
     "fingerprint declared in two stages": (
         mutate(
-            "FROM hadoop-builder AS gdal-builder\n",
-            "FROM hadoop-builder AS gdal-builder\nARG GBX_PIP_INDEX_FPR=none\n",
+            "FROM system-deps AS hadoop-builder\n",
+            "FROM system-deps AS hadoop-builder\nARG GBX_PIP_INDEX_FPR=none\n",
         ),
         "GBX_PIP_INDEX_FPR must be declared once, in the stage of the secret-reading RUN",
+    ),
+    "a GDAL stage comes back": (
+        mutate(
+            "FROM hadoop-builder AS final-base\n",
+            "FROM hadoop-builder AS gdal-builder\nRUN true\nFROM gdal-builder AS final-base\n",
+        ),
+        "the base image has a gdal-builder stage",
+    ),
+    "final-base on another stage": (
+        mutate(
+            "FROM hadoop-builder AS final-base\n",
+            "FROM hadoop-builder AS gdal-builder\nRUN true\nFROM gdal-builder AS final-base\n",
+        ),
+        "final-base is not FROM hadoop-builder",
+    ),
+    "a GDAL version comes back": (
+        "ARG GDAL_VERSION=3.11.4\n" + REAL,
+        "the base image pins a GDAL: ARG GDAL_VERSION",
+    ),
+    "a GDAL checksum comes back": (
+        mutate(
+            "FROM hadoop-builder AS final-base\n",
+            "FROM hadoop-builder AS final-base\nENV GDAL_SHA256=0fa36ee3\n",
+        ),
+        "the base image pins a GDAL: ENV GDAL_SHA256",
+    ),
+    "GDAL's Python binding from sdist comes back": (
+        mutate(
+            "# ZMQ fixes\n",
+            "RUN pip3 install --no-binary :all: gdal==$(gdal-config --version) --break-system-packages\n# ZMQ fixes\n",
+        ),
+        "the base image builds or installs GDAL",
     ),
     "Maven version bumped without the hash": (
         mutate("ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.17"),
@@ -517,10 +564,10 @@ def key_values(instrs, keywords=("ARG", "ENV")) -> dict:
 # --- the native-stack probe (scripts/docker/gbx-native-probe.sh) -------------------------------------
 
 
-def fake_tools(bin_dir: Path, ldd_lines: str, needed: str, **versions) -> None:
-    """Stand-ins for gdalinfo, pkg-config, geos-config, readelf and ldd, first on PATH."""
+def fake_tools(bin_dir: Path, ldd_lines: str, needed: str, gdalinfo: bool = False, **versions) -> None:
+    """Stand-ins for pkg-config, geos-config, readelf, ldd and ldconfig (an empty cache), first on PATH, and for
+    gdalinfo when asked (the base image has none)."""
     tools = {
-        "gdalinfo": f"echo 'GDAL {versions.get('gdal', '3.11.4')}, released 2025/01/01'",
         "pkg-config": f"echo {versions.get('proj', '9.4.0')}",
         "geos-config": f"echo {versions.get('geos', '3.12.1')}",
         # `readelf -d <file>` lists what the library needs
@@ -530,15 +577,22 @@ def fake_tools(bin_dir: Path, ldd_lines: str, needed: str, **versions) -> None:
             f"echo ' 0x000000000000000e (SONAME)             Library soname: [libgdalalljni.so]'"
         ),
         "ldd": f"cat <<'EOF'\n{ldd_lines}\nEOF",
+        "ldconfig": "echo '0 libs found in cache'",
     }
+    if gdalinfo:
+        tools["gdalinfo"] = f"echo 'GDAL {versions.get('gdal', '3.11.4')}, released 2025/01/01'"
+    gone = bin_dir / "gdalinfo"
+    if gone.exists() and not gdalinfo:
+        gone.unlink()
     for name, body in tools.items():
         path = bin_dir / name
         path.write_text(f"#!/bin/sh\n{body}\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def run_probe(tmp_path: Path, *args: str) -> dict:
+def run_probe(tmp_path: Path, *args: str, sysroot: Path = None) -> dict:
     env = dict(os.environ, PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    env["GBX_PROBE_SYSROOT"] = str(sysroot or tmp_path / "sysroot")
     res = subprocess.run(
         ["bash", str(PROBE), *args], capture_output=True, text=True, env=env
     )
@@ -547,23 +601,17 @@ def run_probe(tmp_path: Path, *args: str) -> dict:
 
 
 def test_the_native_probe_reports_the_stack_it_finds(tmp_path):
-    """Legacy mode reads the system GDAL/PROJ/GEOS and where the JNI resolves its libgdal; --payload reads the
-    payload's. Both derive the soname from the JNI file (never a constant) and count what ldd cannot find."""
+    """The base mode reports no system GDAL (gdalinfo, libgdal, JNI, osgeo) and the apt PROJ/GEOS; --payload reads
+    the payload's and derives the JNI's soname from the JNI file (never a constant), counting what ldd cannot find."""
     (tmp_path / "bin").mkdir()
-    # --- the base image: one library resolved, one not found
-    fake_tools(
-        tmp_path / "bin",
-        "\tlinux-vdso.so.1 (0x0000ffff)\n"
-        "\tlibgdal.so.37 => /usr/local/lib/libgdal.so.37 (0x0000ffff)\n"
-        "\tlibmissing.so.1 => not found",
-        "libgdal.so.37",
-    )
-    legacy = run_probe(tmp_path)
-    assert legacy["gdal"] == "3.11.4"
-    assert (legacy["proj"], legacy["geos"]) == ("9.4.0", "3.12.1")
-    assert legacy["jni_soname"] == "libgdal.so.37"
-    assert legacy["jni_libgdal"] == "/usr/local/lib/libgdal.so.37"
-    assert legacy["jni_unresolved"] == "1"
+    (tmp_path / "sysroot").mkdir()
+    # --- the base image: no GDAL of its own
+    fake_tools(tmp_path / "bin", "", "libgdal.so.37")
+    base = run_probe(tmp_path)
+    assert (base["gdal"], base["libgdal"], base["jni"]) == ("", "", "")
+    assert (base["proj"], base["geos"]) == ("9.4.0", "3.12.1")
+    assert "osgeo" in base
+    assert not [k for k in base if k.startswith("jni_")]  # the JNI is the overlay's, read in payload mode only
 
     # --- the native image: the payload's MANIFEST says what it was built from; its JNI needs a hashed libgdal
     root = tmp_path / "payload"
@@ -574,7 +622,8 @@ def test_the_native_probe_reports_the_stack_it_finds(tmp_path):
     )
     fake_tools(
         tmp_path / "bin",
-        "\tlibgdal-abc12345.so.39 => " + str(native / "lib/libgdal-abc12345.so.39") + " (0x1)",
+        "\tlibgdal-abc12345.so.39 => " + str(native / "lib/libgdal-abc12345.so.39") + " (0x1)\n"
+        "\tlibmissing.so.1 => not found",
         "libgdal-abc12345.so.39",
     )
     payload = run_probe(tmp_path, "--payload", str(root))
@@ -585,11 +634,34 @@ def test_the_native_probe_reports_the_stack_it_finds(tmp_path):
     )
     assert payload["jni_soname"] == "libgdal-abc12345.so.39"
     assert payload["jni_libgdal"] == str(native / "lib/libgdal-abc12345.so.39")
-    assert payload["jni_unresolved"] == "0"
+    assert payload["jni_unresolved"] == "1"
     # the HDF5/netCDF-C default plugin directory is reported in payload mode only
-    assert "hdf5_plugin_dir" in payload and "hdf5_plugin_dir" not in legacy
+    assert "hdf5_plugin_dir" in payload and "hdf5_plugin_dir" not in base
     # nothing of the payload is importable here: the bindings are reported missing, not guessed
     assert payload.get("rasterio_error") or payload.get("rasterio_from_payload") == "false"
+
+
+def test_the_base_probe_reports_a_system_gdal_it_finds(tmp_path):
+    """A GDAL left in the base image is reported, never hidden: gdalinfo, a libgdal and a JNI in the system library
+    directories. A PyPI wheel's own libgdal (site-packages, *.libs) is not a system library and is not reported."""
+    (tmp_path / "bin").mkdir()
+    sysroot = tmp_path / "sysroot"
+    triplet = f"{platform.machine()}-linux-gnu"
+    for rel in (
+        "usr/local/lib/libgdal.so.37",
+        f"usr/lib/{triplet}/libgdal.so.34",
+        "usr/local/lib/jni/libgdalalljni.so",
+        "usr/local/lib/python3.12/dist-packages/rasterio.libs/libgdal-0123abcd.so.36",
+    ):
+        (sysroot / rel).parent.mkdir(parents=True, exist_ok=True)
+        (sysroot / rel).write_bytes(b"")
+    fake_tools(tmp_path / "bin", "", "libgdal.so.37", gdalinfo=True, gdal="3.11.4")
+    found = run_probe(tmp_path, sysroot=sysroot)
+    assert found["gdal"] == "3.11.4"
+    assert found["libgdal"].split(",") == sorted(
+        [str(sysroot / "usr/local/lib/libgdal.so.37"), str(sysroot / f"usr/lib/{triplet}/libgdal.so.34")]
+    )
+    assert found["jni"] == str(sysroot / "usr/local/lib/jni/libgdalalljni.so")
 
 
 def test_the_native_probe_refuses_an_unknown_argument(tmp_path):

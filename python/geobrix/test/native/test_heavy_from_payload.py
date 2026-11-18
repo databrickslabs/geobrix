@@ -14,10 +14,11 @@ dev container::
     GBX_NATIVE_ROOT=build/env-wheel/env6/payload bash scripts/commands/gbx-test-parity.sh \\
         --path python/geobrix/test/native/test_heavy_from_payload.py
 
-GDAL's Java classes also load the first ``libgdalalljni.so`` on the JVM's library path, by name. The dev image's
-system JNI (GDAL 3.11.4) is on that path, so these JVMs put the payload's ``lib/`` first (GDALManager refuses a
-second GDAL otherwise). An image whose ``/usr/lib/libgdalalljni.so`` is a link to the payload's (DCS),
-or one with no system GDAL (Databricks runtimes), needs no such setting.
+GDAL's Java classes also load the first ``libgdalalljni.so`` on the JVM's library path, by name. Where a system JNI
+of another GDAL is on that path, these JVMs put the payload's ``lib/`` first (GDALManager refuses a second GDAL
+otherwise). An image whose ``/usr/lib/libgdalalljni.so`` is a link to the payload's (the dev image, DCS), or one with
+no system GDAL (Databricks runtimes), needs no such setting. The guard rows need a second GDAL to refuse; where the
+image has none (the dev image since its GDAL 3.11.4 was retired), they skip with PRECONDITION MISSING.
 """
 
 import glob
@@ -39,8 +40,8 @@ JARS = sorted(
     (REPO / "python" / "geobrix" / "lib").glob("geobrix-*-jar-with-dependencies.jar")
 )
 SYSTEM_JNI = "/usr/lib/libgdalalljni.so"
-# The dev image's own GDAL 3.11 JNI (scripts/docker/Dockerfile links SYSTEM_JNI to it). gbx:docker:start re-links
-# SYSTEM_JNI into the env6 payload; this file stays, so the guard rows still have a second GDAL to refuse.
+# A system JNI of another GDAL, on an image that has one (the dev image no longer does). gbx:docker:start links
+# SYSTEM_JNI into the env6 payload; where this file exists, the guard rows have a second GDAL to refuse.
 IMAGE_JNI = "/usr/local/lib/jni/libgdalalljni.so"
 LIBGDAL = re.compile(r"/libgdal(-[0-9a-f]{8})?\.so(\.\d+)+$")
 DEV_LIBRARY_PATH = "/usr/local/lib:/usr/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/local/hadoop/lib/native"

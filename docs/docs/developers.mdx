@@ -40,6 +40,14 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 
 Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; most `gbx:*` commands run inside that container.
 
+The container runs the native image, `geobrix-dev:ubuntu24-gbxnative-spark-<arch>`. It carries the env6 wheel's GDAL, the same build that Databricks runs. It is built on a base image, `geobrix-dev:ubuntu24-base-spark-<arch>`, which has no GDAL of its own. To build both the first time:
+
+1. Build the base image: `gbx:docker:rebuild`.
+2. Build the env6 wheel: `gbx:build:wheel --env 6`.
+3. Build the native bindings into `build/native/out/<arch>/bindings/dist/`: `gbx:build:native --target bindings`.
+4. Run `scripts/native/prefetch.sh --arch <arch>`, then build the native image: `gbx:docker:rebuild --overlay gbxnative`.
+5. Start the container: `gbx:docker:start`. When an image is missing, it prints these steps and stops.
+
 ### Testing the JVM level
 
 The JVM level (L1) needs a built JAR. [Functions the JAR speeds up](./api/jar-functions.mdx) lists the functions that run on the JVM by default. Compiled classes alone are not enough: the tests load the assembly JAR from `python/geobrix/lib/`.
@@ -169,7 +177,7 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 | `gbx:docker:exec` | Run Maven, pytest, etc. | Runs a command (or interactive shell) in container |
 | `gbx:docker:attach` | Interactive shell in container | Attach to running container |
 | `gbx:docker:restart` | After config change | Restart container |
-| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image (native for your machine's architecture; `--platform` to choose) and optionally start |
+| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild the base image (native for your machine's architecture; `--platform` to choose), or with `--overlay gbxnative` the native image on it |
 | `gbx:docker:clear-pycache` | After editing Python code, stale imports | Clears `.pyc` and `__pycache__` in container so tests see fresh code |
 
 **Lint**

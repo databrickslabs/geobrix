@@ -9,17 +9,16 @@
 # a native arm64 image (an amd64 image on an arm64 Mac runs under Rosetta, about 10x slower).
 # Accepted spellings: linux/arm64, linux/amd64, arm64, amd64, aarch64, x86_64.
 #
-# Tag: one image per architecture, so both coexist and falling back is instant:
-#   geobrix-dev:ubuntu24-gdal311-spark-arm64
-#   geobrix-dev:ubuntu24-gdal311-spark-amd64
-# The un-suffixed geobrix-dev:ubuntu24-gdal311-spark is the pre-arm64 (amd64) tag. It is never
-# written any more; gbx_dev_run_image reads it only as a fallback for an amd64 run.
+# Tags: two images per architecture, each with its own tag, so the arm64 and amd64 images coexist:
+#   geobrix-dev:ubuntu24-base-spark-<arch>       the base image (build_smart.sh): no GDAL of its own
+#   geobrix-dev:ubuntu24-gbxnative-spark-<arch>  the native overlay on it (build_smart.sh --overlay gbxnative): the
+#                                                env6 wheel's GDAL payload, the image the start scripts run
+# GBX_DEV_IMAGE_TAG (default ubuntu24-gbxnative-spark; a .gbx-local.env may name another) says which one to run.
 #
 # Bash 3.2 compatible (macOS /bin/bash).
 
 GBX_DEV_IMAGE_REPO="geobrix-dev"
-GBX_DEV_IMAGE_TAG="${GBX_DEV_IMAGE_TAG:-ubuntu24-gdal311-spark}"   # a worktree's .gbx-local.env may name its own (gbx-container.sh)
-GBX_DEV_LEGACY_IMAGE="${GBX_DEV_IMAGE_REPO}:${GBX_DEV_IMAGE_TAG}"
+GBX_DEV_IMAGE_TAG="${GBX_DEV_IMAGE_TAG:-ubuntu24-gbxnative-spark}"   # a worktree's .gbx-local.env may name its own (gbx-container.sh)
 
 # gbx_normalize_platform <spelling>  ->  linux/arm64 | linux/amd64 (status 2 for anything else)
 gbx_normalize_platform() {
@@ -69,20 +68,19 @@ gbx_platform_arch() {
     echo "${p#linux/}"
 }
 
-# gbx_dev_image_tag <platform>  ->  geobrix-dev:ubuntu24-gdal311-spark-<arch>
+# gbx_dev_image_tag <platform>  ->  the image to run: geobrix-dev:<GBX_DEV_IMAGE_TAG>-<arch>
 gbx_dev_image_tag() {
     local a
     a="$(gbx_platform_arch "$1")" || return 2
     echo "${GBX_DEV_IMAGE_REPO}:${GBX_DEV_IMAGE_TAG}-${a}"
 }
 
-# The native overlay (build_smart.sh --overlay gbxnative): the base image plus the env wheel's natives and Rust.
-# It has its own tag, so the base image stays as the fallback; start scripts run it when GBX_DEV_IMAGE_TAG
-# (.gbx-local.env) names it. gbx_dev_base_image is the image the overlay is built on, whatever GBX_DEV_IMAGE_TAG says.
-GBX_DEV_BASE_IMAGE_TAG="ubuntu24-gdal311-spark"
+# The base image (build_smart.sh) and the native overlay on it (build_smart.sh --overlay gbxnative: the env wheel's
+# natives and Rust). Each has its own tag, whatever GBX_DEV_IMAGE_TAG says; the overlay is the default run image.
+GBX_DEV_BASE_IMAGE_TAG="ubuntu24-base-spark"
 GBX_DEV_NATIVE_IMAGE_TAG="ubuntu24-gbxnative-spark"
 
-# gbx_dev_base_image <platform>  ->  geobrix-dev:ubuntu24-gdal311-spark-<arch>
+# gbx_dev_base_image <platform>  ->  geobrix-dev:ubuntu24-base-spark-<arch>
 gbx_dev_base_image() {
     local a
     a="$(gbx_platform_arch "$1")" || return 2
@@ -96,20 +94,10 @@ gbx_dev_native_image() {
     echo "${GBX_DEV_IMAGE_REPO}:${GBX_DEV_NATIVE_IMAGE_TAG}-${a}"
 }
 
-# gbx_dev_run_image <platform>  ->  the image to run for that platform: the per-arch tag when it
-# exists locally; for amd64 only, the pre-arm64 un-suffixed tag when that image really is amd64;
-# otherwise the per-arch tag (so `docker run` reports the missing image by its real name).
+# gbx_dev_run_image <platform>  ->  the image to run for that platform: the per-arch tag. There is no fallback to
+# another tag (the old un-suffixed ubuntu24-gdal311-spark image held GDAL 3.11.4, which no user runs).
 gbx_dev_run_image() {
-    local tag arch
-    tag="$(gbx_dev_image_tag "$1")" || return 2
-    arch="$(gbx_platform_arch "$1")"
-    if docker image inspect "$tag" >/dev/null 2>&1; then
-        echo "$tag"
-    elif [ "$arch" = "amd64" ] && [ "$(docker image inspect --format '{{.Architecture}}' "$GBX_DEV_LEGACY_IMAGE" 2>/dev/null)" = "amd64" ]; then
-        echo "$GBX_DEV_LEGACY_IMAGE"
-    else
-        echo "$tag"
-    fi
+    gbx_dev_image_tag "$1"
 }
 
 # gbx_container_arch <container>  ->  amd64 | arm64 (the architecture of the image it runs from)
@@ -121,17 +109,37 @@ gbx_container_arch() {
 
 # gbx_require_dev_image <platform>  ->  the image to run (gbx_dev_run_image); when it does not exist
 # locally, says how to build it (or how to run the other architecture) on stderr and returns 1
-# rather than letting `docker run` try to pull a local-only tag from a registry.
+# rather than letting `docker run` try to pull a local-only tag from a registry. The native overlay is
+# built in order: the base image when it is missing, then the env6 wheel, the native bindings and the
+# prefetch, then the overlay.
 gbx_require_dev_image() {
-    local image arch other
+    local image arch other platform na step=1
     image="$(gbx_dev_run_image "$1")" || return 2
     if ! docker image inspect "$image" >/dev/null 2>&1; then
+        platform="$(gbx_normalize_platform "$1")"
         arch="$(gbx_platform_arch "$1")"
         other="amd64"
         [ "$arch" = "amd64" ] && other="arm64"
+        na="aarch64"
+        [ "$arch" = "amd64" ] && na="x86_64"
         {
-            echo "ERROR: image $image not found for $(gbx_normalize_platform "$1")."
-            echo "  Build it:    bash scripts/commands/gbx-docker-rebuild.sh --platform $(gbx_normalize_platform "$1")"
+            echo "ERROR: image $image not found for $platform."
+            if [ "$image" = "$(gbx_dev_native_image "$1")" ]; then
+                echo "  Build it, in this order:"
+                if ! docker image inspect "$(gbx_dev_base_image "$1")" >/dev/null 2>&1; then
+                    echo "    $step. the base image $(gbx_dev_base_image "$1"):"
+                    echo "       bash scripts/commands/gbx-docker-rebuild.sh --platform $platform"
+                    step=$((step + 1))
+                fi
+                echo "    $step. the env6 wheel (its payload, build/env-wheel/env6/payload): bash scripts/commands/gbx-build-wheel.sh --env 6"
+                step=$((step + 1))
+                echo "    $step. the native bindings (build/native/out/$na/bindings/dist/): bash scripts/commands/gbx-build-native.sh --target bindings --arch $na"
+                step=$((step + 1))
+                echo "    $step. bash scripts/native/prefetch.sh --arch $na, then the overlay:"
+                echo "       bash scripts/commands/gbx-docker-rebuild.sh --overlay gbxnative --platform $platform"
+            else
+                echo "  Build it:    bash scripts/commands/gbx-docker-rebuild.sh --platform $platform"
+            fi
             echo "  Or run the $other image instead: GBX_DOCKER_PLATFORM=linux/$other (an image of the other"
             echo "  architecture runs under emulation, about 10x slower)."
         } >&2

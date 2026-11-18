@@ -3,4 +3,3 @@
 # `pins.py audit` fails when the regex matches its file other than once, or captures another value
 # (the consumer drifted), and also when the regex no longer matches (the consumer was retired: delete
 # its line). A consumer that moves to the new stack is retired by pointing it at pins.conf instead.
-scripts/docker/Dockerfile|(?m)^ARG GDAL_VERSION=(\S+)|3.11.4|kept as the fallback dev image

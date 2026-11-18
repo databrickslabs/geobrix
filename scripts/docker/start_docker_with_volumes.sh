@@ -15,7 +15,7 @@
 #   -e JAVA_TOOL_OPTIONS="-agentlib:jdwp=transport=dt_socket,address=5005,server=y,suspend=n" \
 # Optional: --privileged for kernel/ZMQ or entropy issues (see README-DOCKER.md).
 # Platform: --platform linux/arm64|linux/amd64, else $GBX_DOCKER_PLATFORM, else this host's
-# architecture; the image is geobrix-dev:ubuntu24-gdal311-spark-<arch> (see gbx-platform.sh).
+# architecture; the image is geobrix-dev:ubuntu24-gbxnative-spark-<arch> (see gbx-platform.sh).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

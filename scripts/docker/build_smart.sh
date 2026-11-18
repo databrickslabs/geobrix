@@ -13,7 +13,6 @@ STAGES=(
     "base"
     "system-deps"
     "hadoop-builder"
-    "gdal-builder"
     "final"
 )
 
@@ -38,9 +37,10 @@ usage() {
     echo -e "  --overlay gbxnative"
     echo -e "                    Do not build the base image. Layer the env6 wheel's natives (the payload: GDAL, PROJ,"
     echo -e "                    GEOS and the bindings built against them), the rasterio distribution and the pinned Rust"
-    echo -e "                    toolchain over the existing base image (geobrix-dev:ubuntu24-gdal311-spark-<arch>, which"
-    echo -e "                    stays as the fallback) and tag geobrix-dev:ubuntu24-gbxnative-spark-<arch>. Needs the"
-    echo -e "                    env6 wheel built (gbx:build:wheel --env 6) and scripts/native/prefetch.sh run for the arch."
+    echo -e "                    toolchain over the existing base image (geobrix-dev:ubuntu24-base-spark-<arch>) and tag"
+    echo -e "                    geobrix-dev:ubuntu24-gbxnative-spark-<arch>, the image the start scripts run. Needs the"
+    echo -e "                    env6 wheel built (gbx:build:wheel --env 6), the native bindings"
+    echo -e "                    (build/native/out/<arch>/bindings/dist/) and scripts/native/prefetch.sh run for the arch."
     echo -e "                    No package index is used; the only network use is rustup's verified toolchain download."
     echo ""
     echo -e "${YELLOW}Package index:${NC}"
@@ -55,7 +55,7 @@ usage() {
     echo -e "  $0 --no-cache                     Build everything from scratch"
     echo -e "  $0 --progress=plain               Show detailed build output"
     echo -e "  $0 --build-arg CORES=4            Override the CPU cores used (default=2)"
-    echo -e "  $0 --platform linux/amd64         Build the amd64 image (default: the host's architecture)"
+    echo -e "  $0 --platform linux/amd64         Build the amd64 base image (default: the host's architecture)"
     echo -e "  $0 --overlay gbxnative            Add the env wheel's natives and Rust to the existing base image"
     exit 0
 }
@@ -117,10 +117,11 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # --- PLATFORM AND TAGS ---
 # The platform is passed to every stage build, so the image is native to it; one tag per
-# architecture means the arm64 and amd64 images coexist.
+# architecture means the arm64 and amd64 images coexist. This script builds the base image (no GDAL) or the
+# native overlay on it, each under its own tag; GBX_DEV_IMAGE_TAG only says which one the start scripts run.
 PLATFORM="$(gbx_docker_platform "$PLATFORM_ARG")" || exit 2
 ARCH="$(gbx_platform_arch "$PLATFORM")"
-FINAL_TAG="$(gbx_dev_image_tag "$PLATFORM")"
+FINAL_TAG="$(gbx_dev_base_image "$PLATFORM")"
 case "$OVERLAY" in
     "") ;;
     gbxnative) FINAL_TAG="$(gbx_dev_native_image "$PLATFORM")" ;;
@@ -132,7 +133,7 @@ esac
 gbx_check_docker_flags "${EXTRA_ARGS[@]}" || exit 2
 
 # --- WHAT THE IMAGE IS EXPECTED TO HOLD (compared in step 4) ---
-EXPECT_GDAL="$(sed -n 's/^ARG GDAL_VERSION=//p' "$PROJECT_ROOT/scripts/docker/Dockerfile" | head -1)"
+# The base image has no GDAL of its own; PROJ and GEOS are noble's apt packages (system-deps stage).
 EXPECT_PROJ="9.4.0"           # noble libproj-dev
 EXPECT_GEOS="3.12.1"          # noble libgeos-dev
 EXPECT_RASTERIO_GDAL="3.12.1" # the GDAL vendored in the rasterio wheel below, not the system one
@@ -173,7 +174,7 @@ log_info "Starting smart build for ${FINAL_TAG} (${PLATFORM})..."
 # BuildKit does not key its layer cache on a secret, so a changed index alone would reuse the cached pip
 # configuration layer. A non-secret fingerprint of the index is therefore also passed as the build-arg
 # GBX_PIP_INDEX_FPR, to the final stage only (the stage with the pip steps): a changed index rebuilds that
-# stage and nothing before it (GDAL stays cached). The fingerprint is the first 12 hex characters of an
+# stage and nothing before it (the earlier stages stay cached). The fingerprint is the first 12 hex characters of an
 # HMAC-SHA256 of the index keyed with a random per-machine salt (32 bytes, kept 0600 in
 # ${GBX_PIP_INDEX_SALT_FILE:-~/.cache/geobrix/pip-index-fpr-salt} and never printed), so the value, which
 # `docker history` shows, cannot be used to confirm a guessed index. The same index gives the same
@@ -425,37 +426,31 @@ log_info "Image history and config hold no package index."
 # running geobrix-dev, and with no network) and compare what it reports (scripts/docker/gbx-native-probe.sh) with
 # what the image is meant to hold. Any difference leaves the image untagged (the checkpoint stays for inspection).
 #
-# The base image: the heavyweight tier uses the system GDAL (built from source in the gdal-builder stage, version
-# from the Dockerfile) with PROJ and GEOS from noble apt; the lightweight tier's rasterio, pyogrio, pyproj and
-# shapely are PyPI wheels with their own libraries and must match the architecture's lock.
+# The base image: no GDAL of its own (no gdalinfo, no libgdal in a system library directory, no libgdalalljni.so,
+# no osgeo), PROJ and GEOS from noble apt; rasterio, pyogrio, pyproj and shapely are PyPI wheels with their own
+# libraries and must match the architecture's lock. The native overlay brings GDAL (the env6 payload).
 # The native overlay: everything is the env wheel payload's, and the pins (scripts/native/pins.conf) say which.
 # native_stack_failures <probe output>: one line per expectation that does not hold (none: all hold).
 native_stack_failures() {
-    local out="$1" want got name soname
+    local out="$1" want got name key
     value() { printf '%s\n' "$out" | sed -n "s/^$1=//p" | head -1; }
     expect() { # <label> <want> <got>
         if [ -z "$3" ] || [ "$2" != "$3" ]; then echo "$1: want '$2', got '${3:-nothing}'"; fi
     }
-    expect "GDAL" "$EXPECT_GDAL" "$(value gdal)"
+    # no system GDAL: each of these is empty in an image as intended, so a probe that did not report one fails
+    for key in gdal libgdal jni osgeo; do
+        printf '%s\n' "$out" | grep -q "^$key=" || echo "the probe did not report '$key'"
+    done
+    if [ -n "$(value gdal)" ]; then echo "the base image has a system GDAL (gdalinfo reports '$(value gdal)'); it should have none"; fi
+    if [ -n "$(value libgdal)" ]; then echo "the base image has a system libgdal: '$(value libgdal)'; it should have none"; fi
+    if [ -n "$(value jni)" ]; then echo "the base image has a GDAL JNI: '$(value jni)'; it should have none"; fi
+    if [ "$(value osgeo)" != "absent" ]; then echo "the base image has GDAL's Python binding (osgeo: '$(value osgeo)'); it should have none"; fi
     expect "PROJ" "$EXPECT_PROJ" "$(value proj)"
     expect "GEOS" "$EXPECT_GEOS" "$(value geos)"
-    # The JNI's libgdal: the soname is the one the JNI file asks for (not a constant here), and it must resolve to
-    # the GDAL built into /usr/local, not to some other libgdal of that name (an apt copy, say).
-    soname="$(value jni_soname)"
-    case "$soname" in
-        libgdal.so.*) ;;
-        *) echo "libgdalalljni.so needs no libgdal (readelf gave '${soname:-nothing}')" ;;
-    esac
-    if [ "$(value jni_libgdal)" != "/usr/local/lib/${soname:-libgdal.so}" ]; then
-        echo "libgdalalljni.so does not resolve ${soname:-libgdal} in /usr/local/lib (ldd gave '$(value jni_libgdal)')"
-    fi
-    if [ "$(value jni_unresolved)" != "0" ]; then
-        echo "libgdalalljni.so has unresolved libraries: '$(value jni_unresolved)'"
-    fi
     expect "rasterio's GDAL" "$EXPECT_RASTERIO_GDAL" "$(value rasterio_gdal)"
     case ",$(value rasterio_tags)," in
         *manylinux*) ;;
-        *) echo "rasterio is not a manylinux wheel (wheel tags: '$(value rasterio_tags)'); built from source against the system GDAL?" ;;
+        *) echo "rasterio is not a manylinux wheel (wheel tags: '$(value rasterio_tags)'); built from source?" ;;
     esac
     if [ "$(value rasterio_libs)" != "true" ]; then
         echo "rasterio has no vendored rasterio.libs directory"
@@ -557,7 +552,7 @@ fi
 if [ -n "$OVERLAY" ]; then
     log_info "Native stack as expected: GDAL $(native_pin GDAL_VERSION), PROJ $(native_pin PROJ_VERSION), GEOS $(native_pin GEOS_VERSION) from the payload; the JVM's JNI link and every binding are the payload's; no PyPI library is mapped."
 else
-    log_info "Native stack as expected: GDAL ${EXPECT_GDAL}, PROJ ${EXPECT_PROJ}, GEOS ${EXPECT_GEOS}; JNI resolves its libgdal in /usr/local/lib; rasterio is a manylinux wheel; pyogrio, pyproj and shapely match the lock."
+    log_info "Native stack as expected: no system GDAL, libgdal, JNI or osgeo; PROJ ${EXPECT_PROJ}, GEOS ${EXPECT_GEOS}; rasterio is a manylinux wheel with its own GDAL ${EXPECT_RASTERIO_GDAL}; pyogrio, pyproj and shapely match the lock."
 fi
 
 log_info "Applying final tag: ${YELLOW}${FINAL_TAG}${NC}..."

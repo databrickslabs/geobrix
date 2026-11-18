@@ -29,19 +29,21 @@ DOCKER_DIR = REPO_ROOT / "scripts" / "docker"
 COMMANDS = REPO_ROOT / "scripts" / "commands"
 FAKE = Path(__file__).with_name("_fake_docker_platform.py")
 INDEX = "https://ci-user:s3cret@idx.internal:8443/simple"
-TAG = "geobrix-dev:ubuntu24-gdal311-spark"
+# The base image build_smart.sh builds (no GDAL of its own) and the native overlay the start scripts run by default.
+BASE_TAG = "geobrix-dev:ubuntu24-base-spark"
+RUN_TAG = "geobrix-dev:ubuntu24-gbxnative-spark"
+OLD_TAG = "geobrix-dev:ubuntu24-gdal311-spark"  # the retired GDAL 3.11.4 image: never built, never run
 STAGES = [
     "base",
     "system-deps",
     "hadoop-builder",
-    "gdal-builder",
     "final",
 ]
 
 
 def good_probe(arch: str) -> list:
-    """What the native-stack probe prints for an image that is as intended: the system GDAL/PROJ/GEOS,
-    a JNI that resolves libgdal.so.37, a manylinux rasterio wheel, and the lock's wheel versions.
+    """What the native-stack probe prints for a base image that is as intended: no system GDAL (no gdalinfo,
+    libgdal, JNI or osgeo), the apt PROJ/GEOS, a manylinux rasterio wheel, and the lock's wheel versions.
     """
     lock = (
         REPO_ROOT
@@ -56,12 +58,12 @@ def good_probe(arch: str) -> list:
     pins = parse_lock(lock)[0]
     plat = "aarch64" if arch == "arm64" else "x86_64"
     return [
-        "gdal=3.11.4",
+        "gdal=",
+        "libgdal=",
+        "jni=",
+        "osgeo=absent",
         "proj=9.4.0",
         "geos=3.12.1",
-        "jni_soname=libgdal.so.37",
-        "jni_libgdal=/usr/local/lib/libgdal.so.37",
-        "jni_unresolved=0",
         "rasterio_gdal=3.12.1",
         f"rasterio_tags=cp312-cp312-manylinux_2_17_{plat}.manylinux2014_{plat}",
         "rasterio_libs=true",
@@ -297,37 +299,67 @@ def test_an_unsupported_host_has_no_default(tmp_path):
 
 def test_there_is_one_tag_per_architecture(arm):
     res = arm.sh("gbx_dev_image_tag linux/arm64; gbx_dev_image_tag amd64")
-    assert res.stdout.split() == [f"{TAG}-arm64", f"{TAG}-amd64"]
+    assert res.stdout.split() == [f"{RUN_TAG}-arm64", f"{RUN_TAG}-amd64"]
+    res = arm.sh("gbx_dev_base_image linux/arm64; gbx_dev_base_image amd64")
+    assert res.stdout.split() == [f"{BASE_TAG}-arm64", f"{BASE_TAG}-amd64"]
+
+
+def test_the_default_run_image_is_the_native_overlay_with_no_local_env(arm):
+    """No .gbx-local.env: the start scripts run the overlay, not the base image (which has no GDAL)."""
+    res = arm.sh("gbx_dev_run_image linux/arm64")
+    assert res.stdout.strip() == f"{RUN_TAG}-arm64"
+    container = arm.docker / "gbx-container.sh"
+    res = arm._exec(["bash", "-c", f'source "{container}"; gbx_load_local_env "{arm.repo}"; echo "$GBX_DEV_IMAGE_TAG"'])
+    assert res.stdout.strip() == "ubuntu24-gbxnative-spark"
 
 
 # --- gbx-platform.sh: which image to run ------------------------------------------------------
 
 
-def test_run_image_prefers_the_per_arch_tag(arm):
-    arm.image(f"{TAG}-amd64", "amd64")
-    arm.image(TAG, "amd64")
-    assert arm.sh("gbx_dev_run_image linux/amd64").stdout.strip() == f"{TAG}-amd64"
+def test_run_image_is_the_per_arch_tag_and_the_old_gdal311_image_is_never_used(arm):
+    arm.image(OLD_TAG, "amd64")
+    arm.image(f"{OLD_TAG}-amd64", "amd64")
+    arm.image(f"{OLD_TAG}-arm64", "arm64")
+    for plat, arch in (("linux/amd64", "amd64"), ("linux/arm64", "arm64")):
+        assert arm.sh(f"gbx_dev_run_image {plat}").stdout.strip() == f"{RUN_TAG}-{arch}"
+    res = arm.sh("gbx_require_dev_image linux/amd64")
+    assert res.returncode == 1 and OLD_TAG not in res.stdout
 
 
-def test_the_old_unsuffixed_amd64_image_is_an_amd64_fallback(arm):
-    arm.image(TAG, "amd64")
-    assert arm.sh("gbx_dev_run_image linux/amd64").stdout.strip() == TAG
-
-
-def test_the_old_tag_is_never_used_for_arm64_or_when_it_is_not_amd64(arm):
-    arm.image(TAG, "amd64")
-    # arm64 asks for its own tag even though only the old one exists
-    assert arm.sh("gbx_dev_run_image linux/arm64").stdout.strip() == f"{TAG}-arm64"
-    arm.image(TAG, "arm64")
-    assert arm.sh("gbx_dev_run_image linux/amd64").stdout.strip() == f"{TAG}-amd64"
-
-
-def test_a_missing_image_says_how_to_build_it_or_run_the_other(arm):
+def test_a_missing_overlay_says_how_to_build_it_base_first(arm):
     res = arm.sh("gbx_require_dev_image linux/arm64")
     assert res.returncode == 1
-    assert f"{TAG}-arm64" in res.stderr
+    err = res.stderr
+    assert f"{RUN_TAG}-arm64" in err
+    steps = [
+        "gbx-docker-rebuild.sh --platform linux/arm64",
+        "gbx-build-wheel.sh --env 6",
+        "build/native/out/aarch64/bindings/dist/",
+        "scripts/native/prefetch.sh --arch aarch64",
+        "gbx-docker-rebuild.sh --overlay gbxnative --platform linux/arm64",
+    ]
+    assert all(s in err for s in steps), err
+    assert [err.index(s) for s in steps] == sorted(err.index(s) for s in steps)  # in this order
+    assert "GBX_DOCKER_PLATFORM=linux/amd64" in err
+
+
+def test_a_missing_overlay_on_a_built_base_skips_the_base_step(x86):
+    x86.image(f"{BASE_TAG}-amd64", "amd64")
+    res = x86.sh("gbx_require_dev_image linux/amd64")
+    assert res.returncode == 1
+    assert "gbx-docker-rebuild.sh --platform linux/amd64" not in res.stderr
+    assert "1. the env6 wheel" in res.stderr
+    assert "build/native/out/x86_64/bindings/dist/" in res.stderr
+    assert "prefetch.sh --arch x86_64" in res.stderr
+    assert "gbx-docker-rebuild.sh --overlay gbxnative --platform linux/amd64" in res.stderr
+
+
+def test_a_missing_base_run_image_names_the_base_build(arm):
+    res = arm.sh("gbx_require_dev_image linux/arm64", env={"GBX_DEV_IMAGE_TAG": "ubuntu24-base-spark"})
+    assert res.returncode == 1
+    assert f"{BASE_TAG}-arm64" in res.stderr
     assert "gbx-docker-rebuild.sh --platform linux/arm64" in res.stderr
-    assert "GBX_DOCKER_PLATFORM=linux/amd64" in res.stderr
+    assert "--overlay" not in res.stderr
 
 
 # --- build_smart.sh ---------------------------------------------------------------------------
@@ -346,26 +378,26 @@ def test_the_build_defaults_to_the_host_architecture(arm):
     assert [flag_value(b, "-t") for b in builds] == [
         f"geobrix-checkpoint:{s}-arm64" for s in STAGES
     ]
-    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{BASE_TAG}-arm64"] in arm.calls
     assert not [
-        c for c in arm.of("tag") if c[-1] == TAG
-    ]  # the old tag is never written
+        c for c in arm.of("tag") if c[-1].startswith((OLD_TAG, RUN_TAG))
+    ]  # neither the old GDAL 3.11.4 tag nor the run image is written by a base build
     assert not any("--build-arg" in c for c in builds)
 
 
 def test_an_x86_host_builds_amd64(x86):
     assert build(x86).returncode == 0
     assert all(flag_value(b, "--platform") == "linux/amd64" for b in x86.of("build"))
-    assert ["tag", "geobrix-checkpoint:final-amd64", f"{TAG}-amd64"] in x86.calls
+    assert ["tag", "geobrix-checkpoint:final-amd64", f"{BASE_TAG}-amd64"] in x86.calls
 
 
 def test_the_environment_and_the_flag_choose_the_platform(arm):
     assert build(arm, env={"GBX_DOCKER_PLATFORM": "linux/amd64"}).returncode == 0
-    assert ["tag", "geobrix-checkpoint:final-amd64", f"{TAG}-amd64"] in arm.calls
+    assert ["tag", "geobrix-checkpoint:final-amd64", f"{BASE_TAG}-amd64"] in arm.calls
     arm.log.unlink()
     res = build(arm, "--platform", "linux/arm64", env={"GBX_DOCKER_PLATFORM": "amd64"})
     assert res.returncode == 0
-    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{BASE_TAG}-arm64"] in arm.calls
     arm.log.unlink()
     assert build(arm, "--platform=amd64").returncode == 0
     assert all(flag_value(b, "--platform") == "linux/amd64" for b in arm.of("build"))
@@ -532,7 +564,7 @@ def test_an_index_in_the_image_history_fails_the_build_untagged(arm):
     arm.state["history"] = [f"ENV PIP_INDEX_URL={INDEX}", "RUN apt-get update"]
     res = build(arm, env={"PIP_INDEX_URL": INDEX})
     assert res.returncode == 1
-    assert "history" in res.output and f"{TAG}-arm64" in res.output
+    assert "history" in res.output and f"{BASE_TAG}-arm64" in res.output
     assert INDEX not in res.output and "idx.internal" not in res.output
     assert [c for c in arm.of("tag")] == []
     assert "geobrix-checkpoint:final-arm64" not in arm.final_state()["images"]
@@ -580,7 +612,7 @@ def test_the_public_index_is_not_mistaken_for_a_leak(arm):
     arm.state["history"] = ["RUN idx=https://pypi.org/simple/; echo done"]
     res = build(arm, env={"PIP_INDEX_URL": "https://pypi.org/simple/"})
     assert res.returncode == 0, res.output
-    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{BASE_TAG}-arm64"] in arm.calls
 
 
 def test_a_clean_history_is_tagged_after_the_check(arm):
@@ -603,30 +635,30 @@ def started(sb, script, *args, env=None, cwd=None):
 
 
 def test_start_runs_the_host_architectures_image(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     res, runs = started(arm, "start_docker_with_volumes.sh")
     assert res.returncode == 0, res.output
     assert flag_value(runs[0], "--platform") == "linux/arm64"
-    assert runs[0][-2:] == [f"{TAG}-arm64", "/bin/bash"]
+    assert runs[0][-2:] == [f"{RUN_TAG}-arm64", "/bin/bash"]
 
 
 def test_start_on_an_x86_host_runs_the_amd64_image(x86):
-    x86.image(f"{TAG}-amd64", "amd64")
+    x86.image(f"{RUN_TAG}-amd64", "amd64")
     res, runs = started(x86, "start_docker_with_volumes.sh")
     assert res.returncode == 0, res.output
     assert flag_value(runs[0], "--platform") == "linux/amd64"
-    assert runs[0][-2] == f"{TAG}-amd64"
+    assert runs[0][-2] == f"{RUN_TAG}-amd64"
 
 
 def test_start_honours_the_override_and_the_flag(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     _, runs = started(
         arm, "start_docker_with_volumes.sh", env={"GBX_DOCKER_PLATFORM": "linux/amd64"}
     )
     assert (flag_value(runs[0], "--platform"), runs[0][-2]) == (
         "linux/amd64",
-        f"{TAG}-amd64",
+        f"{RUN_TAG}-amd64",
     )
     arm.log.unlink()
     _, runs = started(
@@ -640,28 +672,31 @@ def test_start_honours_the_override_and_the_flag(arm):
     assert (
         flag_value(runs[0], "--platform") == "linux/arm64" and "--privileged" in runs[0]
     )
-    assert runs[0][-2] == f"{TAG}-arm64"
+    assert runs[0][-2] == f"{RUN_TAG}-arm64"
 
 
-def test_start_falls_back_to_the_old_amd64_tag(arm):
-    arm.image(TAG, "amd64")
-    _, runs = started(
+def test_start_never_falls_back_to_the_old_gdal311_image(arm):
+    arm.image(OLD_TAG, "amd64")
+    arm.image(f"{OLD_TAG}-amd64", "amd64")
+    res, runs = started(
         arm, "start_docker_with_volumes.sh", env={"GBX_DOCKER_PLATFORM": "amd64"}
     )
-    assert (flag_value(runs[0], "--platform"), runs[0][-2]) == ("linux/amd64", TAG)
+    assert res.returncode == 1 and runs == []
+    assert f"{RUN_TAG}-amd64" in res.output
 
 
 def test_start_without_the_native_image_runs_nothing_and_says_what_to_do(arm):
-    arm.image(TAG, "amd64")  # only the old amd64 image exists
+    arm.image(f"{BASE_TAG}-arm64", "arm64")  # only the base image exists
     res, runs = started(arm, "start_docker_with_volumes.sh")
     assert res.returncode == 1 and runs == []
-    assert f"{TAG}-arm64" in res.output
-    assert "gbx-docker-rebuild.sh --platform linux/arm64" in res.output
+    assert f"{RUN_TAG}-arm64" in res.output
+    assert "gbx-build-wheel.sh --env 6" in res.output
+    assert "gbx-docker-rebuild.sh --overlay gbxnative --platform linux/arm64" in res.output
     assert "GBX_DOCKER_PLATFORM=linux/amd64" in res.output
 
 
 def test_start_refuses_an_unknown_option_and_platform(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     res, runs = started(arm, "start_docker_with_volumes.sh", "--bogus")
     assert res.returncode == 2 and runs == []
     res, runs = started(
@@ -671,19 +706,19 @@ def test_start_refuses_an_unknown_option_and_platform(arm):
 
 
 def test_start_docker_sh_uses_the_same_choice(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     res, runs = started(arm, "start_docker.sh")
     assert res.returncode == 0, res.output
     assert (flag_value(runs[0], "--platform"), runs[0][-2]) == (
         "linux/arm64",
-        f"{TAG}-arm64",
+        f"{RUN_TAG}-arm64",
     )
     arm.log.unlink()
     _, runs = started(arm, "start_docker.sh", env={"GBX_DOCKER_PLATFORM": "amd64"})
     assert (flag_value(runs[0], "--platform"), runs[0][-2]) == (
         "linux/amd64",
-        f"{TAG}-amd64",
+        f"{RUN_TAG}-amd64",
     )
 
 
@@ -705,7 +740,7 @@ def test_rebuilding_the_other_architecture_leaves_the_container_alone(arm):
     assert lifecycle(arm) == []
     assert arm.final_state()["container"]["running"] is True
     assert all(flag_value(b, "--platform") == "linux/arm64" for b in arm.of("build"))
-    assert f"{TAG}-arm64" in res.output
+    assert f"{BASE_TAG}-arm64" in res.output
     assert "gbx-docker-start.sh --recreate --platform linux/arm64" in res.output
 
 
@@ -756,7 +791,7 @@ def test_extra_docker_flags_reach_docker_after_a_separator(arm):
 
 
 def test_rebuild_start_passes_the_platform_on(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     res = rebuild(arm, "--start")
     assert res.returncode == 0, res.output
     runs = arm.of("run")
@@ -771,7 +806,7 @@ def start(sb, *args, env=None):
 
 
 def test_start_keeps_a_running_container_of_the_other_architecture_and_says_so(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("amd64")
     res = start(arm)
     assert res.returncode == 0, res.output
@@ -781,25 +816,25 @@ def test_start_keeps_a_running_container_of_the_other_architecture_and_says_so(a
 
 
 def test_recreate_switches_the_container_to_the_requested_architecture(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("amd64")
     res = start(arm, "--recreate")
     assert res.returncode == 0, res.output
     assert lifecycle(arm) == ["stop", "rm"]
     runs = arm.of("run")
     assert flag_value(runs[0], "--platform") == "linux/arm64"
-    assert runs[0][-2] == f"{TAG}-arm64"
+    assert runs[0][-2] == f"{RUN_TAG}-arm64"
     assert arm.final_state()["container"]["arch"] == "arm64"
 
 
 def test_start_creates_from_the_requested_platform(arm):
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     res = start(arm, "--platform", "linux/amd64")
     assert res.returncode == 0, res.output
     runs = arm.of("run")
     assert (flag_value(runs[0], "--platform"), runs[0][-2]) == (
         "linux/amd64",
-        f"{TAG}-amd64",
+        f"{RUN_TAG}-amd64",
     )
 
 
@@ -859,7 +894,7 @@ def test_a_current_or_unreadable_image_is_silent(arm, history):
 
 
 def test_start_warns_about_a_stale_image_for_an_existing_container_and_leaves_it(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("arm64")
     arm.state["history"] = maven_history(STALE)
     res = start(arm)
@@ -869,7 +904,7 @@ def test_start_warns_about_a_stale_image_for_an_existing_container_and_leaves_it
 
 
 def test_start_warns_before_a_recreate_from_a_stale_image_and_still_recreates(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("arm64")
     arm.state["history"] = maven_history(STALE)
     res = start(arm, "--recreate")
@@ -881,7 +916,7 @@ def test_start_warns_before_a_recreate_from_a_stale_image_and_still_recreates(ar
 
 
 def test_start_warns_when_it_creates_a_container_from_a_stale_image(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.state["history"] = maven_history(STALE)
     res = start(arm)
     assert res.returncode == 0, res.output
@@ -889,7 +924,7 @@ def test_start_warns_when_it_creates_a_container_from_a_stale_image(arm):
 
 
 def test_start_is_silent_about_maven_when_the_image_matches(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.state["history"] = maven_history(pinned_maven())
     res = start(arm)
     assert res.returncode == 0, res.output
@@ -897,7 +932,7 @@ def test_start_is_silent_about_maven_when_the_image_matches(arm):
 
 
 def test_restart_privileged_warns_before_it_recreates_from_a_stale_image(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("arm64")
     arm.state["history"] = maven_history(STALE)
     res = restart(arm, "--privileged")
@@ -919,17 +954,17 @@ def untouched(sb, arch="amd64"):
 
 
 def test_recreate_without_the_target_image_leaves_the_container_alone(arm):
-    arm.image(f"{TAG}-amd64", "amd64")  # the arm64 image was never built
+    arm.image(f"{RUN_TAG}-amd64", "amd64")  # the arm64 image was never built
     arm.container("amd64")
     res = start(arm, "--recreate", "--platform", "linux/arm64")
     assert res.returncode == 1
-    assert f"{TAG}-arm64" in res.output and "left untouched" in res.output
+    assert f"{RUN_TAG}-arm64" in res.output and "left untouched" in res.output
     assert "gbx-docker-rebuild.sh --platform linux/arm64" in res.output
     assert untouched(arm) and arm.of("run") == []
 
 
 def test_recreate_with_the_target_image_still_replaces_the_container(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("amd64")
     res = start(arm, "--recreate", "--platform", "linux/arm64")
     assert res.returncode == 0, res.output
@@ -939,12 +974,12 @@ def test_recreate_with_the_target_image_still_replaces_the_container(arm):
 def test_a_worktree_mismatch_recreate_checks_the_image_first_too(arm):
     arm.container("amd64", mount="/some/other/worktree")
     # only the OTHER architecture's image exists: the replacement keeps amd64, so nothing is recreated
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     res = start(arm)
     assert res.returncode == 1 and "left untouched" in res.output
-    assert f"{TAG}-amd64" in res.output
+    assert f"{RUN_TAG}-amd64" in res.output
     assert untouched(arm) and arm.of("run") == []
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     res = start(arm)
     assert res.returncode == 0, res.output
     assert lifecycle(arm) == [
@@ -955,23 +990,23 @@ def test_a_worktree_mismatch_recreate_checks_the_image_first_too(arm):
 
 def test_a_worktree_mismatch_recreate_keeps_the_architecture_of_the_container(arm):
     """Only the mount is wrong: an amd64 container on an arm64 host stays amd64."""
-    arm.image(f"{TAG}-arm64", "arm64")
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     arm.container("amd64", mount="/some/other/worktree")
     res = start(arm)
     assert res.returncode == 0, res.output
     run = arm.of("run")[0]
-    assert (flag_value(run, "--platform"), run[-2]) == ("linux/amd64", f"{TAG}-amd64")
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/amd64", f"{RUN_TAG}-amd64")
 
 
 def test_a_worktree_mismatch_recreate_honours_an_explicit_platform(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     arm.container("amd64", mount="/some/other/worktree")
     res = start(arm, "--platform", "linux/arm64")
     assert res.returncode == 0, res.output
     run = arm.of("run")[0]
-    assert (flag_value(run, "--platform"), run[-2]) == ("linux/arm64", f"{TAG}-arm64")
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/arm64", f"{RUN_TAG}-arm64")
 
 
 def restart(sb, *args, env=None):
@@ -982,9 +1017,9 @@ def test_restart_privileged_checks_the_image_before_removing_the_container(arm):
     arm.container("amd64")
     res = restart(arm, "--privileged")
     assert res.returncode == 1
-    assert f"{TAG}-amd64" in res.output and "left untouched" in res.output
+    assert f"{RUN_TAG}-amd64" in res.output and "left untouched" in res.output
     assert untouched(arm) and arm.of("run") == []
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     res = restart(arm, "--privileged")
     assert res.returncode == 0, res.output
     assert lifecycle(arm) == ["stop", "rm"] and arm.of("run")
@@ -993,20 +1028,20 @@ def test_restart_privileged_checks_the_image_before_removing_the_container(arm):
 def test_restart_privileged_recreates_on_the_architecture_it_replaces(arm):
     """Read from the existing container's image, not the host default: an amd64 container on an arm64
     host comes back amd64, even though the arm64 image exists and is the default."""
-    arm.image(f"{TAG}-arm64", "arm64")
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     arm.container("amd64")
     res = restart(arm, "--privileged")
     assert res.returncode == 0, res.output
     run = arm.of("run")[0]
-    assert (flag_value(run, "--platform"), run[-2]) == ("linux/amd64", f"{TAG}-amd64")
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/amd64", f"{RUN_TAG}-amd64")
     assert "--privileged" in run
     assert arm.final_state()["container"]["arch"] == "amd64"
 
 
 def test_restart_privileged_is_not_moved_by_the_platform_environment_either(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
-    arm.image(f"{TAG}-amd64", "amd64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-amd64", "amd64")
     arm.container("amd64")
     res = restart(arm, "--privileged", env={"GBX_DOCKER_PLATFORM": "linux/arm64"})
     assert res.returncode == 0, res.output
@@ -1014,17 +1049,17 @@ def test_restart_privileged_is_not_moved_by_the_platform_environment_either(arm)
 
 
 def test_restart_privileged_on_an_x86_host_keeps_an_arm64_container_arm64(x86):
-    x86.image(f"{TAG}-arm64", "arm64")
-    x86.image(f"{TAG}-amd64", "amd64")
+    x86.image(f"{RUN_TAG}-arm64", "arm64")
+    x86.image(f"{RUN_TAG}-amd64", "amd64")
     x86.container("arm64")
     res = restart(x86, "--privileged")
     assert res.returncode == 0, res.output
     run = x86.of("run")[0]
-    assert (flag_value(run, "--platform"), run[-2]) == ("linux/arm64", f"{TAG}-arm64")
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/arm64", f"{RUN_TAG}-arm64")
 
 
 def test_restart_privileged_refuses_when_the_architecture_cannot_be_read(arm):
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{RUN_TAG}-arm64", "arm64")
     arm.container("amd64")
     arm.state["container_image_gone"] = True
     res = restart(arm, "--privileged")
@@ -1066,7 +1101,7 @@ def test_the_probe_runs_in_a_throwaway_container_of_the_finished_image(arm):
     # no `--name geobrix-dev`, no exec into any container
     assert not any("--name" in c for c in arm.of("run"))
     assert arm.of("exec") == []
-    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{BASE_TAG}-arm64"] in arm.calls
     assert "Native stack as expected" in res.output
     # it comes after the index check and before the tag
     order = [c[0] for c in arm.calls if c[0] in ("history", "run", "tag")]
@@ -1077,7 +1112,7 @@ def test_the_probe_on_an_x86_host_uses_the_amd64_platform(x86):
     res = build(x86)
     assert res.returncode == 0, res.output
     assert flag_value(probe_calls(x86)[0], "--platform") == "linux/amd64"
-    assert ["tag", "geobrix-checkpoint:final-amd64", f"{TAG}-amd64"] in x86.calls
+    assert ["tag", "geobrix-checkpoint:final-amd64", f"{BASE_TAG}-amd64"] in x86.calls
 
 
 def probe_with(arch, **changes):
@@ -1087,30 +1122,26 @@ def probe_with(arch, **changes):
 
 
 PROBE_FAILURES = {
-    "GDAL differs": (dict(gdal="3.11.3"), "GDAL: want '3.11.4', got '3.11.3'"),
-    "GDAL missing": (dict(gdal=""), "GDAL: want '3.11.4', got 'nothing'"),
+    "a system GDAL": (dict(gdal="3.11.4"), "the base image has a system GDAL (gdalinfo reports '3.11.4')"),
+    "a system libgdal": (
+        dict(libgdal="/usr/local/lib/libgdal.so.37"),
+        "the base image has a system libgdal: '/usr/local/lib/libgdal.so.37'",
+    ),
+    "an apt libgdal": (
+        dict(libgdal="/usr/lib/aarch64-linux-gnu/libgdal.so.34"),
+        "the base image has a system libgdal",
+    ),
+    "a GDAL JNI": (
+        dict(jni="/usr/local/lib/jni/libgdalalljni.so"),
+        "the base image has a GDAL JNI: '/usr/local/lib/jni/libgdalalljni.so'",
+    ),
+    "GDAL's Python binding": (
+        dict(osgeo="/usr/local/lib/python3.12/dist-packages/osgeo/__init__.py"),
+        "the base image has GDAL's Python binding",
+    ),
+    "osgeo not reported": (dict(osgeo=""), "the base image has GDAL's Python binding"),
     "PROJ differs": (dict(proj="9.4.1"), "PROJ: want '9.4.0', got '9.4.1'"),
     "GEOS differs": (dict(geos="3.12.2"), "GEOS: want '3.12.1', got '3.12.2'"),
-    "JNI resolves no libgdal": (
-        dict(jni_libgdal=""),
-        "libgdalalljni.so does not resolve libgdal.so.37 in /usr/local/lib",
-    ),
-    "JNI resolves another libgdal": (
-        dict(jni_libgdal="/usr/local/lib/libgdal.so.34"),
-        "libgdalalljni.so does not resolve libgdal.so.37 in /usr/local/lib",
-    ),
-    "JNI resolves its libgdal outside /usr/local/lib": (
-        dict(jni_libgdal="/usr/lib/aarch64-linux-gnu/libgdal.so.37"),
-        "does not resolve libgdal.so.37 in /usr/local/lib",
-    ),
-    "JNI needs no libgdal": (
-        dict(jni_soname="", jni_libgdal=""),
-        "needs no libgdal",
-    ),
-    "JNI has unresolved libraries": (
-        dict(jni_unresolved="2"),
-        "libgdalalljni.so has unresolved libraries",
-    ),
     "rasterio built from source": (
         dict(rasterio_tags="cp312-cp312-linux_aarch64"),
         "rasterio is not a manylinux wheel",
@@ -1119,7 +1150,7 @@ PROBE_FAILURES = {
         dict(rasterio_libs="false"),
         "no vendored rasterio.libs",
     ),
-    "rasterio on the system GDAL": (
+    "rasterio on another GDAL": (
         dict(rasterio_gdal="3.11.4"),
         "rasterio's GDAL: want '3.12.1', got '3.11.4'",
     ),
@@ -1141,7 +1172,7 @@ def test_a_native_stack_that_is_not_as_intended_is_not_tagged(arm, name):
     res = build(arm)
     assert res.returncode == 1, res.output
     assert expected in res.output, res.output
-    assert "not tagged" in res.output and f"{TAG}-arm64" in res.output
+    assert "not tagged" in res.output and f"{BASE_TAG}-arm64" in res.output
     assert arm.of("tag") == []  # the final tag is never applied
     # the checkpoint is kept for inspection
     assert "geobrix-checkpoint:final-arm64" in arm.final_state()["images"]
@@ -1153,8 +1184,17 @@ def test_every_failed_expectation_is_listed(arm):
     )
     res = build(arm)
     assert res.returncode == 1
-    for expected in ("GDAL: want", "PROJ: want", "rasterio is not a manylinux wheel"):
+    for expected in ("has a system GDAL", "PROJ: want", "rasterio is not a manylinux wheel"):
         assert expected in res.output
+    assert arm.of("tag") == []
+
+
+@pytest.mark.parametrize("key", ["gdal", "libgdal", "jni", "osgeo"])
+def test_a_probe_that_does_not_report_a_no_gdal_key_fails_closed(arm, key):
+    """An empty value means "none", so a key the probe did not print at all must not pass as none."""
+    arm.state["probe"]["arm64"] = [l for l in good_probe("arm64") if not l.startswith(key + "=")]
+    res = build(arm)
+    assert res.returncode == 1 and f"the probe did not report '{key}'" in res.output
     assert arm.of("tag") == []
 
 
@@ -1227,18 +1267,6 @@ def test_a_native_stack_failure_does_not_mask_an_index_leak_and_the_reverse(arm)
     assert res.returncode == 1 and "recorded in the image history" in res.output
     assert probe_calls(arm) == []
     assert INDEX not in res.output and "idx.internal" not in res.output
-
-
-def test_the_jni_soname_is_read_from_the_probe_not_hard_coded(arm):
-    """A GDAL bump changes the soname; the check follows what the JNI file asks for (resolved in /usr/local/lib)."""
-    arm.state["probe"]["arm64"] = probe_with(
-        "arm64",
-        jni_soname="libgdal.so.38",
-        jni_libgdal="/usr/local/lib/libgdal.so.38",
-    )
-    res = build(arm)
-    assert res.returncode == 0, res.output
-    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
 
 
 def test_a_probe_that_fails_prints_the_tail_of_its_stderr(arm):
@@ -1326,8 +1354,7 @@ def test_two_builds_starting_together_use_the_salt_that_won(arm):
 
 # --- the native overlay (--overlay gbxnative) -------------------------------------------------------
 
-NATIVE_TAG = "geobrix-dev:ubuntu24-gbxnative-spark"
-BASE_TAG = "geobrix-dev:ubuntu24-gdal311-spark"
+NATIVE_TAG = RUN_TAG
 PAYLOAD_ROOT = "/opt/gbx-native"
 
 
@@ -1482,7 +1509,8 @@ def test_the_overlay_leaves_the_running_container_and_the_base_image_alone(overl
     assert overlay.of("stop") == [] and overlay.of("rm") == []
     assert overlay.final_state()["container"]["running"] is True
     assert f"{NATIVE_TAG}-arm64" in res.output
-    assert "GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark" in res.output  # how to switch, at a quiet point
+    assert "gbx-docker-start.sh --recreate --platform linux/arm64" in res.output  # how to switch, at a quiet point
+    assert "GBX_DEV_IMAGE_TAG" not in res.output  # the overlay is the default run image: nothing to set
 
 
 def test_the_overlay_is_not_started_by_the_rebuild_command(overlay):
@@ -1589,6 +1617,14 @@ def test_an_overlay_probe_that_cannot_run_prints_its_stderr_and_fails_closed(ove
     assert res.returncode == 1 and "Could not run the native-stack probe" in res.output
     assert "no module named osgeo" in res.output
     assert overlay.of("tag") == []
+
+
+def test_a_base_rebuild_says_the_overlay_comes_next(arm):
+    """The container runs the overlay, so a new base image is not what it runs until the overlay is rebuilt on it."""
+    res = rebuild(arm)
+    assert res.returncode == 0, res.output
+    assert f"{BASE_TAG}-arm64" in res.output
+    assert "gbx-docker-rebuild.sh --overlay gbxnative --platform linux/arm64" in res.output
 
 
 def test_the_native_tags_follow_the_architecture(arm):

@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 from conftest import REPO_ROOT
-from test_docker_platform import TAG, Sandbox
+from test_docker_platform import RUN_TAG, Sandbox
 
 SCRIPT = REPO_ROOT / "scripts" / "docker" / "extras" / "docker_native_jni.sh"
 JNI_STEP = ["/bin/bash", "/root/geobrix/scripts/docker/extras/docker_native_jni.sh"]
@@ -165,7 +165,7 @@ def _steps(sb):
 @pytest.mark.parametrize("state", ["running", "stopped", "absent"])
 def test_every_start_links_the_jvm_gdal_after_the_maven_setup(tmp_path, state):
     sb = Sandbox(tmp_path, "arm64")
-    sb.image(f"{TAG}-arm64", "arm64")
+    sb.image(f"{RUN_TAG}-arm64", "arm64")
     if state != "absent":
         sb.container("arm64", running=state == "running")
 
@@ -177,7 +177,7 @@ def test_every_start_links_the_jvm_gdal_after_the_maven_setup(tmp_path, state):
 
 def test_a_restart_links_the_jvm_gdal_after_the_maven_setup(tmp_path):
     sb = Sandbox(tmp_path, "arm64")
-    sb.image(f"{TAG}-arm64", "arm64")
+    sb.image(f"{RUN_TAG}-arm64", "arm64")
     sb.container("arm64")
 
     res = sb.run(sb.commands / "gbx-docker-restart.sh")

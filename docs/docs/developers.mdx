@@ -250,7 +250,7 @@ Pushing to a branch (except `python/**` and `scala/**`) **successfully triggers*
 
 The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `python_build/`) use a **shared environment**. When both run in the same job (e.g. **build main**), caches stay warm:
 
-- **Apt** — Both actions restore `.cache/apt-archives` at the start of the system-packages step and save it at the end. No GDAL comes from apt: the JVMs run on the native payload's GDAL, the one GeoBrix ships. Workflows cache `.cache/apt-archives` with a key derived from both action files, so one cache serves Scala and Python; changing either action’s apt steps invalidates the cache.
+- **Apt** — The Scala action restores `.cache/apt-archives` at the start of its system-packages step and saves it at the end; it installs only `zip` and `unzip`. No GDAL comes from apt: the JVMs run on the native payload's GDAL, the one GeoBrix ships, and the payload bundles the libraries it links. The Python action installs no apt packages. Workflows cache `.cache/apt-archives` with a key derived from both action files, so changing either action invalidates the cache.
 - **Pip** — Both use the same pip cache key (`.ci-pip-cache-key`, created by the workflow from ref + matrix). That avoids duplicate pip installs when Scala runs first and Python reuses the same interpreter and cache.
 - **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`. Every Maven call in CI is `./mvnw`, which runs the version pinned in `.mvn/wrapper/maven-wrapper.properties`; the dev image installs the same version, and `pom.xml` requires it as a minimum.
 

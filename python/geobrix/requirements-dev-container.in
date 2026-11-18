@@ -16,8 +16,8 @@
 #   python3 scripts/ci/check_dev_container_locks.py
 #
 # All versions match scripts/docker/Dockerfile's ENV block (DBR 17.3 LTS-aligned
-# where applicable). GDAL's Python binding (osgeo) is NOT included: the base image
-# has no GDAL, and the native overlay brings the env6 payload's build of it.
+# where applicable). GDAL is NOT included — it's built from source and the
+# Python binding is installed against the local gdal-config --version.
 #
 # Bump procedure: edit a pin, regenerate the .txt, rebuild the image with
 # `scripts/docker/build_smart.sh --no-cache`, smoke-test.

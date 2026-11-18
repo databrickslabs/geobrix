@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "e97684748349ec58bde7d1fc7956c081680ca3138b7a5e975117cb4896fcbd29",
-  "date": "2026-11-17",
+  "native_inputs_sha256": "4cbc2dde4edd4bd840353bacdc70874edd0ce6381a19d4656b463284929fd21a",
+  "date": "2026-11-18",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "1a84ff262223cc3e3c4be3ce9220d27f6d97d085",
+  "built_from": "b13445f6cc36b002849b6911e58a34d6780b6e7d",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -108,7 +108,7 @@
     "scripts/native/install_moves.py": "10b40b37e678a8dba444bb207d3031c9f5ed2fbe79482d7c59f2fe7dde5fb88a",
     "scripts/native/java_jar.py": "e66bc6384dcbb2c60f4088ad03be6b7df1062c7e9278817e5cb6394cc741aca2",
     "scripts/native/jvm_payload.py": "798d7792c8d46d54a42e096aaf685870d893c0ddf2aeb70f7a0cd88badf60b91",
-    "scripts/native/legacy-consumers.txt": "67908735fbe387ac9e7c7f78260c5d0f1f4573e9ff655e5ad588c0cab872080d",
+    "scripts/native/legacy-consumers.txt": "007e74deedc92e3a17111f438196636502ff8bd21b61365840dbc4527054c5a6",
     "scripts/native/maven/gdal-3.13.3-gbx1.jar": "17416efc7f12c47febaa21c50b22ee62d116f1f6102b046fc59607238093dc08",
     "scripts/native/native_inputs.py": "a23f1f90a6054c38de18498b03707a1e8f8ed3232786b700e25bea29f08377d4",
     "scripts/native/p11_probe.py": "2dec1a3e724138cb01caa0288f5f994df4a507e62afdc061be458a1fc992c157",

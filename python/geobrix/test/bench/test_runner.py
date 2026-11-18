@@ -1101,7 +1101,8 @@ def test_process_kb_uses_the_resident_set_when_smaps_rollup_cannot_say(
 
 def test_time_iters_keeps_each_measured_sample_in_run_order():
     """Pooling iterations across runs needs every sample, not only the median, min and p90."""
-    waits = iter([0.004, 0.0, 0.002])
+    # tens of ms apart, so scheduler jitter on a loaded CI runner cannot swap the order
+    waits = iter([0.06, 0.0, 0.03])
 
     def fn():
         time.sleep(next(waits))

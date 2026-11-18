@@ -10,6 +10,7 @@ pyogrio and through the ``file_gdb_gbx`` reader.
 
 import datetime
 import decimal
+import logging
 import os
 import subprocess
 import sys
@@ -795,18 +796,25 @@ def test_every_partition_null_still_raises_the_geometry_type_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sql_reserved_column_name_is_laundered_with_a_trailing_underscore(tmp_path):
+def test_sql_reserved_column_name_is_laundered_with_a_trailing_underscore(
+    tmp_path, caplog
+):
     """GDAL renames a field called after an SQL reserved word (``by``) to ``by_`` and the
     values still land in it."""
     schema = _schema(StructField("by", StringType()), StructField("keep", StringType()))
     rows = [("x", "k", _g(), "4326", ""), ("y", "k", _g(), "4326", "")]
+    caplog.set_level(logging.WARNING)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         out = _write_gdb(tmp_path / "by.gdb", schema, [rows])
     fields = list(pyogrio.read_info(out)["fields"])
     assert "by_" in fields and "by" not in fields and "keep" in fields
     assert sorted(pyogrio.read_dataframe(out)["by_"]) == ["x", "y"]
-    assert any("by_" in str(c.message) for c in caught)
+    # GDAL's error handler is process-wide: once another test routes it to Python
+    # logging, the rename notice arrives as a log record instead of a warning
+    notices = [str(c.message) for c in caught]
+    notices += [r.getMessage() for r in caplog.records]
+    assert any("by_" in m for m in notices)
 
 
 @pytest.mark.parametrize(

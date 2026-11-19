@@ -71,7 +71,7 @@ UC functions read raster files through a table with a FILE column. The table hol
 :::tip Write the table once
 A UC function cannot open a Volume path. Writing this table is the minimum step that gives UC functions, and a Genie Agent, the files.
 
-It is the alternative to a table with a tile column. A tile column copies the pixels, and UC refuses a tile over 64 MiB decoded. The FILE table keeps references, and `gbx_rst_fromfile` reads only the blocks a query needs.
+It is the alternative to a table with a tile column (which is also accepted). A tile column copies the pixels, and UC refuses a tile over 64 MiB decoded. The FILE table keeps references, and `gbx_rst_fromfile` reads only the blocks a query needs.
 :::
 
 The written table gives you:

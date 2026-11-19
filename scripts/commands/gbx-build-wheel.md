@@ -127,7 +127,9 @@ The report is `build/env-wheel/env<N>/verify-<arch>.txt`; the last line is `ENV_
 
 `--verify` installs offline with `base.txt` as constraints, so it cannot see a float. This check uses pip with no constraint and the host's index (its newest releases). The work is `scripts/native/float_check.py`.
 
-- It runs per runtime of the env: env5 has DBR 17.3, DBR 18 and environment 5; env6 has DBR 19, DBR 19 ML, environment 6 and 6 ML.
+- It runs once for each runtime of the env.
+  - env5: DBR 17.3, DBR 18 and environment 5.
+  - env6: DBR 19, DBR 19 ML, environment 6 and environment 6 ML.
 - In a fresh CPython 3.12 venv of the toolchain image, every package of `envs/runtimes/<runtime>.txt` (the runtime's full `pip freeze`) is made installed at its version. Each gets a stub dist-info; pip stays real.
 - `pip install --dry-run --report` runs on the wheel: the core install, each extra alone, and every extra together.
 - A package in the report that the runtime preinstalls at another version is a move. The line names the requirement chain from geobrix (`geobrix[vizx] -> httpx2 -> idna`).

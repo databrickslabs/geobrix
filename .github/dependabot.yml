@@ -21,8 +21,12 @@ updates:
     # Spark is a `provided` dependency compiled against the lowest supported runtime's Spark
     # (DBR 17.3, Spark 4.0), so one JAR loads on DBR 17.3, 18 and 19. A newer Spark is checked
     # by running the JAR on that runtime, not by compiling against it.
+    # jackson-databind is `provided` and must equal the Spark build's own jackson version
+    # (2.18.2 for Spark 4.0.0), so it follows Spark, not the latest release. `jackson.version`
+    # in pom.xml is overridden for a compat build against another Spark.
     ignore:
       - dependency-name: "org.apache.spark:*"
+      - dependency-name: "com.fasterxml.jackson*"
 
   - package-ecosystem: "pip"
     directory: "/python/geobrix"

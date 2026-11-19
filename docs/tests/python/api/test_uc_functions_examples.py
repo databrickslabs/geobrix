@@ -565,3 +565,34 @@ def test_landing_the_raster_table_needs_a_runtime_with_file(spark):
     rasters = spark.createDataFrame([("a.tif", "/Volumes/main/geobrix/rasters/a.tif")], ["name", "path"])
     with pytest.raises(ValueError, match="file_mode='fuse'"):
         ex.land_the_raster_table(rasters)
+
+
+def test_the_on_the_fly_read_is_a_session_statement_on_the_file_column():
+    """The on-the-fly route calls the session functions, without the schema, on the `file` that gbx_file_read gives."""
+    sql = ex.READ_ON_THE_FLY_SQL
+    assert "main.geobrix." not in sql
+    assert re.search(r"\bgbx_rst_fromfile\(file, 'GTiff'\)", sql)
+    assert "FROM raster_files" in sql
+    src = inspect.getsource(ex.read_on_the_fly)
+    assert 'createOrReplaceTempView("raster_files")' in src and "gbx_file_write" not in src
+
+
+def test_the_on_the_fly_read_runs_in_a_session(spark, monkeypatch):
+    """The listing and the read on the sample GeoTIFFs. A runtime without FILE gives a null `file`, so there the same
+    call reads `path`, which the session form of gbx_rst_fromfile also takes; the band means must match rasterio."""
+    import numpy as np
+    import rasterio
+
+    from databricks.labs.gbx.ds.file_gbx import file_supported
+    from path_config import SAMPLE_DATA_BASE
+
+    folder = f"{SAMPLE_DATA_BASE}/london/sentinel2"
+    if not file_supported(spark):
+        monkeypatch.setattr(ex, "READ_ON_THE_FLY_SQL", ex.READ_ON_THE_FLY_SQL.replace("fromfile(file,", "fromfile(path,"))
+    rows = ex.read_on_the_fly(spark, folder).orderBy("path").collect()
+    tifs = sorted(str(p) for p in Path(folder).glob("*.tif"))
+    assert [Path(r["path"]).name for r in rows] == [Path(t).name for t in tifs] and tifs
+    for r in rows:
+        with rasterio.open(r["path"]) as ds:
+            want = [ds.read(b, masked=True).mean() for b in range(1, ds.count + 1)]
+        assert r["band_means"] is not None and np.allclose(r["band_means"], [float(w) for w in want], rtol=1e-6)

@@ -8,7 +8,11 @@
   'full' install;
 - report() prints a row per (runtime, install) and exits 1 on an undocumented move or a failed resolution;
 - host() stops on a missing wheel, image or index before any container runs, and hands the index to the container
-  through the environment only.
+  through the environment only;
+- index_url() reads PIP_INDEX_URL first, then the host pip's global.index-url, else returns "";
+- inner() runs pip's dry-run per runtime and install (no constraint file, the index from the environment), turns each
+  report into moves and new packages, and records a pip failure as an error row;
+- main() parses the arguments and dispatches to host() or, with --inner, to inner().
 """
 
 import importlib.util
@@ -228,3 +232,180 @@ def test_host_redacts_a_failed_container_run(hostenv, capsys):
     out = capsys.readouterr().out
     assert "pypi.example" not in out and "Could not connect to" in out  # the error stays, the index does not
     assert "rows=0 moves=0 undocumented=1" in out
+
+
+# --- index_url(): the host's configured index ------
+
+
+def _pip_config(answers):
+    """subprocess.run stand-in for `<python> -m pip config get global.index-url`: ``answers`` maps the interpreter to
+    (returncode, stdout)."""
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        rc, out = answers.get(cmd[0], (1, ""))
+        return subprocess.CompletedProcess(cmd, rc, out, "")
+
+    run.calls = calls
+    return run
+
+
+def test_index_url_prefers_the_environment(monkeypatch):
+    monkeypatch.setenv("PIP_INDEX_URL", "https://env.example/simple")
+    run = _pip_config({"python3.12": (0, "https://conf.example/simple\n")})
+    monkeypatch.setattr(fc.subprocess, "run", run)
+    assert fc.index_url() == "https://env.example/simple" and run.calls == []
+
+
+def test_index_url_reads_the_pip_config_and_falls_back_to_python3(monkeypatch):
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    run = _pip_config({"python3.12": (0, "https://conf.example/simple\n")})
+    monkeypatch.setattr(fc.subprocess, "run", run)
+    assert fc.index_url() == "https://conf.example/simple"  # stripped
+    assert run.calls[0][1:] == ["-m", "pip", "config", "get", "global.index-url"]
+    run = _pip_config({"python3.12": (1, ""), "python3": (0, "https://py3.example/simple\n")})
+    monkeypatch.setattr(fc.subprocess, "run", run)
+    assert fc.index_url() == "https://py3.example/simple" and [c[0] for c in run.calls] == ["python3.12", "python3"]
+
+
+def test_index_url_is_empty_without_any_source(monkeypatch):
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.setattr(fc.subprocess, "run", _pip_config({"python3.12": (0, "  \n")}))  # blank output is no answer
+    assert fc.index_url() == ""
+
+
+# --- inner(): pip's dry-run per runtime, inside the toolchain image ---------------------------------------------------
+
+
+class _Pip:
+    """subprocess.run stand-in for inner(): the venv is a no-op, the purelib is ``site``, and `pip install --dry-run`
+    records its call and writes ``report`` to the --report path (or fails with ``rc``/``stderr``)."""
+
+    def __init__(self, site, report=None, rc=0, stderr=""):
+        self.site, self.report, self.rc, self.stderr, self.calls = site, report, rc, stderr, []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if cmd[1:3] == ["-m", "venv"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[1] == "-c":
+            return subprocess.CompletedProcess(cmd, 0, f"{self.site}\n", "")
+        assert cmd[1:4] == ["-m", "pip", "install"], cmd
+        if self.rc == 0:
+            Path(cmd[cmd.index("--report") + 1]).write_text(json.dumps(self.report))
+        return subprocess.CompletedProcess(cmd, self.rc, "", self.stderr)
+
+    @property
+    def pip_calls(self):
+        return [(c, kw) for c, kw in self.calls if c[1:4] == ["-m", "pip", "install"]]
+
+
+@pytest.fixture
+def innerenv(tmp_path, monkeypatch):
+    """A runtime pin file, an out path, and the installs cut to the core and one extra."""
+    runtimes = tmp_path / "runtimes"
+    runtimes.mkdir()
+    (runtimes / "dbr19.txt").write_text("idna==3.11\nurllib3==2.5.0  # pinned\npip==25.0\n")
+    monkeypatch.setattr(fc, "installs", lambda env: [("core", ()), ("zarr", ("zarr",))])
+    pip = _Pip(tmp_path / "site", report=REPORT)
+    monkeypatch.setattr(fc.subprocess, "run", pip)
+    args = Namespace(env=6, wheel="/wheel/geobrix.whl", runtime=["dbr19"], runtimes=str(runtimes),
+                     json=str(tmp_path / "float.json"))  # fmt: skip
+    return Namespace(args=args, pip=pip, tmp=tmp_path)
+
+
+def test_inner_dry_runs_pip_without_a_constraint_per_install(innerenv):
+    assert fc.inner(innerenv.args) == 0
+    (core, _), (zarr, _) = innerenv.pip.pip_calls
+    assert core[0].endswith("/bin/python") and core[1:4] == ["-m", "pip", "install"]
+    assert "--dry-run" in core and "--report" in core and "--quiet" in core
+    assert "-c" not in core and "--constraint" not in core
+    assert "--index-url" not in core  # the index comes from the environment
+    assert core[-1] == "/wheel/geobrix.whl" and zarr[-1] == "/wheel/geobrix.whl[zarr]"
+    assert all(kw.get("env") is None for _c, kw in innerenv.pip.pip_calls)  # inherits PIP_INDEX_URL from `docker -e`
+
+
+def test_inner_makes_the_runtime_installed_before_pip_runs(innerenv):
+    fc.inner(innerenv.args)
+    site = innerenv.tmp / "site"
+    assert (site / "idna-3.11.dist-info" / "METADATA").is_file() and (site / "urllib3-2.5.0.dist-info").is_dir()
+    assert not list(site.glob("pip-*"))  # the venv's own pip stays real
+
+
+def test_inner_turns_the_report_into_moves_and_new_packages(innerenv):
+    fc.inner(innerenv.args)
+    rows = json.loads(Path(innerenv.args.json).read_text())
+    core = rows[0]
+    assert (core["runtime"], core["install"], core["installed_before"]) == ("dbr19", "core", 2)
+    assert core["moves"] == [{"name": "idna", "runtime": "3.11", "to": "3.20", "chain": "geobrix -> httpx2 -> idna",
+                              "documented": True}]  # fmt: skip
+    assert {"name": "truststore", "version": "0.10.5", "chain": "geobrix -> httpx2 -> truststore"} in core["new"]
+    assert rows[1]["install"] == "zarr" and "error" not in rows[1]  # one row per (runtime, install)
+
+
+def test_inner_marks_an_undocumented_move(innerenv, monkeypatch):
+    monkeypatch.setattr(fc, "allowed_for", lambda env, label: set())
+    fc.inner(innerenv.args)
+    assert json.loads(Path(innerenv.args.json).read_text())[0]["moves"][0]["documented"] is False
+
+
+def test_inner_records_a_pip_failure_as_an_error_row(innerenv):
+    innerenv.pip.rc = 1
+    innerenv.pip.stderr = "ERROR: No matching distribution found for foo at https://pypi.example.internal/simple/foo/"
+    assert fc.inner(innerenv.args) == 0  # the verdict is the host's; the rows carry the failure
+    rows = json.loads(Path(innerenv.args.json).read_text())
+    assert [r["install"] for r in rows] == ["core", "zarr"]  # a failed install does not stop the next one
+    assert all("moves" not in r for r in rows)
+    assert "No matching distribution found for foo" in rows[0]["error"] and "pypi.example" not in rows[0]["error"]
+    assert fc.report(6, "x86_64", Path("g.whl"), rows) == 1
+
+
+# --- main(): arguments and dispatch ----------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def dispatch(monkeypatch):
+    """host() and inner() replaced by recorders returning a chosen code; ENVS restored after --inner rebinds it."""
+
+    class Calls(list):
+        rc = 0
+
+    calls = Calls()
+    monkeypatch.setattr(fc, "host", lambda a: calls.append(("host", a)) or calls.rc)
+    monkeypatch.setattr(fc, "inner", lambda a: calls.append(("inner", a)) or calls.rc)
+    monkeypatch.setattr(fc, "ENVS", fc.ENVS)
+    return calls
+
+
+def _argv(monkeypatch, *argv):
+    monkeypatch.setattr(sys, "argv", ["float_check.py", *argv])
+
+
+def test_main_dispatches_to_host_and_returns_its_code(dispatch, monkeypatch):
+    _argv(monkeypatch, "--env", "6", "--arch", "aarch64", "--wheel", "w.whl", "--runtime", "a", "--runtime", "b",
+          "--out", "o")  # fmt: skip
+    dispatch.rc = 1
+    assert fc.main() == 1
+    ((target, args),) = dispatch
+    assert target == "host"
+    got = (args.env, args.arch, args.wheel, args.runtime, args.out, args.inner)
+    assert got == (6, "aarch64", "w.whl", ["a", "b"], "o", False)
+
+
+def test_main_inner_dispatches_to_inner_and_points_envs_at_the_runtimes_parent(dispatch, monkeypatch):
+    _argv(monkeypatch, "--inner", "--env", "5", "--arch", "x86_64", "--runtimes", "/envs/runtimes",
+          "--json", "/out/f.json")  # fmt: skip
+    assert fc.main() == 0
+    ((target, args),) = dispatch
+    assert target == "inner" and args.json == "/out/f.json" and args.runtime is None
+    assert fc.ENVS == Path("/envs")  # the container mounts the envs dir, not the repo
+
+
+@pytest.mark.parametrize("argv", [["--arch", "x86_64"], ["--env", "6"], ["--env", "7", "--arch", "x86_64"],
+                                  ["--env", "6", "--arch", "riscv"]])  # fmt: skip
+def test_main_rejects_a_missing_or_unknown_env_or_arch(dispatch, monkeypatch, argv):
+    _argv(monkeypatch, *argv)
+    with pytest.raises(SystemExit) as e:
+        fc.main()
+    assert e.value.code == 2 and dispatch == []

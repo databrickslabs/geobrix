@@ -67,7 +67,7 @@ UC_FILE_COLUMN_WINDOW_SQL = """SELECT main.geobrix.gbx_rst_avg(main.geobrix.gbx_
 FROM rasters r
 JOIN aois a ON st_intersects(r.footprint, a.geom)"""
 
-# The columns of the rasters table, from the header of each COG. A session statement: it runs in a notebook or job
+# The columns of the rasters table, from the header of each GeoTIFF. A session statement: it runs in a notebook or job
 # after register(spark). The footprint is a GEOMETRY(4326), so st_intersects joins it to polygons in EPSG:4326.
 RASTER_TABLE_COLUMNS_SQL = """SELECT regexp_extract(path, '[^/]+$', 0) AS name,
        path,
@@ -488,12 +488,12 @@ def preview_procedures():
 
 
 def prepare_a_table_of_raster_files(spark, volume_dir="/Volumes/main/geobrix/rasters"):
-    """List the COGs of a Volume folder and read the header of each into the columns of the rasters table."""
+    """List the tiled GeoTIFFs (such as COGs) of a Volume folder and read the header of each into the rasters table."""
     from databricks.labs.gbx.ds.file_gbx import gbx_file_read
     from databricks.labs.gbx.rasterx import functions as rx
 
-    # List the COGs: one row for each file, with its path.
-    files = gbx_file_read(spark, volume_dir, extensions=(".tif",))
+    # List the GeoTIFFs: one row for each file, with its path.
+    files = gbx_file_read(spark, volume_dir, extensions=(".tif", ".tiff"))
 
     # Read each header once. The tile from rst_fromfile holds no pixels.
     files.select("path", rx.rst_fromfile(files["path"]).alias("t")).createOrReplaceTempView("raster_headers")

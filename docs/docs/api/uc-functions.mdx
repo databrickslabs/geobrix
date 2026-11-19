@@ -66,22 +66,22 @@ The sandbox installs the packages from PyPI. When it cannot reach PyPI, the crea
 
 ## Prepare a table of raster files
 
-UC functions read raster files through a table with a FILE column. Build the table once, from a Volume folder of COGs. It holds one row for each COG, with a reference to the file and the columns a query filters on.
+UC functions read raster files through a table with a FILE column. Build the table once, from a Volume folder of tiled GeoTIFFs, such as COGs. It holds one row for each file, with a reference to the file and the columns a query filters on.
 
 :::tip The least you need for raster files on UC
 A UC function cannot open a Volume path, so this table is the minimum step that gives UC functions the files.
 
-It is an alternative to a table with a tile column. That route also works, but it copies the pixels into the table, and UC refuses a tile over 64 MiB decoded. The FILE route keeps references, and `gbx_rst_fromfile` reads only the COG blocks a query needs.
+It is an alternative to a table with a tile column. That route also works, but it copies the pixels into the table, and UC refuses a tile over 64 MiB decoded. The FILE route keeps references, and `gbx_rst_fromfile` reads only the blocks a query needs.
 :::
 
 Run the steps in an env 6 notebook or job, after `register(spark)`:
 
-1. List the COGs with `gbx_file_read`. Each row holds `path`, `size` and `file`.
+1. List the GeoTIFFs with `gbx_file_read`. Each row holds `path`, `size` and `file`.
 2. Read each header once with `rst_fromfile`. The tile it returns holds no pixels.
 3. Keep the columns of the table: `name`, `path`, `srid`, `pixel_size` and `footprint`.
 4. Land the table with `gbx_file_write`, with `file_mode="external"` and `file_col="file"`.
 
-`volume_dir` is the Volume folder that holds the COGs.
+`volume_dir` is the Volume folder that holds the GeoTIFFs. UC reads tiled GeoTIFFs only: it refuses a striped GeoTIFF or another format with a `Fix:`. Write such files as COGs with [`cog_gbx`](../writers/cog) first.
 
 <CodeFromTest code={ucExamples} language="python" functionName="prepare_a_table_of_raster_files" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 

@@ -149,10 +149,11 @@ VENDORED_DISTS = {"gdal"}
 # 2.32.3.
 SECURITY_FLOORS = {"requests": ("2.32.4", "CVE-2024-47081")}
 # Both env wheels target frozen runtime bases (env5: DBR 17.3, DBR 18, Serverless env 5; env6: DBR 19, Serverless
-# env 6), so core.txt's next-minor caps on the preinstalled numpy, pandas, pyarrow, scipy, protobuf, urllib3 and
-# pillow are deliberate frozen-base caps: they cannot downgrade the runtime, and they stop a transitive requirement from
-# upgrading one. The EXTRAS follow a stricter rule: a package any target runtime preinstalls (base.txt names every one
-# an extra names) gets a floor only there, never an upper bound, since an extra is an opt-in a user may install over a
+# env 6), so core.txt's caps on the preinstalled numpy, pandas, pyarrow, scipy, protobuf (next minor), urllib3 and
+# pillow (next major: a runtime patched to one of their security releases must still satisfy the range) are deliberate
+# frozen-base caps: they cannot downgrade the runtime, and they stop a transitive requirement from upgrading one. The
+# EXTRAS follow a stricter rule: a package any target runtime preinstalls (base.txt names every one an extra names)
+# gets a floor only there, never an upper bound, since an extra is an opt-in a user may install over a
 # base they have since upgraded themselves; caps in extras stay on what GeoBrix brings in, where they guard our own
 # compatibility. FROZEN_BASE_CAPS lists the extras' exceptions: env5's requests is held under 2.33, so its
 # CVE-2024-47081 move is a patch move (2.32.3 -> 2.32.5), not a jump to the newest requests.

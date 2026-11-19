@@ -631,6 +631,10 @@ gbx_python_with_sdk() {
 # caller's GBX_NATIVE_ROOT (a native payload, e.g. build/env-wheel/env6/payload), so the run's Python and the JVM it
 # starts use that payload's GDAL. A path under this checkout (relative to it or absolute) becomes its /root/geobrix
 # path; any other absolute path is taken as a path inside the container. Empty when GBX_NATIVE_ROOT is unset.
+# GBX_NATIVE_PTH=0 goes with it: the dev image's 00-gbx-native.pth puts /opt/gbx-native/_vendor/<arch> first on
+# sys.path at interpreter start, whatever GBX_NATIVE_ROOT says, so the bindings came from the image's payload while
+# _native.native_dir() named the caller's. With it the payload is activated at `import databricks.labs.gbx`, from
+# GBX_NATIVE_ROOT only.
 gbx_native_env_args() {
     GBX_NATIVE_ENV_ARGS=()
     [ -n "${GBX_NATIVE_ROOT:-}" ] || return 0
@@ -641,7 +645,7 @@ gbx_native_env_args() {
         /*) ;;
         *) p="/root/geobrix/${p#./}" ;;
     esac
-    GBX_NATIVE_ENV_ARGS=(-e "GBX_NATIVE_ROOT=${p%/}")
+    GBX_NATIVE_ENV_ARGS=(-e "GBX_NATIVE_ROOT=${p%/}" -e GBX_NATIVE_PTH=0)
 }
 
 # gbx_test_env_args: GBX_TEST_ENV_ARGS, the `docker exec` -e arguments for the test-selection variables a host

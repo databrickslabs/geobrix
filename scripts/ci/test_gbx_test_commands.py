@@ -485,7 +485,8 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
 
 def test_a_native_payload_reaches_the_container_pytest_runs(sandbox):
     # GBX_NATIVE_ROOT names a payload under the checkout (relative or absolute): the container's pytest gets its
-    # /root/geobrix path, on the light run and on the parity run; unset, nothing is passed.
+    # /root/geobrix path, on the light run, on gbx:test:python's and on the parity run; unset, nothing is passed.
+    # GBX_NATIVE_PTH=0 goes with it: the image's startup .pth would put the image's own bindings first on sys.path.
     path = "python/geobrix/test/zarr/test_keys.py"
 
     def pytest_env():
@@ -493,8 +494,9 @@ def test_a_native_payload_reaches_the_container_pytest_runs(sandbox):
 
     sandbox.run("gbx-test-pyrx.sh", "--docker", "--path", path, GBX_NATIVE_ROOT="build/env-wheel/env6/payload")
     assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+    assert pytest_env()["GBX_NATIVE_PTH"] == "0"
     sandbox.run("gbx-test-pyrx.sh", "--docker", "--path", path)
-    assert "GBX_NATIVE_ROOT" not in pytest_env()
+    assert "GBX_NATIVE_ROOT" not in pytest_env() and "GBX_NATIVE_PTH" not in pytest_env()
     tree = sandbox.root / "t"
     tree.mkdir()
     (tree / "test_x_cross_tier.py").write_text("def test_x():\n    pass\n")
@@ -506,6 +508,15 @@ def test_a_native_payload_reaches_the_container_pytest_runs(sandbox):
     )
     assert res.returncode == 0, res.output
     assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+    assert pytest_env()["GBX_NATIVE_PTH"] == "0"
+    # gbx:test:python passes them too (the parity sandbox above staged a JAR, its heavy-tier precondition)
+    py_path = "python/geobrix/test/pyrx/test_x.py"
+    res = sandbox.run("gbx-test-python.sh", "--path", py_path, GBX_NATIVE_ROOT="build/env-wheel/env6/payload")
+    assert res.returncode == 0, res.output
+    assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+    assert pytest_env()["GBX_NATIVE_PTH"] == "0"
+    sandbox.run("gbx-test-python.sh", "--path", py_path)
+    assert "GBX_NATIVE_ROOT" not in pytest_env() and "GBX_NATIVE_PTH" not in pytest_env()
 
 
 def test_the_oracle_table_selection_reaches_the_container_pytest_runs(sandbox):

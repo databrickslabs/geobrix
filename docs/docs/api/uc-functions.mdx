@@ -83,7 +83,7 @@ The written table gives you:
 
 ### Write the table
 
-Run the steps in an env 6 notebook or job, after `register(spark)`:
+Run the steps in an env 6 notebook or job (outside a SQL warehouse), after `register(spark)`:
 
 1. List the GeoTIFFs with `gbx_file_read`. Each row holds `path`, `size` and `file`.
 2. Read each header once with `rst_fromfile`. The tile it returns holds no pixels.

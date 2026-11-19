@@ -17,6 +17,12 @@ updates:
       maven-plugins:
         patterns:
           - "org.apache.maven.plugins:*"
+          - "org.codehaus.mojo:*"
+    # Spark is a `provided` dependency compiled against the lowest supported runtime's Spark
+    # (DBR 17.3, Spark 4.0), so one JAR loads on DBR 17.3, 18 and 19. A newer Spark is checked
+    # by running the JAR on that runtime, not by compiling against it.
+    ignore:
+      - dependency-name: "org.apache.spark:*"
 
   - package-ecosystem: "pip"
     directory: "/python/geobrix"

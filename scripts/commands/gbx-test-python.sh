@@ -23,6 +23,7 @@ show_help() {
     echo ""
     echo -e "${CYAN}Oracle tables:${NC} set ${YELLOW}GBX_ORACLE_TABLES=<T1,T2>${NC} in the calling shell to run only those oracle tables in the family harness; it is passed into the container unchanged."
     echo -e "${CYAN}Driver snapshot:${NC} set ${YELLOW}GBX_DRIVERS_SNAPSHOT=write${NC} (with ${YELLOW}GBX_NATIVE_ROOT${NC} at the env6 payload) to rewrite manifest/shipped_drivers.json from that payload's GDAL in test/core/test_drivers.py; it is passed into the container."
+    echo -e "${CYAN}Native payload:${NC} set ${YELLOW}GBX_NATIVE_ROOT=<payload>${NC} (e.g. build/env-wheel/env6/payload, from gbx:build:wheel --env 6) to run the container's pytest on that payload's GDAL and bindings; it is passed into the container as its /root/geobrix path."
     echo -e "${CYAN}Pytest options:${NC} set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (e.g. '--durations=20 --junitxml=test-logs/python.xml'); it is passed into the container, to the --path run and to each phase. A --junitxml path is reliable only with --path (each phase overwrites it)."
     echo ""
     echo -e "${CYAN}Phases (no --path):${NC} the heavy and light tiers cannot share one pytest process, so the default"
@@ -229,8 +230,9 @@ run_single() {
         cd /root/geobrix && \
         ${PLUGIN_ENV}python3 -m pytest $PLUGIN_ARGS $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
+    gbx_native_env_args
     gbx_test_env_args
-    docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
+    docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 
     echo ""
@@ -299,8 +301,9 @@ run_phase() {
     echo -e "${CYAN}  pytest ${args}${NC}"
     show_separator
     echo ""
+    gbx_native_env_args
     gbx_test_env_args
-    docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
+    docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix/python/geobrix && \
         ${PLUGIN_ENV}python3 -m pytest $PLUGIN_ARGS $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
     return "${PIPESTATUS[0]}"

@@ -9,7 +9,7 @@ Later targets build on it.
 `rust-native` is the toolchain plus libclang, where Rust crates that call GDAL, PROJ or GEOS are built against the `stage-native` tree.
 Every version comes from `scripts/native/pins.conf`.
 Its KEY=VALUE lines are the GDAL build's cache key. The build context gets them without comments, so a comment edit rebuilds nothing.
-Versions that feed no GDAL build come from `scripts/native/rust-pins.conf`: PyO3, the georust crates, and the rust-native stage's libclang. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds.
+Versions that feed no GDAL build come from `scripts/native/rust-pins.conf`: PyO3, the georust crates, and the rust-native stage's libclang. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. The OpenJPEG source patch (`OPENJPEG_PATCH_*`) is not fetched: it ships in the repository (`scripts/native/patches/`, with OpenJPEG's `LICENSE`), and `prefetch.sh` copies it into `build/native/src/`, checked against the same sha256; its `pins.conf` URL is provenance only. It does still download two things from public hosts while it builds.
 The first is the JDK (dnf, from the base image's distribution repositories).
 The second is the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
 

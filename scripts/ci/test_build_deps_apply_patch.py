@@ -100,3 +100,12 @@ def test_the_openjpeg_patch_pins_are_what_the_build_passes():
     assert re.fullmatch(r"[0-9a-f]{64}", pins["OPENJPEG_PATCH_SHA256"])
     assert pins["OPENJPEG_PATCH_FILE"].endswith(".patch")
     assert 'apply_patch "$OPENJPEG_PATCH_FILE" "$OPENJPEG_PATCH_SHA256"' in SCRIPT.read_text()
+
+
+def test_the_repository_ships_the_openjpeg_patch_with_its_pinned_sum():
+    """prefetch.sh copies the patch from scripts/native/patches/ (never github.com): its bytes are the pinned ones,
+    and OpenJPEG's BSD-2-Clause licence ships beside it."""
+    pins = dict(re.findall(r"^(OPENJPEG_PATCH_\w+)=(.*)$", PINS.read_text(), re.M))
+    shipped = PINS.parent / "patches" / pins["OPENJPEG_PATCH_FILE"]
+    assert hashlib.sha256(shipped.read_bytes()).hexdigest() == pins["OPENJPEG_PATCH_SHA256"]
+    assert "2-clauses" in (PINS.parent / "patches" / "LICENSE-openjpeg").read_text()

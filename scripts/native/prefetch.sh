@@ -1,7 +1,8 @@
 #!/bin/bash
 # prefetch.sh --arch x86_64|aarch64: fill build/native/ (gitignored) on the host with everything the build
 # container needs, so the container builds from its context and never reaches for the network.
-#   src/                every pinned source tarball, sha256-checked (shared by both architectures)
+#   src/                every pinned source tarball and patch, sha256-checked (shared by both architectures); a file
+#                       scripts/native/patches/ holds is copied from the repository instead of downloaded
 #   bin/<arch>/         rustup-init and cargo-deny.tar.gz, sha256-checked
 #   wheelhouse/<arch>/  the hashed build requirements as manylinux_2_28 wheels (pip download --require-hashes)
 #   sdists/             the five Python-binding sdists, sha256-checked against pins.conf (<X>_SDIST_SHA256), and rasterio's
@@ -39,8 +40,9 @@ OUT="$GBX_NATIVE_BUILD"
 mkdir -p "$OUT/src" "$OUT/bin/$ARCH" "$OUT/wheelhouse/$ARCH" "$OUT/sdists" \
     "$OUT/wheelhouse-bindings/$ARCH" "$OUT/wheelhouse-test/$ARCH" "$OUT/wheelhouse-pypi/$ARCH"
 
+# fetch_source: a file the repository ships (scripts/native/patches/) is copied from there, sha256-checked, not downloaded
 while IFS=$'\t' read -r file sha url url2; do
-    fetch_verified "$OUT/src/$file" "$sha" "$url" "$url2" || exit 1
+    fetch_source "$OUT/src/$file" "$sha" "$url" "$url2" || exit 1
 done < <(python3 "$GBX_NATIVE_DIR/pins.py" sources)
 
 fetch_verified "$OUT/bin/$ARCH/rustup-init" "$(pin "RUSTUP_INIT_SHA256_$UPPER")" \

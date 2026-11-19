@@ -15,6 +15,8 @@ retried once first, as prefetch.sh's `curl --retry` retries it, so a transient a
 seconds for a refusal, and within about twice --timeout for a host that swallows the connection (it is tried twice),
 not 20 minutes into the build. The quay.io image pull and the image build's dnf are probed by the workflow step that
 runs this; the image build's `rustup toolchain install` uses static.rust-lang.org, rustup-init's host, probed here.
+A pinned file the repository ships (scripts/native/patches/<X>_FILE, which prefetch.sh copies instead of downloading)
+is not probed: its _URL in pins.conf is provenance only.
 Stdlib only.
 """
 
@@ -50,13 +52,22 @@ def kind(dep):
     return "a pinned source tarball"
 
 
-def downloads(pins, testdata, arch):
-    """{dep: [url, ...]}: each direct download of prefetch.sh with its origin and mirror."""
+def in_repo(native):
+    """The file names scripts/native/patches/ holds: pinned files prefetch.sh copies from the repository."""
+    own = native / "patches"
+    return frozenset(p.name for p in own.iterdir() if p.is_file()) if own.is_dir() else frozenset()
+
+
+def downloads(pins, testdata, arch, shipped=frozenset()):
+    """{dep: [url, ...]}: each direct download of prefetch.sh with its origin and mirror; a dep whose <dep>_FILE is in
+    shipped (in_repo) is copied from the repository, not downloaded, and is left out."""
     out = {}
     for key, value in sorted({**pins, **testdata}.items()):
         if not key.endswith(("_URL", "_URL2")) or not value.startswith(("https://", "http://")):
             continue
         dep = key[: -len("_URL2")] if key.endswith("_URL2") else key[: -len("_URL")]
+        if pins.get(f"{dep}_FILE") in shipped:
+            continue
         if "{triple}" in value:
             value = value.replace("{triple}", TRIPLES[dep].format(arch=arch))
         out.setdefault(dep, []).append(value)
@@ -113,7 +124,11 @@ def main(argv):
     ap.add_argument("--root", type=Path, default=HERE.parent.parent)
     args = ap.parse_args(argv)
     native = args.root / "scripts" / "native"
-    dl = downloads(load_pins(native / "pins.conf"), load_pins(native / "test-data.conf"), args.arch)
+    pins, shipped = load_pins(native / "pins.conf"), in_repo(native)
+    dl = downloads(pins, load_pins(native / "test-data.conf"), args.arch, shipped)
+    own = sorted(k[: -len("_FILE")] for k, v in pins.items() if k.endswith("_FILE") and v in shipped)
+    if own:
+        print(f"egress probe: not probed, shipped in scripts/native/patches/: {', '.join(own)}")
     errors = probe(dl, lambda u: check_url(u, args.timeout))
     for e in errors:
         print(e)

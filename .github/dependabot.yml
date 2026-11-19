@@ -27,6 +27,10 @@ updates:
     ignore:
       - dependency-name: "org.apache.spark:*"
       - dependency-name: "com.fasterxml.jackson*"
+      # maven-site-plugin is pinned at the reviewed 3.12.1 only so Maven's super-POM default does not
+      # pull a newer site plugin (3.22.0: ~90 Doxia/Jetty/Velocity artifacts and their keys) into the
+      # pgpverify gate. Nothing here runs `mvn site`, so its version has no effect on any build.
+      - dependency-name: "org.apache.maven.plugins:maven-site-plugin"
 
   - package-ecosystem: "pip"
     directory: "/python/geobrix"

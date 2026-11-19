@@ -124,14 +124,14 @@ FROM hadoop-builder AS final-base
 # from serving both a bad tarball and a matching bad checksum. To bump
 # MAVEN_VERSION, update MAVEN_SHA512 in lockstep. Take the hash from the official Apache
 # apache-maven-<version>-bin.tar.gz.sha512 (archive.apache.org, downloads.apache.org and
-# dlcdn.apache.org agree for 3.9.16); scripts/ci/test_dev_dockerfile.py keeps a table of the
+# dlcdn.apache.org agree for 3.10.1); scripts/ci/test_dev_dockerfile.py keeps a table of the
 # version/hash pairs and fails when only one of the two changes.
 # CI runs the same version through the Maven wrapper (.mvn/wrapper/maven-wrapper.properties); the
 # wrapper cannot download inside this container (Maven Central is blocked), which is why the image
 # installs Maven itself. scripts/ci/test_maven_wrapper.py fails when MAVEN_VERSION and the
 # wrapper's version differ, so bump both together (and pom.xml's enforcer floor).
-ARG MAVEN_VERSION=3.9.16
-ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+ARG MAVEN_VERSION=3.10.1
+ARG MAVEN_SHA512=8af2fcc48ee6b8f8fc0b21054226e14404b88500df6483cdeb3ae603408f6de27b1397ac591a9fb0d98fee64f4f624fee1383efd25b8998786cda1598fb9ea39
 RUN mkdir -p $ROOTDIR/share/maven \
   && curl -fsSL -o /tmp/apache-maven.tar.gz https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
   && echo "${MAVEN_SHA512}  /tmp/apache-maven.tar.gz" | sha512sum -c - \

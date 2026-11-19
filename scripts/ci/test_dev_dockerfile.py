@@ -32,6 +32,7 @@ LOCK_ARM = "requirements-dev-container-aarch64.txt"
 MAVEN_SHA512_BY_VERSION = {
     "3.9.9": "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b",
     "3.9.16": "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6",
+    "3.10.1": "8af2fcc48ee6b8f8fc0b21054226e14404b88500df6483cdeb3ae603408f6de27b1397ac591a9fb0d98fee64f4f624fee1383efd25b8998786cda1598fb9ea39",
 }
 
 
@@ -509,16 +510,16 @@ MUTATIONS = {
         "the base image builds or installs GDAL",
     ),
     "Maven version bumped without the hash": (
-        mutate("ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.17"),
-        "MAVEN_VERSION 3.9.17 has no recorded official SHA-512",
+        mutate("ARG MAVEN_VERSION=3.10.1", "ARG MAVEN_VERSION=3.10.2"),
+        "MAVEN_VERSION 3.10.2 has no recorded official SHA-512",
     ),
     "Maven version moved back without the hash": (
-        mutate("ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.9"),
-        "MAVEN_SHA512 does not match the recorded official hash for Maven 3.9.9",
+        mutate("ARG MAVEN_VERSION=3.10.1", "ARG MAVEN_VERSION=3.9.16"),
+        "MAVEN_SHA512 does not match the recorded official hash for Maven 3.9.16",
     ),
     "Maven hash changed without the version": (
-        mutate("ARG MAVEN_SHA512=831a8591", "ARG MAVEN_SHA512=a555254d"),
-        "MAVEN_SHA512 does not match the recorded official hash for Maven 3.9.16",
+        mutate("ARG MAVEN_SHA512=8af2fcc4", "ARG MAVEN_SHA512=831a8591"),
+        "MAVEN_SHA512 does not match the recorded official hash for Maven 3.10.1",
     ),
     "Maven hash dropped": (
         re.sub(r"ARG MAVEN_SHA512=[0-9a-f]{128}", "ARG MAVEN_SHA512=", REAL),

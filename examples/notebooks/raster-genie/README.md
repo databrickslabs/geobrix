@@ -12,7 +12,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 `genie/seed_agent.py` creates two Genie Agents for the example. The live agent, below, answers from the four tables and composes the GeoBrix Unity Catalog raster functions itself, starting from `gbx_rst_fromfile` on the `rasters` FILE table.
 
-![The live Raster Genie Agent in a Databricks workspace. Its sources are the aois, coverage, rasters and s2_scene_assets tables and the GeoBrix Unity Catalog raster functions, such as gbx_rst_fromfile, gbx_rst_avg, gbx_rst_nbr and gbx_rst_histogram, 28 sources in all. Below the question box, it suggests questions about the raster assets, the coverage table and the named areas.](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/raster-genie/genie-agent-live.png)
+![The live Raster Genie Agent in a Databricks workspace. Its 28 sources are the aois, coverage, rasters and s2_scene_assets tables and the GeoBrix Unity Catalog raster functions. They include gbx_rst_fromfile, gbx_rst_avg, gbx_rst_nbr and gbx_rst_histogram. Below the question box, it suggests questions about the raster assets, the coverage table and the named areas.](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/raster-genie/genie-agent-live.png)
 
 ---
 

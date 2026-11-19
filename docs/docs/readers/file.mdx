@@ -207,7 +207,7 @@ raises `ValueError` with an upgrade message — use
 
 A SQL warehouse reads a window of a raster in a FILE column with `gbx_rst_fromfile`. It needs no session.
 
-1. Write COGs with [`cog_gbx`](../writers/cog). Land them with [`gbx_file_write`](../common-functions), using `file_mode="external"` and `file_col="file"`.
+1. Write COGs with [`cog_gbx`](../writers/cog). Land them with [`gbx_file_write`](../common-functions), using `file_mode="external"` and `file_col="file"`. See [Prepare a table of raster files](../api/uc-functions#prepare-a-table-of-raster-files).
 2. Select the rows. Join the table to the polygons that you want to cut.
 3. Call `gbx_rst_fromfile` on the FILE column, with a `geom` or a `resolution`.
 

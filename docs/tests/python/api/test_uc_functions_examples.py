@@ -505,3 +505,63 @@ def test_the_session_form_of_the_window_read_runs(spark, tmp_path, sql):
     row = spark.sql(session_sql).first()
     assert row is not None and row["mean_value"] is not None, session_sql
     assert np.isclose(row["mean_value"][0], float(want), rtol=1e-6)
+
+
+_FOOTPRINT = "st_transform(st_setsrid(st_geomfromwkb(gbx_rst_boundingbox(t)), gbx_rst_srid(t)), 4326)"
+
+
+def test_the_raster_table_has_the_columns_the_window_read_uses():
+    """The window read selects r.name and joins on r.footprint and r.file; the table preparation makes all three."""
+    aliases = re.findall(r" AS (\w+)", ex.RASTER_TABLE_COLUMNS_SQL)
+    assert aliases == ["name", "srid", "pixel_size", "footprint"]  # and `path`; no `file`: gbx_file_write adds it
+    assert re.search(r"^\s+path,$", ex.RASTER_TABLE_COLUMNS_SQL, re.M)
+    for sql in _WINDOW_SQL:
+        assert "r.file" in sql and "r.footprint" in sql
+    assert "r.name" in ex.UC_FROMFILE_WINDOW_SQL
+    assert _FOOTPRINT in ex.RASTER_TABLE_COLUMNS_SQL
+    land = inspect.getsource(ex.land_the_raster_table)
+    assert 'file_mode="external"' in land and 'file_col="file"' in land
+
+
+def test_the_raster_table_preparation_runs_in_a_session(spark, monkeypatch):
+    """Steps 1 and 2 on the sample COGs. The local Spark has no st_* functions, so the footprint stays the WKB box
+    that st_geomfromwkb reads on Databricks; the box must be the bounds of each file."""
+    import rasterio
+    from shapely import wkb
+
+    from databricks.labs.gbx.rasterx.file_table import build_create_sql
+    from path_config import SAMPLE_DATA_BASE
+
+    folder = f"{SAMPLE_DATA_BASE}/london/sentinel2"
+    monkeypatch.setattr(ex, "RASTER_TABLE_COLUMNS_SQL", ex.RASTER_TABLE_COLUMNS_SQL.replace(_FOOTPRINT, "gbx_rst_boundingbox(t)"))
+    rasters = ex.prepare_a_table_of_raster_files(spark, folder)
+    assert rasters.columns == ["name", "path", "srid", "pixel_size", "footprint"]
+    rows = rasters.orderBy("path").collect()
+    tifs = sorted(p.name for p in Path(folder).glob("*.tif"))
+    assert [r["name"] for r in rows] == tifs and tifs
+    for r in rows:
+        with rasterio.open(r["path"]) as ds:
+            assert r["srid"] == ds.crs.to_epsg()
+            assert r["pixel_size"] == pytest.approx(abs(ds.res[0]))
+            assert wkb.loads(bytes(r["footprint"])).bounds == pytest.approx(tuple(ds.bounds))
+    # the table gbx_file_write creates on a runtime with FILE: the plain columns and one FILE EXTERNAL `file`
+    ddl = build_create_sql(
+        "main.geobrix.rasters",
+        plain_cols=[(f.name, f.dataType.simpleString()) for f in rasters.schema.fields],
+        file_col="file",
+        file_mode="external",
+        filespace=None,
+        layout="order",
+    )
+    assert ddl.count(" file ") == 1 and "file FILE EXTERNAL" in ddl
+
+
+def test_landing_the_raster_table_needs_a_runtime_with_file(spark):
+    """file_mode="external" raises on a runtime without FILE, before it writes anything, and names the fuse fallback."""
+    from databricks.labs.gbx.ds.file_gbx import file_supported
+
+    if file_supported(spark):
+        pytest.skip("this runtime has FILE: the landing writes main.geobrix.rasters on Databricks")
+    rasters = spark.createDataFrame([("a.tif", "/Volumes/main/geobrix/rasters/a.tif")], ["name", "path"])
+    with pytest.raises(ValueError, match="file_mode='fuse'"):
+        ex.land_the_raster_table(rasters)

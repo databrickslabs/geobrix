@@ -67,6 +67,15 @@ UC_FILE_COLUMN_WINDOW_SQL = """SELECT main.geobrix.gbx_rst_avg(main.geobrix.gbx_
 FROM rasters r
 JOIN aois a ON st_intersects(r.footprint, a.geom)"""
 
+# The columns of the rasters table, from the header of each COG. A session statement: it runs in a notebook or job
+# after register(spark). The footprint is a GEOMETRY(4326), so st_intersects joins it to polygons in EPSG:4326.
+RASTER_TABLE_COLUMNS_SQL = """SELECT regexp_extract(path, '[^/]+$', 0) AS name,
+       path,
+       gbx_rst_srid(t) AS srid,
+       abs(gbx_rst_pixelwidth(t)) AS pixel_size,
+       st_transform(st_setsrid(st_geomfromwkb(gbx_rst_boundingbox(t)), gbx_rst_srid(t)), 4326) AS footprint
+FROM raster_headers"""
+
 # An array function takes an ARRAY of tiles, so it needs no aggregate.
 UC_RASTER_MERGE_SQL = """SELECT main.geobrix.gbx_rst_merge(collect_list(tile)) AS mosaic
 FROM rasters
@@ -476,3 +485,25 @@ def preview_procedures():
         dry_run=True,
         procedures=True,
     )
+
+
+def prepare_a_table_of_raster_files(spark, volume_dir="/Volumes/main/geobrix/rasters"):
+    """List the COGs of a Volume folder and read the header of each into the columns of the rasters table."""
+    from databricks.labs.gbx.ds.file_gbx import gbx_file_read
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    # List the COGs: one row for each file, with its path.
+    files = gbx_file_read(spark, volume_dir, extensions=(".tif",))
+
+    # Read each header once. The tile from rst_fromfile holds no pixels.
+    files.select("path", rx.rst_fromfile(files["path"]).alias("t")).createOrReplaceTempView("raster_headers")
+    rasters = spark.sql(RASTER_TABLE_COLUMNS_SQL)
+    return rasters
+
+
+def land_the_raster_table(rasters):
+    """Write the rasters table, with a FILE EXTERNAL column made from the path of each row."""
+    from databricks.labs.gbx.ds.file_gbx import gbx_file_write
+
+    # Adds the FILE EXTERNAL column `file`, made from `path`, and writes the rows in path order.
+    gbx_file_write(rasters, "main.geobrix.rasters", file_mode="external", file_col="file")

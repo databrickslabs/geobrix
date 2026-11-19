@@ -64,6 +64,39 @@ Pass `deps="per-function"` to give each function only the packages it imports. T
 
 The sandbox installs the packages from PyPI. When it cannot reach PyPI, the create fails, and the error names the fix. Stage the wheels on a Volume with `gbx.stage_deps`, then pass `deps="volume"`. See [Install without PyPI access](../installation.mdx#offline-install).
 
+## Prepare a table of raster files
+
+UC functions read raster files through a table with a FILE column. Build the table once, from a Volume folder of COGs. It holds one row for each COG, with a reference to the file and the columns a query filters on.
+
+:::tip The least you need for raster files on UC
+A UC function cannot open a Volume path, so this table is the minimum step that gives UC functions the files.
+
+It is an alternative to a table with a tile column. That route also works, but it copies the pixels into the table, and UC refuses a tile over 64 MiB decoded. The FILE route keeps references, and `gbx_rst_fromfile` reads only the COG blocks a query needs.
+:::
+
+Run the steps in an env 6 notebook or job, after `register(spark)`:
+
+1. List the COGs with `gbx_file_read`. Each row holds `path`, `size` and `file`.
+2. Read each header once with `rst_fromfile`. The tile it returns holds no pixels.
+3. Keep the columns of the table: `name`, `path`, `srid`, `pixel_size` and `footprint`.
+4. Land the table with `gbx_file_write`, with `file_mode="external"` and `file_col="file"`.
+
+`volume_dir` is the Volume folder that holds the COGs.
+
+<CodeFromTest code={ucExamples} language="python" functionName="prepare_a_table_of_raster_files" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The statement reads the header columns. `pixel_size` is in the units of the raster's CRS, as the `resolution` argument of `gbx_rst_fromfile` is. `footprint` is the bounding box as a `GEOMETRY(4326)`, so `st_intersects` can join it to your polygons.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="RASTER_TABLE_COLUMNS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_file_write` adds the FILE EXTERNAL column `file`, made from `path` with `try_to_file`. It writes the rows in path order. The DataFrame must not carry a `file` column of its own, so the statement leaves out the one from `gbx_file_read`. Pass `overwrite=True` to build the table again.
+
+<CodeFromTest code={ucExamples} language="python" functionName="land_the_raster_table" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`file_mode="external"` needs compute with FILE support, such as Serverless env 6. On a runtime without FILE it raises a `ValueError` that names the fix. The [Raster Genie](../notebooks/raster-genie) notebook lands its COGs this way on Serverless env 6.
+
+To query the table, see [Read a window of a raster file](#read-a-window-of-a-raster-file). A file up to 64 MiB needs no table: see [Read a small raster file](#read-a-small-raster-file).
+
 ## Where UC functions run
 
 UC functions run on:
@@ -473,7 +506,7 @@ To read a window of a large COG in a FILE column, see [Read a window of a raster
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_FROMFILE_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-The query assumes that `rasters` has a `file` FILE column and a `footprint` GEOMETRY column, and that `aois` has a `name` and a `geom` column.
+The query assumes that `rasters` has a `name`, a `file` FILE column and a `footprint` GEOMETRY column. It assumes that `aois` has a `name` and a `geom` column. [Prepare a table of raster files](#prepare-a-table-of-raster-files) builds `rasters` with these columns.
 
 See [`rst_fromfile`](./raster-functions#rst_fromfile) for every argument and refusal.
 

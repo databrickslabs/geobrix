@@ -18,7 +18,7 @@
     <properties>
         <!-- jackson-databind (provided) must be the Spark build's own version: 2.18.2 for Spark 4.0.0.
              Override with -Djackson.version=... when building against another Spark (Spark 4.3: 2.21.2). -->
-        <jackson.version>2.18.2</jackson.version>
+        <jackson.version>2.23.0</jackson.version>
         <!-- Build output directory. A Spark compat build (gbx:test:scala with a spark-version option) points
              it elsewhere so it never touches the default target/ and its JARs. -->
         <gbx.build.dir>${project.basedir}/target</gbx.build.dir>

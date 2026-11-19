@@ -116,7 +116,7 @@
         <dependency>
             <groupId>org.scalamock</groupId>
             <artifactId>scalamock_${scala.compat.version}</artifactId>
-            <version>7.6.0</version>
+            <version>7.6.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -492,7 +492,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-site-plugin</artifactId>
-                <version>3.12.1</version>
+                <version>3.22.0</version>
             </plugin>
         </plugins>
     </build>

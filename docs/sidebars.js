@@ -68,6 +68,7 @@ const sidebars = {
             'notebooks/orthomosaic',
             'notebooks/zarr-weather-features',
             'notebooks/zarr-size-ladder',
+            'notebooks/raster-genie',
           ],
         },
         {

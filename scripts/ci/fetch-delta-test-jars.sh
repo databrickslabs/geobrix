@@ -102,7 +102,7 @@ fi
 # image's mvn is the same version, so it stays the default there.
 MVN="${GBX_MVN:-mvn}"
 if ! command -v "$MVN" >/dev/null 2>&1; then
-    echo "delta-spark ${DELTA_VERSION}: missing and ${MVN} is not available. Fix: run this inside geobrix-dev, or set GBX_MVN to a Maven 3.9.16 or ./mvnw." >&2
+    echo "delta-spark ${DELTA_VERSION}: missing and ${MVN} is not available. Fix: run this inside geobrix-dev, or set GBX_MVN to a Maven 3.10.1 or ./mvnw." >&2
     exit 1
 fi
 

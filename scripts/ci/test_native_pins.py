@@ -69,10 +69,6 @@ def test_the_repository_passes_the_audit():
     "rel, change",
     [
         ("rust-toolchain.toml", (r'channel = "[^"]+"', 'channel = "0.0.1"')),
-        (
-            "scripts/docker/Dockerfile",
-            (r"(?m)^ARG GDAL_VERSION=\S+", "ARG GDAL_VERSION=9.9.9"),
-        ),
         ("scripts/native/pins.conf", (r"(?m)^(GDAL_SHA256=).*", r"\1<")),
         # a half-done bump: the version moved, its URL, file name and checksum did not
         ("scripts/native/pins.conf", (r"(?m)^(GDAL_VERSION=).*", r"\g<1>9.9.9")),
@@ -97,7 +93,6 @@ def test_the_repository_passes_the_audit():
     ],
     ids=[
         "rust-channel",
-        "legacy-gdal-arg",
         "checksum",
         "version-without-url",
         "crate-pin-in-pins-conf",
@@ -119,6 +114,41 @@ def test_drift_is_reported(tmp_path, rel, change):
 
     assert res.returncode == 1, res.stdout
     assert rel in res.stdout + res.stderr
+
+
+def test_the_legacy_list_is_empty_and_still_checked(tmp_path):
+    """No file pins an old native version now (the dev base image's GDAL 3.11.4 is retired), so the list holds only
+    its header and the audit passes. A row added to it is still checked: a consumer whose value drifted, one that no
+    longer matches (retired: delete the line) and a missing file are each reported."""
+    rows = [
+        line
+        for line in (REPO_ROOT / "scripts/native/legacy-consumers.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert rows == []
+    assert "ARG GDAL_VERSION" not in (REPO_ROOT / "scripts/docker/Dockerfile").read_text()
+
+    root = audited_copy(tmp_path)
+    consumer = root / "scripts/legacy-consumer.txt"
+    consumer.write_text("OLD_GDAL=3.11.4\n")
+    listed = root / "scripts/native/legacy-consumers.txt"
+    header = listed.read_text()
+
+    def audit_with(row):
+        listed.write_text(header + row + "\n")
+        res = pins("audit", "--check", "--root", str(root))
+        return res.returncode, res.stdout + res.stderr
+
+    row = "scripts/legacy-consumer.txt|(?m)^OLD_GDAL=(\\S+)|{}|a test"
+    assert audit_with(row.format("3.11.4"))[0] == 0
+    code, out = audit_with(row.format("3.10.0"))
+    assert code == 1 and "a consumer drifted" in out
+    consumer.write_text("nothing here\n")
+    code, out = audit_with(row.format("3.11.4"))
+    assert code == 1 and "no longer matches its legacy line" in out
+    consumer.unlink()
+    code, out = audit_with(row.format("3.11.4"))
+    assert code == 1 and "listed in legacy-consumers.txt but missing" in out
 
 
 def test_the_gdal_java_jar_installs_only_with_its_pin_and_names_its_build(tmp_path):

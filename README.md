@@ -22,7 +22,7 @@
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)
 ![General](https://img.shields.io/badge/General-1-1565c0)
 <!-- END GENERATED counts -->
-![VizX](https://img.shields.io/badge/VizX-23-6a1b9a)
+![VizX](https://img.shields.io/badge/VizX-27-6a1b9a)
 
 **GeoBrix** is a high-performance [Databricks Labs](https://www.databricks.com/learn/labs) spatial library that delivers the next generation of *product-augmenting* capabilities — raster, discrete global grids, and vector format I/O — and is built to drive you *deeper* into Databricks-native [`GEOMETRY`/`GEOGRAPHY` and ST/H3 functions](https://databrickslabs.github.io/geobrix/docs/databricks-spatial), not replace them. It is the modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (now in maintenance).
 
@@ -35,19 +35,20 @@
 GeoBrix has one function set. You call it from SQL, Python, Unity Catalog SQL or Scala, and `gbx.register(spark)` picks the level that runs each function on the compute. It says why when it falls back. *Lightweight* and *heavyweight* are short names for the Python and JVM [levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers#the-levels).
 
 - **Python level (lightweight)** — runs every function in Python on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR and no init script**. The env wheel carries its own GDAL, PROJ and GEOS. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM**.
-- **JVM level (heavyweight)** — Scala + GDAL on dedicated clusters, where it is faster. Add the GeoBrix JAR (`gbx.stage_jar` stages it from the env wheel) as a cluster library, or use the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **The code does not change** between the two.
+- **JVM level (heavyweight)** — Scala + GDAL on dedicated clusters, kept only for functions where it measured at least 1.2x faster. Add the GeoBrix JAR (`gbx.stage_jar` stages it from the env wheel) as a cluster library, or use the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs) (`mjohns797/geobrix:0.6.0-env6-arm` or `-x86`, DBR 19); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **The code does not change** between the two.
+- **Unity Catalog functions** — `gbx.uc.install(catalog, schema, volume_dir)` creates 226 of the 258 functions as `<catalog>.<schema>.gbx_*`, for SQL warehouses, dashboards and Genie. Aggregates and `PARTITION BY` table functions have no Unity Catalog form. See [Unity Catalog functions](https://databrickslabs.github.io/geobrix/docs/api/uc-functions).
 - **Native kernels where measured faster** — GDAL, plus Rust for BNG cell encoding and TIN triangulation, both in the env wheel. We continue to assess where Rust can help further.
 
 ## Packages
 
 <img src="resources/images/brand/RasterX.png" width="18%" /> <img src="resources/images/brand/GridX.png" width="18%" /> <img src="resources/images/brand/VectorX.png" width="18%" /> <img src="resources/images/brand/VizX.png" width="18%" />
 
-- **[RasterX](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)** — full-spectrum raster I/O and analytics (gap-filling; the platform has no built-in raster): reprojection, terrain, spectral indices, XYZ/PMTiles tiling, and H3/quadbin/BNG aggregation, plus **virtual tiles** and a **COG-preparation lane** for memory-safe processing of multi-gigabyte rasters. **Both tiers** — lightweight `pyrx` and heavyweight Scala.
-- **[GridX](https://databrickslabs.github.io/geobrix/docs/api/gridx-functions)** — discrete global grids: British National Grid, CARTO quadbin, and custom user-defined grids — cell math, k-ring/k-loop, polyfill, tessellation, and grid-aware aggregation (pairs with native H3 for global hex). **Both tiers** — lightweight `pygx` and heavyweight Scala.
-- **[VectorX](https://databrickslabs.github.io/geobrix/docs/api/vectorx-functions)** — vector operations that augment the native ST functions: MVT tile encoding, TIN elevation surfaces, authority-string CRS transforms, antimeridian handling, and distributed-shapely geometry validity, cleaning & coverage-validity, plus legacy-geometry migration. **Both tiers** — lightweight `pyvx` and heavyweight Scala.
-- **[VizX](https://databrickslabs.github.io/geobrix/docs/api/vizx)** — notebook visualization: render raster tiles/files, whole VRT mosaics (`plot_mosaic`), and PMTiles/COG archives, and turn Spark geometry/H3-cell/grid DataFrames into GeoPandas for static & interactive maps. **Python-only** (no SQL); works with either tier.
+- **[RasterX](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)** — full-spectrum raster I/O and analytics (gap-filling; the platform has no built-in raster): reprojection, terrain, spectral indices, XYZ/PMTiles tiling, and H3/quadbin/BNG aggregation, plus **virtual tiles** and a **COG-preparation lane** for memory-safe processing of multi-gigabyte rasters. Python API: `rasterx`.
+- **[GridX](https://databrickslabs.github.io/geobrix/docs/api/gridx-functions)** — discrete global grids: British National Grid, CARTO quadbin, and custom user-defined grids — cell math, k-ring/k-loop, polyfill, tessellation, and grid-aware aggregation (pairs with native H3 for global hex). Python API: `gridx.<grid>` (`bng`, `quadbin`, `custom`, `h3`).
+- **[VectorX](https://databrickslabs.github.io/geobrix/docs/api/vectorx-functions)** — vector operations that augment the native ST functions: MVT tile encoding, TIN elevation surfaces, authority-string CRS transforms, antimeridian handling, and distributed-shapely geometry validity, cleaning & coverage-validity, plus legacy-geometry migration. Python API: `vectorx`.
+- **[VizX](https://databrickslabs.github.io/geobrix/docs/api/vizx)** — notebook visualization: render raster tiles/files, whole VRT mosaics (`plot_mosaic`), and PMTiles/COG archives, and turn Spark geometry/H3-cell/grid DataFrames into GeoPandas for static & interactive maps. **Python-only** (no SQL); works at either level.
 
-All SQL functions register with a `gbx_` prefix (e.g. `gbx_rst_clip`, `gbx_bng_cellarea`, `gbx_st_asmvt`) so usage is clearly attributable to GeoBrix on classic compute. Python/Scala bindings mirror the names. See [benchmarks](https://databrickslabs.github.io/geobrix/docs/api/benchmarking) for light-vs-heavy timings. 
+All SQL functions register with a `gbx_` prefix (e.g. `gbx_rst_clip`, `gbx_bng_cellarea`, `gbx_st_asmvt`) so usage is clearly attributable to GeoBrix on classic compute. Python names drop the prefix (`rasterx.functions.rst_clip`); Scala calls the SQL names. See [benchmarks](https://databrickslabs.github.io/geobrix/docs/api/benchmarking) for Python-vs-JVM timings.
 
 ## Supported Databricks Runtimes
 
@@ -59,9 +60,9 @@ GeoBrix supports the following Databricks Runtime releases:
 | **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
 | **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
+A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency. Runtimes before DBR 17.3 are not supported.
 
-On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and GEOS. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#env-wheel) for the wheels and their extras.
+On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines on the `CURRENT` channel. Each carries GDAL 3.13.3, PROJ 9.9.0, GEOS 3.15.0, the Rust module and the JAR, so there is no init script and no GDAL bundle; the 0.5.x `light_*` extras fail at resolution. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#env-wheel) for the wheels and their extras.
 
 ## Quick start
 
@@ -88,11 +89,11 @@ boroughs = spark.read.format("geojson_gbx").load("/Volumes/.../boroughs.geojson"
 boroughs.write.format("geojson_gbx").mode("overwrite").save("/Volumes/.../out.geojson")
 ```
 
-On a dedicated cluster, the same code also uses the JVM implementation once you add the JAR (`gbx.stage_jar`) or use the GeoBrix DCS image. See [Surfaces & Levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers). Moving from 0.5.x? Read the [migration guide](https://databrickslabs.github.io/geobrix/docs/migration-0-6).
+On a dedicated cluster, the same code also uses the JVM level, where it is faster, once you add the JAR (`gbx.stage_jar`) or use the GeoBrix DCS image. See [Surfaces & Levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers). Moving from 0.5.x? Read the [migration guide](https://databrickslabs.github.io/geobrix/docs/migration-0-6) and the [0.6.0 release notes](https://databrickslabs.github.io/geobrix/docs/release-notes#v060).
 
 ## Readers & writers
 
-Readers and writers (`*_gbx`) are pure Python and need no JAR. Full options, output schemas, and examples: [Readers](https://databrickslabs.github.io/geobrix/docs/readers/overview) · [Writers](https://databrickslabs.github.io/geobrix/docs/writers/overview).
+Readers and writers (`*_gbx`) are pure Python and need no JAR. They replace the retired Scala `gdal`/`ogr` formats. Full options, output schemas, and examples: [Readers](https://databrickslabs.github.io/geobrix/docs/readers/overview) · [Writers](https://databrickslabs.github.io/geobrix/docs/writers/overview).
 
 **Readers**
 
@@ -116,7 +117,7 @@ Readers and writers (`*_gbx`) are pure Python and need no JAR. Full options, out
 
 **Writers**
 
-| Format | Reader |
+| Format | Writer |
 |---|---|
 | Raster (generic) | `raster_gbx` |
 | GeoTIFF | `gtiff_gbx` |
@@ -146,14 +147,15 @@ End-to-end worked examples live in [`examples/notebooks/`](./examples/notebooks/
 
 | Notebook | Series | What it shows |
 |---|---|---|
-| [`eo-series`](https://databrickslabs.github.io/geobrix/docs/notebooks/eo-series) | Earth Observation (STAC) | A four-notebook Earth Observation series over Sentinel-2 L2A (Alaska), moving from a vector area-of-interest → STAC discovery (Microsoft Planetary Computer) → band download → gridded (H3) raster tables → multi-band stacking and clipping, on the lightweight tier (Serverless). |
+| [`eo-series`](https://databrickslabs.github.io/geobrix/docs/notebooks/eo-series) | Earth Observation (STAC) | A four-notebook Earth Observation series over Sentinel-2 L2A (Alaska), moving from a vector area-of-interest → STAC discovery (Microsoft Planetary Computer) → band download → gridded (H3) raster tables → multi-band stacking and clipping, on Serverless. |
 | [`xview`](https://databrickslabs.github.io/geobrix/docs/notebooks/xview) | Per-object clipping | Loads high-resolution aerial GeoTIFFs from the [xView Detection Challenge](https://challenge.xviewdataset.org/) into Lakehouse tables and clips rasters to labeled GeoJSON objects: raw TGZ → `gtiff` raster table → GeoJSON object table (EWKT + SRID) → per-object clipped tiles written back to a Volume, using RasterX with the built-in Spatial SQL functions. |
 | [`wireless-coverage`](https://databrickslabs.github.io/geobrix/docs/notebooks/wireless-coverage) | 01 → 02a / 02b → 03a → 03b → 04 · LiDAR surfaces → H3 gridding + raster-pixel contrast → tower siting | A six-notebook series over San Francisco. Parts 1 and 2a build the LiDAR surface stack (`lidar_gbx`, `rst_binpoints_agg`, `rst_chm`, `rst_dtmfromgeoms_agg`) — DSM, bare-earth DTM, CHM — as permanent Delta tables; Part 2b is the DSM-raster alternative. Part 3a H3-grids all three surfaces (`rst_isoband`, `gbx_rst_h3_rastertogridmax`, `h3_cellfill`). Part 3b is the raster-pixel counterpoint: native 1 m pixels vs H3 cells, with both a raster viewshed (`rst_viewshed_towers`) and an inline H3 line-of-sight pass run independently — the two engines compared head-to-head on the same towers. Part 4 places one candidate tower per H3 res-9 centroid, rules out ~65% with a cheap coarse quick-pass, then runs an exact H3 line-of-sight viewshed via `h3_los_visible` for each survivor, scoring sites on two independent factors (required mast height and viewshed cell count) and writing per-cell coverage-depth tables. |
 | [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | DEM extra (Wireless Coverage series) | Downloads a USGS 3DEP **seamless (10 m)** DEM for the San Francisco Bay Area via `DemDownloader()`, tiles it into distributed virtual tiles with the `raster_gbx` reader, clips each tile to a land mask from Overture Maps (`rst_clip`), extracts twelve 60 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`h3_try_coverash3`) at resolution 9, assembles a multi-band raster stack, and dissolves per-group polygons on Spark via the product `st_union_agg` in `cells_as_gdf`. |
 | [`helios`](https://databrickslabs.github.io/geobrix/docs/notebooks/helios) | Tiling to PMTiles | A four-notebook solar site-selection series that turns one San Francisco bounding box into self-contained [PMTiles](https://protomaps.com/docs/pmtiles) archives — candidate rooftops (vector), aerial basemap (raster), and terrain slope/aspect/hillshade scoring (elevation) — then reshards a layer into a distributed multi-archive PMTiles mosaic + catalog for web-scale delivery, viewable in a single browser tab with no tile server. |
 | [`vapor-eyes`](https://databrickslabs.github.io/geobrix/docs/notebooks/vapor-eyes) | Methane monitoring | Works a satellite methane signal over the Permian Basin — from a wide-area screen down to the operator whose well pad is leaking — reading Sentinel-5P (TROPOMI) swaths as points with the `netcdf_gbx` reader alongside EMIT plume data. Ships in two flavors: a production-ready Lakeflow pipeline and an interactive notebook series. |
 | [`orthomosaic`](https://databrickslabs.github.io/geobrix/docs/notebooks/orthomosaic) | Photogrammetry | Extracts per-image EXIF/GPS telemetry with `exif_gbx`, computes GSD, and runs distributed sparse SfM with `pycolmap` on Serverless env 5 — with an optional GPU dense MVS pass — to produce a georeferenced orthomosaic; publishes it via color-correction → COG → PMTiles, then (optionally) derives GeoSAM instance-object polygons and an `rst_land_cover` region map, serving the object model behind a Unity Gateway GPU Model Serving endpoint. |
-| [`zarr-weather-features`](https://databrickslabs.github.io/geobrix/docs/notebooks/zarr-weather-features) | Zarr weather features | Registers an ERA5-like weather cube in place as a transactional Zarr store (`gbx_zarr_register`), reads a box as blocks and as a table, samples 100 sites into a features table (`gbx_zarr_sample`), writes a derived wind speed back as a new variable in one transaction (`gbx_zarr_write`), reads the version before it, maps it as raster tiles clipped with `rst_clip`, and tags the version for training (`gbx_zarr_tag`), on the lightweight tier (Serverless environment 6 or Databricks Runtime 19). |
+| [`zarr-weather-features`](https://databrickslabs.github.io/geobrix/docs/notebooks/zarr-weather-features) | Zarr weather features | Registers an ERA5-like weather cube in place as a transactional Zarr store (`gbx_zarr_register`), reads a box as blocks and as a table, samples 100 sites into a features table (`gbx_zarr_sample`), writes a derived wind speed back as a new variable in one transaction (`gbx_zarr_write`), reads the version before it, maps it as raster tiles clipped with `rst_clip`, and tags the version for training (`gbx_zarr_tag`), on Serverless environment 6 or Databricks Runtime 19. A second notebook, [Zarr at Scale](https://databrickslabs.github.io/geobrix/docs/notebooks/zarr-size-ladder), reads and writes stores from 10 MB to 10 GB. |
+| [`raster-genie`](https://databrickslabs.github.io/geobrix/docs/notebooks/raster-genie) | Raster in Genie and SQL warehouses | Master Cloud Optimized GeoTIFFs landed in FILE columns, queried with the `gbx_rst_*` functions in plain SQL, then asked about through a Genie Agent. The first notebook is the 2024 Smokehouse Creek fire: burned area by severity (Sentinel-2 dNBR) and the people inside the perimeter (WorldPop), on Serverless environment 6. |
 
 ### Apps
 
@@ -165,6 +167,7 @@ End-to-end worked examples live in [`examples/notebooks/`](./examples/notebooks/
 
 - Native Databricks `GEOMETRY`/`GEOGRAPHY` are not produced directly yet — geometries are exchanged as **WKB/WKT** (+ `*_srid`); convert with the native ST functions ([Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
 - Spatial KNN is not yet ported.
+- Zarr stores run on DBR 19 and Serverless environment 6 only ([Zarr limits](https://databrickslabs.github.io/geobrix/docs/limitations#zarr-stores)).
 
 ## Building, deploying, releasing
 

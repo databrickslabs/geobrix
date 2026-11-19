@@ -4,9 +4,9 @@
 #
 # The JAR's GDAL Java classes come from the native build (pom.xml gdal.java.version), and a JVM binds them to the
 # first libgdalalljni.so on its library path: GDAL's classes load it by name, and GDALManager's fallback is
-# /usr/lib/libgdalalljni.so (/lib is /usr/lib). The image's link there is its own GDAL 3.11 JNI, which those
-# classes refuse. So that link points at the same build's JNI: the env6 payload's, which gbx:build:wheel --env 6
-# extracts to build/env-wheel/env6/payload/. A JNI linked into a payload's _native/<arch>/lib takes that payload's
+# /usr/lib/libgdalalljni.so (/lib is /usr/lib). The dev image's link there is its own payload's JNI
+# (/opt/gbx-native, Dockerfile.gbxnative). So that link points at the checkout's build of the same JNI: the env6
+# payload's, which gbx:build:wheel --env 6 extracts to build/env-wheel/env6/payload/. A JNI linked into a payload's _native/<arch>/lib takes that payload's
 # GDAL and PROJ data (GDALManager). Made on every start, so a recreated container gets it again.
 # With no payload yet, the link is left as it is and the fix is printed.
 #
@@ -20,7 +20,7 @@ LINK="${GBX_JNI_LINK:-/usr/lib/libgdalalljni.so}"
 ARCH="${GBX_JNI_ARCH:-$(uname -m)}"
 PAYLOAD="${GBX_NATIVE_ROOT:-$ROOT/build/env-wheel/env6/payload}"
 JNI="${PAYLOAD%/}/_native/$ARCH/lib/libgdalalljni.so"
-IMAGE_JNI="${GBX_JNI_IMAGE:-/usr/local/lib/jni/libgdalalljni.so}"   # the JNI the image was built with
+IMAGE_JNI="${GBX_JNI_IMAGE:-/opt/gbx-native/_native/$ARCH/lib/libgdalalljni.so}"   # the JNI the image was built with
 
 echo ""
 echo "::: [JVM GDAL] $LINK -> the payload's JNI ($PAYLOAD) :::"
@@ -34,7 +34,7 @@ if [ ! -f "$JNI" ]; then
             echo "    $LINK dangles (its payload is gone) and $IMAGE_JNI is not there to restore it to"
         fi
     fi
-    echo "    The JVM keeps the image's JNI ($([ -e "$LINK" ] && readlink -f "$LINK" || echo none)), which the JAR's GDAL classes refuse."
+    echo "    The JVM keeps the image's JNI ($([ -e "$LINK" ] && readlink -f "$LINK" || echo none)); the JAR's GDAL classes need the checkout's payload build."
     if [ "${GBX_JNI_REQUIRE:-0}" = 1 ]; then
         echo "    GBX_JNI_REQUIRE=1: failing (CI's native payload step lays the payload out before this one)."
         echo "::: done :::"

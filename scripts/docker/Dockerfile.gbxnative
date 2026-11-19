@@ -1,7 +1,7 @@
 # check=skip=InvalidDefaultArgInFrom
-# geobrix-dev on the env wheel's natives: the base dev image plus the env6 wheel's payload (the same bytes the wheel
-# ships), the rasterio distribution built against that GDAL, and the pinned Rust toolchain. The base image stays
-# the fallback. Build with `bash scripts/commands/gbx-docker-rebuild.sh --overlay gbxnative`, which assembles the
+# geobrix-dev on the env wheel's natives: the base dev image (which has no GDAL of its own) plus the env6 wheel's
+# payload (the same bytes the wheel ships), the rasterio distribution built against that GDAL, and the pinned Rust
+# toolchain. This is the image the dev container runs. Build with `bash scripts/commands/gbx-docker-rebuild.sh --overlay gbxnative`, which assembles the
 # build context (build/devimage/<arch>/: payload/, rust/, dist/) from the native build and checks every file
 # against its pin. No package index is needed: every pip step is --no-index, and every RUN but the toolchain
 # download has no network.

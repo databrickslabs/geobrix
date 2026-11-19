@@ -11,6 +11,18 @@ updates:
     # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
     cooldown:
       default-days: 7
+    # One PR for the build plugins: a plugin bump usually pulls newly signed transitive
+    # artifacts, so .maven-keys.list (pgpverify) is fixed once for the whole group.
+    groups:
+      maven-plugins:
+        patterns:
+          - "org.apache.maven.plugins:*"
+          - "org.codehaus.mojo:*"
+    # Spark is a `provided` dependency compiled against the lowest supported runtime's Spark
+    # (DBR 17.3, Spark 4.0), so one JAR loads on DBR 17.3, 18 and 19. A newer Spark is checked
+    # by running the JAR on that runtime, not by compiling against it.
+    ignore:
+      - dependency-name: "org.apache.spark:*"
 
   - package-ecosystem: "pip"
     directory: "/python/geobrix"
@@ -25,6 +37,16 @@ updates:
     # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
     cooldown:
       default-days: 7
+    # pyproject.toml is an input of the two-architecture native gate, so any pin edit
+    # there forces a restamp. The lint toolchain (pinned to match requirements-ci.in and
+    # the dev-container locks) and the vizx anywidget range are bumped by hand together
+    # with the next real pyproject.toml change (any bump, a patch too, edits the file).
+    ignore:
+      - dependency-name: "isort"
+      - dependency-name: "black"
+      - dependency-name: "flake8"
+      - dependency-name: "flake8-pyproject"
+      - dependency-name: "anywidget"
 
   # NOTE: No `github-actions` ecosystem entry: the lockdown policy disables
   # Dependabot updates for Actions so SHA pins are not silently bumped.

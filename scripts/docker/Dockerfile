@@ -2,7 +2,11 @@
 # The CPU platform is whatever `--platform` the build is given (scripts/docker/build_smart.sh
 # passes the host's, or $GBX_DOCKER_PLATFORM): linux/arm64 or linux/amd64. Nothing here defaults
 # to amd64, and an arch-specific path is derived in-image (dpkg) or from BuildKit's TARGETARCH.
-ARG GDAL_VERSION=3.11.4
+#
+# This is the dev BASE image: OS, JDK, Maven, Hadoop, Spark and the hash-pinned Python lock. It holds no
+# GDAL of its own (no libgdal, no JNI, no osgeo): rasterio, pyogrio, pyproj and shapely are the lock's PyPI
+# wheels with their own libraries. The image contributors run is the native overlay
+# (scripts/docker/Dockerfile.gbxnative), which layers the env6 wheel's GDAL payload over this one.
 
 # ==========================================
 # STAGE 1: OS Base & Java
@@ -109,55 +113,25 @@ RUN case "$TARGETARCH" in \
     echo "export JAVA_HOME=$JAVA_HOME" >> $HADOOP_HOME/etc/hadoop/hadoop-env.sh
 
 # ==========================================
-# STAGE 4: GDAL Builder (The Slowest Part)
-# e.g. `docker build --target gdal-builder -t geobrix-gdal-builder .`
-# ==========================================
-FROM hadoop-builder AS gdal-builder
-ARG GDAL_VERSION
-# Pinned SHA-256 of the GDAL 3.11.4 source tarball (Labs lockdown policy).
-# Upstream OSGeo only publishes MD5; this SHA-256 was computed locally after
-# MD5-verifying the upstream download (md5: 9f4fa4b3be48fb60d5dd76fecb11a5f6).
-# To bump GDAL_VERSION, update GDAL_SHA256 in lockstep.
-ENV GDAL_SHA256=0fa36ee34d4451db586d2bf78ea0dbfa3b0dfae0516587f8130d21add0ac9dad
-RUN wget -q -O /tmp/gdal.tar.gz https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz \
-    && echo "${GDAL_SHA256}  /tmp/gdal.tar.gz" | sha256sum -c - \
-    && tar -xzf /tmp/gdal.tar.gz -C $ROOTDIR/src/ \
-    && rm /tmp/gdal.tar.gz
-
-RUN mkdir -p src/gdal-${GDAL_VERSION}/build && cd src/gdal-${GDAL_VERSION}/build \
-    && cmake -G Ninja .. \
-        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DGDAL_USE_JAVA=ON -DJAVA_HOME="${JAVA_HOME}" \
-        -DJNI_INCLUDE_DIRS="${JAVA_HOME}/include;${JAVA_HOME}/include/linux" \
-        -DBUILD_JAVA_BINDINGS=ON -DBUILD_PYTHON_BINDINGS=OFF \
-    && cmake --build . --parallel 8 && cmake --install . && ldconfig
-
-# Redundant Symlinks as requested for project compatibility
-RUN ln -s $ROOTDIR/lib/libgdal.so /usr/lib/libgdal.so && \
-    ln -s $ROOTDIR/lib/libgdal.so /usr/lib/libgdal.so.30 && \
-    ln -s $ROOTDIR/lib/jni/libgdalalljni.so /usr/lib/libgdalalljni.so && \
-    mkdir -p /usr/lib/jni && ln -s $ROOTDIR/lib/jni/libgdalalljni.so /usr/lib/jni/libgdalalljni.so.30
-
-# ==========================================
-# STAGE 5: Final Development Environment
+# STAGE 4: Final Development Environment
 # e.g. `docker build --target final -t geobrix-final .`
-# (STAGE 6 below sets the per-architecture library path and is the stage tagged as the image.)
+# (STAGE 5 below sets the per-architecture library path and is the stage tagged as the image.)
 # ==========================================
-FROM gdal-builder AS final-base
+FROM hadoop-builder AS final-base
 
 # --- Maven Installation (Pinned Checksum per Labs lockdown policy) ---
 # Pinning the SHA-512 in-Dockerfile prevents a compromised archive.apache.org
 # from serving both a bad tarball and a matching bad checksum. To bump
 # MAVEN_VERSION, update MAVEN_SHA512 in lockstep. Take the hash from the official Apache
 # apache-maven-<version>-bin.tar.gz.sha512 (archive.apache.org, downloads.apache.org and
-# dlcdn.apache.org agree for 3.9.16); scripts/ci/test_dev_dockerfile.py keeps a table of the
+# dlcdn.apache.org agree for 3.10.1); scripts/ci/test_dev_dockerfile.py keeps a table of the
 # version/hash pairs and fails when only one of the two changes.
 # CI runs the same version through the Maven wrapper (.mvn/wrapper/maven-wrapper.properties); the
 # wrapper cannot download inside this container (Maven Central is blocked), which is why the image
 # installs Maven itself. scripts/ci/test_maven_wrapper.py fails when MAVEN_VERSION and the
 # wrapper's version differ, so bump both together (and pom.xml's enforcer floor).
-ARG MAVEN_VERSION=3.9.16
-ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+ARG MAVEN_VERSION=3.10.1
+ARG MAVEN_SHA512=8af2fcc48ee6b8f8fc0b21054226e14404b88500df6483cdeb3ae603408f6de27b1397ac591a9fb0d98fee64f4f624fee1383efd25b8998786cda1598fb9ea39
 RUN mkdir -p $ROOTDIR/share/maven \
   && curl -fsSL -o /tmp/apache-maven.tar.gz https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
   && echo "${MAVEN_SHA512}  /tmp/apache-maven.tar.gz" | sha512sum -c - \
@@ -216,7 +190,7 @@ ENV PYZMQ_VERSION=25.1.1
 # BuildKit does NOT key its layer cache on a secret, so a changed index alone would reuse the cached
 # layer below with the old one. GBX_PIP_INDEX_FPR is the fix: build_smart.sh passes the first 12 hex
 # characters of the sha256 of the index (a fingerprint, not the index) to this stage only. It changes
-# when the index does, so this layer and the pip steps after it rebuild (GDAL stays cached).
+# when the index does, so this layer and the pip steps after it rebuild (the stages before stay cached).
 # Caveat for lock recompiles: the
 # dev proxy is a ROLLING-RECENT mirror that prunes old releases,
 # so it cannot reproduce runtime-matched locks (e.g. botocore 1.40.x). Authoritative recompiles
@@ -244,8 +218,8 @@ RUN --mount=type=secret,id=pip_index_url \
 # wheels at docker-build time (the LiteLLM-class attack vector).
 #
 # Pinned versions in the .in source match the ENV block above (DBR 17.3 LTS
-# aligned where applicable). GDAL is NOT in the lockfile — its Python wheel
-# must build against the gdal-config from Stage 4 (source build).
+# aligned where applicable). GDAL's own Python binding (osgeo) is NOT in the
+# lockfile: the native overlay brings the env6 payload's build of it.
 #
 # Regenerate both locks from requirements-dev-container.in (on the host or in the
 # container; the platform flag picks the wheels, so either machine can compile either lock):
@@ -292,30 +266,6 @@ RUN arch="$(dpkg --print-architecture)" && \
     esac && \
     pip3 install --require-hashes --ignore-installed -r "$lock" --break-system-packages
 
-# 4. Build the GDAL Python binding from sdist against the verified libgdal
-#    headers from Stage 4.
-#
-#    Why this single package is not in the hash-pinned lockfile:
-#    - The Python binding version is pinned by `gdal-config --version`, which
-#      is whatever libgdal we source-built in Stage 4 (currently 3.11.4, and
-#      that source tarball IS SHA-256-verified — see GDAL_SHA256 above). The
-#      Python wheel/sdist on PyPI MUST match that native, so the version
-#      string is dynamic in the same way GDAL_VERSION is.
-#    - To bring this under --require-hashes we'd need a per-libgdal-version
-#      hash for the matching PyPI sdist; OSGeo doesn't publish per-release
-#      hashes for the PyPI sdist, and pinning them ourselves means another
-#      file to bump in lockstep on every GDAL version bump.
-#
-#    Mitigation: --no-binary :all: forces pip to grab the source distribution
-#    and compile it against our verified libgdal headers, rather than
-#    accepting whatever pre-built manylinux wheel PyPI serves. A malicious
-#    actor would have to ship a backdoored sdist (much harder than swapping
-#    a wheel: the sdist build script runs `gdal-config` from our verified
-#    Stage-4 install, and any byte that ships in libgdal.so came from the
-#    verified source tarball). Residual risk: the sdist's Python wrapper
-#    code itself is not byte-verified.
-RUN pip3 install --no-binary :all: gdal==$(gdal-config --version) --break-system-packages
-
 # ZMQ fixes
 ENV ZMQ_TRANSPORT=tcp
 # Add this to your main apt-get block
@@ -341,7 +291,7 @@ RUN mkdir -p /tmp/jupyter_runtime && chmod 1777 /tmp/jupyter_runtime
 RUN python3 -m ipykernel install --name python3 --display-name "Python 3 (Geobrix)" --env JUPYTER_IP 0.0.0.0 --env JUPYTER_RUNTIME_DIR /tmp/jupyter_runtime
 
 # ==========================================
-# STAGE 6: per-architecture library path, entrypoint (the stage tagged as the image)
+# STAGE 5: per-architecture library path, entrypoint (the stage tagged as the image)
 # e.g. `docker buildx build --platform linux/arm64 --target final -t geobrix-final .`
 # BuildKit sets TARGETARCH (amd64 | arm64) from --platform; any other value has no
 # final-<arch> stage and fails the build, rather than defaulting to one. A direct build for another

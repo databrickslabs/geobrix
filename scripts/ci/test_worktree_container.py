@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 from conftest import REPO_ROOT
-from test_docker_platform import TAG, Sandbox
+from test_docker_platform import BASE_TAG, RUN_TAG, Sandbox
 
 COMMANDS = REPO_ROOT / "scripts" / "commands"
 DOCKER_DIR = REPO_ROOT / "scripts" / "docker"
@@ -42,7 +42,7 @@ STREAMLINE = [
     "GBX_DEV_PORT_SPARK_UI=4041",
     'GBX_DEV_EXTRA_MOUNTS="/data/bench:/Volumes/bench:ro"',
     "GBX_DEV_DOCKER_ENV=A=1",
-    "GBX_DEV_IMAGE_TAG=ubuntu24-gdal311-spark",
+    "GBX_DEV_IMAGE_TAG=ubuntu24-base-spark",
 ]
 
 
@@ -81,8 +81,10 @@ STREAMLINE = [
 def test_the_run_arguments_follow_the_checkout(tmp_path, script, lines, tail):
     sb = Sandbox(tmp_path, "arm64")
     repo = sb.repo
-    sb.image(f"{TAG}-arm64", "arm64")
+    sb.image(f"{RUN_TAG}-arm64", "arm64")
+    sb.image(f"{BASE_TAG}-arm64", "arm64")
     env_file = local_env(tmp_path, *lines) if lines else tmp_path / "no-such.env"
+    image = BASE_TAG if lines else RUN_TAG  # the file names the base image; with none, the default overlay runs
 
     res = sb.run(
         repo / "scripts" / "docker" / script,
@@ -92,7 +94,7 @@ def test_the_run_arguments_follow_the_checkout(tmp_path, script, lines, tail):
 
     assert res.returncode == 0, res.output
     want = ["run", "--platform", "linux/arm64", *tail.format(root=repo).split()]
-    assert sb.of("run") == [want + [f"{TAG}-arm64", "/bin/bash"]]
+    assert sb.of("run") == [want + [f"{image}-arm64", "/bin/bash"]]
 
 
 def test_every_call_of_a_locked_exec_names_the_checkouts_container(sandbox):
@@ -323,8 +325,10 @@ def linked_checkout(sb: Sandbox, tmp_path: Path, container: str, mount) -> Path:
     wt = tmp_path / "wt"
     git(main, "worktree", "add", "-q", str(wt))
     (wt / ".gbx-local.env").write_text(f"GBX_DEV_CONTAINER={container}\n")
-    sb.image(f"{TAG}-arm64", "arm64")
-    sb.image(f"{TAG}-amd64", "amd64")
+    sb.image(f"{RUN_TAG}-arm64", "arm64")
+    sb.image(f"{BASE_TAG}-arm64", "arm64")
+    sb.image(f"{RUN_TAG}-amd64", "amd64")
+    sb.image(f"{BASE_TAG}-amd64", "amd64")
     sb.container("arm64", mount=str(mount or wt), name=container)
     return wt
 
@@ -385,7 +389,8 @@ def _spelled_checkout(sb: Sandbox, tmp_path: Path, kind: str):
     alias = tmp_path / "alias"
     alias.symlink_to(tmp_path)
     if kind == "main-symlink":
-        sb.image(f"{TAG}-arm64", "arm64")
+        sb.image(f"{RUN_TAG}-arm64", "arm64")
+        sb.image(f"{BASE_TAG}-arm64", "arm64")
         sb.container("arm64", mount=str(alias / "repo"))
         return sb.repo, str(alias / "repo"), None
     wt = linked_checkout(sb, tmp_path, "gbx-dev-wt", mount=str(alias / "wt"))
@@ -424,7 +429,8 @@ def test_another_directory_of_the_same_name_is_still_another_worktree(tmp_path, 
     if kind == "main":
         other = tmp_path / "elsewhere" / "repo"
         other.mkdir(parents=True)
-        sb.image(f"{TAG}-arm64", "arm64")
+        sb.image(f"{RUN_TAG}-arm64", "arm64")
+        sb.image(f"{BASE_TAG}-arm64", "arm64")
         sb.container("arm64", mount=str(other))
         root = sb.repo
     else:
@@ -472,8 +478,10 @@ def test_an_unusable_container_architecture_is_refused(
     tmp_path, script, args, arch, gone
 ):
     sb = Sandbox(tmp_path, "arm64")
-    sb.image(f"{TAG}-arm64", "arm64")
-    sb.image(f"{TAG}-amd64", "amd64")
+    sb.image(f"{RUN_TAG}-arm64", "arm64")
+    sb.image(f"{BASE_TAG}-arm64", "arm64")
+    sb.image(f"{RUN_TAG}-amd64", "amd64")
+    sb.image(f"{BASE_TAG}-amd64", "amd64")
     sb.container(arch, mount="/some/other/worktree")
     sb.state["container_image_gone"] = gone
 

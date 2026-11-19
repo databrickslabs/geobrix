@@ -451,17 +451,18 @@ def test_sidecars_alter_open_sees_a_colour_table_and_gcps_held_in_the_sidecar(
 
 
 def test_sidecars_alter_open_retries_a_transient_miss_on_each_open(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
+    retry_sleep,
 ):
     """Both opens (with the sidecars, and the file alone) retry a miss on the mount, as every Volume read does."""
     from databricks.labs.gbx._gdal_policy import open_data as real_data
-    from databricks.labs.gbx.core import _retry
     from databricks.labs.gbx.pyrx import _env
 
     path = str(tmp_path / "r.tif")
     _gtiff(path)
     (tmp_path / "r.tif.aux.xml").write_text("<PAMDataset/>")
-    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     fails = {"with": 2, "alone": 2}
     real_open = _env.open_raster
 
@@ -484,32 +485,34 @@ def test_sidecars_alter_open_retries_a_transient_miss_on_each_open(
     assert fails == {"with": 0, "alone": 0}
 
 
-def test_sidecars_alter_open_fails_a_corrupt_raster_at_once(tmp_path, monkeypatch):
+def test_sidecars_alter_open_fails_a_corrupt_raster_at_once(
+    tmp_path, monkeypatch, retry_sleep
+):
     """A file GDAL opens and cannot read is no transient miss: rasterio raises it as an OSError too, and the ten retries
     with their waits (about twenty seconds) would only delay the same failure."""
-    from databricks.labs.gbx.core import _retry
     from databricks.labs.gbx.pyrx import _env
 
     path = tmp_path / "bad.tif"
     path.write_bytes(b"II*\x00" + b"\x00" * 12)  # a TIFF magic and no readable header
     (tmp_path / "bad.tif.aux.xml").write_text("<PAMDataset/>")
     waits = []
-    monkeypatch.setattr(_retry.time, "sleep", waits.append)
+    retry_sleep(waits.append)
     with pytest.raises(RasterioIOError):
         _env.sidecars_alter_open(str(path))
     assert waits == []
 
 
-def test_sidecars_alter_open_retries_an_io_error_of_the_mount(tmp_path, monkeypatch):
+def test_sidecars_alter_open_retries_an_io_error_of_the_mount(
+    tmp_path, monkeypatch, retry_sleep
+):
     """GDAL's I/O failure of a Volume's FUSE (no errno in rasterio's error) is retried; only an unreadable file fails
     at once."""
-    from databricks.labs.gbx.core import _retry
     from databricks.labs.gbx.pyrx import _env
 
     path = str(tmp_path / "r.tif")
     _gtiff(path)
     (tmp_path / "r.tif.aux.xml").write_text("<PAMDataset/>")
-    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     fails = {"n": 2}
     real_open = _env.open_raster
 

@@ -57,8 +57,11 @@ EXAMPLES:
 
 NOTES:
     - Uses scripts/docker/start_docker_with_volumes.sh
-    - Image: geobrix-dev:ubuntu24-gdal311-spark-<arch>; the platform is --platform, else
-      \$GBX_DOCKER_PLATFORM, else this host's architecture
+    - Image: geobrix-dev:ubuntu24-gbxnative-spark-<arch> (the native overlay: the env6 wheel's GDAL payload over
+      the base image); the platform is --platform, else \$GBX_DOCKER_PLATFORM, else this host's architecture.
+      A missing image stops the command with the steps that build it, in order: the base image
+      (gbx:docker:rebuild) when it is missing too, gbx:build:wheel --env 6, the native bindings,
+      scripts/native/prefetch.sh --arch <arch>, then gbx:docker:rebuild --overlay gbxnative
     - An existing container is kept as is, even when it runs the other architecture (a warning says so);
       --recreate replaces it
     - Warns (never blocks) when the image behind the container, or the one a new or recreated container

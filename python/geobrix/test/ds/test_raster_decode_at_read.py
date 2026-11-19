@@ -280,11 +280,12 @@ def test_a_bad_file_in_a_batch_is_set_aside_by_its_own_path_and_the_others_kept(
 
 
 def test_a_transient_miss_reading_a_header_is_retried_and_a_bad_file_is_not(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
+    retry_sleep,
 ):
-    from databricks.labs.gbx.core import _retry
 
-    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     (path,) = _folder(tmp_path, 1)
     real, calls = R.open_raster, []
 
@@ -304,11 +305,12 @@ def test_a_transient_miss_reading_a_header_is_retried_and_a_bad_file_is_not(
         R._whole_file_header(str(bad))
 
 
-def test_a_gdal_worded_missing_file_with_no_errno_is_retried(tmp_path, monkeypatch):
+def test_a_gdal_worded_missing_file_with_no_errno_is_retried(
+    tmp_path, monkeypatch, retry_sleep
+):
     # GDAL words a file a Serverless Volume does not show yet as an IO error with no errno.
-    from databricks.labs.gbx.core import _retry
 
-    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     (path,) = _folder(tmp_path, 1)
     real, calls = R.open_raster, []
 

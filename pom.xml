@@ -228,7 +228,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
-                <version>3.6.2</version>
+                <version>3.8.0</version>
                 <executions>
                     <execution>
                         <id>add-doc-test-sources</id>
@@ -280,7 +280,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>3.6.3</version>
+                <version>3.7.0</version>
                 <executions>
                     <execution>
                         <id>enforce-versions</id>
@@ -292,7 +292,7 @@
                                 <!-- The floor is the version .mvn/wrapper/maven-wrapper.properties pins,
                                      so a different Maven cannot build what CI builds. -->
                                 <requireMavenVersion>
-                                    <version>[3.9.16,)</version>
+                                    <version>[3.10.1,)</version>
                                     <message>This repo needs the Maven version pinned in .mvn/wrapper/maven-wrapper.properties or newer. On the host and in CI, run ./mvnw instead of mvn (it downloads and checksum-verifies the pinned Maven). Inside the geobrix-dev container ./mvnw cannot work; the image's Maven is out of date, so rebuild the image with gbx:docker:rebuild.</message>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
@@ -327,7 +327,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.5</version>
+                <version>3.6.1</version>
                 <configuration>
                     <!-- Tests will be run with scalatest-maven-plugin instead -->
                     <skipTests>true</skipTests>

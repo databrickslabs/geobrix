@@ -285,6 +285,9 @@ def test_every_jvm_job_links_the_payload_jni_before_its_tests():
         if re.search(r"gdal311/libgdalalljni\.so\s+/usr/lib", p.read_text())
     ]
     assert not copies, f"GDAL 3.11's JNI still goes to /usr/lib in {copies}"
+    # and the GDAL 3.11 JNI the repository once carried for CI is gone, with its .gitignore exception
+    assert not (REPO_ROOT / "scripts" / "gdal311").exists()
+    assert "scripts/gdal311" not in (REPO_ROOT / ".gitignore").read_text()
 
 
 def test_ci_checks_the_arch_gate_stamp_and_builds_nothing():

@@ -31,7 +31,7 @@ gbx_load_local_env() {
     GBX_LINKED_WORKTREE=false; gbx_is_linked_worktree "$root" && GBX_LINKED_WORKTREE=true
     GBX_DEV_CONTAINER="$GBX_MAIN_CONTAINER"; GBX_DEV_PORT_JDWP=5005; GBX_DEV_PORT_JUPYTER=8888; GBX_DEV_PORT_SPARK_UI=4040
     GBX_DEV_VOLUMES_DIR="$root/sample-data/Volumes"; GBX_DEV_EXTRA_MOUNTS=""; GBX_DEV_DOCKER_ENV=""
-    GBX_DEV_IMAGE_TAG="ubuntu24-gdal311-spark"; GBX_CARGO_REGISTRY=""
+    GBX_DEV_IMAGE_TAG="ubuntu24-gbxnative-spark"; GBX_CARGO_REGISTRY=""
     if [ ! -f "$file" ]; then
         if [ "$GBX_LINKED_WORKTREE" = true ]; then
             _gbx_local_env_refuse "$root is a linked git worktree with no $file: copy scripts/docker/gbx-local.env.example there and set GBX_DEV_CONTAINER and the GBX_DEV_PORT_* values"

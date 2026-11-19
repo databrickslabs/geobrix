@@ -228,26 +228,26 @@ org.apache.maven.plugins:maven-install-plugin                            = 0x88B
 org.apache.maven.plugins:maven-jar-plugin                                = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven.plugins:maven-resources-plugin                          = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 org.apache.maven.plugins:maven-site-plugin                               = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
-org.apache.maven.plugins:maven-surefire-plugin                           = 0xF254B35617DC255D9344BCFA873A8E86B4372146
+org.apache.maven.plugins:maven-surefire-plugin                           = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
 org.apache.maven.reporting:maven-reporting-api                           = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
 org.apache.maven.reporting:maven-reporting-exec                          = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
-org.apache.maven.resolver:maven-resolver-api                             = 0x522CA055B326A636D833EF6A0551FD3684FCBBB7, 0x29BEA2A645F2D6CED7FB12E02B172E3E156466E8, 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
+org.apache.maven.resolver:maven-resolver-api                             = 0x522CA055B326A636D833EF6A0551FD3684FCBBB7, 0x29BEA2A645F2D6CED7FB12E02B172E3E156466E8, 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688, 0x88BE34F94BDB2B5357044E2E3A387D43964143E3
 org.apache.maven.resolver:maven-resolver-impl                            = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
 org.apache.maven.resolver:maven-resolver-spi                             = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
-org.apache.maven.resolver:maven-resolver-util                            = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688, 0x29BEA2A645F2D6CED7FB12E02B172E3E156466E8, 0x84789D24DF77A32433CE1F079EB80E92EB2135B1, 0x522CA055B326A636D833EF6A0551FD3684FCBBB7
+org.apache.maven.resolver:maven-resolver-util                            = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688, 0x29BEA2A645F2D6CED7FB12E02B172E3E156466E8, 0x84789D24DF77A32433CE1F079EB80E92EB2135B1, 0x522CA055B326A636D833EF6A0551FD3684FCBBB7, 0x88BE34F94BDB2B5357044E2E3A387D43964143E3
 org.apache.maven.shared:file-management                                  = 0x29BEA2A645F2D6CED7FB12E02B172E3E156466E8
 org.apache.maven.shared:maven-common-artifact-filters                    = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
 org.apache.maven.shared:maven-dependency-tree                            = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688
 org.apache.maven.shared:maven-filtering                                  = 0xB91AB7D2121DC6B0A61AA182D7742D58455ECC7C
 org.apache.maven.shared:maven-shared-incremental                         = 0xF254B35617DC255D9344BCFA873A8E86B4372146
 org.apache.maven.shared:maven-shared-utils                               = 0x82C9EC0E52C47A936A849E0113D979595E6D01E1, 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
-org.apache.maven.surefire:maven-surefire-common                          = 0xF254B35617DC255D9344BCFA873A8E86B4372146
-org.apache.maven.surefire:surefire-api                                   = 0xF254B35617DC255D9344BCFA873A8E86B4372146
-org.apache.maven.surefire:surefire-booter                                = 0xF254B35617DC255D9344BCFA873A8E86B4372146
-org.apache.maven.surefire:surefire-extensions-api                        = 0xF254B35617DC255D9344BCFA873A8E86B4372146
-org.apache.maven.surefire:surefire-extensions-spi                        = 0xF254B35617DC255D9344BCFA873A8E86B4372146
-org.apache.maven.surefire:surefire-logger-api                            = 0xF254B35617DC255D9344BCFA873A8E86B4372146
-org.apache.maven.surefire:surefire-shared-utils                          = 0xF254B35617DC255D9344BCFA873A8E86B4372146
+org.apache.maven.surefire:maven-surefire-common                          = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
+org.apache.maven.surefire:surefire-api                                   = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
+org.apache.maven.surefire:surefire-booter                                = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
+org.apache.maven.surefire:surefire-extensions-api                        = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
+org.apache.maven.surefire:surefire-extensions-spi                        = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
+org.apache.maven.surefire:surefire-logger-api                            = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
+org.apache.maven.surefire:surefire-shared-utils                          = 0xF254B35617DC255D9344BCFA873A8E86B4372146, 0x716EE302674CDBB2E660E1B44DB5EA09F2E3C800
 org.apache.maven:maven-aether-provider                                   = 0xFB11D4BB7B244678337AAD8BC7BF26D0BB617866
 org.apache.maven:maven-archiver                                          = 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688, 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA, 0xFA77DCFEF2EE6EB2DEBEDD2C012579464D01C06A, 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven:maven-artifact                                          = 0xBA926F64CA647B6D853A38672E2010F8A7FF4A41, 0x6A814B1F869C2BBEAB7CB7271A2A1C94BDE89688, 0xFB11D4BB7B244678337AAD8BC7BF26D0BB617866
@@ -430,10 +430,12 @@ commons-cli:commons-cli:pom:1.0                                                 
 commons-codec:commons-codec:jar:1.11                                                       = noSig
 commons-codec:commons-codec:jar:1.19.0                                                     = noSig
 commons-codec:commons-codec:jar:1.22.0                                                     = 0xF4DD59C90148BDC52BEB90A4530AA5F25C25011F
+commons-codec:commons-codec:jar:1.23.0                                                     = 0xF4DD59C90148BDC52BEB90A4530AA5F25C25011F
 commons-codec:commons-codec:jar:1.3                                                        = noSig
 commons-codec:commons-codec:pom:1.11                                                       = noSig
 commons-codec:commons-codec:pom:1.19.0                                                     = noSig
 commons-codec:commons-codec:pom:1.22.0                                                     = 0xF4DD59C90148BDC52BEB90A4530AA5F25C25011F
+commons-codec:commons-codec:pom:1.23.0                                                     = 0xF4DD59C90148BDC52BEB90A4530AA5F25C25011F
 commons-codec:commons-codec:pom:1.3                                                        = noSig
 commons-collections:commons-collections:jar:3.2.1                                          = noSig
 commons-collections:commons-collections:pom:3.2.1                                          = noSig
@@ -507,10 +509,12 @@ org.apache.commons:commons-exec:pom:1.6.0                                       
 org.apache.commons:commons-lang3:jar:3.18.0                                                = noSig
 org.apache.commons:commons-lang3:jar:3.19.0                                                = noSig
 org.apache.commons:commons-lang3:jar:3.20.0                                                = noSig
+org.apache.commons:commons-lang3:jar:3.21.0                                                = 0xF4DD59C90148BDC52BEB90A4530AA5F25C25011F
 org.apache.commons:commons-lang3:jar:3.8.1                                                 = noSig
 org.apache.commons:commons-lang3:pom:3.18.0                                                = noSig
 org.apache.commons:commons-lang3:pom:3.19.0                                                = noSig
 org.apache.commons:commons-lang3:pom:3.20.0                                                = noSig
+org.apache.commons:commons-lang3:pom:3.21.0                                                = 0xF4DD59C90148BDC52BEB90A4530AA5F25C25011F
 org.apache.commons:commons-lang3:pom:3.8.1                                                 = noSig
 org.apache.httpcomponents:httpclient:jar:4.0.2                                             = noSig
 org.apache.httpcomponents:httpclient:jar:4.5.14                                            = noSig
@@ -1150,6 +1154,17 @@ org.codehaus.plexus:plexus-utils:jar:4.1.0                                      
 org.codehaus.plexus:plexus-utils:pom:4.1.0                                                 = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 com.github.javaparser:javaparser-core:jar:3.28.2                                           = 0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20
 com.github.javaparser:javaparser-core:pom:3.28.2                                           = 0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20
+
+# --- 2026-11-19: Dependabot build-helper-maven-plugin 3.8.0 (#155) ---
+#
+# Signed by 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA (Sylwester Lachiewicz
+# <slachiewicz@apache.org>), the same signer as 3.6.2 above. Fingerprint cross-checked
+# 2026-11-19 against https://downloads.apache.org/maven/KEYS (Apache Maven PMC; he also
+# releases for MojoHaus). The general build-helper entry (0x84789D24) does not cover him,
+# so each version needs its own line. No new transitive artifacts.
+
+org.codehaus.mojo:build-helper-maven-plugin:jar:3.8.0                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.mojo:build-helper-maven-plugin:pom:3.8.0                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 
 # --- badSig overrides for POMs byte-mutated by db-maven JFrog mirror -----
 #

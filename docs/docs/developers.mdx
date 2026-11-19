@@ -40,6 +40,14 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 
 Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; most `gbx:*` commands run inside that container.
 
+The container runs the native image, `geobrix-dev:ubuntu24-gbxnative-spark-<arch>`. It carries the env6 wheel's GDAL, the same build that Databricks runs. It is built on a base image, `geobrix-dev:ubuntu24-base-spark-<arch>`, which has no GDAL of its own. To build both the first time:
+
+1. Build the base image: `gbx:docker:rebuild`.
+2. Build the env6 wheel: `gbx:build:wheel --env 6`.
+3. Build the native bindings into `build/native/out/<arch>/bindings/dist/`: `gbx:build:native --target bindings`.
+4. Run `scripts/native/prefetch.sh --arch <arch>`, then build the native image: `gbx:docker:rebuild --overlay gbxnative`.
+5. Start the container: `gbx:docker:start`. When an image is missing, it prints these steps and stops.
+
 ### Testing the JVM level
 
 The JVM level (L1) needs a built JAR. [Functions the JAR speeds up](./api/jar-functions.mdx) lists the functions that run on the JVM by default. Compiled classes alone are not enough: the tests load the assembly JAR from `python/geobrix/lib/`.
@@ -169,7 +177,7 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 | `gbx:docker:exec` | Run Maven, pytest, etc. | Runs a command (or interactive shell) in container |
 | `gbx:docker:attach` | Interactive shell in container | Attach to running container |
 | `gbx:docker:restart` | After config change | Restart container |
-| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image (native for your machine's architecture; `--platform` to choose) and optionally start |
+| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild the base image (native for your machine's architecture; `--platform` to choose), or with `--overlay gbxnative` the native image on it |
 | `gbx:docker:clear-pycache` | After editing Python code, stale imports | Clears `.pyc` and `__pycache__` in container so tests see fresh code |
 
 **Lint**
@@ -250,7 +258,7 @@ Pushing to a branch (except `python/**` and `scala/**`) **successfully triggers*
 
 The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `python_build/`) use a **shared environment**. When both run in the same job (e.g. **build main**), caches stay warm:
 
-- **Apt** — Both actions restore `.cache/apt-archives` at the start of the system-packages step and save it at the end. No GDAL comes from apt: the JVMs run on the native payload's GDAL, the one GeoBrix ships. Workflows cache `.cache/apt-archives` with a key derived from both action files, so one cache serves Scala and Python; changing either action’s apt steps invalidates the cache.
+- **Apt** — The Scala action restores `.cache/apt-archives` at the start of its system-packages step and saves it at the end; it installs only `zip` and `unzip`. No GDAL comes from apt: the JVMs run on the native payload's GDAL, the one GeoBrix ships, and the payload bundles the libraries it links. The Python action installs no apt packages. Workflows cache `.cache/apt-archives` with a key derived from both action files, so changing either action invalidates the cache.
 - **Pip** — Both use the same pip cache key (`.ci-pip-cache-key`, created by the workflow from ref + matrix). That avoids duplicate pip installs when Scala runs first and Python reuses the same interpreter and cache.
 - **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`. Every Maven call in CI is `./mvnw`, which runs the version pinned in `.mvn/wrapper/maven-wrapper.properties`; the dev image installs the same version, and `pom.xml` requires it as a minimum.
 

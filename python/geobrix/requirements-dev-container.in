@@ -143,3 +143,6 @@ geopy>=2.5.0
 mistune>=3.3.0
 bleach>=6.4.0
 soupsieve>=3.0.2,<4
+# protobuf: the env6 runtime's version (envs/env6/base.txt). The dev image runs the env6 payload, whose vendored
+# mapbox-vector-tile 2.2 imports protobuf 6 from the runtime; without it gbx_st_asmvt fails to import here.
+protobuf==6.33.5

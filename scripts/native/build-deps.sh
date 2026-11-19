@@ -183,7 +183,19 @@ b_expat() {
     { [ -f "$P/lib/libexpat.a" ] && [ -z "$(ls "$P"/lib/libexpat.so* 2> /dev/null)" ]; } || { echo "BUILD FAILED: expat is not static only"; exit 1; }
     finish
 }
-b_openjpeg() { enter openjpeg "$OPENJPEG_FILE"; lic; cm . -DBUILD_CODEC=OFF -DBUILD_STATIC_LIBS=OFF; finish; }
+# apply_patch <file> <sha256>: a pinned source patch (pins.conf X_PATCH_*) on the unpacked source, checked by its sum first;
+# --fuzz=0 and --forward: a hunk that does not apply exactly (an upstream move, or the fix already in) fails the build.
+apply_patch() {
+    echo "$2  $SRC/$1" | sha256sum -c - || { echo "BUILD FAILED: $1 sha256"; exit 1; }
+    patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$SRC/$1" || { echo "BUILD FAILED: $1 does not apply to $DEP"; exit 1; }
+}
+# OPENJPEG_PATCH: the opj_j2k_read_sod heap-buffer-overflow fix (OSV-2025-219), in no release yet
+b_openjpeg() {
+    enter openjpeg "$OPENJPEG_FILE"; lic
+    apply_patch "$OPENJPEG_PATCH_FILE" "$OPENJPEG_PATCH_SHA256"
+    cm . -DBUILD_CODEC=OFF -DBUILD_STATIC_LIBS=OFF
+    finish
+}
 b_libaec() { enter libaec "$LIBAEC_FILE"; lic; cm . -DBUILD_STATIC_LIBS=OFF; finish; }
 b_hdf5() {
     enter hdf5 "$HDF5_FILE"; lic

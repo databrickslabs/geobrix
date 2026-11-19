@@ -14,7 +14,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -272,7 +271,7 @@ def test_the_descriptor_check_allows_each_root_a_file_was_checked_against(vol):
         PermissionError(errno.EACCES, "denied"),
     ],
 )
-def test_permanent_errors_are_not_retried(packs, monkeypatch, exc):
+def test_permanent_errors_are_not_retried(packs, monkeypatch, exc, retry_sleep):
     opens, sleeps = [], []
 
     def refuse(*args, **kwargs):
@@ -280,19 +279,21 @@ def test_permanent_errors_are_not_retried(packs, monkeypatch, exc):
         raise exc
 
     monkeypatch.setattr(os, "open", refuse)
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     with pytest.raises(type(exc)):
         FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
     assert opens == [1] and sleeps == []
 
 
-def test_a_directory_named_as_a_file_is_drift_and_not_retried(vol, monkeypatch):
+def test_a_directory_named_as_a_file_is_drift_and_not_retried(
+    vol, monkeypatch, retry_sleep
+):
     """A row that names a directory is a manifest that does not match the store; it
     surfaces as ``ZarrStoreDrift`` (``os.open`` of a directory succeeds on Linux and the
     ``pread`` then fails with ``IsADirectoryError``), and waiting cannot fix it."""
     (vol / "store" / "adir").mkdir()
     sleeps = []
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     err = _refused(FuseRangeReader(str(vol / "store")), Region("adir", 0, 4))
     assert "adir" in str(err) and "directory" in str(err)
     assert "Fix:" in str(err) and "gbx_zarr_sync" in err.fix
@@ -307,7 +308,11 @@ def test_a_directory_named_as_a_file_is_drift_and_not_retried(vol, monkeypatch):
     ],
 )
 def test_an_open_that_reports_a_directory_is_drift_and_not_retried(
-    packs, monkeypatch, exc, word
+    packs,
+    monkeypatch,
+    exc,
+    word,
+    retry_sleep,
 ):
     opens, sleeps = [], []
 
@@ -316,7 +321,7 @@ def test_an_open_that_reports_a_directory_is_drift_and_not_retried(
         raise exc
 
     monkeypatch.setattr(os, "open", refuse)
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     with pytest.raises(ZarrStoreDrift) as ei:
         FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
     assert word in str(ei.value) and "Fix:" in str(ei.value)
@@ -333,7 +338,9 @@ def test_a_path_through_a_file_is_drift(vol):
 
 @needs_proc
 def test_a_descriptor_that_cannot_be_traced_is_refused_and_not_retried(
-    packs, monkeypatch
+    packs,
+    monkeypatch,
+    retry_sleep,
 ):
     """The check fails closed, and an OS error from it is no transient miss to retry."""
     sleeps, tries = [], []
@@ -343,14 +350,14 @@ def test_a_descriptor_that_cannot_be_traced_is_refused_and_not_retried(
         raise OSError(errno.EIO, "Input/output error")
 
     monkeypatch.setattr("databricks.labs.gbx.zarr._access._held_path", untraceable)
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     with pytest.raises(ZarrStoreDrift) as ei:
         FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
     assert "a.bin" in str(ei.value) and "Fix:" in str(ei.value)
     assert len(tries) == 1 and sleeps == []
 
 
-def test_a_transient_error_is_retried(packs, monkeypatch):
+def test_a_transient_error_is_retried(packs, monkeypatch, retry_sleep):
     tries, sleeps = [], []
     real = os.open
 
@@ -361,7 +368,7 @@ def test_a_transient_error_is_retried(packs, monkeypatch):
         return real(*args, **kwargs)
 
     monkeypatch.setattr(os, "open", flaky)
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     got = FuseRangeReader(str(packs / "base")).read([Region("a.bin", 5, 2)])
     assert got == [bytes([5, 6])] and len(tries) == 3 and len(sleeps) == 2
 
@@ -968,13 +975,15 @@ def test_an_external_files_identity_is_checked_once_and_matches_the_mount(
 
 
 def test_request_failures_are_retried_and_never_echo_the_credentials(
-    cloud, monkeypatch
+    cloud,
+    monkeypatch,
+    retry_sleep,
 ):
     import obstore
     from obstore import exceptions as ox
 
     sleeps = []
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     real_get = obstore.get_ranges
     failures = [
         ox.GenericError(f"error sending https://a.blob/c/p?sv=1&sig={SENTINEL}&se=2"),
@@ -1067,13 +1076,18 @@ def _forbidden():
     ids=["read-S3-400", "read-403", "put", "stat-bare-400"],
 )
 def test_refused_credentials_are_not_retried_and_auto_carries_on_through_the_mount(
-    cloud, monkeypatch, op, refusal, mode
+    cloud,
+    monkeypatch,
+    op,
+    refusal,
+    mode,
+    retry_sleep,
 ):
     """The credentials expire after a request: nothing waits and retries; "auto" does the rest
     of the work through the mount (a pack is written there, a read comes from there), "direct"
     raises with a Fix that names the expiry."""
     sleeps = []
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     vol = cloud.vol
     mount = vol / "mnt"  # a pack written through the mount lands here, not in the cloud
     cfg = dataclasses.replace(
@@ -1193,7 +1207,12 @@ def fake_s3(monkeypatch):
 @pytest.mark.parametrize("mode", ["auto", "direct"])
 @pytest.mark.parametrize("status", [400, 403])
 def test_a_bare_4xx_from_s3_is_a_refusal_not_a_transient_error(
-    fake_s3, cloud, monkeypatch, mode, status
+    fake_s3,
+    cloud,
+    monkeypatch,
+    mode,
+    status,
+    retry_sleep,
 ):
     """S3 answers a failed HEAD (or a failed list) with a bare 400 or 403 and no body: the
     credentials expired and nothing says so. One request, no retry, no sleep: "auto" asks the
@@ -1202,7 +1221,7 @@ def test_a_bare_4xx_from_s3_is_a_refusal_not_a_transient_error(
     from databricks.labs.gbx.zarr._pack import require_packs
 
     sleeps = []
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     fake_s3.respond = lambda method, target: (status, b"", {})
     vol = cloud.vol
     (vol / "store" / "data").mkdir()
@@ -1269,12 +1288,15 @@ def test_a_bare_4xx_from_s3_is_a_refusal_not_a_transient_error(
 
 
 def test_a_failure_that_is_not_the_credentials_is_still_retried(
-    fake_s3, cloud, monkeypatch
+    fake_s3,
+    cloud,
+    monkeypatch,
+    retry_sleep,
 ):
     """Only a refusal skips the retries: a 400 that names another problem is a transient error
     as before (3 requests for 3 attempts, then an OSError)."""
     sleeps = []
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    retry_sleep(sleeps.append)
     other = b"<Error><Code>InvalidArgument</Code><Message>bad</Message></Error>"
     fake_s3.respond = lambda method, target: (400, other, {})
     vol = cloud.vol
@@ -1332,14 +1354,16 @@ def test_a_direct_read_compares_the_object_time_at_whole_seconds(cloud, monkeypa
 
 
 def test_a_pack_is_one_put_and_the_commit_looks_for_the_object_not_the_mount(
-    cloud, monkeypatch
+    cloud,
+    monkeypatch,
+    retry_sleep,
 ):
     import obstore
 
     from databricks.labs.gbx.zarr._pack import PackWriter, require_packs
     from databricks.labs.gbx.zarr.errors import ZarrError
 
-    monkeypatch.setattr(time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     puts, real_put = [], obstore.put
     monkeypatch.setattr(
         obstore,

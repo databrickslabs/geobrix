@@ -1458,13 +1458,13 @@ def test_lidar_chunk_table_check_does_not_blame_the_file_for_an_io_error_in_lazr
 
 
 def test_lidar_chunk_table_check_retries_a_transient_miss_on_its_open(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
+    retry_sleep,
 ):
     """The check opens the file a second time; a UC Volume FUSE miss there is
     retried like the first open's, and is not a bad file."""
     import builtins
-
-    from databricks.labs.gbx.ds import _listing
 
     path = _laz(tmp_path / "c.laz", 120_000)
     misses, real_open = [], builtins.open
@@ -1476,7 +1476,7 @@ def test_lidar_chunk_table_check_retries_a_transient_miss_on_its_open(
         return real_open(file, *a, **k)
 
     monkeypatch.setattr(builtins, "open", flaky)
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     rows, recs = _read(tmp_path, path, "lidar_gbx")
     assert len(misses) == 1 and len(rows) == 120_000 and recs == []
 
@@ -2007,12 +2007,14 @@ def test_memory_and_import_errors_fail_the_read(tmp_path, monkeypatch):
             _read(tmp_path, path, "geojson_gbx", {"chunkSize": "2"})
 
 
-def test_transient_io_errors_are_retried_then_fail_the_read(tmp_path, monkeypatch):
+def test_transient_io_errors_are_retried_then_fail_the_read(
+    tmp_path, monkeypatch, retry_sleep
+):
     import errno
 
-    from databricks.labs.gbx.ds import _listing, vector
+    from databricks.labs.gbx.ds import vector
 
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     path = _geojson(tmp_path / "a.geojson", [_feature(i) for i in range(3)])
     real = vector.VectorGbxReader.partitions
     state = {"calls": 0, "fail": 1}
@@ -2043,13 +2045,11 @@ def test_transient_io_errors_are_retried_then_fail_the_read(tmp_path, monkeypatc
     assert rows == [] and rec["error_class"] == "ValueError"
 
 
-def test_lidar_environment_errors_fail_the_read(tmp_path, monkeypatch):
+def test_lidar_environment_errors_fail_the_read(tmp_path, monkeypatch, retry_sleep):
     import laspy
     from laspy.errors import LaspyException
 
-    from databricks.labs.gbx.ds import _listing
-
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     good, _, _ = _las(tmp_path / "good.las", 10)
     expected = P.path_schema("lidar_gbx", None, good)
     for err in (

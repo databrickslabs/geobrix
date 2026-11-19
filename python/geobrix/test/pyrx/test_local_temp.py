@@ -305,14 +305,15 @@ def _fail_first(monkeypatch, module, name, target, failures):
 
 
 def test_copy_source_sequential_copies_and_retries_a_transient_miss(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    retry_sleep,
 ):
     import builtins
-    import time
 
     from databricks.labs.gbx.pyrx.core.local_temp import copy_source_sequential
 
-    monkeypatch.setattr(time, "sleep", lambda _s: None)  # no retry backoff
+    retry_sleep(lambda _s: None)  # no retry backoff
     src = tmp_path / "s.bin"
     src.write_bytes(b"abc" * 1000)
     dst = tmp_path / "d.bin"
@@ -323,16 +324,17 @@ def test_copy_source_sequential_copies_and_retries_a_transient_miss(
 
 
 def test_retried_source_signature_matches_source_signature_after_a_miss(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    retry_sleep,
 ):
-    import time
 
     from databricks.labs.gbx.pyrx.core.local_temp import (
         retried_source_signature,
         source_signature,
     )
 
-    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    retry_sleep(lambda _s: None)
     f = tmp_path / "s.bin"
     f.write_bytes(b"x" * 10)
     expected = source_signature(str(f))

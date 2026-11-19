@@ -46,7 +46,7 @@ def test_no_match_raises(tree):
 # ---------------------------------------------------------------------------
 
 
-def test_retry_succeeds_after_transient_failures(monkeypatch):
+def test_retry_succeeds_after_transient_failures(monkeypatch, retry_sleep):
     """Function that fails N-1 times then succeeds returns the success value."""
     calls = []
 
@@ -56,13 +56,13 @@ def test_retry_succeeds_after_transient_failures(monkeypatch):
             raise FileNotFoundError("transient")
         return "ok"
 
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     result = _listing._retry_transient(_flaky, attempts=5, backoff=0.1)
     assert result == "ok"
     assert len(calls) == 3
 
 
-def test_retry_reraises_after_all_attempts_exhausted(monkeypatch):
+def test_retry_reraises_after_all_attempts_exhausted(monkeypatch, retry_sleep):
     """Function that always raises re-raises after `attempts` tries."""
     calls = []
 
@@ -70,13 +70,13 @@ def test_retry_reraises_after_all_attempts_exhausted(monkeypatch):
         calls.append(1)
         raise FileNotFoundError("persistent")
 
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     with pytest.raises(FileNotFoundError, match="persistent"):
         _listing._retry_transient(_always_fail, attempts=4, backoff=0.1)
     assert len(calls) == 4
 
 
-def test_retry_does_not_suppress_non_oserror(monkeypatch):
+def test_retry_does_not_suppress_non_oserror(monkeypatch, retry_sleep):
     """Non-OSError exceptions are NOT retried — propagated immediately."""
     calls = []
 
@@ -84,13 +84,13 @@ def test_retry_does_not_suppress_non_oserror(monkeypatch):
         calls.append(1)
         raise ValueError("programming error")
 
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     with pytest.raises(ValueError, match="programming error"):
         _listing._retry_transient(_bad, attempts=5, backoff=0.1)
     assert len(calls) == 1  # no retry
 
 
-def test_retry_sleeps_with_linear_backoff(monkeypatch):
+def test_retry_sleeps_with_linear_backoff(monkeypatch, retry_sleep):
     """Each retry sleeps backoff * attempt seconds (linear backoff)."""
     sleeps = []
     calls = []
@@ -101,13 +101,15 @@ def test_retry_sleeps_with_linear_backoff(monkeypatch):
             raise FileNotFoundError("transient")
         return "done"
 
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    retry_sleep(lambda s: sleeps.append(s))
     _listing._retry_transient(_flaky, attempts=10, backoff=0.5)
     # 3 failures → 3 sleeps with linear backoff: 0.5, 1.0, 1.5
     assert sleeps == [0.5, 1.0, 1.5]
 
 
-def test_a_path_found_missing_is_retried_once_not_once_per_layer(monkeypatch, tmp_path):
+def test_a_path_found_missing_is_retried_once_not_once_per_layer(
+    monkeypatch, tmp_path, retry_sleep
+):
     """A virtual tile's missing /Volumes file paid each layer's full retry budget in turn (2026-11-12: the open probe, then
     the staging copy, 45 s per task; on Serverless an isoband_missing_path test past 120 s). Once one retry loop ran out on
     a missing path, the next loops for that path try it once: the budget is paid once, not once per layer.
@@ -115,7 +117,7 @@ def test_a_path_found_missing_is_retried_once_not_once_per_layer(monkeypatch, tm
     from databricks.labs.gbx.core import _retry
 
     sleeps = []
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    retry_sleep(lambda s: sleeps.append(s))
     monkeypatch.setattr(_retry, "_MISSING", {})
     gone = str(tmp_path / "gbx_missing_tile.tif")
     with pytest.raises(
@@ -154,7 +156,9 @@ def test_a_path_found_missing_is_retried_once_not_once_per_layer(monkeypatch, tm
 
 
 def test_a_missing_virtual_tile_file_pays_one_budget_through_probe_and_staging(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    retry_sleep,
 ):
     """The two layers a missing /Volumes file met in a row (the direct-open probe, then the staging copy): 22.5 s in all,
     not 45 s (the probe's GDAL error names no file; it passes the path)."""
@@ -163,7 +167,7 @@ def test_a_missing_virtual_tile_file_pays_one_budget_through_probe_and_staging(
     from databricks.labs.gbx.pyrx.core import local_temp
 
     sleeps = []
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    retry_sleep(lambda s: sleeps.append(s))
     monkeypatch.setattr(_retry, "_MISSING", {})
     gone = str(tmp_path / "gbx_missing_tile.tif")
     with pytest.raises(OSError):
@@ -173,14 +177,16 @@ def test_a_missing_virtual_tile_file_pays_one_budget_through_probe_and_staging(
     assert sum(sleeps) == pytest.approx(22.5)
 
 
-def test_a_retried_spark_task_tries_a_missing_file_once(monkeypatch, tmp_path):
+def test_a_retried_spark_task_tries_a_missing_file_once(
+    monkeypatch, tmp_path, retry_sleep
+):
     """Spark runs a failed task again (4 attempts on Serverless, each in a fresh Python worker, so no record carries
     over: 2026-11-12, a probe's attempts 0-3 waited 23 s each, 104 s in all). The first attempt waits the budget; a later
     attempt tries a missing file once. Another I/O error keeps its retries there."""
     from databricks.labs.gbx.core import _retry
 
     sleeps = []
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    retry_sleep(lambda s: sleeps.append(s))
     gone = str(tmp_path / "gbx_missing_tile.tif")
     calls = []
 
@@ -215,12 +221,14 @@ def test_outside_a_spark_task_the_attempt_is_0():
     assert _retry._task_attempt() == 0
 
 
-def test_another_failure_on_a_recorded_path_still_retries(monkeypatch, tmp_path):
+def test_another_failure_on_a_recorded_path_still_retries(
+    monkeypatch, tmp_path, retry_sleep
+):
     """Only a missing file is recorded: an I/O error that is not ENOENT (a FUSE hiccup) keeps its retries."""
     from databricks.labs.gbx.core import _retry
 
     sleeps = []
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    retry_sleep(lambda s: sleeps.append(s))
     monkeypatch.setattr(_retry, "_MISSING", {})
     p = str(tmp_path / "f.tif")
     with pytest.raises(OSError):
@@ -274,7 +282,7 @@ def test_raise_on_empty_true_is_the_default(tree):
         _listing.list_files(str(tree), filter_regex=r".*\.nope$")
 
 
-def test_list_files_retries_transient_walk_error(tree, monkeypatch):
+def test_list_files_retries_transient_walk_error(tree, monkeypatch, retry_sleep):
     """A transient FileNotFoundError inside os.walk is retried (not propagated)."""
     real_walk = os.walk
     calls = []
@@ -286,7 +294,7 @@ def test_list_files_retries_transient_walk_error(tree, monkeypatch):
         return real_walk(path, *a, **kw)
 
     monkeypatch.setattr(_listing.os, "walk", _flaky_walk)
-    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    retry_sleep(lambda s: None)
     files = _listing.list_files(str(tree), filter_regex=r".*\.tif$")
     assert len(files) == 3  # a/one.tif, a/two.tif, b/three.tif
     assert len(calls) == 2  # failed once, succeeded on retry

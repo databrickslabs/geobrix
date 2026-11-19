@@ -14,7 +14,6 @@ import warnings
 
 import pytest
 
-from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.pyrx import _env
 
 
@@ -35,7 +34,7 @@ _REAL_PYPROJ_HOOK = _env._register_pyproj_search_dirs
 
 
 @pytest.fixture
-def base(monkeypatch, tmp_path):
+def base(monkeypatch, tmp_path, retry_sleep):
     """A stand-in bundled PROJ data dir; overlays are built under tmp_path."""
     bundled = _mkdir_with(tmp_path / "bundled", "proj.db", "proj.ini")
     monkeypatch.setenv("PROJ_DATA", str(bundled))
@@ -51,7 +50,7 @@ def base(monkeypatch, tmp_path):
     monkeypatch.setattr(_env, "_PROJ_DATA_RETRY_AT", {})
     monkeypatch.setattr(_env, "_WARNED_UNLISTABLE", set())
     monkeypatch.setattr(_env, "_PROJ_DATA_BUILDING", set())
-    monkeypatch.setattr(_listing.time, "sleep", lambda _s: None)  # no retry backoff
+    retry_sleep(lambda _s: None)  # no retry backoff
     return bundled
 
 

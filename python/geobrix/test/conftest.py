@@ -368,6 +368,25 @@ def no_backoff_sleep(monkeypatch):
 
 
 @pytest.fixture
+def retry_sleep(monkeypatch):
+    """``retry_sleep(fn)``: the retry loop (``core._retry``, which every listing, read and Zarr access retry runs
+    through) sleeps with ``fn(seconds)`` instead of ``time.sleep``, to skip or record the back-off.
+
+    It replaces ``core._retry``'s own ``time`` and never ``time.sleep`` on the stdlib module: that is the one every
+    thread calls, and once a Spark session is up py4j's FinalizerWorker loops on ``time.sleep(1)``. Under a
+    stdlib patch it spins on the stub (CI, PR #157: 77224.5 s recorded for 22.5 s expected).
+    """
+    import types
+
+    from databricks.labs.gbx.core import _retry
+
+    def patch(fn):
+        monkeypatch.setattr(_retry, "time", types.SimpleNamespace(sleep=fn))
+
+    return patch
+
+
+@pytest.fixture
 def named_raster_reads(monkeypatch):
     """The paths of the rasters read by name while the test runs (a list, filled as they open).
 

@@ -124,7 +124,7 @@ jupyterlab==4.6.4
 jupyter_server==2.21.1
 jupyter_core==5.9.1
 jupyter_client==8.6.3
-tornado==6.5.10
+tornado==6.6.1
 nbformat==5.10.4
 nbconvert==7.17.2
 pyzmq==25.1.1
@@ -142,4 +142,4 @@ anyio>=4.14.2
 geopy>=2.5.0
 mistune>=3.3.0
 bleach>=6.4.0
-soupsieve>=2.9.0,<3
+soupsieve>=3.0.2,<4

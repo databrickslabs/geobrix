@@ -427,6 +427,16 @@ def _module_leaves_process_state_as_found():
     later test module in the same pytest process (all light dirs share one) would see:
     PROJ_DATA / GDAL_DATA, the merged-dir caches, and GDAL's own PROJ search path (set by
     the next rasterio Env)."""
+    # pyproj resolves and caches its data dir on first use. A pyproj without a bundled proj_dir
+    # (the env6 payload's) takes PROJ_DATA, so a first use under the ``base`` fixture would cache
+    # its stand-in dir (a text proj.db) for the whole process. Resolve it now, while PROJ_DATA
+    # is real. A full test/pyrx run already does this at collection; this file alone does not.
+    try:
+        import pyproj.datadir
+
+        pyproj.datadir.get_data_dir()
+    except ImportError:
+        pass
     found = {k: os.environ.get(k) for k in _PROCESS_ENV_KEYS}
     found_dirs = (dict(_env._PROJ_DATA_DIRS), dict(_env._PROJ_DATA_BASES))
     found_paths = _gdal_proj_search_paths()

@@ -1155,6 +1155,17 @@ org.codehaus.plexus:plexus-utils:pom:4.1.0                                      
 com.github.javaparser:javaparser-core:jar:3.28.2                                           = 0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20
 com.github.javaparser:javaparser-core:pom:3.28.2                                           = 0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20
 
+# --- 2026-11-19: Dependabot build-helper-maven-plugin 3.8.0 (#155) ---
+#
+# Signed by 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA (Sylwester Lachiewicz
+# <slachiewicz@apache.org>), the same signer as 3.6.2 above. Fingerprint cross-checked
+# 2026-11-19 against https://downloads.apache.org/maven/KEYS (Apache Maven PMC; he also
+# releases for MojoHaus). The general build-helper entry (0x84789D24) does not cover him,
+# so each version needs its own line. No new transitive artifacts.
+
+org.codehaus.mojo:build-helper-maven-plugin:jar:3.8.0                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.mojo:build-helper-maven-plugin:pom:3.8.0                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+
 # --- badSig overrides for POMs byte-mutated by db-maven JFrog mirror -----
 #
 # These six .pom files fail pgpverify-maven-plugin with "PGP Signature

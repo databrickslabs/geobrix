@@ -138,7 +138,7 @@ UC functions run on:
 
 They do not run on clusters that use a [Databricks Container Service](../installation/dcs.mdx) image. They do not run on classic SQL warehouses.
 
-A warehouse reads rasters and vector files through the session readers. Ingest the files into a Delta table, then query the table with UC functions. UC has no function that reads a raw file.
+A warehouse reads rasters and vector files through the session readers. Ingest the files into a Delta table, then query the table with UC functions. UC has no function that reads a raw file. For rasters, write a table with a FILE column once: see [Prepare a table of raster files](#prepare-a-table-of-raster-files).
 
 ## What UC provides
 

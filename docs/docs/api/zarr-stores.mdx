@@ -35,6 +35,12 @@ weather cube. It registers the cube in place and samples it at 100 sites. It wri
 as a new version, maps it as raster tiles, and tags the version for training.
 :::
 
+## Store kinds at a glance
+
+A store is plain, registered (read-only or writable) or managed. [Store kinds](#store-kinds) explains each one.
+
+![The four kinds of Zarr store side by side. A plain store has only its own objects and no manifest table. A read-only registered store has a Delta manifest table that points at the store's objects without copying them. A writable registered store has a manifest that points at the store's objects and at an overlay root of immutable pack files. The store's objects are locked against writes. A managed store has a manifest that points at pack files under a data root. A banner explains that many registrations of one store are independent branches. It also explains that every root has exactly one owner.](../../../resources/images/diagrams/zarr/store-kinds.png)
+
 ## Which page do you need?
 
 | You want to | Go to |
@@ -128,7 +134,7 @@ Points are sampled the same way, at the nearest cell:
 ## Store kinds
 
 A Zarr store GeoBrix works with is one of four kinds. They differ in where the bytes live, whether a
-manifest table exists, and who may write.
+manifest table exists, and who may write. The diagram in [Store kinds at a glance](#store-kinds-at-a-glance) shows the four side by side.
 
 | Kind | Created by | Where the bytes live | Versions and transactions | Who may write |
 |---|---|---|---|---|
@@ -136,8 +142,6 @@ manifest table exists, and who may write.
 | **Registered, read-only** | `gbx_zarr_register(spark, path, table)` | The store's own objects, **not copied** | Yes, in the manifest table | Nobody through GeoBrix |
 | **Registered, writable** | `gbx_zarr_register(spark, path, table, writable=True, overlay_root=...)` | The store's own objects, plus an **overlay** of new pack files | Yes | Anyone with `MODIFY` on the table and write access to the overlay root's Volume; the store itself is never written |
 | **Managed** | `gbx_zarr_write(..., mode="create")` | Pack files GeoBrix wrote under the store's root | Yes | Anyone with `MODIFY` on the table and write access to the root's Volume |
-
-![The four kinds of Zarr store side by side. A plain store has only its own objects and no manifest table. A read-only registered store has a Delta manifest table that points at the store's objects without copying them. A writable registered store has a manifest that points at the store's objects and at an overlay root of immutable pack files. The store's objects are locked against writes. A managed store has a manifest that points at pack files under a data root. A banner explains that many registrations of one store are independent branches. It also explains that every root has exactly one owner.](../../../resources/images/diagrams/zarr/store-kinds.png)
 
 A plain store has no manifest, so no versions and no guard against a second writer. GeoBrix writes one
 only when you ask: [`transactional=False`](../writers/zarr#plain-stores-opt-in) creates or appends to it,

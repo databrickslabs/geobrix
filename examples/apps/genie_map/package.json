@@ -34,7 +34,7 @@
     "@kepler.gl/localization": "3.2.5",
     "@kepler.gl/processors": "3.2.5",
     "@kepler.gl/reducers": "3.2.5",
-    "@kepler.gl/schemas": "3.2.5",
+    "@kepler.gl/schemas": "3.2.6",
     "@kepler.gl/styles": "3.2.5",
     "@kepler.gl/table": "3.2.5",
     "@kepler.gl/types": "3.2.5",

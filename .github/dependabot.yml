@@ -113,6 +113,11 @@ updates:
       - dependency-name: "@databricks/appkit-ui"
       - dependency-name: "concurrently"
         update-types: ["version-update:semver-major"]
+      # mapbox-gl stays on 1.x, the last BSD-licensed line (2.x and later are proprietary and need a token);
+      # kepler.gl 3.x depends on it. vitest 5 is a dev-only test-runner major.
+      - dependency-name: "mapbox-gl"
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
 
   # The examples/tests notebook harness lock.
   - package-ecosystem: "pip"

@@ -29,7 +29,7 @@
     "@docusaurus/module-type-aliases": "^3.10.2",
     "@docusaurus/types": "^3.10.2",
     "@someok/docusaurus-plugin-relative-paths": "^1.0.5",
-    "playwright": "^1.65.0",
+    "playwright": "^1.65.1",
     "raw-loader": "^4.0.2"
   },
   "overrides": {

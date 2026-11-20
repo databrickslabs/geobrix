@@ -14,7 +14,7 @@
 #
 # pytest is intentionally CI-matrix (9.1.1), not DBR's 8.3.5 — we don't run
 # tests in DBR.
-pytest==9.1.1
+pytest==9.2.0
 nbformat==5.10.4
 nbconvert==7.17.2
 testbook==0.4.2

@@ -83,44 +83,43 @@ The written table gives you:
 
 ### Write the table
 
-Run the steps in an env 6 notebook or job (outside a SQL warehouse), after `register(spark)`:
+Run the code in an env 6 notebook or job (outside a SQL warehouse), after `register(spark)`. Set `volume_dir` to the Volume folder that holds the GeoTIFFs.
 
-1. List the GeoTIFFs with `gbx_file_read`. Each row holds `path`, `size` and `file`.
-2. Read each header once with `rst_fromfile`. The tile it returns holds no pixels.
-3. Keep the columns of the table: `name`, `path`, `srid`, `pixel_size` and `footprint`.
-4. Write the table with `gbx_file_write`, with `file_mode="external"` and `file_col="file"`.
+UC reads tiled GeoTIFFs only: it refuses a striped GeoTIFF or another format with a `Fix:`. Write such files as COGs with [`cog_gbx`](../writers/cog) first.
 
-`volume_dir` is the Volume folder that holds the GeoTIFFs. UC reads tiled GeoTIFFs only: it refuses a striped GeoTIFF or another format with a `Fix:`. Write such files as COGs with [`cog_gbx`](../writers/cog) first.
+The shortest form lists the GeoTIFFs with `gbx_file_read` and writes their paths with `gbx_file_write`. `gbx_file_write` adds the FILE EXTERNAL column `file`, made from `path` with `try_to_file`.
 
-<CodeFromTest code={ucExamples} language="python" functionName="prepare_a_table_of_raster_files" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+<CodeFromTest code={ucExamples} language="python" functionName="write_a_table_of_file_references" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-The statement reads the header columns. `pixel_size` is in the units of the raster's CRS, as the `resolution` argument of `gbx_rst_fromfile` is. `footprint` is the bounding box as a `GEOMETRY(4326)`, so `st_intersects` can join it to your polygons.
+The DataFrame must not carry a `file` column of its own, so the code keeps only `path` from the listing.
 
-<CodeFromTest code={ucExamples} language="sql" functionName="RASTER_TABLE_COLUMNS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+The recommended form also reads each header once and keeps the header columns. A query can then filter on them before it reads any pixel.
 
-`gbx_file_write` adds the FILE EXTERNAL column `file`, made from `path` with `try_to_file`. It writes the rows in path order. The DataFrame must not carry a `file` column of its own, so the statement leaves out the one from `gbx_file_read`. Pass `overwrite=True` to build the table again.
+<CodeFromTest code={ucExamples} language="python" functionName="write_the_raster_table" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-<CodeFromTest code={ucExamples} language="python" functionName="land_the_raster_table" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+`pixel_size` is in the units of the raster's CRS, as the `resolution` argument of `gbx_rst_fromfile` is. `footprint` is the bounding box as a `GEOMETRY(4326)`, so `st_intersects` can join it to your polygons.
+
+`gbx_file_write` writes the rows in path order. Pass `overwrite=True` to build the table again.
 
 `file_mode="external"` needs compute with FILE support, such as Serverless env 6. On a runtime without FILE it raises a `ValueError` that names the fix. The [Raster Genie](../notebooks/raster-genie) notebook writes its COGs this way on Serverless env 6.
 
 ### Query the table
 
-A query starts at `gbx_rst_fromfile` on `r.file`, and it calls UC functions only. This is all a Genie Agent, a SQL warehouse or a dashboard needs. The join on `footprint` picks the files before any pixel is read.
+#### From a Genie Agent, a SQL warehouse or a dashboard
+
+A query on the `rasters` table calls UC functions only, so it needs no session. It starts at `gbx_rst_fromfile` on `r.file`. The join on `footprint` picks the files before any pixel is read.
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_FROMFILE_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 See [Read a window of a raster file](#read-a-window-of-a-raster-file) for the arguments and the 64 MiB window limit.
 
-### Read on the fly in a session
+#### On the fly, in a session
 
-In a notebook or job, you can skip the table. `gbx_file_read` gives the `file` column directly, and `gbx_rst_fromfile` reads it in the same query.
+In a notebook or job, you can skip the table. `gbx_file_read` gives the `file` column, and `gbx_rst_fromfile` reads it in the same query.
 
 <CodeFromTest code={ucExamples} language="python" functionName="read_on_the_fly" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-<CodeFromTest code={ucExamples} language="sql" functionName="READ_ON_THE_FLY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
-
-Use this route for one-off exploration in a session. It costs more on each query:
+Use this route for one-off exploration. Each query costs more:
 
 - Every query lists the folder again.
 - There is no `footprint` to filter on, unless the query reads the headers again.

@@ -508,34 +508,89 @@ def test_the_session_form_of_the_window_read_runs(spark, tmp_path, sql):
 
 
 _FOOTPRINT = "st_transform(st_setsrid(st_geomfromwkb(gbx_rst_boundingbox(t)), gbx_rst_srid(t)), 4326)"
+_VOLUME_DIR = 'volume_dir = "/Volumes/main/geobrix/rasters"'
+
+
+def _run_with(fn, replacements, *args):
+    """Run the page's function ``fn`` with each text of ``replacements`` swapped in its source, once each: the sample
+    folder for the page's ``volume_dir``, and stand-ins for what the local Spark lacks (st_* functions, FILE values).
+    Every other line runs as the page shows it."""
+    src = inspect.getsource(fn)
+    for old, new in replacements.items():
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    ns = {}
+    exec(compile(src, inspect.getsourcefile(fn), "exec"), ns)
+    return ns[fn.__name__](*args)
+
+
+def _spy_on_file_write(monkeypatch):
+    """Record each gbx_file_write call (the DataFrame, the target, the keywords), then make the real call."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    calls, real = [], file_gbx.gbx_file_write
+
+    def spy(df, target, **kwargs):
+        calls.append((df, target, kwargs))
+        return real(df, target, **kwargs)
+
+    monkeypatch.setattr(file_gbx, "gbx_file_write", spy)
+    return calls
+
+
+def _no_file_runtime(spark):
+    from databricks.labs.gbx.ds.file_gbx import file_supported
+
+    if file_supported(spark):
+        pytest.skip("this runtime has FILE: the write creates a table in main.geobrix on Databricks")
 
 
 def test_the_raster_table_has_the_columns_the_window_read_uses():
-    """The window read selects r.name and joins on r.footprint and r.file; the table preparation makes all three."""
-    aliases = re.findall(r" AS (\w+)", ex.RASTER_TABLE_COLUMNS_SQL)
-    assert aliases == ["name", "srid", "pixel_size", "footprint"]  # and `path`; no `file`: gbx_file_write adds it
-    assert re.search(r"^\s+path,$", ex.RASTER_TABLE_COLUMNS_SQL, re.M)
+    """The window read selects r.name and joins on r.footprint and r.file; the raster table makes all three."""
+    src = inspect.getsource(ex.write_the_raster_table)
+    assert _FOOTPRINT + " AS footprint" in src  # a GEOMETRY(4326), so st_intersects joins it to polygons
     for sql in _WINDOW_SQL:
         assert "r.file" in sql and "r.footprint" in sql
     assert "r.name" in ex.UC_FROMFILE_WINDOW_SQL
-    assert _FOOTPRINT in ex.RASTER_TABLE_COLUMNS_SQL
-    land = inspect.getsource(ex.land_the_raster_table)
-    assert 'file_mode="external"' in land and 'file_col="file"' in land
+    for fn in (ex.write_a_table_of_file_references, ex.write_the_raster_table):
+        assert 'file_mode="external", file_col="file")' in inspect.getsource(fn)
 
 
-def test_the_raster_table_preparation_runs_in_a_session(spark, monkeypatch):
-    """Steps 1 and 2 on the sample COGs. The local Spark has no st_* functions, so the footprint stays the WKB box
-    that st_geomfromwkb reads on Databricks; the box must be the bounds of each file."""
+def test_the_table_of_file_references_is_the_path_of_each_geotiff(spark, monkeypatch):
+    """The short form on the sample GeoTIFFs: it writes `path` only (the listing's own `file` would clash with the new
+    FILE column). A runtime without FILE refuses the write, before it writes anything, and names the fuse fallback."""
+    from path_config import SAMPLE_DATA_BASE
+
+    _no_file_runtime(spark)
+    folder = f"{SAMPLE_DATA_BASE}/london/sentinel2"
+    calls = _spy_on_file_write(monkeypatch)
+    with pytest.raises(ValueError, match="file_mode='fuse'"):
+        _run_with(ex.write_a_table_of_file_references, {_VOLUME_DIR: f'volume_dir = "{folder}"'}, spark)
+    ((df, target, kwargs),) = calls
+    assert target == "main.geobrix.raster_files" and kwargs == {"file_mode": "external", "file_col": "file"}
+    assert df.columns == ["path"]
+    tifs = sorted(p.name for p in Path(folder).glob("*.tif"))
+    assert sorted(Path(r["path"]).name for r in df.collect()) == tifs and tifs
+
+
+def test_the_raster_table_is_written_from_the_header_of_each_file(spark, monkeypatch):
+    """The recommended form on the sample GeoTIFFs. The local Spark has no st_* functions, so the footprint stays the
+    WKB box that st_geomfromwkb reads on Databricks; the box must be the bounds of each file."""
     import rasterio
     from shapely import wkb
 
     from databricks.labs.gbx.rasterx.file_table import build_create_sql
     from path_config import SAMPLE_DATA_BASE
 
+    _no_file_runtime(spark)
     folder = f"{SAMPLE_DATA_BASE}/london/sentinel2"
-    monkeypatch.setattr(ex, "RASTER_TABLE_COLUMNS_SQL", ex.RASTER_TABLE_COLUMNS_SQL.replace(_FOOTPRINT, "gbx_rst_boundingbox(t)"))
-    rasters = ex.prepare_a_table_of_raster_files(spark, folder)
-    assert rasters.columns == ["name", "path", "srid", "pixel_size", "footprint"]
+    calls = _spy_on_file_write(monkeypatch)
+    with pytest.raises(ValueError, match="file_mode='fuse'"):
+        swap = {_VOLUME_DIR: f'volume_dir = "{folder}"', _FOOTPRINT: "gbx_rst_boundingbox(t)"}
+        _run_with(ex.write_the_raster_table, swap, spark)
+    ((rasters, target, kwargs),) = calls
+    assert target == "main.geobrix.rasters" and kwargs == {"file_mode": "external", "file_col": "file"}
+    assert rasters.columns == ["name", "path", "srid", "pixel_size", "footprint"]  # no `file`: gbx_file_write adds it
     rows = rasters.orderBy("path").collect()
     tifs = sorted(p.name for p in Path(folder).glob("*.tif"))
     assert [r["name"] for r in rows] == tifs and tifs
@@ -546,7 +601,7 @@ def test_the_raster_table_preparation_runs_in_a_session(spark, monkeypatch):
             assert wkb.loads(bytes(r["footprint"])).bounds == pytest.approx(tuple(ds.bounds))
     # the table gbx_file_write creates on a runtime with FILE: the plain columns and one FILE EXTERNAL `file`
     ddl = build_create_sql(
-        "main.geobrix.rasters",
+        target,
         plain_cols=[(f.name, f.dataType.simpleString()) for f in rasters.schema.fields],
         file_col="file",
         file_mode="external",
@@ -556,28 +611,14 @@ def test_the_raster_table_preparation_runs_in_a_session(spark, monkeypatch):
     assert ddl.count(" file ") == 1 and "file FILE EXTERNAL" in ddl
 
 
-def test_landing_the_raster_table_needs_a_runtime_with_file(spark):
-    """file_mode="external" raises on a runtime without FILE, before it writes anything, and names the fuse fallback."""
-    from databricks.labs.gbx.ds.file_gbx import file_supported
-
-    if file_supported(spark):
-        pytest.skip("this runtime has FILE: the landing writes main.geobrix.rasters on Databricks")
-    rasters = spark.createDataFrame([("a.tif", "/Volumes/main/geobrix/rasters/a.tif")], ["name", "path"])
-    with pytest.raises(ValueError, match="file_mode='fuse'"):
-        ex.land_the_raster_table(rasters)
-
-
 def test_the_on_the_fly_read_is_a_session_statement_on_the_file_column():
     """The on-the-fly route calls the session functions, without the schema, on the `file` that gbx_file_read gives."""
-    sql = ex.READ_ON_THE_FLY_SQL
-    assert "main.geobrix." not in sql
-    assert re.search(r"\bgbx_rst_fromfile\(file, 'GTiff'\)", sql)
-    assert "FROM raster_files" in sql
     src = inspect.getsource(ex.read_on_the_fly)
-    assert 'createOrReplaceTempView("raster_files")' in src and "gbx_file_write" not in src
+    assert "main.geobrix." not in src and "gbx_file_write" not in src
+    assert re.search(r"\bgbx_rst_fromfile\(file, 'GTiff'\)", src)
 
 
-def test_the_on_the_fly_read_runs_in_a_session(spark, monkeypatch):
+def test_the_on_the_fly_read_runs_in_a_session(spark):
     """The listing and the read on the sample GeoTIFFs. A runtime without FILE gives a null `file`, so there the same
     call reads `path`, which the session form of gbx_rst_fromfile also takes; the band means must match rasterio."""
     import numpy as np
@@ -587,9 +628,10 @@ def test_the_on_the_fly_read_runs_in_a_session(spark, monkeypatch):
     from path_config import SAMPLE_DATA_BASE
 
     folder = f"{SAMPLE_DATA_BASE}/london/sentinel2"
+    swap = {_VOLUME_DIR: f'volume_dir = "{folder}"'}
     if not file_supported(spark):
-        monkeypatch.setattr(ex, "READ_ON_THE_FLY_SQL", ex.READ_ON_THE_FLY_SQL.replace("fromfile(file,", "fromfile(path,"))
-    rows = ex.read_on_the_fly(spark, folder).orderBy("path").collect()
+        swap["fromfile(file,"] = "fromfile(path,"
+    rows = _run_with(ex.read_on_the_fly, swap, spark).orderBy("path").collect()
     tifs = sorted(str(p) for p in Path(folder).glob("*.tif"))
     assert [Path(r["path"]).name for r in rows] == [Path(t).name for t in tifs] and tifs
     for r in rows:

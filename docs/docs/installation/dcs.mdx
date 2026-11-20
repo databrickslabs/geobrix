@@ -38,8 +38,8 @@ Each 0.6.0 image ran on a dedicated DBR 19 cluster before its release. The check
 
 The 0.6.0 release digests:
 
-- Graviton (arm64): `mjohns797/geobrix@sha256:6ca4007f48e8897f6e45009ed0a0cc0e252bb231a428d624795d4de36b58a52d`
-- x86 (amd64): `mjohns797/geobrix@sha256:12ba3af60f98abdc544934a924b6ee1e6f789065ab06c9ed2bbb22a13670c8fe`
+- Graviton (arm64): `mjohns797/geobrix@sha256:73cf436188c88935556a10230621e080d3f9d0558bbc1a53b7efc1deb90507b1`
+- x86 (amd64): `mjohns797/geobrix@sha256:08d808c1c769538ccc89435291db97f84b808e701ee654276c3f5924f7351846`
 
 There is no DBR 17.3 / 18 image. On that compute, install the env5 wheel and the GeoBrix JAR as
 [cluster libraries](../installation.mdx#env-wheel-and-jar).
@@ -77,7 +77,8 @@ on the version you tested. The two architectures carry the same contents:
   The image links the JNI library into `/usr/lib`, where the GeoBrix JAR loads it.
 - **The GeoBrix env6 wheel**, installed with the `[vizx]` extra (the core library plus
   visualization) into the image's Python, so the Python engine needs no `%pip` step. The image
-  holds the wheel's dependencies from a hashed lock. The lock changes one base package, `idna`, which moves to 3.20.
+  holds the wheel's dependencies from a hashed lock. The lock changes two base packages. `idna` moves to 3.20.
+  `pillow` moves from 12.0.0 to 13.0.0, which fixes a TIFF and EXIF memory denial of service (GHSA-wqgw-9xfh-qf2g).
 - **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
   dedicated cluster loads JARs from.
 
@@ -144,7 +145,7 @@ To make a new lock, for example after a base image update, add `--relock`. It ne
 and it runs `scripts/docker/dcs/dcs_lock.py relock`. The command fetches the wheelhouse from the lock.
 
 The build takes about a minute natively and a few minutes under emulation. The wheel install leaves the
-base image's package versions as they are, except `idna`. The build fails rather than change any other.
+base image's package versions as they are, except `idna` and `pillow`. The build fails rather than change any other.
 
 ## Set up a dedicated cluster
 

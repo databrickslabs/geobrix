@@ -39,9 +39,11 @@ BASE_IMAGES = {  # arch -> (docker platform, image)
     "aarch64": ("linux/arm64", "databricksruntime/environment:v6-standard-arm"),
     "x86_64": ("linux/amd64", "databricksruntime/environment:v6-standard"),
 }
-# What the core install moves on purpose (core.txt says so): httpx2 2.12 and later need idna >= 3.18, and the base
-# image ships 3.11. Every other package of the base image is held at its version.
-DECLARED_MOVES = ("idna",)
+# What the image moves on purpose. idna: the core install does (core.txt says so): httpx2 2.12 and later need
+# idna >= 3.18, and the base image ships 3.11. pillow: dcs.in pins 13.0.0 over the base image's 12.0.0 for
+# GHSA-wqgw-9xfh-qf2g (CVE-2026-128066), a TIFF / EXIF IFD memory denial of service the exif_gbx reader reaches
+# through Image.open. Every other package of the base image is held at its version.
+DECLARED_MOVES = ("idna", "pillow")
 GLIBC_MINORS = range(17, 29)  # manylinux_2_17 .. manylinux_2_28: the image is Ubuntu 24.04 (glibc 2.39)
 
 

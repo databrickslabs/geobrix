@@ -197,13 +197,14 @@ def test_the_probe_skips_a_download_the_repository_ships():
     }
     assert sorted(probe.downloads(pins, {}, "x86_64")) == ["OPENJPEG", "OPENJPEG_PATCH"]
     assert sorted(probe.downloads(pins, {}, "x86_64", frozenset({"openjpeg-abc.patch"}))) == ["OPENJPEG"]
-    # the repository's own pins: the shipped patch is not probed, the tarball still is
+    # the repository's own pins: the shipped patches are not probed, the tarballs still are
     native = REPO_ROOT / "scripts" / "native"
     real = probe.load_pins(native / "pins.conf")
     shipped = probe.in_repo(native)
-    assert real["OPENJPEG_PATCH_FILE"] in shipped
     dl = probe.downloads(real, probe.load_pins(native / "test-data.conf"), "x86_64", shipped)
-    assert "OPENJPEG_PATCH" not in dl and "OPENJPEG" in dl
+    for dep in ("OPENJPEG", "EXPAT"):
+        assert real[f"{dep}_PATCH_FILE"] in shipped
+        assert f"{dep}_PATCH" not in dl and dep in dl
 
 
 def _fetch_source(tmp_path, own_data, want):

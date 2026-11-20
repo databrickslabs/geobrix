@@ -398,17 +398,19 @@ def test_the_dcs_lock_installs_our_rasterio_and_holds_the_base(arch):
     assert len(entries) == len(re.findall(r"^[A-Za-z0-9_.-]+==", lock, re.M))
     # click is held at the image's version
     assert re.search(r"^click==(\S+)", base, re.M).group(1) == pinned["click"]
+    # pillow is the declared security move (dcs.in): 13.0.0 over the base image's 12.0.0 (GHSA-wqgw-9xfh-qf2g)
+    assert pinned["pillow"] == "13.0.0" and re.search(r"^pillow==(\S+)", base, re.M).group(1) == "12.0.0"
     # and it is the package list of the image at ONE image digest, one `name==version` per line after that header
     header, *packages = base.splitlines()
     assert re.fullmatch(r"# base-image: databricksruntime/environment@sha256:[0-9a-f]{64}", header)
     assert all(re.fullmatch(r"[A-Za-z0-9_.-]+==\S+", ln) for ln in packages)
 
 
-def test_the_dcs_inputs_name_the_declared_requirements_and_our_rasterio():
+def test_the_dcs_inputs_name_the_declared_requirements_our_rasterio_and_the_pillow_move():
     lines = [ln.split("#")[0].strip() for ln in (ENV6 / "dcs.in").read_text().splitlines()]
     lines = [ln for ln in lines if ln]
     rasterio = f"rasterio=={pin('RASTERIO_VERSION')}+gbx{pin('GBX_NATIVE_REVISION')}"
-    assert lines == ["-r core.txt", "-r extra-vizx.txt", rasterio]
+    assert lines == ["-r core.txt", "-r extra-vizx.txt", rasterio, "pillow==13.0.0"]
 
 
 def test_a_version_that_is_only_a_prefix_of_the_pinned_url_is_reported():

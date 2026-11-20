@@ -165,9 +165,9 @@ nbconvert==7.17.2 \
     --hash=sha256:344a218e8595117ce37396ed025d994f146d076226ebac59255a2fa085ab24d8 \
     --hash=sha256:6a143c11c00bf831604da4b1be4347d36ea52367057eb920135d69bc2862fed2
     # via -r requirements.in
-nbformat==5.10.4 \
-    --hash=sha256:322168b14f937a5d11362988ecac2a4952d3d8e3a2cbeb2319584631226d5b3a \
-    --hash=sha256:3b48d6c8fbca4b299bf3982ea7db1af21580e4fec269ad087b9e81588891200b
+nbformat==5.11.1 \
+    --hash=sha256:32d4521c68c6e7d5b29c76defaeed9f42ea733142b9b19f88277ce10390b9c4d \
+    --hash=sha256:cc6698fa75f4fab8755ead786317815f13a6fee3b53311c0abb1a8b51d52f7ec
     # via
     #   -r requirements.in
     #   nbclient
@@ -197,9 +197,9 @@ pygments==2.20.0 \
     # via
     #   nbconvert
     #   pytest
-pytest==9.1.1 \
-    --hash=sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313 \
-    --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+pytest==9.2.0 \
+    --hash=sha256:07acdcf88ec174f907dc01af70bf52d49b014bbab03faeeade31c96b18c2e588 \
+    --hash=sha256:97c4f3b1f3c7414aa36465e09b8220f1d03627993bd51b1282e193753c80557b
     # via -r requirements.in
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
@@ -428,9 +428,9 @@ six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
     # via python-dateutil
-soupsieve==3.0.4 \
-    --hash=sha256:8412826614f9c632227067d0985aeb9f584bd15efc852955430e097a9fe7afbf \
-    --hash=sha256:924fab84ae21604c19e175e1f39815eb6fa83ba23836e09e9de180925e5bc4c0
+soupsieve==4.1 \
+    --hash=sha256:ca9abf7126667010d8f6e9b39bfc1bc3b23c8aed9bcb0f54a754dde969bb8aab \
+    --hash=sha256:e4d667b3974ce6e038e7390486b8093369854a1d345ffdd4c121dfc4a782e809
     # via
     #   -r requirements.in
     #   beautifulsoup4

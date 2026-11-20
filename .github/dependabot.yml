@@ -71,6 +71,13 @@ updates:
       docusaurus:
         patterns:
           - "@docusaurus/*"
+    # React majors move by hand with a full docs build as proof: Docusaurus accepts React 18 and 19,
+    # but MDX components and plugins are only checked by building the site.
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
 
   # The Genie Map example app. Dependabot handles pnpm lockfiles under the npm ecosystem.
   - package-ecosystem: "npm"
@@ -86,6 +93,15 @@ updates:
       - dependency-name: "@kepler.gl/*"
         update-types: ["version-update:semver-major"]
       - dependency-name: "maplibre-gl"
+        update-types: ["version-update:semver-major"]
+      # deck.gl 8.9 and kepler.gl 3.x use @math.gl/web-mercator 3 and viewport-mercator-project 6;
+      # a major of either here would load two copies. @vitejs/plugin-react 5 needs Node >= 20.19 on
+      # the Apps runtime, so it moves in its own pass with a deploy check.
+      - dependency-name: "@math.gl/web-mercator"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "viewport-mercator-project"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/plugin-react"
         update-types: ["version-update:semver-major"]
 
   # The examples/tests notebook harness lock.

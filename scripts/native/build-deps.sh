@@ -174,20 +174,24 @@ b_curl() {
     grep -q "Features:.* HTTP2" _cmake.log || { echo "BUILD FAILED: curl was configured without HTTP2: $(grep -m1 'Features:' _cmake.log)"; exit 1; }
     finish
 }
-# expat static and hidden: EXPAT_SHARED_LIBS=OFF compiles it -fvisibility=hidden (no XML_ENABLE_VISIBILITY), and
-# build-gdal.sh links it with --exclude-libs. Only libgdal uses it, so it ships inside libgdal, where a system
-# libexpat.so.1 in the global scope cannot interpose on it (no shared libexpat ships any more).
-b_expat() {
-    enter expat "$EXPAT_FILE"; lic
-    cm . -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_SHARED_LIBS=OFF
-    { [ -f "$P/lib/libexpat.a" ] && [ -z "$(ls "$P"/lib/libexpat.so* 2> /dev/null)" ]; } || { echo "BUILD FAILED: expat is not static only"; exit 1; }
-    finish
-}
-# apply_patch <file> <sha256>: a pinned source patch (pins.conf X_PATCH_*) on the unpacked source, checked by its sum first;
+# apply_patch <file> <sha256> [strip]: a pinned source patch (pins.conf X_PATCH_*) on the unpacked source, checked by its
+# sum first; strip is patch's -p (default 1; 2 for a patch whose paths are a subdirectory of the upstream repository).
 # --fuzz=0 and --forward: a hunk that does not apply exactly (an upstream move, or the fix already in) fails the build.
 apply_patch() {
     echo "$2  $SRC/$1" | sha256sum -c - || { echo "BUILD FAILED: $1 sha256"; exit 1; }
-    patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$SRC/$1" || { echo "BUILD FAILED: $1 does not apply to $DEP"; exit 1; }
+    patch -p"${3:-1}" --forward --fuzz=0 --no-backup-if-mismatch < "$SRC/$1" || { echo "BUILD FAILED: $1 does not apply to $DEP"; exit 1; }
+}
+# expat static and hidden: EXPAT_SHARED_LIBS=OFF compiles it -fvisibility=hidden (no XML_ENABLE_VISIBILITY), and
+# build-gdal.sh links it with --exclude-libs. Only libgdal uses it, so it ships inside libgdal, where a system
+# libexpat.so.1 in the global scope cannot interpose on it (no shared libexpat ships any more).
+# EXPAT_PATCH: the unknown_toUtf8 / unknown_toUtf16 out-of-bounds read fix (CVE-2026-124317), in no release yet; its
+# paths are upstream's expat/lib/..., hence strip 2
+b_expat() {
+    enter expat "$EXPAT_FILE"; lic
+    apply_patch "$EXPAT_PATCH_FILE" "$EXPAT_PATCH_SHA256" 2
+    cm . -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_SHARED_LIBS=OFF
+    { [ -f "$P/lib/libexpat.a" ] && [ -z "$(ls "$P"/lib/libexpat.so* 2> /dev/null)" ]; } || { echo "BUILD FAILED: expat is not static only"; exit 1; }
+    finish
 }
 # OPENJPEG_PATCH: the opj_j2k_read_sod heap-buffer-overflow fix (OSV-2025-219), in no release yet
 b_openjpeg() {

@@ -1,0 +1,71 @@
+From 3f83976721f156ea77173bc76fa49e6c077e817f Mon Sep 17 00:00:00 2001
+From: Sebastian Pipping <sebastian@pipping.org>
+Date: Sat, 7 Nov 2026 20:36:19 +0000
+Subject: [PATCH] [CVE-2026-124317] lib: Fix overread in unknown encoding
+ decoder
+
+libexpat/libexpat#1492, merged as 3f83976721f156ea77173bc76fa49e6c077e817f
+(not in any release: R_2_10_0 is 88 commits behind it). This is that merge
+commit's diff against its first parent 1f3714d75712801cf6fcb5ca30cdb37d60bb17b9,
+as GitHub's API serves it (identical to the pull request's .diff), trimmed to
+the library change: the expat/lib/xmltok.c hunks are upstream's, byte for byte
+(the pull request's commits bf26290d2f02 and 3d7756761299); the
+expat/tests/misc_tests.c hunk (the regression test, commit 05075975dc24) is
+dropped, as GeoBrix builds Expat with EXPAT_BUILD_TESTS=OFF. The paths are
+upstream's repository paths (expat/lib/...): apply with patch -p2 from the
+release tarball's root.
+---
+ expat/lib/xmltok.c | 20 ++++++++++++++------
+ 1 file changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/expat/lib/xmltok.c b/expat/lib/xmltok.c
+index 2f837acc4c..8cc03962e5 100644
+--- a/expat/lib/xmltok.c
++++ b/expat/lib/xmltok.c
+@@ -1283,13 +1283,17 @@ unknown_toUtf8(const ENCODING *enc, const char **fromP, const char *fromLim,
+     utf8 = uenc->utf8[(unsigned char)**fromP];
+     n = *utf8++;
+     if (n == 0) {
++      const size_t readLen
++          = (AS_NORMAL_ENCODING(enc)->type[(unsigned char)**fromP]
++             - (BT_LEAD2 - 2));
++      if (readLen > (size_t)(fromLim - *fromP))
++        return XML_CONVERT_INPUT_INCOMPLETE;
+       int c = uenc->convert(uenc->userData, *fromP);
+       n = XmlUtf8Encode(c, buf);
+       if (n > toLim - *toP)
+         return XML_CONVERT_OUTPUT_EXHAUSTED;
+       utf8 = buf;
+-      *fromP += (AS_NORMAL_ENCODING(enc)->type[(unsigned char)**fromP]
+-                 - (BT_LEAD2 - 2));
++      *fromP += readLen;
+     } else {
+       if (n > toLim - *toP)
+         return XML_CONVERT_OUTPUT_EXHAUSTED;
+@@ -1307,9 +1311,13 @@ unknown_toUtf16(const ENCODING *enc, const char **fromP, const char *fromLim,
+   while (*fromP < fromLim && *toP < toLim) {
+     unsigned short c = uenc->utf16[(unsigned char)**fromP];
+     if (c == 0) {
++      const size_t readLen
++          = (AS_NORMAL_ENCODING(enc)->type[(unsigned char)**fromP]
++             - (BT_LEAD2 - 2));
++      if (readLen > (size_t)(fromLim - *fromP))
++        return XML_CONVERT_INPUT_INCOMPLETE;
+       c = (unsigned short)uenc->convert(uenc->userData, *fromP);
+-      *fromP += (AS_NORMAL_ENCODING(enc)->type[(unsigned char)**fromP]
+-                 - (BT_LEAD2 - 2));
++      *fromP += readLen;
+     } else
+       (*fromP)++;
+     *(*toP)++ = c;
+@@ -1317,8 +1325,8 @@ unknown_toUtf16(const ENCODING *enc, const char **fromP, const char *fromLim,
+ 
+   if ((*toP == toLim) && (*fromP < fromLim))
+     return XML_CONVERT_OUTPUT_EXHAUSTED;
+-  else
+-    return XML_CONVERT_COMPLETED;
++
++  return XML_CONVERT_COMPLETED;
+ }
+ 
+ ENCODING *

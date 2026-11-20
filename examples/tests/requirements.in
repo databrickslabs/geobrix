@@ -12,10 +12,10 @@
 # Then install with --require-hashes to enforce supply-chain integrity:
 #   pip install --require-hashes -r examples/tests/requirements.txt
 #
-# pytest is intentionally CI-matrix (9.1.1), not DBR's 8.3.5 — we don't run
+# pytest is intentionally CI-matrix (9.2.0), not DBR's 8.3.5 — we don't run
 # tests in DBR.
-pytest==9.1.1
-nbformat==5.10.4
+pytest==9.2.0
+nbformat==5.11.1
 nbconvert==7.17.2
 testbook==0.4.2
 
@@ -25,4 +25,4 @@ testbook==0.4.2
 tornado>=6.6.1
 mistune>=3.3.0
 bleach>=6.4.0
-soupsieve>=3.0.2,<4
+soupsieve>=4.0.0,<5

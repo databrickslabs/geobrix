@@ -2185,7 +2185,7 @@ quadbin==0.2.2 \
     --hash=sha256:f7c3ee3a197ca5baf660cbd4646040a7ab85b6aeeab71ae6069729cdf81a1b81
     # via -r core.txt
 rasterio==1.5.2+gbx1 \
-    --hash=sha256:ea38113042f8a399d40905061cc4e1b36aa01b25b68d27fdddeb1d8614c293e0
+    --hash=sha256:524d97eb2910d0bade84028d5c4339d0bbc429b7be0ed2d0f76c4c2f4c28895d
     # via -r dcs.in
 referencing==0.37.0 \
     --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231 \

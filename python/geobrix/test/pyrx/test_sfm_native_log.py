@@ -22,6 +22,9 @@ def _fake_pycolmap(level=0):
 @pytest.fixture(autouse=True)
 def _no_env(monkeypatch):
     monkeypatch.delenv(_native_log.VERBOSE_ENV, raising=False)
+    # Open scopes are keyed by id(pycolmap.logging). A test that leaves a scope open on a fake that is then freed
+    # would leave an entry a later fake can match when CPython reuses the id (the level is then never set).
+    monkeypatch.setattr(_native_log, "_ACTIVE", {})
 
 
 def test_default_limits_native_log_to_warnings():

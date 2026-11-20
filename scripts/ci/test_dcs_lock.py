@@ -57,6 +57,17 @@ def test_the_constraints_hold_the_base_except_what_the_core_declares_it_moves():
     assert not any(ln.startswith("idna") for ln in cons.splitlines())
 
 
+def test_pillow_is_a_declared_move_for_its_advisory():
+    """dcs.in pins pillow 13.0.0 over the base image's 12.0.0 (GHSA-wqgw-9xfh-qf2g): the constraints leave the base's
+    pillow out, and a lock that moves it is sound, while any other undeclared move is still refused."""
+    base = BASE + "pillow==12.0.0\n"
+    assert not any(ln.startswith("pillow") for ln in dcs_lock.constraints(base).splitlines())
+    lock = LOCK + f"pillow==13.0.0 \\\n    --hash=sha256:{H3}\n"
+    assert dcs_lock.moves(dcs_lock.parse_lock(lock), dcs_lock.parse_base(base))["pillow"] == ("12.0.0", "13.0.0")
+    assert check(lock, base) == []
+    assert any("click" in p for p in check(lock.replace("click==8.2.1", "click==8.5.0"), base))
+
+
 def check(lock=LOCK, base=BASE, rasterio="1.5.2+gbx1", sha=None):
     return dcs_lock.check(dcs_lock.parse_lock(lock), dcs_lock.parse_base(base), rasterio, sha)
 

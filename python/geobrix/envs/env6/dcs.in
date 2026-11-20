@@ -8,3 +8,8 @@
 -r core.txt
 -r extra-vizx.txt
 rasterio==1.5.2+gbx1
+# The image moves the base image's pillow 12.0.0 to 13.0.0 (a declared move, dcs_lock.py DECLARED_MOVES) for
+# GHSA-wqgw-9xfh-qf2g (CVE-2026-128066): a moderate memory denial of service in Pillow's TIFF / EXIF IFD parsing,
+# fixed in 13.0.0, which the exif_gbx reader reaches (ds/exif.py, Image.open on the file it reads). The env6 wheel's
+# own pillow requirement (core.txt, >=12.0.0,<14) is unchanged: a %pip install keeps the runtime's pillow.
+pillow==13.0.0

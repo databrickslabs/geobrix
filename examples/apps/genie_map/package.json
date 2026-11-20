@@ -37,7 +37,7 @@
     "@kepler.gl/schemas": "3.2.5",
     "@kepler.gl/styles": "3.2.5",
     "@kepler.gl/table": "3.2.5",
-    "@kepler.gl/types": "3.2.5",
+    "@kepler.gl/types": "3.2.6",
     "@kepler.gl/utils": "3.2.5",
     "@loaders.gl/loader-utils": "^4.3.4",
     "@math.gl/web-mercator": "^3.6.3",

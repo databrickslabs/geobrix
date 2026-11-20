@@ -77,8 +77,8 @@ on the version you tested. The two architectures carry the same contents:
   The image links the JNI library into `/usr/lib`, where the GeoBrix JAR loads it.
 - **The GeoBrix env6 wheel**, installed with the `[vizx]` extra (the core library plus
   visualization) into the image's Python, so the Python engine needs no `%pip` step. The image
-  holds the wheel's dependencies from a hashed lock. The lock changes two base packages: `idna` moves to 3.20,
-  and `pillow` moves from 12.0.0 to 13.0.0, which fixes a TIFF and EXIF memory denial of service (GHSA-wqgw-9xfh-qf2g).
+  holds the wheel's dependencies from a hashed lock. The lock changes two base packages. `idna` moves to 3.20.
+  `pillow` moves from 12.0.0 to 13.0.0, which fixes a TIFF and EXIF memory denial of service (GHSA-wqgw-9xfh-qf2g).
 - **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
   dedicated cluster loads JARs from.
 

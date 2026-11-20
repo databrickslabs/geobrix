@@ -45,7 +45,10 @@ name: Build GDAL native (x86_64)
 # Direct fetches: the repository wires JFrog remotes for PyPI, Maven, npm and cargo only (no Docker or generic remote),
 # so a cold build fetches four kinds of thing from their own hosts, each checked by its pin or its signature:
 #   - the pinned downloads of scripts/native/prefetch.sh: pins.conf's *_URL / *_URL2 (the source tarballs, rustup-init,
-#     cargo-deny, the PROJ grids) and rasterio's test data (test-data.conf), sha256-checked;
+#     cargo-deny, the PROJ grids) and rasterio's test data (test-data.conf), sha256-checked. The OpenJPEG source
+#     patch is not one: it ships in the repository (scripts/native/patches/), and prefetch.sh copies it from there,
+#     sha256-checked, so its pins.conf URL (GitHub's generated commit .patch, which answers runners with 503 at times)
+#     is provenance only and is not probed;
 #   - the manylinux image from quay.io, pinned by digest;
 #   - the JDK from the image's AlmaLinux dnf repositories (rpm signatures);
 #   - the Rust toolchain from static.rust-lang.org, rustup-init's host (rustup checks it against its manifest).

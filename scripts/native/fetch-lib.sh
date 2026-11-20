@@ -6,6 +6,10 @@
 GBX_NATIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GBX_NATIVE_ROOT="$(cd "$GBX_NATIVE_DIR/../.." && pwd)"
 GBX_NATIVE_BUILD="${GBX_NATIVE_BUILD:-$GBX_NATIVE_ROOT/build/native}"
+# Pinned files the repository ships instead of downloading, by their pins.conf <X>_FILE name: a source patch whose
+# upstream URL (GitHub's generated commit .patch) answers CI runners with HTTP 503 at times. Its _URL stays in
+# pins.conf as provenance; egress_probe.py does not probe it.
+GBX_NATIVE_IN_REPO="${GBX_NATIVE_IN_REPO:-$GBX_NATIVE_DIR/patches}"
 
 pin() { python3 "$GBX_NATIVE_DIR/pins.py" get "$1"; }
 
@@ -38,6 +42,24 @@ fetch_verified() {
     done
     echo "PREFETCH FAILED: $(basename "$dest") could not be downloaded from any of its sources" >&2
     return 1
+}
+
+# fetch_source DEST SHA256 URL [URL2]: a pinned source file. With a copy in the repository ($GBX_NATIVE_IN_REPO/<file>)
+# it is copied from there, never downloaded; a copy whose sum differs from the pin is a hard stop, as a download's is.
+fetch_source() {
+    local dest="$1" want="$2" own got
+    own="$GBX_NATIVE_IN_REPO/$(basename "$dest")"
+    if [ ! -f "$own" ]; then
+        fetch_verified "$@"
+        return
+    fi
+    got="$(sha256_of "$own")"
+    if [ "$got" != "$want" ]; then
+        echo "PREFETCH FAILED: $(basename "$dest") sha256 $got, pins.conf says $want (the repository's copy, $own)" >&2
+        return 1
+    fi
+    mkdir -p "$(dirname "$dest")"
+    cp "$own" "$dest.part" && mv "$dest.part" "$dest"
 }
 
 # fetch_sdist DEST SHA256 FILE: a Python binding's sdist (pins.conf <X>_SDIST_FILE / _SDIST_SHA256). With

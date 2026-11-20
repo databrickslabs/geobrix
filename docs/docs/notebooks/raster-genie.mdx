@@ -24,6 +24,10 @@ It takes the data through five steps:
 **[examples/notebooks/raster-genie](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/raster-genie)** — open the series from a Git folder, or download the whole folder, and import `config_nb.ipynb` and `01_smokehouse_creek.ipynb` into your Databricks workspace to run.
 :::
 
+`genie/seed_agent.py` creates two Genie Agents for the example. The live agent, below, answers from the four tables and composes the GeoBrix Unity Catalog raster functions itself, starting from `gbx_rst_fromfile` on the `rasters` FILE table.
+
+![The live Raster Genie Agent in a Databricks workspace. Its 28 sources are the aois, coverage, rasters and s2_scene_assets tables and the GeoBrix Unity Catalog raster functions. They include gbx_rst_fromfile, gbx_rst_avg, gbx_rst_nbr and gbx_rst_histogram. Below the question box, it suggests questions about the raster assets, the coverage table and the named areas.](../../../resources/images/screenshots/raster-genie/genie-agent-live.png)
+
 :::info Runs on Serverless by default
 `config_nb` installs the `geobrix[stac,vizx,databricks]` env6 wheel, so the notebook runs on **Serverless environment 6** with no JAR. The `gbx_rst_*` functions run in the session at the Python level. The same calls run in Unity Catalog once the GeoBrix Unity Catalog functions are installed. See [Query FILE columns from Unity Catalog](../readers/file#query-file-columns-from-unity-catalog), [Choose an install path](../installation#choose-an-install-path) and [Surfaces & Levels](../api/execution-tiers).
 :::

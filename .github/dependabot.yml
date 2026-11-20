@@ -21,8 +21,16 @@ updates:
     # Spark is a `provided` dependency compiled against the lowest supported runtime's Spark
     # (DBR 17.3, Spark 4.0), so one JAR loads on DBR 17.3, 18 and 19. A newer Spark is checked
     # by running the JAR on that runtime, not by compiling against it.
+    # jackson-databind is `provided` and must equal the Spark build's own jackson version
+    # (2.18.2 for Spark 4.0.0), so it follows Spark, not the latest release. `jackson.version`
+    # in pom.xml is overridden for a compat build against another Spark.
     ignore:
       - dependency-name: "org.apache.spark:*"
+      - dependency-name: "com.fasterxml.jackson*"
+      # maven-site-plugin is pinned at the reviewed 3.12.1 only so Maven's super-POM default does not
+      # pull a newer site plugin (3.22.0: ~90 Doxia/Jetty/Velocity artifacts and their keys) into the
+      # pgpverify gate. Nothing here runs `mvn site`, so its version has no effect on any build.
+      - dependency-name: "org.apache.maven.plugins:maven-site-plugin"
 
   - package-ecosystem: "pip"
     directory: "/python/geobrix"
@@ -47,6 +55,48 @@ updates:
       - dependency-name: "flake8"
       - dependency-name: "flake8-pyproject"
       - dependency-name: "anywidget"
+
+  # The docs site build (Docusaurus). Nothing here ships to users; it keeps the deploy's
+  # build lock patched.
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    # Labs lockdown policy: wait 7 days after a release before opening a PR
+    # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
+    cooldown:
+      default-days: 7
+    # The @docusaurus/* packages release in lockstep and must stay on one version.
+    groups:
+      docusaurus:
+        patterns:
+          - "@docusaurus/*"
+
+  # The Genie Map example app. Dependabot handles pnpm lockfiles under the npm ecosystem.
+  - package-ecosystem: "npm"
+    directory: "/examples/apps/genie_map"
+    schedule:
+      interval: "weekly"
+    # Labs lockdown policy: wait 7 days after a release before opening a PR
+    # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
+    cooldown:
+      default-days: 7
+    # kepler.gl 3.x pins maplibre-gl 3.x, so a major of either is a coordinated move made by hand.
+    ignore:
+      - dependency-name: "@kepler.gl/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "maplibre-gl"
+        update-types: ["version-update:semver-major"]
+
+  # The examples/tests notebook harness lock.
+  - package-ecosystem: "pip"
+    directory: "/examples/tests"
+    schedule:
+      interval: "weekly"
+    # Labs lockdown policy: wait 7 days after a release before opening a PR
+    # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
+    cooldown:
+      default-days: 7
 
   # NOTE: No `github-actions` ecosystem entry: the lockdown policy disables
   # Dependabot updates for Actions so SHA pins are not silently bumped.

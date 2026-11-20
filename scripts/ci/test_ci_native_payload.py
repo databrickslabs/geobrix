@@ -184,6 +184,72 @@ def test_the_direct_download_probe_names_a_download_with_no_working_origin():
     assert probe.probe(dl, lambda url: (True, "ok")) == []
 
 
+def test_the_probe_skips_a_download_the_repository_ships():
+    """A pinned file scripts/native/patches/ holds is copied by prefetch.sh, not downloaded: the probe leaves it out
+    (its URL is provenance only) and keeps every other download, the OpenJPEG tarball on the same host included."""
+    probe = _native("egress_probe")
+    pins = {
+        "OPENJPEG_URL": "https://github.example/openjpeg.tar.gz",
+        "OPENJPEG_FILE": "openjpeg-2.5.4.tar.gz",
+        "OPENJPEG_PATCH_URL": "https://github.example/commit/abc.patch",
+        "OPENJPEG_PATCH_URL2": "single-source",
+        "OPENJPEG_PATCH_FILE": "openjpeg-abc.patch",
+    }
+    assert sorted(probe.downloads(pins, {}, "x86_64")) == ["OPENJPEG", "OPENJPEG_PATCH"]
+    assert sorted(probe.downloads(pins, {}, "x86_64", frozenset({"openjpeg-abc.patch"}))) == ["OPENJPEG"]
+    # the repository's own pins: the shipped patch is not probed, the tarball still is
+    native = REPO_ROOT / "scripts" / "native"
+    real = probe.load_pins(native / "pins.conf")
+    shipped = probe.in_repo(native)
+    assert real["OPENJPEG_PATCH_FILE"] in shipped
+    dl = probe.downloads(real, probe.load_pins(native / "test-data.conf"), "x86_64", shipped)
+    assert "OPENJPEG_PATCH" not in dl and "OPENJPEG" in dl
+
+
+def _fetch_source(tmp_path, own_data, want):
+    """fetch-lib.sh's fetch_source (prefetch.sh's source loop) with the repository copy in a tmp dir and a curl that
+    logs and fails (own_data None: the repository ships no copy): -> (result, dest, curl was called)."""
+    own = tmp_path / "patches"
+    own.mkdir()
+    if own_data is not None:
+        (own / "x.patch").write_bytes(own_data)
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    (shims / "curl").write_text(f"#!/bin/sh\necho curl >> {tmp_path / 'curl.log'}\nexit 7\n")
+    (shims / "curl").chmod(0o755)
+    dest = tmp_path / "src" / "x.patch"
+    env = dict(os.environ, GBX_NATIVE_IN_REPO=str(own), PATH=f"{shims}{os.pathsep}{os.environ['PATH']}")
+    script = (
+        f'source "{REPO_ROOT}/scripts/native/fetch-lib.sh";'
+        f' fetch_source "{dest}" "{want}" https://github.example/x.patch single-source'
+    )
+    res = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    return res, dest, (tmp_path / "curl.log").exists()
+
+
+@pytest.mark.parametrize("pinned", ["right", "wrong"])
+def test_prefetch_copies_a_shipped_file_from_the_repository_and_checks_its_sum(tmp_path, pinned):
+    """prefetch.sh's sources go through fetch_source: a file the repository ships is copied, never downloaded (no
+    curl), and kept only when its sha256 is the pin; a wrong sum fails and writes nothing."""
+    assert 'fetch_source "$OUT/src/$file"' in (REPO_ROOT / "scripts/native/prefetch.sh").read_text()
+    data = b"a patch\n"
+    want = hashlib.sha256(data).hexdigest() if pinned == "right" else "0" * 64
+    res, dest, curled = _fetch_source(tmp_path, data, want)
+    assert not curled, "a shipped file was downloaded"
+    if pinned == "right":
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert dest.read_bytes() == data
+    else:
+        assert res.returncode == 1 and "PREFETCH FAILED: x.patch sha256" in res.stderr
+        assert "the repository's copy" in res.stderr and not dest.exists()
+
+
+def test_prefetch_downloads_a_file_the_repository_does_not_ship(tmp_path):
+    """No repository copy: fetch_source is fetch_verified (here curl is called, fails, and so does the fetch)."""
+    res, dest, curled = _fetch_source(tmp_path, None, "0" * 64)
+    assert curled and res.returncode == 1 and "could not be downloaded" in res.stderr and not dest.exists()
+
+
 TIMEOUT = "timed out"
 BARE_TIMEOUT = "bare timeout"  # socket.timeout out of resp.read(), not wrapped in a URLError
 CUT_SHORT = "cut short"  # http.client.IncompleteRead: an HTTPException, not an OSError

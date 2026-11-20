@@ -15,12 +15,15 @@ EXTRA=()
 ALLOW_DIRTY=()
 NO_RS=()
 VERIFY=""
+FLOAT=""
+WHEEL=""
 LOG_PATH=""
 
 usage() {
     show_banner "Build an env wheel with the native payload"
     echo "Usage: bash scripts/commands/gbx-build-wheel.sh --env 5|6 [--jar <path>] [--no-rs] [--extra-payload <dir>] [--allow-dirty] [--log <path>]"
     echo "       bash scripts/commands/gbx-build-wheel.sh --env 5|6 --verify x86_64|aarch64|both [--log <path>]"
+    echo "       bash scripts/commands/gbx-build-wheel.sh --env 5|6 --float-check x86_64|aarch64|both [--wheel <path>] [--log <path>]"
     echo ""
     echo "  --env            5 (DBR 17.3, DBR 18, Serverless env 5) or 6 (DBR 19, Serverless env 6, SQL warehouses, UC)"
     echo "  --jar            the GeoBrix JAR to ship in _jar/ (default target/geobrix-<version>-jar-with-dependencies.jar)"
@@ -33,6 +36,11 @@ usage() {
     echo "  --verify ARCH    build nothing: install dist/env<N>'s wheel in a fresh offline venv in ARCH's toolchain"
     echo "                   image and run scripts/native/check-env-wheel.sh (install, .pth and import activation, CA,"
     echo "                   tripwire, Python 3.11, payload self-check, the Rust kernels); 'both' runs aarch64 then x86_64"
+    echo "  --float-check ARCH  build nothing: on every runtime of the env (envs/runtimes/<runtime>.txt made installed in a"
+    echo "                   fresh venv of ARCH's toolchain image), pip install --dry-run the wheel, its core and each extra,"
+    echo "                   against the host's index; any move of a preinstalled package that install_moves.py does not"
+    echo "                   document fails (scripts/native/float_check.py); 'both' runs aarch64 then x86_64"
+    echo "  --wheel          with --float-check: the wheel to check (default dist/env<N>'s), e.g. a release wheel as control"
     echo "  --log            Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
     echo "Inputs: build/native/out/<arch>/{stage-native,bindings}/ for x86_64 and aarch64 (gbx:build:native),"
@@ -53,6 +61,8 @@ while [[ $# -gt 0 ]]; do
         --allow-dirty) ALLOW_DIRTY=(--allow-dirty); shift ;;
         --no-rs) NO_RS=(--no-rs); shift ;;
         --verify) [[ $# -ge 2 ]] || needs_value "$1"; VERIFY="$2"; shift 2 ;;
+        --float-check) [[ $# -ge 2 ]] || needs_value "$1"; FLOAT="$2"; shift 2 ;;
+        --wheel) [[ $# -ge 2 ]] || needs_value "$1"; WHEEL="$2"; shift 2 ;;
         --log) [[ $# -ge 2 ]] || needs_value "$1"; LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -61,12 +71,14 @@ done
 
 case "$ENV_N" in 5|6) ;; *) echo "--env must be 5 or 6" >&2; usage; exit 1 ;; esac
 case "$VERIFY" in ""|x86_64|aarch64|both) ;; *) echo "--verify must be x86_64, aarch64 or both" >&2; usage; exit 1 ;; esac
+case "$FLOAT" in ""|x86_64|aarch64|both) ;; *) echo "--float-check must be x86_64, aarch64 or both" >&2; usage; exit 1 ;; esac
+[ -z "$WHEEL" ] || [ -n "$FLOAT" ] || { echo "--wheel needs --float-check" >&2; usage; exit 1; }
 
 cd "$PROJECT_ROOT"
 VERSION="$(sed -nE 's/^__version__ = "([^"]+)"$/\1/p' python/geobrix/src/databricks/labs/gbx/__init__.py)"
 JAR="${JAR:-target/geobrix-${VERSION}-jar-with-dependencies.jar}"
 VENDOR_PURE="build/env-wheel/vendor-pure/env${ENV_N}"
-show_banner "Env wheel: geobrix ${VERSION}+env${ENV_N}${VERIFY:+ (verify $VERIFY)}"
+show_banner "Env wheel: geobrix ${VERSION}+env${ENV_N}${VERIFY:+ (verify $VERIFY)}${FLOAT:+ (float check $FLOAT)}"
 setup_log_file "$LOG_PATH"
 
 # Every precondition before any step: Docker, uv, and a host pip for the index downloads.
@@ -91,6 +103,16 @@ builder() {
 }
 
 T0=$(date +%s)
+if [ -n "$FLOAT" ]; then
+    if [ "$FLOAT" = both ]; then ARCHES=(aarch64 x86_64); else ARCHES=("$FLOAT"); fi
+    rc=0
+    for a in "${ARCHES[@]}"; do
+        # each architecture runs on its own, so one failure does not hide the other (pipefail: the check's exit)
+        if ! "$HOST_PYTHON" scripts/native/float_check.py --env "$ENV_N" --arch "$a" ${WHEEL:+--wheel "$WHEEL"} 2>&1 | redact; then rc=1; fi
+    done
+    echo "ENV_WHEEL env=${ENV_N} float_check=${FLOAT} failed=${rc} seconds=$(($(date +%s) - T0))"
+    exit "$rc"
+fi
 if [ -n "$VERIFY" ]; then
     if [ "$VERIFY" = both ]; then ARCHES=(aarch64 x86_64); else ARCHES=("$VERIFY"); fi
     for a in "${ARCHES[@]}"; do builder --verify "$a"; done

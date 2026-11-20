@@ -239,6 +239,9 @@ deps = ["GDAL", "PROJ", "GEOS", "LIBGEOTIFF", "LIBTIFF", "SQLITE", "OPENSSL", "C
         "CBLOSC", "LIBPNG", "LIBJPEG_TURBO", "LIBWEBP", "LERC", "EXPAT", "OPENJPEG", "LIBAEC", "HDF5", "NETCDF_C",
         "NGHTTP2", "PCRE2", "MUPARSER", "HIGHWAY", "BROTLI", "LCMS2", "LIBJXL"]
 versions = {d.lower(): p[d + "_VERSION"] for d in deps}
+# source patches applied on top of a pinned version (pins.conf X_PATCH_*): {dep: {file, sha256}}
+patches = {k[: -len("_PATCH_FILE")].lower(): {"file": v, "sha256": p[k[: -len("_FILE")] + "_SHA256"]}
+           for k, v in sorted(p.items()) if k.endswith("_PATCH_FILE")}
 grids = {p[f"PROJGRID_{k}_FILE"]: {"sha256": p[f"PROJGRID_{k}_SHA256"], "license": p[f"PROJGRID_{k}_LICENSE"]}
          for k in ("OSTN15", "OSGM15", "EGM96")}
 
@@ -293,6 +296,7 @@ manifest = {
     "arch": os.uname().machine,
     "baseline": "manylinux_2_28",
     "versions": versions,
+    "patches": patches,
     "sonames": renamed["sonames"],
     "jni": renamed["jni"],
     "proj_grids": grids,

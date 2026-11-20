@@ -115,7 +115,14 @@ def test_the_filter_plugins_reach_only_the_payloads_hdf5(
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in ("HDF5_PLUGIN_PATH", "GBX_NATIVE_DISABLE", "PYTHONPATH")
+        # the row picks its own activator: a caller's GBX_NATIVE_PTH=0 (gbx:test:python with GBX_NATIVE_ROOT) goes
+        if k
+        not in (
+            "HDF5_PLUGIN_PATH",
+            "GBX_NATIVE_DISABLE",
+            "GBX_NATIVE_PTH",
+            "PYTHONPATH",
+        )
     }
     env.update(GBX_NATIVE_ROOT=str(PAYLOAD), GBX_SRC=str(SRC), TMP_DIR=str(tmp_path))
     if activator == "import":

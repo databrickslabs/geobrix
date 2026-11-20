@@ -1,2 +1,4 @@
 # Maven wrapper: a POSIX shell script, LF only (a CRLF checkout breaks the shebang).
 /mvnw text eol=lf
+# Vendored source patches: byte-exact (their sha256 is pinned in scripts/native/pins.conf), no EOL conversion.
+/scripts/native/patches/** -text

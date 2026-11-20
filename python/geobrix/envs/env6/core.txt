@@ -5,7 +5,8 @@
 # and GDAL's own osgeo and osgeo_utils from that GDAL. rio-cogeo and xarray-spatial are dropped:
 # GDAL's COG driver and GDALViewshedGenerate do their work.
 
-# The runtime's preinstalled versions as the floor, the next minor as the cap: these move nothing.
+# The runtime's preinstalled versions as the floor, the next minor as the cap (urllib3 and pillow: the next major,
+# below): these move nothing.
 # These are FROZEN-BASE caps, deliberate: this wheel targets frozen runtime bases (DBR 19, Serverless environment
 # 6), so a cap cannot downgrade the runtime's numpy, pandas, pyarrow, scipy, protobuf, urllib3 or pillow, and it stops a
 # transitive requirement from upgrading one. (The extras follow another rule: a package the runtimes preinstall
@@ -15,10 +16,15 @@ pandas>=2.3.3,<2.4
 pyarrow>=21.0.0,<22
 scipy>=1.16.3,<1.17
 protobuf>=6.31.1,<7
-urllib3<2.6
+# urllib3 and pillow are capped at the next MAJOR, not the next minor: both have security releases past the runtimes'
+# versions, and a runtime that Databricks patches to one must still satisfy the range, or installing geobrix would
+# downgrade it. pip keeps an installed version that satisfies the range, so the wider cap moves nothing either. The
+# dependency lists (_native/deps) resolve urllib3, which base.txt does not hold, to its newest release under the cap:
+# pip installs it only where no urllib3 in the range is installed already.
+urllib3<3
 # pillow: GeoBrix imports PIL (rasterx ortho and imagery, the exif_gbx reader); DBR 19 and env 6 (and their ML runtimes)
 # all ship 12.0.0.
-pillow>=12.0.0,<12.1
+pillow>=12.0.0,<14
 # PEP 728 TypedDict(extra_items=...), which rio-tiler 9 uses, works from 4.13.0 (the runtimes ship 4.15.0).
 typing_extensions>=4.13
 # What the core install does move (gbx:versions:audit --install-moves lists these and fails on any other move), each

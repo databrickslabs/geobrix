@@ -64,6 +64,70 @@ Pass `deps="per-function"` to give each function only the packages it imports. T
 
 The sandbox installs the packages from PyPI. When it cannot reach PyPI, the create fails, and the error names the fix. Stage the wheels on a Volume with `gbx.stage_deps`, then pass `deps="volume"`. See [Install without PyPI access](../installation.mdx#offline-install).
 
+## Prepare a table of raster files
+
+UC functions read raster files through a table with a FILE column. The table holds one row for each tiled GeoTIFF, such as a COG, in a Volume folder. Each row holds a FILE reference to the file and the header columns of the file. Every UC query on the rasters starts from this table.
+
+:::tip Write the table once
+A UC function cannot open a Volume path. Writing this table is the minimum step that gives UC functions, and a Genie Agent, the files.
+
+It is the alternative to a table with a tile column (which is also accepted). A tile column copies the pixels, and UC refuses a tile over 64 MiB decoded. The FILE table keeps references, and `gbx_rst_fromfile` reads only the blocks a query needs.
+:::
+
+The written table gives you:
+
+- **UC functions alone.** A Genie Agent, a SQL warehouse or a dashboard queries the table with no session step. A query starts at `gbx_rst_fromfile` on the `file` column.
+- **One listing and one header read.** They run once, at ingest, not on every query.
+- **A filter before the pixels.** A query filters or joins on `footprint`, `srid`, `pixel_size` and `name` before it reads any pixel. For example, `st_intersects` on `footprint` picks the files that meet a polygon.
+- **A governed UC table.** It carries grants and lineage. Add table and column comments so a Genie Agent knows what each column holds. The [Raster Genie](../notebooks/raster-genie) notebook does this.
+
+### Write the table
+
+Run the steps in an env 6 notebook or job (outside a SQL warehouse), after `register(spark)`:
+
+1. List the GeoTIFFs with `gbx_file_read`. Each row holds `path`, `size` and `file`.
+2. Read each header once with `rst_fromfile`. The tile it returns holds no pixels.
+3. Keep the columns of the table: `name`, `path`, `srid`, `pixel_size` and `footprint`.
+4. Write the table with `gbx_file_write`, with `file_mode="external"` and `file_col="file"`.
+
+`volume_dir` is the Volume folder that holds the GeoTIFFs. UC reads tiled GeoTIFFs only: it refuses a striped GeoTIFF or another format with a `Fix:`. Write such files as COGs with [`cog_gbx`](../writers/cog) first.
+
+<CodeFromTest code={ucExamples} language="python" functionName="prepare_a_table_of_raster_files" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The statement reads the header columns. `pixel_size` is in the units of the raster's CRS, as the `resolution` argument of `gbx_rst_fromfile` is. `footprint` is the bounding box as a `GEOMETRY(4326)`, so `st_intersects` can join it to your polygons.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="RASTER_TABLE_COLUMNS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_file_write` adds the FILE EXTERNAL column `file`, made from `path` with `try_to_file`. It writes the rows in path order. The DataFrame must not carry a `file` column of its own, so the statement leaves out the one from `gbx_file_read`. Pass `overwrite=True` to build the table again.
+
+<CodeFromTest code={ucExamples} language="python" functionName="land_the_raster_table" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`file_mode="external"` needs compute with FILE support, such as Serverless env 6. On a runtime without FILE it raises a `ValueError` that names the fix. The [Raster Genie](../notebooks/raster-genie) notebook writes its COGs this way on Serverless env 6.
+
+### Query the table
+
+A query starts at `gbx_rst_fromfile` on `r.file`, and it calls UC functions only. This is all a Genie Agent, a SQL warehouse or a dashboard needs. The join on `footprint` picks the files before any pixel is read.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_FROMFILE_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+See [Read a window of a raster file](#read-a-window-of-a-raster-file) for the arguments and the 64 MiB window limit.
+
+### Read on the fly in a session
+
+In a notebook or job, you can skip the table. `gbx_file_read` gives the `file` column directly, and `gbx_rst_fromfile` reads it in the same query.
+
+<CodeFromTest code={ucExamples} language="python" functionName="read_on_the_fly" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="READ_ON_THE_FLY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Use this route for one-off exploration in a session. It costs more on each query:
+
+- Every query lists the folder again.
+- There is no `footprint` to filter on, unless the query reads the headers again.
+- A SQL warehouse, a dashboard or a Genie Agent cannot run it, because `gbx_file_read` is a session function.
+
+For repeated queries, or for a Genie Agent, [write the table](#write-the-table). A file up to 64 MiB needs no table: see [Read a small raster file](#read-a-small-raster-file).
+
 ## Where UC functions run
 
 UC functions run on:
@@ -74,7 +138,7 @@ UC functions run on:
 
 They do not run on clusters that use a [Databricks Container Service](../installation/dcs.mdx) image. They do not run on classic SQL warehouses.
 
-A warehouse reads rasters and vector files through the session readers. Ingest the files into a Delta table, then query the table with UC functions. UC has no function that reads a raw file.
+A warehouse reads rasters and vector files through the session readers. Ingest the files into a Delta table, then query the table with UC functions. UC has no function that reads a raw file. For rasters, write a table with a FILE column once: see [Prepare a table of raster files](#prepare-a-table-of-raster-files).
 
 ## What UC provides
 
@@ -473,7 +537,7 @@ To read a window of a large COG in a FILE column, see [Read a window of a raster
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_FROMFILE_WINDOW_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-The query assumes that `rasters` has a `file` FILE column and a `footprint` GEOMETRY column, and that `aois` has a `name` and a `geom` column.
+The query assumes that `rasters` has a `name`, a `file` FILE column and a `footprint` GEOMETRY column. It assumes that `aois` has a `name` and a `geom` column. [Prepare a table of raster files](#prepare-a-table-of-raster-files) builds `rasters` with these columns.
 
 See [`rst_fromfile`](./raster-functions#rst_fromfile) for every argument and refusal.
 

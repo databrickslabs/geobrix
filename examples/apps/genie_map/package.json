@@ -31,7 +31,7 @@
     "@kepler.gl/constants": "3.2.5",
     "@kepler.gl/duckdb": "^3.2.5",
     "@kepler.gl/layers": "3.2.5",
-    "@kepler.gl/localization": "3.2.5",
+    "@kepler.gl/localization": "3.2.6",
     "@kepler.gl/processors": "3.2.5",
     "@kepler.gl/reducers": "3.2.5",
     "@kepler.gl/schemas": "3.2.5",

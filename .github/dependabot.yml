@@ -55,6 +55,13 @@ updates:
       - dependency-name: "flake8"
       - dependency-name: "flake8-pyproject"
       - dependency-name: "anywidget"
+    # The requirements-*.in/.txt pairs are uv locks compiled for Python 3.12 and one platform each, some
+    # constrained by another lock. Dependabot re-compiles them with pip-compile on Python 3.10 and fails
+    # (earthaccess needs 3.12), so it scans pyproject.toml only. The locks are relocked by hand with uv
+    # (the commands are in each lock's header); their Dependabot alerts still show.
+    exclude-paths:
+      - "requirements-*.in"
+      - "requirements-*.txt"
 
   # The docs site build (Docusaurus). Nothing here ships to users; it keeps the deploy's
   # build lock patched.
@@ -66,17 +73,20 @@ updates:
     # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
     cooldown:
       default-days: 7
-    # The @docusaurus/* packages release in lockstep and must stay on one version.
+    # The @docusaurus/* packages release in lockstep and must stay on one version. Every other minor
+    # and patch update comes as one weekly PR.
     groups:
       docusaurus:
         patterns:
           - "@docusaurus/*"
-    # React majors move by hand with a full docs build as proof: Docusaurus accepts React 18 and 19,
-    # but MDX components and plugins are only checked by building the site.
+      docs-minor-patch:
+        patterns:
+          - "*"
+        update-types: ["minor", "patch"]
+    # Majors move by hand with a full docs build as proof (React 19, for example: Docusaurus accepts it,
+    # but MDX components and plugins are only checked by building the site).
     ignore:
-      - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-dom"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
   # The Genie Map example app. Dependabot handles pnpm lockfiles under the npm ecosystem.
@@ -89,38 +99,29 @@ updates:
     cooldown:
       default-days: 7
     # The @kepler.gl/* packages are pinned to one version and release in lockstep, so they move in one PR.
+    # Every other minor and patch update comes as one weekly PR.
     groups:
       kepler:
         patterns:
           - "@kepler.gl/*"
-    # kepler.gl 3.x pins maplibre-gl 3.x, so a major of either is a coordinated move made by hand.
+      genie-map-minor-patch:
+        patterns:
+          - "*"
+        update-types: ["minor", "patch"]
+    # Majors move by hand, each with a build, a render check and a deploy check. Known holds:
+    # kepler.gl 3.x pins maplibre-gl 3.x and declares react-intl ^6.3.0 (the app's IntlProvider must be
+    # the copy kepler reads); deck.gl 8.9 and kepler.gl 3.x use @math.gl/web-mercator 3 and
+    # viewport-mercator-project 6; @vitejs/plugin-react 5 needs Node >= 20.19 on the Apps runtime.
     ignore:
-      - dependency-name: "@kepler.gl/*"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      - dependency-name: "maplibre-gl"
-        update-types: ["version-update:semver-major"]
-      # deck.gl 8.9 and kepler.gl 3.x use @math.gl/web-mercator 3 and viewport-mercator-project 6;
-      # a major of either here would load two copies. @vitejs/plugin-react 5 needs Node >= 20.19 on
-      # the Apps runtime, so it moves in its own pass with a deploy check.
-      - dependency-name: "@math.gl/web-mercator"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "viewport-mercator-project"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@vitejs/plugin-react"
-        update-types: ["version-update:semver-major"]
-      # @databricks/appkit-ui is the Databricks Apps SDK, still 0.x: its minors can break the app, so it
-      # moves with a deploy check on the Apps runtime. concurrently 10 is a dev-only major (dev script runner).
+      # The Databricks Apps SDK packages are 0.x, where a minor can break the app: they move by hand
+      # with a deploy check on the Apps runtime.
+      - dependency-name: "@databricks/appkit"
       - dependency-name: "@databricks/appkit-ui"
-      - dependency-name: "concurrently"
-        update-types: ["version-update:semver-major"]
-      # mapbox-gl stays on 1.x, the last BSD-licensed line (2.x and later are proprietary and need a token);
-      # kepler.gl 3.x depends on it. vitest 5 is a dev-only test-runner major.
+      # mapbox-gl stays on 1.x, the last BSD-licensed line (2.x and later are proprietary and need a
+      # token); kepler.gl 3.x depends on it.
       - dependency-name: "mapbox-gl"
-      - dependency-name: "vitest"
-        update-types: ["version-update:semver-major"]
-      # kepler.gl 3.x declares react-intl ^6.3.0, and the app's IntlProvider must be the copy kepler reads.
-      - dependency-name: "react-intl"
-        update-types: ["version-update:semver-major"]
 
   # The examples/tests notebook harness lock.
   - package-ecosystem: "pip"
@@ -131,6 +132,15 @@ updates:
     # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
     cooldown:
       default-days: 7
+    # One weekly PR for minor and patch updates; majors move by hand.
+    groups:
+      examples-tests-minor-patch:
+        patterns:
+          - "*"
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # NOTE: No `github-actions` ecosystem entry: the lockdown policy disables
   # Dependabot updates for Actions so SHA pins are not silently bumped.

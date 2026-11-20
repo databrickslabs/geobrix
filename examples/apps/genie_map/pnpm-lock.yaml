@@ -135,7 +135,7 @@ importers:
         version: 0.5.20
       '@reduxjs/toolkit':
         specifier: ^2.14.0
-        version: 2.14.0(@types/react@18.3.31)(react-redux@9.3.0(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)
+        version: 2.14.0(@types/react@18.3.31)(react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)
       '@types/cors':
         specifier: ^2.8.19
         version: 2.8.19
@@ -182,8 +182,8 @@ importers:
         specifier: 1.13.3
         version: 1.13.3
       maplibre-gl:
-        specifier: ^6.4.1
-        version: 6.15.0
+        specifier: ^6.18.0
+        version: 6.18.0
       process:
         specifier: ^0.11.10
         version: 0.11.10
@@ -200,8 +200,8 @@ importers:
         specifier: 6.8.9
         version: 6.8.9(react@18.3.1)(typescript@5.9.3)
       react-redux:
-        specifier: ^9.2.0
-        version: 9.3.0(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1)
+        specifier: ^9.3.1
+        version: 9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1)
       react-resizable-panels:
         specifier: ^2.0.0
         version: 2.1.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -2102,15 +2102,15 @@ packages:
     resolution: {integrity: sha512-cOZZOVhDSulgK0meTsTkmNXb1ahVvmTmWmfx9gRBwc6hq98wS9JP35ESIoNq3xqEan+UN+gn8187Z6E4NKhLsw==}
     hasBin: true
 
-  '@maplibre/maplibre-gl-style-spec@26.4.4':
-    resolution: {integrity: sha512-hG4RZR4PBd/+6A3ODdZ3AnQRF106ZQk1y3bhwDg8bH/A4Oz2tnRUJVVWs9BZa6gXZ1d3UKe89C+Mm+olGBELvA==}
+  '@maplibre/maplibre-gl-style-spec@26.7.0':
+    resolution: {integrity: sha512-9d7hK1zk1WRx/AFvq7NtmlTlaOGPXS2r+FZXsrMv8453Xy14bnXBpVCPJDBupCfQs/p8FL0/kb0ygbEWTufN0g==}
     hasBin: true
 
   '@maplibre/mlt@1.3.0':
     resolution: {integrity: sha512-7M2O7ABM80Oi8XPkfkrjKB8mOBIxGoVgkA52Mu4RMWoBvvMdagQ522+WxVYujZsMpqIr3BpzrTbXrm4k8lCzCQ==}
 
-  '@maplibre/vt-pbf@4.3.2':
-    resolution: {integrity: sha512-j6p0AdjvAR19Z3XaCysle7A4ZSo08tYOzxD0Y9NQylwPAkwJJeYub5b2eVucdeDh7erhv69DahoLOevDRERRUw==}
+  '@maplibre/vt-pbf@4.3.3':
+    resolution: {integrity: sha512-dEe5XUd64RQbxNxy2OzIkJnwNDWjVmSXjCd0A7zLirm7QJ/WWbmtDFIkfsiM4yt1cplqzG6oSivRYeWx1SM1yg==}
 
   '@math.gl/core@3.6.3':
     resolution: {integrity: sha512-jBABmDkj5uuuE0dTDmwwss7Cup5ZwQ6Qb7h1pgvtkEutTrhkcv8SuItQNXmF45494yIHeoGue08NlyeY6wxq2A==}
@@ -7289,8 +7289,8 @@ packages:
     resolution: {integrity: sha512-krg2KFIdOpLPngONDhP6ixCoWl5kbdMINP0moMSJFVX7wX1Clm2M9hlNKXS8vBGlVWwR5R3ZfI6IPrYz7c+aCQ==}
     engines: {node: '>=16.14.0', npm: '>=8.1.0'}
 
-  maplibre-gl@6.15.0:
-    resolution: {integrity: sha512-kxFetbvUHDOVaAP1CYb226Mdk2QhzIPddqM0xJTFD35wu78Mpd6NM7+H68ALjc6Oa0kAOX5EAdMKyvD2u3qfcg==}
+  maplibre-gl@6.18.0:
+    resolution: {integrity: sha512-8ucT+RhJtEZGFvWGPioVQwvOPMAIuUehEgxl2dELw9aJmX4SpUi+OCHHAD33B9EuohNC7kC/gccJacUgTMQfQQ==}
     engines: {node: '>=16.14.0', npm: '>=8.1.0'}
 
   maplibregl-mapbox-request-transformer@0.0.2:
@@ -8256,8 +8256,8 @@ packages:
       redux:
         optional: true
 
-  react-redux@9.3.0:
-    resolution: {integrity: sha512-KQopgqFo/p/fgmAs5qz6p5RWaNAzq40WAu7fJIXnQpYxFPbJYtsJPWvGeF2rOBaY/kEuV77AVsX8TsQzKm+A/g==}
+  react-redux@9.3.1:
+    resolution: {integrity: sha512-vxMLT0lalUjbZPkoTepWyKAZbjIIFssNx/CEL9lTfwQBU6XpkGSmCNdcCIrkOBUgB68uftZMnbXVb6DwGnhRKQ==}
     peerDependencies:
       '@types/react': ^18.2.25 || ^19
       react: ^18.0 || ^19
@@ -13604,7 +13604,7 @@ snapshots:
       rw: 1.3.3
       sort-object: 3.0.3
 
-  '@maplibre/maplibre-gl-style-spec@26.4.4':
+  '@maplibre/maplibre-gl-style-spec@26.7.0':
     dependencies:
       '@mapbox/jsonlint-lines-primitives': 2.0.3
       '@mapbox/unitbezier': 1.0.0
@@ -13617,7 +13617,7 @@ snapshots:
     dependencies:
       '@mapbox/point-geometry': 1.1.0
 
-  '@maplibre/vt-pbf@4.3.2':
+  '@maplibre/vt-pbf@4.3.3':
     dependencies:
       '@mapbox/point-geometry': 1.1.0
       '@types/geojson': 7946.0.16
@@ -16674,7 +16674,7 @@ snapshots:
       react: 18.3.1
       react-redux: 8.1.3(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(redux@4.2.1)
 
-  '@reduxjs/toolkit@2.14.0(@types/react@18.3.31)(react-redux@9.3.0(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)':
+  '@reduxjs/toolkit@2.14.0(@types/react@18.3.31)(react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@standard-schema/utils': 0.3.0
@@ -16685,7 +16685,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 18.3.31
       react: 18.3.1
-      react-redux: 9.3.0(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1)
+      react-redux: 9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1)
 
   '@rolldown/binding-android-arm64@1.0.0-beta.41':
     optional: true
@@ -19963,16 +19963,16 @@ snapshots:
       tinyqueue: 2.0.3
       vt-pbf: 3.1.3
 
-  maplibre-gl@6.15.0:
+  maplibre-gl@6.18.0:
     dependencies:
       '@mapbox/point-geometry': 1.1.0
       '@mapbox/tiny-sdf': 2.3.0
       '@mapbox/unitbezier': 1.0.0
       '@mapbox/vector-tile': 3.0.0
       '@maplibre/geojson-vt': 6.3.0
-      '@maplibre/maplibre-gl-style-spec': 26.4.4
+      '@maplibre/maplibre-gl-style-spec': 26.7.0
       '@maplibre/mlt': 1.3.0
-      '@maplibre/vt-pbf': 4.3.2
+      '@maplibre/vt-pbf': 4.3.3
       '@types/geojson': 7946.0.16
       bidi-js: 1.1.0
       earcut: 3.2.4
@@ -21197,7 +21197,7 @@ snapshots:
       react-dom: 18.3.1(react@18.3.1)
       redux: 4.2.1
 
-  react-redux@9.3.0(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1):
+  react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1):
     dependencies:
       '@types/use-sync-external-store': 0.0.6
       react: 18.3.1

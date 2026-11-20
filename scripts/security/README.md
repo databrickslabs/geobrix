@@ -1,15 +1,23 @@
 # scripts/security/
 
-Tooling that implements the Databricks Labs repository lockdown policy for
-GeoBrix — supply-chain hardening around third-party GitHub Actions and Maven
-dependencies. Two pinning regimes:
+Tooling for GeoBrix's supply-chain hardening of third-party GitHub Actions
+and Maven dependencies. Two pinning regimes:
 
-1. **GitHub Actions** — every third-party Action must be pinned to a full
-   commit SHA taken from a release published before the
-   `2026-03-10T00:00:00Z` cutoff. Tag names are preserved as inline
-   comments for human-readable cross-reference; the comment is **not**
-   authoritative — reviewers verify the SHA against the referenced
-   release.
+1. **GitHub Actions** — the rules for a public Databricks repository:
+   - Every third-party Action and reusable workflow is pinned to a full-length
+     commit SHA, never a tag or a branch. A moved tag would run new code.
+   - The SHA is the commit of a release tag, and that release is at least
+     7 days old when it is pinned (`GBX_ACTION_MIN_AGE_DAYS`, the same
+     cooldown as `.github/dependabot.yml`). A compromised release then has
+     time to be found and pulled before it runs in CI.
+   - Each workflow keeps a top-level `permissions:` block, read-only by
+     default, and grants a job only the extra permission it needs.
+   - Tag names stay as inline comments for readability. The comment is
+     **not** authoritative: reviewers check the SHA against the release.
+
+   An earlier version of this policy pinned only releases published before a
+   fixed date (2026-03-10). A fixed date stops security and runtime updates,
+   such as the move of Actions to Node 24, so the minimum age replaces it.
 
 2. **Maven dependencies** — every dependency, transitive dependency,
    plugin, and plugin dependency must be signed by a PGP key whose
@@ -46,8 +54,8 @@ dependencies. Two pinning regimes:
 | Script | Requires | Purpose |
 |---|---|---|
 | `list-external-actions` | `yq` (Mike Farah) | Emit the set of external actions referenced by any workflow or composite action under `.github/`, one per line. |
-| `resolve-action-ref` | `gh`, `jq` | For each `action[@ref]`, resolve the most recent pre-cutoff release tag to the commit SHA it points at. Marks already-pinned entries with `✓` and drift with `⚠`. |
-| `pin-gh-actions` | `git` | Consume `resolve-action-ref` output, rewrite every `uses:` line under `.github/` to the new SHA form (skipping `databricks*`-owned actions), and stage the result with `git add`. Prints the staged diff for review — **does not commit**. |
+| `resolve-action-ref` | `gh`, `jq` | For each `action[@ref]`, resolve the most recent release that is at least `GBX_ACTION_MIN_AGE_DAYS` (default 7) days old to the commit SHA its tag points at. Marks already-pinned entries with `✓` and drift with `⚠`. |
+| `pin-gh-actions` | `git` | Consume `resolve-action-ref` output, rewrite every matching `uses:` line under `.github/` to the new SHA and tag comment (skipping `databricks*`-owned actions), and stage the result with `git add`. Prints the staged diff for review — **does not commit**. |
 | `maven-pgp-bootstrap` | `./mvnw` (or `GBX_MVN=mvn` in geobrix-dev), `awk` | Run `pgpverify-maven-plugin` with relaxed settings, capture every PGP fingerprint Maven Central serves for the resolved closure, and emit draft `.maven-keys.list` entries on stdout. The output is a draft — every fingerprint must be cross-checked against the project's published signing key before being committed. |
 | `maven-pgp-verify` | `./mvnw` (or `GBX_MVN=mvn` in geobrix-dev) | Run strict verification (`./mvnw -Pverify-pgp verify`). Exits non-zero if any artifact is unsigned, weakly signed, or signed by a key not in `.maven-keys.list`. |
 
@@ -80,7 +88,8 @@ the other pinning regimes here:
 ```sh
 cd "$(git rev-parse --show-toplevel)"
 
-# 1. Preview what would change
+# 1. Preview what would change. This lists the newest eligible release of
+#    EVERY action; to move only some, pass just those to resolve-action-ref.
 ./scripts/security/list-external-actions \
   | xargs ./scripts/security/resolve-action-ref
 
@@ -91,7 +100,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 # 3. Review, then commit
 git diff --cached -- .github
-git commit -m "Re-pin GitHub Actions to commits from releases prior to 2026-03-10"
+git commit -m "Pin GitHub Actions to releases at least 7 days old"
 ```
 
 ## Typical flow — Maven PGP keysmap
@@ -144,10 +153,11 @@ git commit -m "Populate Maven PGP keysmap from reviewed signatures"
 
 ## Refresh cadence
 
-**GitHub Actions:** the cutoff date is a constant inside
-`resolve-action-ref` and `pin-gh-actions`. It will only change when the
-policy is updated by the Databricks Labs team, at which point both
-scripts should be updated in lockstep.
+**GitHub Actions:** Dependabot does not update Actions here (see the note in
+`.github/dependabot.yml`), so Actions move by hand with the flow above. Move
+one when GitHub deprecates its runtime (as for Node 20), when it has a
+security fix, or at a release. The minimum age is `GBX_ACTION_MIN_AGE_DAYS`,
+read by both scripts.
 
 **Maven keysmap:** re-run `maven-pgp-bootstrap` whenever a Dependabot PR
 bumps a Maven dep (or any direct dep is added/removed in `pom.xml`). The

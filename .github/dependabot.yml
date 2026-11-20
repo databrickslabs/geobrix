@@ -118,6 +118,9 @@ updates:
       - dependency-name: "mapbox-gl"
       - dependency-name: "vitest"
         update-types: ["version-update:semver-major"]
+      # kepler.gl 3.x declares react-intl ^6.3.0, and the app's IntlProvider must be the copy kepler reads.
+      - dependency-name: "react-intl"
+        update-types: ["version-update:semver-major"]
 
   # The examples/tests notebook harness lock.
   - package-ecosystem: "pip"

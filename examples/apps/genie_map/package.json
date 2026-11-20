@@ -40,7 +40,7 @@
     "@kepler.gl/types": "3.2.5",
     "@kepler.gl/utils": "3.2.5",
     "@loaders.gl/loader-utils": "^4.3.4",
-    "@math.gl/web-mercator": "^3.6.3",
+    "@math.gl/web-mercator": "^4.1.0",
     "@monaco-editor/react": "^4.6.0",
     "@openassistant/core": "^0.5.17",
     "@openassistant/duckdb": "^0.5.17",

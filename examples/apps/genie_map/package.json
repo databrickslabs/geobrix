@@ -90,7 +90,7 @@
     "concurrently": "^9.1.2",
     "eslint": "^9.16.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^16.5.0",
+    "globals": "^17.14.0",
     "tsx": "^4.19.2",
     "typescript-eslint": "^8.72.1",
     "vitest": "^4.1.12"

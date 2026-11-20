@@ -25,7 +25,7 @@ itself — they apply to every release we publish.
 
 Every third-party Action referenced under `.github/` is locked to a full commit
 SHA, rather than a movable
-tag like `@v3`. The SHA comes from a release published before the policy cutoff. Tag names are kept inline as comments for readability, but the
+tag like `@v3`. The SHA is the commit of a release that was public for at least 7 days before it was pinned. Tag names are kept inline as comments for readability, but the
 SHA is what GitHub resolves. This means a compromised upstream Action repo
 cannot retroactively change what runs in our CI.
 

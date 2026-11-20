@@ -17,7 +17,7 @@
 
 set -eu
 
-cutoff="2026-03-10T00:00:00Z"
+min_age_days="${GBX_ACTION_MIN_AGE_DAYS:-7}"
 root="$(git rev-parse --show-toplevel)"
 
 ensure_no_staged_changes() {
@@ -47,7 +47,8 @@ apply_pin() {
     find "${root}/.github" \( -name '*.yml' -o -name '*.yaml' \) |
     while IFS= read -r file
     do
-        sed "s|uses: ${old_ref}|uses: ${new_ref}  # ${tag}|g" "${file}" > "${file}.$$"
+        # Replace the ref and any trailing "# <tag>" comment, so the old tag is not left beside the new one.
+        sed -E "s|uses: ${old_ref}( +#.*)?$|uses: ${new_ref}  # ${tag}|" "${file}" > "${file}.$$"
         mv "${file}.$$" "${file}"
     done
 }
@@ -59,7 +60,7 @@ stage_and_show() {
     git diff --cached -- "$root/.github"
 
     printf '\nTo commit:\n'
-    printf '  git commit -m "Pin GitHub Actions to the commit associated with the last known release prior to %s"\n' "${cutoff}"
+    printf '  git commit -m "Pin GitHub Actions to releases at least %s days old"\n' "${min_age_days}"
 }
 
 # --- Main ---

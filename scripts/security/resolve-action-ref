@@ -1,7 +1,8 @@
 #!/bin/sh
 #
-# For each action@ref argument, find the latest release published before
-# a cutoff date and resolve its tag to a commit SHA.
+# For each action@ref argument, find the latest release that is at least
+# GBX_ACTION_MIN_AGE_DAYS days old (default 7) and resolve its tag to a
+# commit SHA.
 #
 # Usage: resolve-action-ref [action[@ref] ...]
 # Output: ✓/⚠ action[@ref]: action@sha  # tag
@@ -10,7 +11,12 @@
 
 set -eu
 
-cutoff="2026-03-10T00:00:00Z"
+# A release must have been public this long before we pin it, so a
+# compromised release has time to be found and pulled. It matches the
+# cooldown in .github/dependabot.yml.
+min_age_days="${GBX_ACTION_MIN_AGE_DAYS:-7}"
+cutoff=$(date -u -v-"${min_age_days}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+    date -u -d "${min_age_days} days ago" +%Y-%m-%dT%H:%M:%SZ)
 
 error() {
     printf "error: %s\n" "$*" 1>&2
@@ -162,6 +168,6 @@ for arg in "$@"
 do
     if ! resolve_action "$arg"
     then
-        error "$arg: no release found before $cutoff"
+        error "$arg: no release at least ${min_age_days} days old (published before $cutoff)"
     fi
 done

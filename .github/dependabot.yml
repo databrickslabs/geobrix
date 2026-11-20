@@ -88,6 +88,11 @@ updates:
     # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
     cooldown:
       default-days: 7
+    # The @kepler.gl/* packages are pinned to one version and release in lockstep, so they move in one PR.
+    groups:
+      kepler:
+        patterns:
+          - "@kepler.gl/*"
     # kepler.gl 3.x pins maplibre-gl 3.x, so a major of either is a coordinated move made by hand.
     ignore:
       - dependency-name: "@kepler.gl/*"
@@ -102,6 +107,11 @@ updates:
       - dependency-name: "viewport-mercator-project"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@vitejs/plugin-react"
+        update-types: ["version-update:semver-major"]
+      # @databricks/appkit-ui is the Databricks Apps SDK, still 0.x: its minors can break the app, so it
+      # moves with a deploy check on the Apps runtime. concurrently 10 is a dev-only major (dev script runner).
+      - dependency-name: "@databricks/appkit-ui"
+      - dependency-name: "concurrently"
         update-types: ["version-update:semver-major"]
 
   # The examples/tests notebook harness lock.

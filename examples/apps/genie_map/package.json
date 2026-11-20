@@ -51,7 +51,7 @@
     "@openassistant/tables": "^0.5.17",
     "@openassistant/ui": "^0.5.17",
     "@openassistant/utils": "^0.5.17",
-    "@reduxjs/toolkit": "^2.5.0",
+    "@reduxjs/toolkit": "^2.14.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/geojson": "^7946.0.16",

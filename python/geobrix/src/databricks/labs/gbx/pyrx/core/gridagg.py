@@ -43,9 +43,10 @@ longitude 180 or on a tile edge lands in the same cell in every function and
 tier. The H3 encoder stays a scalar comprehension over valid pixels because
 ``h3.latlng_to_cell`` is C-backed and exposes no array API.
 
-The covering path is intentionally NOT vectorized (it iterates per-pixel,
-matching the heavy tier's O(pixels) design).  Use small/coarse rasters; this
-path is not intended for large tiles.
+The covering path iterates per pixel for quadbin, BNG and custom grids (with an interior fast path, see
+``_COVERING_FAST_PATH_EXACT``) and for H3 cells larger than the pixels. For H3 cells smaller than the pixels it is
+cell-major and vectorised (``_covering_band_h3_vectorised``): each fine cell overlaps only a few pixels, and shapely
+computes every intersection area in one array call per chunk. Both give the same states within 1e-9.
 """
 
 import math
@@ -68,6 +69,10 @@ QUADBIN_MAX_RES = 20
 # above the 1e-9 result-neutrality bar.  Any grid NOT listed here falls back to
 # the existing polyfill+intersection path (safe default for future grids).
 _COVERING_FAST_PATH_EXACT = frozenset({"custom", "quadbin", "bng"})
+# The vectorised H3 covering path: read at call time, so tests can set it False to force the per-pixel loop.
+_H3_COVERING_VECTORISED = True
+# Cells per vectorised chunk: bounds the (cell, pixel) pair arrays to a few hundred thousand entries.
+_H3_VEC_CHUNK_CELLS = 20000
 
 _AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
 # The statistics that split: each is a plain function of one cell's partial state (see ``measure_of``), so ONE pass over the
@@ -299,6 +304,8 @@ def _covering_band(
 
     ``conf`` is a ``CustomGridConf`` instance when ``grid="custom"``.
     """
+    if grid == "h3" and _use_h3_vectorised(work_ds, resolution, gt):
+        return _covering_band_h3_vectorised(band, mask, int(resolution), agg, gt)
     # Lazy imports: tessellate oracles + shapely (avoid heavy deps at import time)
     from shapely.geometry import Polygon as _Polygon
 
@@ -398,6 +405,168 @@ def _covering_band(
         }
         for cell, pairs in acc.items()  # vectorscan: ok (per-cell)
     ]
+
+
+def _use_h3_vectorised(work_ds, resolution, gt) -> bool:
+    """True when the H3 covering pass takes the vectorised path: the flag is on, the grid is north-up (no rotation
+    terms) and the average cell is smaller than the centre pixel (``h3fit``, the recommender's own pixel area).
+    """
+    if not _H3_COVERING_VECTORISED or gt[2] != 0.0 or gt[4] != 0.0:
+        return False
+    from databricks.labs.gbx.pyrx.core.h3fit import H3_AVG_CELL_AREA_M2, pixel_area_m2
+
+    try:
+        return H3_AVG_CELL_AREA_M2[int(resolution)] < pixel_area_m2(work_ds)
+    except (ValueError, ArithmeticError):
+        return False
+
+
+def _h3_candidate_cells(gt: tuple, height: int, width: int, resolution: int) -> list:
+    """Every H3 cell that may overlap a pixel of a north-up grid: one overlap polyfill of the grid bbox, padded by one
+    pixel so a cell whose overlap test sits on the bbox edge is still a candidate (a superset; empty overlaps drop).
+    """
+    import h3
+
+    xa, xb = gt[0], gt[0] + width * gt[1]
+    ya, yb = gt[3], gt[3] + height * gt[5]
+    west, east = min(xa, xb) - abs(gt[1]), max(xa, xb) + abs(gt[1])
+    south, north = min(ya, yb) - abs(gt[5]), max(ya, yb) + abs(gt[5])
+    box = h3.LatLngPoly([(south, west), (north, west), (north, east), (south, east)])
+    return list(h3.polygon_to_cells_experimental(box, resolution, contain="overlap"))
+
+
+def _h3_hexagons(cells: list) -> np.ndarray:
+    """Shapely (lon, lat) hexagons of H3 cell strings -- the vertices of ``tessellate._cell_polygon_lonlat`` --
+    built with one ``shapely.polygons`` call per vertex count."""
+    import h3
+    import shapely
+
+    # vectorscan: ok (h3 no array API)
+    rings = [[(lng, lat) for lat, lng in h3.cell_to_boundary(c)] for c in cells]
+    out = np.empty(len(cells), dtype=object)
+    by_n: dict = {}
+    for i, ring in enumerate(rings):  # vectorscan: ok (groups indices by vertex count)
+        by_n.setdefault(len(ring), []).append(i)
+    for idx in by_n.values():  # vectorscan: ok (one array call per vertex count)
+        sel = np.asarray(idx)
+        out[sel] = shapely.polygons(
+            np.asarray([rings[i] for i in idx], dtype="float64")
+        )
+    return out
+
+
+def _cell_pixel_pairs(hexes: np.ndarray, gt: tuple, height: int, width: int):
+    """(cell index, row, col) of every pixel in each hexagon's bounding window, as flat arrays (inverse geotransform
+    of the hexagon bounds; north-up grid)."""
+    import shapely
+
+    b = shapely.bounds(hexes)
+    ca, cb = (b[:, 0] - gt[0]) / gt[1], (b[:, 2] - gt[0]) / gt[1]
+    ra, rb = (b[:, 1] - gt[3]) / gt[5], (b[:, 3] - gt[3]) / gt[5]
+    c0 = np.clip(np.floor(np.minimum(ca, cb)), 0, width - 1).astype(np.int64)
+    c1 = np.clip(np.floor(np.maximum(ca, cb)), -1, width - 1).astype(np.int64)
+    r0 = np.clip(np.floor(np.minimum(ra, rb)), 0, height - 1).astype(np.int64)
+    r1 = np.clip(np.floor(np.maximum(ra, rb)), -1, height - 1).astype(np.int64)
+    ncol, nrow = np.maximum(c1 - c0 + 1, 0), np.maximum(r1 - r0 + 1, 0)
+    n = ncol * nrow
+    cell = np.repeat(np.arange(hexes.size), n)
+    off = np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)
+    cols = np.repeat(c0, n) + off % np.repeat(np.maximum(ncol, 1), n)
+    rows = np.repeat(r0, n) + off // np.repeat(np.maximum(ncol, 1), n)
+    return cell, rows, cols
+
+
+def _weighted_reduce_vec(
+    inv: np.ndarray, n: int, vals: np.ndarray, w: np.ndarray, agg: str
+) -> list:
+    """Per-cell covering statistic of (value, weight) pairs grouped by ``inv``: ``_weighted_reduce``'s formulas with
+    numpy group sums (the median keeps ``_weighted_reduce`` per cell)."""
+    if agg == "median":
+        order = np.argsort(inv, kind="stable")
+        cuts = np.cumsum(np.bincount(inv, minlength=n))[:-1]
+        vs, ws = np.split(vals[order], cuts), np.split(w[order], cuts)
+        return [
+            _weighted_reduce(list(zip(v.tolist(), x.tolist())), agg)
+            for v, x in zip(vs, ws)  # vectorscan: ok (per-cell)
+        ]
+    sw = np.bincount(inv, weights=w, minlength=n)
+    sv = np.bincount(inv, weights=vals * w, minlength=n)
+    if agg == "count":
+        return [float(x) for x in sw]
+    if agg == "sum":
+        return [float(x) for x in sv]
+    mean = sv / sw
+    if agg == "avg":
+        return [float(x) for x in mean]
+    m2 = np.bincount(inv, weights=w * (vals - mean[inv]) ** 2, minlength=n)
+    if agg in ("variance", "stddev"):
+        var = m2 / sw
+        return [float(x) for x in (var if agg == "variance" else np.sqrt(var))]
+    lo = np.full(n, np.inf)
+    np.minimum.at(lo, inv, vals)
+    hi = np.full(n, -np.inf)
+    np.maximum.at(hi, inv, vals)
+    if agg == "min":
+        return [float(x) for x in lo]
+    if agg == "max":
+        return [float(x) for x in hi]
+    if agg == _PARTIAL:
+        return [
+            (float(a), float(b), float(c), float(d), float(e))
+            for a, b, c, d, e in zip(sw, sv, m2, lo, hi)  # vectorscan: ok (per-cell)
+        ]
+    raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
+
+
+def _covering_band_h3_vectorised(
+    band: np.ndarray, mask: np.ndarray, resolution: int, agg: str, gt: tuple
+) -> list:
+    """``_covering_band`` for H3 cells smaller than the pixels of a north-up EPSG:4326 grid, cell-major: the same
+    cells and states as the per-pixel loop (weight = intersection area / pixel area, kept when > 0).
+    """
+    import shapely
+
+    from databricks.labs.gbx.pyrx.core.tessellate import _encode_cellid
+
+    if not mask.any():
+        return []
+    height, width = mask.shape
+    px_area = abs(gt[1] * gt[5])
+    cells = _h3_candidate_cells(gt, height, width, resolution)
+    out = []
+    step = _H3_VEC_CHUNK_CELLS
+    for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound pairs)
+        chunk = cells[start : start + step]
+        hexes = _h3_hexagons(chunk)
+        cell, rows, cols = _cell_pixel_pairs(hexes, gt, height, width)
+        ok = mask[rows, cols]
+        cell, rows, cols = cell[ok], rows[ok], cols[ok]
+        if cell.size == 0:
+            continue
+        xl, xr = gt[0] + cols * gt[1], gt[0] + (cols + 1) * gt[1]
+        yt, yb = gt[3] + rows * gt[5], gt[3] + (rows + 1) * gt[5]
+        boxes = shapely.box(
+            np.minimum(xl, xr),
+            np.minimum(yt, yb),
+            np.maximum(xl, xr),
+            np.maximum(yt, yb),
+        )
+        w = shapely.area(shapely.intersection(hexes[cell], boxes)) / px_area
+        keep = w > 0
+        cell, w, vals = (
+            cell[keep],
+            w[keep],
+            band[rows[keep], cols[keep]].astype("float64"),
+        )
+        if cell.size == 0:
+            continue
+        uniq, inv = np.unique(cell, return_inverse=True)
+        measures = _weighted_reduce_vec(inv.astype(np.intp), uniq.size, vals, w, agg)
+        out.extend(
+            {"cellID": _encode_cellid(chunk[int(c)], "h3"), "measure": m}
+            for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
+        )
+    return out
 
 
 def _complete_coverage_pass(

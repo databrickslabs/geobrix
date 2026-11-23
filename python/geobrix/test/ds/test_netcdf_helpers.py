@@ -89,7 +89,7 @@ def raster_rows(path, **options):
     """(variable, transform, crs, pixels) of each tile the raster reader yields."""
     reader = NetcdfRasterReader({"path": path, **options})
     out = []
-    for source, (_, raster_bytes, meta) in reader.read(_FilePartition(path, -1)):
+    for source, (_, raster_bytes, *_, meta) in reader.read(_FilePartition(path, -1)):
         with MemoryFile(bytes(raster_bytes)) as mf, mf.open() as ds:
             out.append((source.split(":")[-1], ds.transform, str(ds.crs), ds.read(1)))
     return out

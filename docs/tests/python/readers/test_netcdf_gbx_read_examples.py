@@ -50,6 +50,12 @@ def test_read_raster(spark, tmp_path):
     assert ex.read_raster(spark, p).count() == 1
 
 
+def test_read_raster_bbox(spark, tmp_path):
+    p = str(tmp_path / "era5.nc")
+    _write_grid(p)
+    assert ex.read_raster_bbox(spark, p).count() == 1
+
+
 def test_read_vector(spark, tmp_path):
     p = str(tmp_path / "s5p.nc")
     _write_points(p)

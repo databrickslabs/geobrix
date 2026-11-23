@@ -1,7 +1,7 @@
 """netcdf_gbx — lightweight NetCDF reader.
 
 One DataSource, two modes (the `mode` option, default "raster"):
-  * raster — CF regular/projected grids -> the shared (source, tile) GeoTIFF struct.
+  * raster — CF regular/projected grids -> (source, tile), tile = the V2 tile; bbox cuts the grid on read.
   * vector — DSG points, or any 2-D field (incl. curvilinear swath) coerced to
     per-cell points -> the light vector schema (attrs + geom_0 WKB + srid cols).
 
@@ -13,14 +13,20 @@ Spark-config mutation or JVM-bridge access).
 from __future__ import annotations
 
 import warnings
-from typing import Dict, Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx._gdal_policy import open_bytes
+from databricks.labs.gbx.core.crs import crs_to_canonical
 from databricks.labs.gbx.ds import _encode, _listing, _netcdf, _quarantine
-from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
+from databricks.labs.gbx.ds.raster import (
+    RasterGbxReader,
+    _FilePartition,
+    _v2_tile_row,
+    reader_schema_v2,
+)
 
 # Estimated decoded-bytes ceiling for bandDim stacking before a soft-warn is emitted.
 # 256 MiB is a conservative per-band-stack warn threshold; it is NOT the Serverless
@@ -89,6 +95,50 @@ def _parse_fanout(raw: str) -> List[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
+def _parse_bbox(raw: str) -> Optional[Tuple[float, float, float, float]]:
+    """The ``bbox`` option ``"minx,miny,maxx,maxy"`` as four floats; None when the option is absent."""
+    if not raw or not raw.strip():
+        return None
+    try:
+        parts = tuple(float(v) for v in raw.split(","))
+    except ValueError:
+        parts = ()
+    if len(parts) != 4 or not (parts[0] < parts[2] and parts[1] < parts[3]):
+        raise ValueError(
+            f"netcdf_gbx: bbox must be 'minx,miny,maxx,maxy' with minx < maxx and miny < maxy; got {raw!r}."
+        )
+    return parts
+
+
+def _bbox_window(
+    ds, variable, transform, crs, bbox, bbox_crs
+) -> Optional[Tuple[int, int, int, int]]:
+    """North-up pixel window (col_off, row_off, width, height) of ``variable``'s grid that covers ``bbox`` (in
+    ``bbox_crs``, or the grid's CRS when None), snapped outward to whole pixels and clipped to the grid
+    (``ds._window.window_for_bbox``); None when the two do not overlap."""
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.ds._window import window_for_bbox
+
+    height, width = _netcdf.grid_shape(ds, variable)
+    win = window_for_bbox(
+        SimpleNamespace(crs=crs, transform=transform, width=width, height=height),
+        bbox,
+        bbox_crs,
+    )
+    if win is None:
+        return None
+    return int(win.col_off), int(win.row_off), int(win.width), int(win.height)
+
+
+def _refuse_vector_bbox(options) -> None:
+    if _option(options, "bbox").strip():
+        raise ValueError(
+            "netcdf_gbx: the bbox option applies to raster mode only. "
+            "Fix: drop it, and filter the points after the read (for example st_intersects on geom_0)."
+        )
+
+
 def _apply_slice_metadata(
     ds: "object", sel: Dict[str, int], meta: Dict[str, str]
 ) -> None:
@@ -111,14 +161,17 @@ def _encode_single_band_tile(
     crs: str,
     nodata: "object",
     file_path: str,
+    window: Optional[Tuple[int, int, int, int]] = None,
 ) -> Tuple:
-    """Encode one 2-D slice as a single-band GeoTIFF tile.
+    """Encode one 2-D slice (the ``window`` of it, when set) as a single-band GeoTIFF tile.
 
-    Returns ``(source, (cellid, raster_bytes, meta))``.
+    Returns ``(source, tile)``, tile in V2_TILE_SCHEMA order: materialized, no path or window.
     """
     from rasterio.io import MemoryFile
 
-    arr = _netcdf.fill_kept(_netcdf.array_2d(ds, var, sel=sel if sel else None), nodata)
+    arr = _netcdf.fill_kept(
+        _netcdf.array_2d(ds, var, sel=sel if sel else None, window=window), nodata
+    )
 
     if sel:
         suffix = ",".join(f"{k}={v}" for k, v in sorted(sel.items()))
@@ -149,11 +202,16 @@ def _encode_single_band_tile(
                 all_parents="",
                 tile_format="gtiff",
             )
+            tile_crs = crs_to_canonical(rds.crs)
 
     if sel:
         _apply_slice_metadata(ds, sel, meta)
+    if window is not None:
+        meta["sourceWindow"] = ",".join(str(v) for v in window)
 
-    return source, (cellid, raster_bytes, meta)
+    return source, _v2_tile_row(
+        cellid, raster_bytes, path=None, window=None, metadata=meta, crs=tile_crs
+    )
 
 
 def _encode_multiband_tile(
@@ -166,11 +224,12 @@ def _encode_multiband_tile(
     crs: str,
     nodata: "object",
     file_path: str,
+    window: Optional[Tuple[int, int, int, int]] = None,
 ) -> Tuple:
-    """Stream-encode *n_bands* slices of *band_dim* into one multi-band GeoTIFF.
+    """Stream-encode *n_bands* slices of *band_dim* (the ``window`` of each, when set) into one multi-band GeoTIFF.
 
     One slice is decoded at a time to bound peak input RAM.
-    Returns ``(source, (cellid, raster_bytes, meta))``.
+    Returns ``(source, tile)``, tile in V2_TILE_SCHEMA order: materialized, no path or window.
     """
     import numpy as np
     from rasterio.enums import ColorInterp
@@ -178,7 +237,7 @@ def _encode_multiband_tile(
 
     # Decode the first slice to learn shape/dtype; write it to band 1.
     first_arr = _netcdf.fill_kept(
-        _netcdf.array_2d(ds, var, sel={**sel, band_dim: 0}), nodata
+        _netcdf.array_2d(ds, var, sel={**sel, band_dim: 0}, window=window), nodata
     )
     h, w = first_arr.shape[-2], first_arr.shape[-1]
     dtype = str(first_arr.dtype)
@@ -233,7 +292,8 @@ def _encode_multiband_tile(
             del first_arr
             for k in range(1, n_bands):
                 arr_k = _netcdf.fill_kept(
-                    _netcdf.array_2d(ds, var, sel={**sel, band_dim: k}), nodata
+                    _netcdf.array_2d(ds, var, sel={**sel, band_dim: k}, window=window),
+                    nodata,
                 )
                 out.write(arr_k.astype(dtype), k + 1)
                 del arr_k
@@ -246,23 +306,75 @@ def _encode_multiband_tile(
                 all_parents="",
                 tile_format="gtiff",
             )
+            tile_crs = crs_to_canonical(rds.crs)
 
     meta["bandDim"] = band_dim
     meta["bandCoords"] = ",".join(str(c) for c in band_coords)
     meta["bandDescriptions"] = ",".join(f"{band_dim}={c}" for c in band_coords)
     if sel:
         _apply_slice_metadata(ds, sel, meta)
+    if window is not None:
+        meta["sourceWindow"] = ",".join(str(v) for v in window)
 
-    return source, (cellid, raster_bytes, meta)
+    return source, _v2_tile_row(
+        cellid, raster_bytes, path=None, window=None, metadata=meta, crs=tile_crs
+    )
+
+
+def _slicing_options(options) -> Tuple[Dict[str, int], List[str], str]:
+    """The ``dimIndex``, ``fanout`` and ``bandDim`` options, parsed; raises ValueError when one dim is in two."""
+    # Parse dimIndex, fanout, and bandDim options.
+    dim_index = _parse_dim_index(_option(options, "dimIndex"))
+    fanout_dims = _parse_fanout(_option(options, "fanout"))
+    band_dim = _option(options, "bandDim").strip()
+
+    # Overlap guards.
+    overlap_df = set(dim_index) & set(fanout_dims)
+    if overlap_df:
+        raise ValueError(
+            f"netcdf_gbx: dims {sorted(overlap_df)!r} appear in both dimIndex "
+            "and fanout; a dimension cannot be both pinned and expanded."
+        )
+    if band_dim:
+        if band_dim in dim_index:
+            raise ValueError(
+                f"netcdf_gbx: bandDim={band_dim!r} also appears in dimIndex; "
+                "a dimension cannot be both stacked (bandDim) and pinned (dimIndex)."
+            )
+        if band_dim in fanout_dims:
+            raise ValueError(
+                f"netcdf_gbx: bandDim={band_dim!r} also appears in fanout; "
+                "a dimension cannot be both stacked (bandDim) and expanded (fanout)."
+            )
+    return dim_index, fanout_dims, band_dim
 
 
 class NetcdfRasterReader(RasterGbxReader):
     """Raster mode: transcode each CF grid variable to a GeoTIFF tile (one row per variable)."""
 
     def __init__(self, options: Dict[str, str]):
-        super().__init__(options)  # path/sizeInMB/filterRegex/bbox/bboxCrs
+        super().__init__(options)  # path/sizeInMB/filterRegex
         self.options = dict(options)
         self.group = options.get("group")
+        self.bbox = _parse_bbox(_option(options, "bbox"))
+        self.bbox_crs = _option(options, "bboxCrs").strip() or None
+
+    def _grid_of(self, ds, var):
+        """(transform, crs, nodata, leading dims, window) of one variable; window is None without a bbox. None when
+        the bbox misses the variable's grid (then the variable gives no row)."""
+        from rasterio.windows import Window
+        from rasterio.windows import transform as window_transform
+
+        transform, crs = _netcdf.grid_transform_crs(ds, var)
+        nodata = _netcdf.nodata_of(ds, var)
+        ldims = dict(_netcdf.leading_dims(ds, var))
+        window = None
+        if self.bbox is not None:
+            window = _bbox_window(ds, var, transform, crs, self.bbox, self.bbox_crs)
+            if window is None:
+                return None
+            transform = window_transform(Window(*window), transform)
+        return transform, crs, nodata, ldims, window
 
     def partitions(self):
         # NetCDF raster reader emits one row PER VARIABLE per file, not per tile
@@ -278,29 +390,7 @@ class NetcdfRasterReader(RasterGbxReader):
         if _listing.is_empty_plan(partition):
             return
 
-        # Parse dimIndex, fanout, and bandDim options.
-        dim_index = _parse_dim_index(_option(self.options, "dimIndex"))
-        fanout_dims = _parse_fanout(_option(self.options, "fanout"))
-        band_dim = _option(self.options, "bandDim").strip()
-
-        # Overlap guards.
-        overlap_df = set(dim_index) & set(fanout_dims)
-        if overlap_df:
-            raise ValueError(
-                f"netcdf_gbx: dims {sorted(overlap_df)!r} appear in both dimIndex "
-                "and fanout; a dimension cannot be both pinned and expanded."
-            )
-        if band_dim:
-            if band_dim in dim_index:
-                raise ValueError(
-                    f"netcdf_gbx: bandDim={band_dim!r} also appears in dimIndex; "
-                    "a dimension cannot be both stacked (bandDim) and pinned (dimIndex)."
-                )
-            if band_dim in fanout_dims:
-                raise ValueError(
-                    f"netcdf_gbx: bandDim={band_dim!r} also appears in fanout; "
-                    "a dimension cannot be both stacked (bandDim) and expanded (fanout)."
-                )
+        dim_index, fanout_dims, band_dim = _slicing_options(self.options)
 
         # With read_paths' on_error="skip" (a hook on the reader) a variable, or
         # one slice of it, that cannot be read is a bad record and the others
@@ -324,12 +414,13 @@ class NetcdfRasterReader(RasterGbxReader):
 
             for var in variables:
                 try:
-                    transform, crs = _netcdf.grid_transform_crs(ds, var)
-                    nodata = _netcdf.nodata_of(ds, var)
-                    var_ldims = dict(_netcdf.leading_dims(ds, var))
+                    grid = self._grid_of(ds, var)
                 except BaseException as exc:  # noqa: BLE001 - see _bad
                     _bad(f"variable={var}", exc)
                     continue
+                if grid is None:
+                    continue  # the bbox misses this variable's grid: no row
+                transform, crs, nodata, var_ldims, window = grid
 
                 # Per-variable typo warning (includes bandDim in the check).
                 if var_ldims and (dim_index or fanout_dims or band_dim):
@@ -384,6 +475,7 @@ class NetcdfRasterReader(RasterGbxReader):
                                 crs,
                                 nodata,
                                 partition.file_path,
+                                window,
                             )
                         else:
                             source, tile = _encode_single_band_tile(
@@ -394,6 +486,7 @@ class NetcdfRasterReader(RasterGbxReader):
                                 crs,
                                 nodata,
                                 partition.file_path,
+                                window,
                             )
                     except BaseException as exc:  # noqa: BLE001 - see _bad
                         _bad(
@@ -417,10 +510,11 @@ class NetcdfGbxDataSource(DataSource):
     def schema(self) -> StructType:
         mode = self._mode()
         if mode == "raster":
-            return reader_schema()
+            return reader_schema_v2()
         if mode == "vector":
             from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
 
+            _refuse_vector_bbox(self.options)
             return NetcdfVectorReader(self.options).schema()
         raise ValueError(
             f"netcdf_gbx: unknown mode={mode!r} (use 'raster' or 'vector')."
@@ -433,6 +527,7 @@ class NetcdfGbxDataSource(DataSource):
         if mode == "vector":
             from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
 
+            _refuse_vector_bbox(self.options)
             return NetcdfVectorReader(self.options)
         raise ValueError(
             f"netcdf_gbx: unknown mode={mode!r} (use 'raster' or 'vector')."

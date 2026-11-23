@@ -17,6 +17,16 @@ df = (spark.read.format("netcdf_gbx")
       .load("/Volumes/main/geobrix_samples/netcdf/era5_sample.nc"))
 df.show()"""
 
+READ_RASTER_BBOX = """# Cut the grid to an area of interest on read (minx,miny,maxx,maxy).
+# bboxCrs is the CRS of the bbox; without it, the bbox is in the grid's CRS.
+df = (spark.read.format("netcdf_gbx")
+      .option("variable", "t2m")
+      .option("bbox", "10.2,49.6,11.2,50.1")
+      .option("bboxCrs", "EPSG:4326")
+      .load("/Volumes/main/geobrix_samples/netcdf/era5_sample.nc"))
+# The tile is the standard tile: the gbx_rst_* functions take it as it is.
+df.selectExpr("gbx_rst_width(tile) AS w", "gbx_rst_height(tile) AS h").show()"""
+
 READ_VECTOR = """# Vector mode: swath / point NetCDF -> one point per cell (lossless,
 # no regridding). e.g. Sentinel-5P TROPOMI CH4 (netCDF-4 swath); the quality
 # flag rides along as its own column so you filter downstream.
@@ -55,6 +65,16 @@ def read_raster(spark, path):
     df = spark.read.format("netcdf_gbx").option("variable", "t2m").load(path)
     assert [f.name for f in df.schema.fields] == ["source", "tile"]
     assert df.collect()[0]["tile"]["cellid"] == -1
+    return df
+
+
+def read_raster_bbox(spark, path):
+    """Verify READ_RASTER_BBOX: bbox cuts the 4 x 3 grid to 3 x 2 on read; gbx_rst_* take the tile."""
+    _register(spark)
+    df = (spark.read.format("netcdf_gbx").option("variable", "t2m")
+          .option("bbox", "10.2,49.6,11.2,50.1").option("bboxCrs", "EPSG:4326").load(path))
+    row = df.selectExpr("gbx_rst_width(tile) AS w", "gbx_rst_height(tile) AS h").first()
+    assert (row["w"], row["h"]) == (3, 2)
     return df
 
 

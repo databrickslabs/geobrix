@@ -213,7 +213,19 @@ def leading_dims(ds, variable: str) -> List[Tuple[str, int]]:
     return [(dim, int(var.sizes[dim])) for dim in var.dims if dim not in spatial_dims]
 
 
-def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object":
+def grid_shape(ds, variable: str) -> Tuple[int, int]:
+    """(height, width) of a regular grid variable: the sizes of its lat and lon dimensions."""
+    lat, lon = _find_lat_lon(ds)
+    var = ds[variable]
+    return int(var.sizes[lat.dims[0]]), int(var.sizes[lon.dims[0]])
+
+
+def array_2d(
+    ds,
+    variable: str,
+    sel: Optional[Dict[str, int]] = None,
+    window: Optional[Tuple[int, int, int, int]] = None,
+) -> "object":
     """The variable's 2-D slice as a north-up numpy array (lat descending).
 
     Only that slice is read and decoded (``isel`` before ``.values``): a fanout
@@ -229,6 +241,8 @@ def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object
                   the existing size>1 warning).  Out-of-range indices raise
                   ValueError.  Pass None (or omit) for the original single-slice
                   behavior.
+        window:   Optional north-up pixel window (col_off, row_off, width, height)
+                  of the lat/lon grid; only that window is read and decoded.
     """
     import numpy as np
 
@@ -267,16 +281,27 @@ def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object
             )
         index[drop_dim] = 0
 
-    lat, _ = _find_lat_lon(ds)
-    latdim = lat.dims[0]
-    # Ensure north-up: descending latitude along the lat dimension.
+    lat, lon = _find_lat_lon(ds)
+    latdim, londim = lat.dims[0], lon.dims[0]
+    # North-up: descending latitude along the lat dimension.
     latvals = ds[lat.name].values
-    if (
+    ascending = (
         latdim in da.dims
         and latdim not in index
         and float(latvals[0]) < float(latvals[-1])
-    ):
-        index[latdim] = slice(None, None, -1)
+    )
+    if window is None:
+        if ascending:
+            index[latdim] = slice(None, None, -1)
+    else:
+        col_off, row_off, width, height = window
+        if ascending:  # north-up row r is file row n - 1 - r
+            n = int(da.sizes[latdim])
+            stop = n - 1 - (row_off + height)
+            index[latdim] = slice(n - 1 - row_off, stop if stop >= 0 else None, -1)
+        else:
+            index[latdim] = slice(row_off, row_off + height)
+        index[londim] = slice(col_off, col_off + width)
     return np.asarray(_decoded_or_raw(ds, variable, index))
 
 

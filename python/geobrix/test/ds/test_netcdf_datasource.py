@@ -7,7 +7,7 @@ from netCDF4 import Dataset
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
 EXPECTED_METADATA_KEYS = {
     "path",
@@ -89,7 +89,7 @@ def test_raster_schema_matches_tile_schema():
     ds = NetcdfGbxDataSource(options={"path": "/tmp/none", "variable": "ch4"})
     schema = ds.schema()
     assert [f.name for f in schema.fields] == ["source", "tile"]
-    assert schema["tile"].dataType == _serde.TILE_SCHEMA
+    assert schema["tile"].dataType == V2_TILE_SCHEMA
 
 
 def test_raster_read_round_trip(spark, tmp_path):

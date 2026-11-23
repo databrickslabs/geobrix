@@ -14,6 +14,14 @@ To migrate from 0.5.x, see the [migration guide](./migration-0-6.mdx). For the 0
 
 ---
 
+## v0.6.1
+
+### Changes {#v061-changes}
+
+- **Fixed: [`netcdf_gbx` raster mode](./readers/netcdf.mdx#bbox).** Its tile is the standard tile, so the `gbx_rst_*` functions take it directly, and `bbox` cuts the grid on read. A table written from an earlier read keeps the three-field tile: rewrite it, or append with `mergeSchema`.
+
+---
+
 ## v0.6.0
 
 ### New {#v060-new}

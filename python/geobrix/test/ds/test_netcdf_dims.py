@@ -105,7 +105,7 @@ def _read_reader(path: str, options: dict) -> List[Tuple]:
 def _tile_mean(row: Tuple) -> float:
     """Decode the (source, tile) row and return the mean pixel value."""
     _, tile_tuple = row
-    _, raster_bytes, _ = tile_tuple
+    raster_bytes = tile_tuple[1]
     with MemoryFile(bytes(raster_bytes)) as mf, mf.open() as ds:
         return float(ds.read(1).mean())
 
@@ -119,7 +119,7 @@ def _read(path: str, options: dict, recwarn, caplog):
     """The rows a read yields, as (source, per-band means, metadata), and every warning it raised."""
     caplog.set_level(logging.WARNING)
     out = []
-    for source, (_, raster_bytes, meta) in _read_reader(path, options):
+    for source, (_, raster_bytes, *_, meta) in _read_reader(path, options):
         with MemoryFile(bytes(raster_bytes)) as mf, mf.open() as rds:
             out.append(
                 (
@@ -556,7 +556,7 @@ def test_banddim_stack_of_uint8_steps_has_no_alpha_band(tmp_path, steps):
     _write_uint8_steps(p, steps)
     rows = _read_reader(p, {"bandDim": "time"})
     assert len(rows) == 1
-    _, (_, raster_bytes, _) = rows[0]
+    _, (_, raster_bytes, *_) = rows[0]
     raster_bytes = bytes(raster_bytes)
     with MemoryFile(raster_bytes) as mf, mf.open() as rds:
         assert rds.count == steps
@@ -614,7 +614,7 @@ def test_fill_kept_covers_every_band_of_a_stack_and_the_banddim_read_keeps_the_f
         v[0, 0, 0] = v[1, 1, 1] = v[2, 0, 1] = -9999.0
     rows = _read_reader(p, {"bandDim": "time"})
     assert len(rows) == 1
-    _, (_, raster_bytes, _) = rows[0]
+    _, (_, raster_bytes, *_) = rows[0]
     with MemoryFile(bytes(raster_bytes)) as mf, mf.open() as rds:
         assert rds.count == 3 and rds.nodata == -9999.0
         data = rds.read()

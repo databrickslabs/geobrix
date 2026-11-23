@@ -80,7 +80,8 @@ readers is not part of this release.
 | `dimIndex` | — | Raster mode: pin one or more leading (non-spatial) dimensions to a specific integer index. Format: `"dim=index"` or `"dim1=i1,dim2=i2"`. Example: `"time=2,level=1"`. Absent dims fall back to index 0 (with a warning when the dim has more than one slice). An out-of-range index raises `ValueError`. |
 | `fanout` | — | Raster mode: expand one or more leading dimensions across all their indices. Format: `"dim"` or `"dim1,dim2"`. Each index combination becomes a separate `(source, tile)` row. A variable that lacks any of the named dims emits a single row (no expansion). Dims not listed are pinned by `dimIndex` or default to index 0. A dim that appears in both `dimIndex` and `fanout` raises `ValueError`. |
 | `bandDim` | — | Raster mode: stack one leading dimension's slices as bands in a single multi-band tile. Format: `"dim"` (one dim only). `bandDim="time"` on a variable with `(time=3, lat, lon)` produces one 3-band tile. Composes with `dimIndex` (pins other dims) and `fanout` (one multi-band tile per fanout combination). A dim named in `bandDim` cannot also appear in `dimIndex` or `fanout` — this raises `ValueError`. Estimated decoded bytes > ~256 MiB emits a `UserWarning` and suggests `fanout` instead. |
-| `bbox` / `bboxCrs` | — | Area-of-interest filter (`"minx,miny,maxx,maxy"`). |
+| `bbox` | — | Raster mode: cut each grid to this area on read, `"minx,miny,maxx,maxy"`. The cut snaps outward to whole pixels. A variable whose grid misses the area gives no row. Vector mode refuses it. |
+| `bboxCrs` | the grid's CRS | The CRS of `bbox`, for example `"EPSG:4326"`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches. |
 | `sizeInMB` | `"-1"` | Raster mode: `<= 0` = one whole tile per variable. |
 
@@ -100,6 +101,18 @@ The output is the standard `(source, tile)` schema — see
 [Tile Structure](../api/tile-structure). Only regular lat/lon or projected
 (CF `grid_mapping`) grids are accepted in raster mode; a curvilinear/swath
 variable raises an error steering you to `mode=vector`.
+
+The tile is the standard tile, so every `gbx_rst_*` function takes it directly. Its `raster` holds the GeoTIFF bytes; `path` and `window` are `NULL`.
+
+### Cut to an area (`bbox`) {#bbox}
+
+`bbox` cuts each grid on read. Only that window of each slice is read and decoded.
+
+<CodeFromTest code={netcdfExamples} language="python" functionName="READ_RASTER_BBOX"
+  source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
+
+The tile `metadata` key `sourceWindow` holds the cut in the source grid: `col_off,row_off,width,height`. With `bandDim`, `bbox` keeps a long stack small: one season of daily 1/24° data over a county is a few hundred kilobytes.
 
 A cell that holds the variable's fill value stays that fill value in the tile, and the tile's NoData is the same value.
 This matches what GDAL reads from the file.
@@ -195,6 +208,7 @@ multi-band buffer per task.
 
 If `bandDim` would produce a tile larger than ~256 MiB of decoded data, the
 reader emits a `UserWarning` and suggests `fanout` instead.
+Cut the grid with `bbox` first: the warning counts the cut window only.
 :::
 
 ### Vector mode — points & swath → per-cell points

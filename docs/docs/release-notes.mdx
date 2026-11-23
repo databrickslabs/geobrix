@@ -19,7 +19,12 @@ To migrate from 0.5.x, see the [migration guide](./migration-0-6.mdx). For the 0
 ### Changes {#v061-changes}
 
 - **Fixed: [`netcdf_gbx` raster mode](./readers/netcdf.mdx#bbox).** Its tile is the standard tile, so the `gbx_rst_*` functions take it directly, and `bbox` cuts the grid on read. A table written from an earlier read keeps the three-field tile: rewrite it, or append with `mergeSchema`.
-- **Fixed: [`netcdf_gbx` CRS](./readers/netcdf.mdx).** A grid with a CF `grid_mapping` (polar stereographic, Lambert conformal and others) now gets its CRS from it, and its `x` / `y` in kilometres are read as such. `EPSG:4326` is no longer assumed for a grid that is not 1-D latitude / longitude: it is refused, and the error says to set `crs_wkt` or read it with `raster_gbx`.
+- **Fixed: [`netcdf_gbx` CRS](./readers/netcdf.mdx).** A grid with a CF `grid_mapping` (polar stereographic, Lambert conformal and others) now gets its CRS from it. For any projected CRS, `x` / `y` in kilometres are scaled to the units of the CRS.
+- **[`netcdf_gbx` vector mode](./readers/netcdf.mdx) reads a projected grid** from its 2-D `lat` / `lon`, one point per cell.
+
+### Breaking {#v061-breaking}
+
+- **[`netcdf_gbx` no longer labels a grid EPSG:4326 by guess](./readers/netcdf.mdx).** A grid with no CRS whose axes are not 1-D latitude / longitude is refused. Add a CF grid mapping variable, or read it in vector mode when it has 2-D `lat` / `lon`. Vector mode refuses a projected grid with no 2-D `lat` / `lon`, which used to give no rows.
 
 ---
 

@@ -12,6 +12,7 @@ Spark-config mutation or JVM-bridge access).
 
 from __future__ import annotations
 
+import logging
 import warnings
 from typing import Dict, Iterator, List, Optional, Tuple
 
@@ -27,6 +28,8 @@ from databricks.labs.gbx.ds.raster import (
     _v2_tile_row,
     reader_schema_v2,
 )
+
+_logger = logging.getLogger(__name__)
 
 # Estimated decoded-bytes ceiling for bandDim stacking before a soft-warn is emitted.
 # 256 MiB is a conservative per-band-stack warn threshold; it is NOT the Serverless
@@ -323,7 +326,6 @@ def _encode_multiband_tile(
 
 def _slicing_options(options) -> Tuple[Dict[str, int], List[str], str]:
     """The ``dimIndex``, ``fanout`` and ``bandDim`` options, parsed; raises ValueError when one dim is in two."""
-    # Parse dimIndex, fanout, and bandDim options.
     dim_index = _parse_dim_index(_option(options, "dimIndex"))
     fanout_dims = _parse_fanout(_option(options, "fanout"))
     band_dim = _option(options, "bandDim").strip()
@@ -347,6 +349,23 @@ def _slicing_options(options) -> Tuple[Dict[str, int], List[str], str]:
                 "a dimension cannot be both stacked (bandDim) and expanded (fanout)."
             )
     return dim_index, fanout_dims, band_dim
+
+
+def _warn_unknown_dims(var, var_ldims, dim_index, fanout_dims, band_dim) -> None:
+    """Warn when dimIndex / fanout / bandDim name a dim the variable does not have (a typo, most often)."""
+    if not var_ldims or not (dim_index or fanout_dims or band_dim):
+        return
+    all_req = set(dim_index) | set(fanout_dims) | ({band_dim} if band_dim else set())
+    unknown = all_req - set(var_ldims)
+    if unknown:
+        warnings.warn(
+            f"netcdf_gbx: variable {var!r} has leading dims "
+            f"{sorted(var_ldims)!r} but requested dim(s) "
+            f"{sorted(unknown)!r} are not among them; "
+            f"falling through (unknown dims ignored).",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class NetcdfRasterReader(RasterGbxReader):
@@ -411,6 +430,7 @@ class NetcdfRasterReader(RasterGbxReader):
 
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
             variables = _netcdf.select_variables(ds, self.options, "raster")
+            missed: List[str] = []
 
             for var in variables:
                 try:
@@ -419,26 +439,10 @@ class NetcdfRasterReader(RasterGbxReader):
                     _bad(f"variable={var}", exc)
                     continue
                 if grid is None:
-                    continue  # the bbox misses this variable's grid: no row
+                    missed.append(var)  # the bbox misses this variable's grid: no row
+                    continue
                 transform, crs, nodata, var_ldims, window = grid
-
-                # Per-variable typo warning (includes bandDim in the check).
-                if var_ldims and (dim_index or fanout_dims or band_dim):
-                    all_req = (
-                        set(dim_index)
-                        | set(fanout_dims)
-                        | ({band_dim} if band_dim else set())
-                    )
-                    unknown = all_req - set(var_ldims)
-                    if unknown:
-                        warnings.warn(
-                            f"netcdf_gbx: variable {var!r} has leading dims "
-                            f"{sorted(var_ldims)!r} but requested dim(s) "
-                            f"{sorted(unknown)!r} are not among them; "
-                            f"falling through (unknown dims ignored).",
-                            UserWarning,
-                            stacklevel=2,
-                        )
+                _warn_unknown_dims(var, var_ldims, dim_index, fanout_dims, band_dim)
 
                 band_dim_for_var = (
                     band_dim if (band_dim and band_dim in var_ldims) else None
@@ -497,6 +501,15 @@ class NetcdfRasterReader(RasterGbxReader):
                         continue
 
                     yield (source, tile)
+
+        if variables and len(missed) == len(variables):
+            _logger.warning(
+                "netcdf_gbx: bbox %s misses the grid of every variable in %s, so the file gives no rows. "
+                "Check bboxCrs: without it, the bbox is in the grid's CRS. A 0-360 longitude grid is not shifted: "
+                "give its bbox in 0-360.",
+                _option(self.options, "bbox"),
+                partition.file_path,
+            )
 
 
 class NetcdfGbxDataSource(DataSource):

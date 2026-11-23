@@ -330,9 +330,8 @@ def crs_from_cf(attrs: dict) -> str:
         )
     try:
         built = _pyproj.CRS.from_cf({k: _cf_value(v) for k, v in attrs.items()})
-    except (
-        Exception
-    ) as exc:  # noqa: BLE001 - pyproj raises CRSError / KeyError / ValueError by mapping
+    # pyproj raises CRSError / KeyError / ValueError, depending on the mapping.
+    except Exception as exc:  # noqa: BLE001
         raise ValueError(
             f"crs_from_cf: cannot build a CRS from the CF grid mapping {attrs.get('grid_mapping_name')!r}: {exc}. "
             "Fix: set crs_wkt on the grid mapping variable, or read the file with raster_gbx."
@@ -340,6 +339,18 @@ def crs_from_cf(attrs: dict) -> str:
     crs = CRS.from_wkt(built.to_wkt())
     auth = crs.to_authority(confidence_threshold=100)
     return f"{auth[0]}:{auth[1]}" if auth else crs.to_wkt()
+
+
+def projected_unit_metres(crs) -> Optional[float]:
+    """Metres per unit of the axes of a PROJECTED ``crs`` (1.0 for metres, 0.3048006096 for US survey feet); None for a
+    geographic CRS (its axes are degrees). ``crs`` is anything :func:`to_pyproj_crs` takes (a rasterio CRS, an
+    authority string, WKT, an int)."""
+    if crs is None:
+        return None
+    pp = to_pyproj_crs(crs)
+    if not pp.is_projected:
+        return None
+    return float(pp.axis_info[0].unit_conversion_factor)
 
 
 def area_m2(geom, crs) -> float:

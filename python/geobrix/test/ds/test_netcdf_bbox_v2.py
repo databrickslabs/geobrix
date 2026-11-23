@@ -86,9 +86,33 @@ def test_bbox_in_another_crs_gives_the_same_window(tmp_path):
     assert tile[8]["sourceWindow"] == "1,1,5,5"
 
 
-def test_a_bbox_that_misses_the_grid_gives_no_row(tmp_path):
+def test_a_bbox_that_misses_the_grid_gives_no_row_and_a_warning(tmp_path, caplog):
+    import logging
+
     p = _write_cube(str(tmp_path / "c.nc"), ndays=1)
-    assert _rows(p, bbox="10,40,11,41") == []
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds.netcdf"):
+        assert _rows(p, bbox="10,40,11,41") == []
+    (msg,) = [r.getMessage() for r in caplog.records if "bbox" in r.getMessage()]
+    assert "misses the grid of every variable" in msg and "0-360" in msg
+
+
+def test_a_bbox_that_overlaps_gives_no_warning(tmp_path, caplog):
+    import logging
+
+    p = _write_cube(str(tmp_path / "c.nc"), ndays=1)
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds.netcdf"):
+        assert len(_rows(p, bbox=BBOX)) == 1
+    assert not [r for r in caplog.records if "bbox" in r.getMessage()]
+
+
+def test_a_bbox_partly_outside_the_grid_is_clipped_to_it(tmp_path):
+    # West of the grid's first pixel edge (-94.05): the window starts at column 0 and keeps cols 0..5, rows 1..5.
+    p = _write_cube(str(tmp_path / "c.nc"), ndays=1)
+    ((_, tile),) = _rows(p, bbox="-95.0,42.02,-93.52,42.38")
+    arr, transform, _ = _pixels(tile)
+    assert tile[8]["sourceWindow"] == "0,1,6,5"
+    np.testing.assert_array_equal(arr[0], NORTH_UP[1:6, 0:6])
+    assert transform.c == pytest.approx(-94.05) and transform.f == pytest.approx(42.45)
 
 
 @pytest.mark.parametrize("raw", ["1,2,3", "a,b,c,d", "3,0,1,1"])

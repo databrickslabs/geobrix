@@ -114,6 +114,9 @@ The tile is the standard tile, so every `gbx_rst_*` function takes it directly. 
 
 The tile `metadata` key `sourceWindow` holds the cut in the source grid: `col_off,row_off,width,height`. With `bandDim`, `bbox` keeps a long stack small: one season of daily 1/24° data over a county is a few hundred kilobytes.
 
+The reader does not shift a 0-360° longitude grid: give its `bbox` in 0-360.
+When the `bbox` misses every variable of a file, the reader logs a warning and the file gives no rows.
+
 A cell that holds the variable's fill value stays that fill value in the tile, and the tile's NoData is the same value.
 This matches what GDAL reads from the file.
 
@@ -224,6 +227,9 @@ This is the same shape as the other `*_gbx` vector readers, so the GeoBrix built
 curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
 no target grid or resampling method is chosen for you.
 
+A projected grid whose CF `coordinates` name 2-D `lat` / `lon` gives one point per cell at those positions (EPSG:4326).
+Vector mode refuses a projected grid without them: read it in raster mode.
+
 #### CF discrete sampling geometries
 
 A file with a `featureType` of `point`, `profile` or `trajectory` gives one point per observation.
@@ -277,7 +283,15 @@ affected. If you set `HDF5_PLUGIN_PATH` yourself, your directories are searched 
 filters yours lack. `GBX_NATIVE_DISABLE=1` turns the env wheel's native payload, plugins included, off.
 
 :::note Coordinate reference systems
-`netcdf_gbx` reads the CRS from CF `crs_wkt` (or `crs_canonical`) grid-mapping attributes and stores it as a canonical string in `tile.metadata` and `tile.crs`. The `spatial_epsg` attribute is also read. When a variable has none of these, the CRS comes from its CF `grid_mapping` variable (`polar_stereographic`, `lambert_conformal_conic`, `transverse_mercator` and the other CF projections), and `x` / `y` in kilometres are read as kilometres. `EPSG:4326` is the default only for a grid with 1-D `lat` / `lon`; any other grid with no CRS is refused with a Fix: set `crs_wkt` on the grid mapping, or read it with `raster_gbx`. For a non-EPSG CRS, prefer `crs_canonical`: `spatial_epsg` may carry an ESRI code, although its name implies EPSG. ESRI and OGC authorities are preserved. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+`netcdf_gbx` reads the CRS from CF `crs_wkt` (or `crs_canonical`) grid-mapping attributes. It stores it as a canonical string in `tile.metadata` and `tile.crs`.
+The `spatial_epsg` attribute is also read.
+Without these, the CRS comes from the CF `grid_mapping` variable, for example `polar_stereographic` or `lambert_conformal_conic`.
+
+For a projected CRS, the reader scales `x` / `y` from their CF `units` to the units of the CRS, for example `km` to metres.
+`EPSG:4326` is the default only for a grid with 1-D `lat` / `lon`.
+The reader refuses any other grid that has no CRS, and the error gives the fix.
+
+For a non-EPSG CRS, prefer `crs_canonical`: `spatial_epsg` may carry an ESRI code, although its name implies EPSG. ESRI and OGC authorities are preserved. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
 ## Next Steps

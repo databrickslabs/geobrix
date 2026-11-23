@@ -28,7 +28,10 @@ _LON_NAMES = {"lon", "longitude", "x"}
 # What names a GEOGRAPHIC axis: a bare x / y is not enough to call a grid degrees.
 _GEO_LAT_NAMES = {"lat", "latitude"}
 _GEO_LON_NAMES = {"lon", "longitude"}
-# The CF standard names of a projected axis.
+# The CF standard names and units of a geographic axis, and the standard names of a projected one.
+_LAT_STANDARD, _LON_STANDARD = "latitude", "longitude"
+_LAT_UNITS = ("degrees_north", "degree_north")
+_LON_UNITS = ("degrees_east", "degree_east")
 _PROJ_Y, _PROJ_X = "projection_y_coordinate", "projection_x_coordinate"
 # Metres per unit of a projected axis (CF `units`); degrees are never scaled.
 _METRES_PER_UNIT = {
@@ -89,42 +92,53 @@ def open_dataset(path: str, group: Optional[str]) -> Iterator["object"]:
         ds.close()
 
 
+def _standard_name(var) -> str:
+    return str(getattr(var, "standard_name", "")).lower()
+
+
+def _units(var) -> str:
+    return str(getattr(var, "units", "")).lower()
+
+
 def _is_lat(var) -> bool:
-    sn = str(getattr(var, "standard_name", "")).lower()
-    un = str(getattr(var, "units", "")).lower()
     return (
-        sn in ("latitude", _PROJ_Y)
-        or un in ("degrees_north", "degree_north")
+        _standard_name(var) in (_LAT_STANDARD, _PROJ_Y)
+        or _units(var) in _LAT_UNITS
         or var.name.lower() in _LAT_NAMES
     )
 
 
 def _is_lon(var) -> bool:
-    sn = str(getattr(var, "standard_name", "")).lower()
-    un = str(getattr(var, "units", "")).lower()
     return (
-        sn in ("longitude", _PROJ_X)
-        or un in ("degrees_east", "degree_east")
+        _standard_name(var) in (_LON_STANDARD, _PROJ_X)
+        or _units(var) in _LON_UNITS
         or var.name.lower() in _LON_NAMES
     )
 
 
-def _is_geo_axis(var, standard_name: str, units: Tuple[str, str], names) -> bool:
-    """True when ``var`` is a geographic (degrees) axis by its CF standard name, units or name (not a bare x / y)."""
+def _is_geo_lat(var) -> bool:
+    """A geographic (degrees) latitude by its CF standard name, units or name (not a bare y)."""
     return (
-        str(getattr(var, "standard_name", "")).lower() == standard_name
-        or str(getattr(var, "units", "")).lower() in units
-        or var.name.lower() in names
+        _standard_name(var) == _LAT_STANDARD
+        or _units(var) in _LAT_UNITS
+        or var.name.lower() in _GEO_LAT_NAMES
+    )
+
+
+def _is_geo_lon(var) -> bool:
+    """A geographic (degrees) longitude by its CF standard name, units or name (not a bare x)."""
+    return (
+        _standard_name(var) == _LON_STANDARD
+        or _units(var) in _LON_UNITS
+        or var.name.lower() in _GEO_LON_NAMES
     )
 
 
 def _is_cf_axis(var) -> bool:
     """A 1-D coordinate that names itself an axis (CF standard name or degree units), not just by its name."""
-    sn = str(getattr(var, "standard_name", "")).lower()
-    un = str(getattr(var, "units", "")).lower()
     return var.ndim == 1 and (
-        sn in ("latitude", "longitude", _PROJ_Y, _PROJ_X)
-        or un in ("degrees_north", "degree_north", "degrees_east", "degree_east")
+        _standard_name(var) in (_LAT_STANDARD, _LON_STANDARD, _PROJ_Y, _PROJ_X)
+        or _units(var) in _LAT_UNITS + _LON_UNITS
     )
 
 
@@ -179,29 +193,33 @@ def classify(ds, variable: str) -> str:
     return UNSUPPORTED
 
 
-def _metres_per_unit(axis) -> float:
-    """Metres per unit of a projected axis, from its CF ``units`` (none means metres); 1.0 for degrees.
+def _axis_scale(axis, crs_unit_m: float) -> float:
+    """What one unit of a projected ``axis`` is in the units of its CRS (``crs_unit_m`` metres each): ``km`` on a metre
+    CRS is 1000. An axis with no ``units`` is in the units of the CRS (1.0); a degree axis is left alone (1.0).
     Raises ValueError for a unit it does not know: a guessed scale is a wrong tile."""
-    unit = str(getattr(axis, "units", "") or "m").strip().lower()
-    if unit.startswith("degree"):
+    unit = _units(axis).strip()
+    if not unit or unit.startswith("degree"):
         return 1.0
     if unit not in _METRES_PER_UNIT:
         raise ValueError(
             f"netcdf_gbx: the axis {axis.name!r} has units {unit!r}, not metres or kilometres. "
-            "Fix: set crs_wkt on the grid mapping (the CRS then fixes the unit), or read the file with raster_gbx."
+            "Fix: set the axis units to m or km (CF units), or drop them when the values are in the units of the CRS."
         )
-    return _METRES_PER_UNIT[unit]
+    return _METRES_PER_UNIT[unit] / crs_unit_m
 
 
 def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
     """Affine transform (north-up) + CRS string for a regular grid variable.
 
     The CRS is resolved first, so a grid with no CRS is refused before its coordinates are read. The transform
-    comes from the 1-D y / x coordinate values; a CRS built from a CF ``grid_mapping`` is in metres, so those
-    coordinates are scaled to metres (``km`` -> 1000)."""
+    comes from the 1-D y / x coordinate values. For a projected CRS, wherever it came from, each axis is scaled from
+    its CF ``units`` to the units of the CRS (``km`` on a metre CRS -> 1000); a geographic grid is left alone.
+    """
     from affine import Affine
 
-    crs, from_cf = _resolve_crs(ds, variable)
+    from databricks.labs.gbx.core.crs import projected_unit_metres
+
+    crs = _crs_string(ds, variable)
     lat, lon = _find_lat_lon(ds)
     lats = lat.values
     lons = lon.values
@@ -210,10 +228,10 @@ def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
     ulx = float(min(lons)) - px / 2.0
     uly = float(max(lats)) + py / 2.0
     transform = Affine.translation(ulx, uly) * Affine.scale(px, -py)
-    if from_cf:
-        transform = (
-            Affine.scale(_metres_per_unit(lon), _metres_per_unit(lat)) * transform
-        )
+    crs_unit_m = projected_unit_metres(crs)
+    if crs_unit_m is not None:
+        scale = Affine.scale(_axis_scale(lon, crs_unit_m), _axis_scale(lat, crs_unit_m))
+        transform = scale * transform
     return transform, crs
 
 
@@ -249,17 +267,13 @@ def _is_geographic_grid(ds) -> bool:
         and lon is not None
         and lat.ndim == 1
         and lon.ndim == 1
-        and _is_geo_axis(
-            lat, "latitude", ("degrees_north", "degree_north"), _GEO_LAT_NAMES
-        )
-        and _is_geo_axis(
-            lon, "longitude", ("degrees_east", "degree_east"), _GEO_LON_NAMES
-        )
+        and _is_geo_lat(lat)
+        and _is_geo_lon(lon)
     )
 
 
-def _resolve_crs(ds, variable: Optional[str] = None) -> Tuple[str, bool]:
-    """(CRS string, whether it was built from CF grid-mapping attributes) for a CF grid dataset.
+def _crs_string(ds, variable: Optional[str] = None) -> str:
+    """The CRS string for a CF grid dataset.
 
     Check order (first match wins):
     1. ``crs_canonical``: authority string ("EPSG:4326", "ESRI:54008") or WKT
@@ -279,37 +293,49 @@ def _resolve_crs(ds, variable: Optional[str] = None) -> Tuple[str, bool]:
         # 1. crs_canonical (authority string or WKT — written by current writer)
         canonical = getattr(v, "crs_canonical", None)
         if canonical is not None:
-            return str(canonical), False
+            return str(canonical)
         # 2. crs_wkt (CF standard; rioxarray and compliant writers emit this)
         wkt = getattr(v, "crs_wkt", None)
         if wkt is not None:
-            return str(wkt), False
+            return str(wkt)
         # 3. Legacy EPSG integer attributes
         epsg = getattr(v, "epsg_code", None) or getattr(v, "spatial_epsg", None)
         if epsg is not None:
             code = _epsg_int(epsg)
             if code is not None:
-                return f"EPSG:{code}", False
+                return f"EPSG:{code}"
     # 4. The CF grid mapping
     attrs = _cf_grid_mapping(ds, variable)
     if attrs is not None:
         from databricks.labs.gbx.core.crs import crs_from_cf
 
-        return crs_from_cf(attrs), True
+        return crs_from_cf(attrs)
     # 5. Geographic lon/lat only
     if _is_geographic_grid(ds):
-        return "EPSG:4326", False
+        return "EPSG:4326"
+    raise ValueError(_no_crs_message(ds, variable))
+
+
+def _no_crs_message(ds, variable: Optional[str]) -> str:
+    """Why a grid has no CRS, and the fix that fits it: vector mode for 2-D lat / lon, a CF grid mapping otherwise."""
     what = f"variable {variable!r}" if variable else "the grid"
-    raise ValueError(
+    head = (
         f"netcdf_gbx: {what} has no CRS: no crs_canonical, crs_wkt or epsg_code attribute and no CF grid_mapping "
         "variable, and its axes are not 1-D latitude / longitude, so EPSG:4326 would be a guess. "
-        "Fix: set crs_wkt on the grid mapping, or read it with raster_gbx."
     )
-
-
-def _crs_string(ds, variable: Optional[str] = None) -> str:
-    """The CRS string for a CF grid dataset (see :func:`_resolve_crs` for the order)."""
-    return _resolve_crs(ds, variable)[0]
+    lat, _ = _find_lat_lon(ds)
+    if lat is not None and _eff_ndim(lat) == 2:
+        return (
+            head
+            + "Fix: read it with mode=vector, which places one point per cell from its 2-D lat / lon."
+        )
+    fix = (
+        "Fix: add a CF grid mapping variable with crs_wkt (or the CF projection attributes) and name it in the "
+        "grid_mapping attribute of the variable."
+    )
+    if variable and _aux_lat_lon(ds, variable) is not None:
+        fix += " Or read it with mode=vector, which places one point per cell from its 2-D lat / lon."
+    return head + fix
 
 
 def _epsg_int(epsg) -> Optional[int]:
@@ -502,6 +528,7 @@ def point_arrays(
     """Flatten point (DSG), grid, or curvilinear data to aligned 1-D arrays.
 
     - POINTS/CURVILINEAR: lat/lon already align with the value array, so ravel each.
+    - GRID with 2-D aux lat / lon (CF ``coordinates``): those lat / lon, raveled.
     - GRID: 1-D lat (H) and 1-D lon (W) must be meshgridded to H*W before ravel so
       they align with the 2-D value array's ravel.
     """
@@ -509,7 +536,11 @@ def point_arrays(
 
     lat, lon = _find_lat_lon(ds)
     kind = classify(ds, variables[0])
-    if kind == GRID:
+    aux = _aux_lat_lon(ds, variables[0]) if kind == GRID else None
+    if aux is not None:  # a projected grid placed by its 2-D lat / lon, cell by cell
+        lat_flat = np.asarray(aux[0].values).ravel()
+        lon_flat = np.asarray(aux[1].values).ravel()
+    elif kind == GRID:
         lon2d, lat2d = np.meshgrid(
             np.asarray(ds[lon.name].values), np.asarray(ds[lat.name].values)
         )  # indexing="xy" -> shape (H, W), matching the value array
@@ -688,8 +719,42 @@ def dsg_arrays(
     return lon, lat, z, {name: per_obs(name) for name in variables}, "4326"
 
 
+def _aux_lat_lon(ds, variable: str):
+    """(lat, lon) of a grid variable's 2-D auxiliary geographic coordinates (CF ``coordinates``), else None.
+
+    They place a projected grid cell by cell in vector mode. Both must lie on the variable's last two dimensions, in
+    its order, and the variable must have no other dimension with more than one slice, so its values align with them.
+    xarray moves ``coordinates`` to the encoding when it decodes coordinates, so both are read.
+    """
+    da = ds[variable]
+    raw = da.attrs.get("coordinates") or da.encoding.get("coordinates") or ""
+    names = list(dict.fromkeys(str(raw).split() + [str(c) for c in da.coords]))
+    if da.ndim < 2 or _eff_ndim(da) > 2:
+        return None
+    lat = lon = None
+    for name in names:
+        if name not in ds.variables:
+            continue
+        v = ds[name]
+        if v.ndim != 2 or tuple(v.dims) != tuple(da.dims[-2:]):
+            continue
+        if lat is None and _is_geo_lat(v):
+            lat = v
+        elif lon is None and _is_geo_lon(v):
+            lon = v
+    return (lat, lon) if lat is not None and lon is not None else None
+
+
+def _vector_readable(ds, name: str) -> bool:
+    kind = classify(ds, name)
+    return kind in (POINTS, CURVILINEAR) or (
+        kind == GRID and _aux_lat_lon(ds, name) is not None
+    )
+
+
 def readable_variables(ds, mode: str) -> List[str]:
-    """Data variables readable in `mode` ('raster' -> GRID; 'vector' -> POINTS/CURVILINEAR).
+    """Data variables readable in `mode` ('raster' -> GRID; 'vector' -> POINTS/CURVILINEAR, or a GRID with 2-D
+    aux lat / lon).
 
     Iterates ds.data_vars only: with open_dataset's decode_coords="all", lat/lon,
     grid-mapping, and bounds coordinate variables are xarray coords, not data_vars,
@@ -701,17 +766,35 @@ def readable_variables(ds, mode: str) -> List[str]:
         layout = dsg_layout(ds)
         if layout is not None:
             return list(layout.attributes)
-    keep = {GRID} if mode == "raster" else {POINTS, CURVILINEAR}
-    return [name for name in list(ds.data_vars) if classify(ds, name) in keep]
+        return [name for name in list(ds.data_vars) if _vector_readable(ds, name)]
+    return [name for name in list(ds.data_vars) if classify(ds, name) == GRID]
+
+
+def _refuse_projected_grids(ds, names: List[str], readable: List[str]) -> None:
+    """Vector mode: a projected grid with no 2-D lat / lon has no positions to give its points. Refuse it, never an
+    empty frame."""
+    if dsg_layout(ds) is not None or _is_geographic_grid(ds):
+        return
+    for name in names:
+        if name in ds.data_vars and name not in readable and classify(ds, name) == GRID:
+            raise ValueError(
+                f"netcdf_gbx: variable {name!r} sits on projected x / y axes with no 2-D lat / lon to place its "
+                "points in vector mode; this is a projected grid: read it in raster mode (the default mode)."
+            )
 
 
 def select_variables(ds, options: Dict[str, str], mode: str) -> List[str]:
-    """Auto-enumerate all readable variables, narrowed by an optional variable filter."""
+    """Auto-enumerate all readable variables, narrowed by an optional variable filter. Vector mode refuses a
+    projected grid it cannot place (see :func:`_refuse_projected_grids`)."""
     readable = readable_variables(ds, mode)
     raw = options.get("variables") or options.get("variable")
-    if not raw:
+    requested = [v.strip() for v in str(raw).split(",") if v.strip()] if raw else None
+    if mode != "raster":
+        _refuse_projected_grids(
+            ds, requested if requested is not None else list(ds.data_vars), readable
+        )
+    if requested is None:
         return readable
-    requested = [v.strip() for v in str(raw).split(",") if v.strip()]
     readable_set = set(readable)
     return [v for v in requested if v in readable_set]
 

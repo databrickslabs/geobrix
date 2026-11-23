@@ -694,6 +694,11 @@ EXAMPLES = {
         "gp_agg_idw",
         "SELECT gbx_rst_gridfrompoints_agg(c0, c1, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326) AS out FROM gbx_example",
     ),
+    "gbx_rst_h3_fitresolution": (
+        "RASTER_TO_GRID",
+        "h3_fit_utm30",
+        "SELECT gbx_rst_h3_fitresolution(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_h3_rasterize": (
         "RASTER_AGGREGATE",
         "h3rt_dup_max",

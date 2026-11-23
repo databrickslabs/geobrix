@@ -50,6 +50,22 @@ def _rtg_ll(tmpdir):
     return _tile(_gtiff(_bands(60, 80), "EPSG:4326", origin=(-1.0, 52.0), px=0.01))
 
 
+@builder("h3fit_utm30")
+def _h3fit_utm30(tmpdir):
+    """30 m pixels in UTM 15N whose centre is at about 42.0 N, 93.65 W (an HLS-like tile over central Iowa)."""
+    return _tile(
+        _gtiff(_bands(8, 8), "EPSG:32615", origin=(446000.0, 4650000.0), px=30.0)
+    )
+
+
+@builder("h3fit_utm10")
+def _h3fit_utm10(tmpdir):
+    """10 m pixels at the same place (the CDL grid CSB field polys were drawn from)."""
+    return _tile(
+        _gtiff(_bands(8, 8), "EPSG:32615", origin=(446000.0, 4650000.0), px=10.0)
+    )
+
+
 @builder("rtg_bng")
 def _rtg_bng(tmpdir):
     return _tile(
@@ -522,10 +538,27 @@ _OTHER_ROWS = tuple(
     for row in (*_other_partial_rows(g), *_other_edges(g), *_other_merge_rows(g))
 )
 
+# gbx_rst_h3_fitresolution: expected values from the geodesic area of the centre pixel and the official H3 table
+# (rtg_ll: 0.01 degree at 51.7 N = 769,000 m2 -> res 8 either rule; 30 m -> 12, log-nearest 11; 10 m -> 13).
+FIT = "gbx_rst_h3_fitresolution"
+U30, U10 = Build("h3fit_utm30"), Build("h3fit_utm10")
+_FIT_ROWS = (
+    Case("h3_fit_ll", FIT, (LL,), "exact", 8, BOTH),
+    Case("h3_fit_ll_log_nearest", FIT, (LL, "log_nearest"), "exact", 8, BOTH),
+    Case("h3_fit_utm30", FIT, (U30,), "exact", 12, BOTH),
+    Case("h3_fit_utm30_log_nearest", FIT, (U30, "log_nearest"), "exact", 11, BOTH),
+    Case("h3_fit_utm10", FIT, (U10,), "exact", 13, BOTH),
+    Case("h3_fit_null_tile", FIT, (None,), "null", None, BOTH),
+    Case("h3_fit_error_tile", FIT, (ERR,), "null", None, BOTH),
+    Case("h3_fit_corrupt_tile", FIT, (CORRUPT,), "null", None, BOTH),
+    Case("h3_fit_bad_rule", FIT, (LL, "nearest"), "raises", "rule", ONLY),
+)
+
 RASTER_TO_GRID = (
     share(_SESSION_ROWS, *_H3_SHARED, *_OTHER_SHARED)
     + _PARTIAL_ROWS
     + _TVF_EDGES
     + _MERGE_ROWS
     + _OTHER_ROWS
+    + _FIT_ROWS
 )

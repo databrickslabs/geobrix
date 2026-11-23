@@ -764,6 +764,17 @@
       ],
       "since": "0.4.0"
     },
+    "gbx_rst_h3_fitresolution": {
+      "examples": "Examples:\n      > SELECT gbx_rst_h3_fitresolution(tile) AS h3_res, gbx_rst_h3_fitresolution(tile, 'log_nearest') AS h3_res_log_nearest FROM rasters;",
+      "usage_args": "tile, [rule]",
+      "description": "Return the H3 resolution that fits the raster's pixel size.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.1"
+    },
     "gbx_rst_h3_rasterize": {
       "examples": "Examples:\n      > SELECT gbx_rst_h3_rasterize( collect_list(struct(cellid, value)), 4326, 0.01, 0.005, 0.005, 0.025, 0.025, 2, 2, 'centroids', 0 ) AS content FROM (VALUES (619056821909585919L, 1.0), (619056822407921663L, 2.0), (619056559519170559L, 3.0) ) AS t(cellid, value);",
       "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",

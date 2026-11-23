@@ -2991,6 +2991,32 @@ def rst_gridfrompoints_agg(
     )
 
 
+def rst_h3_fitresolution(
+    tile: ColLike,
+    rule: ColLike = None,
+) -> Column:
+    """Return the H3 resolution that fits the raster's pixel size.
+
+    Args:
+        tile: The raster tile. Clip it to the area of interest first, so its centre
+            pixel is at that latitude.
+        rule: `'not_larger'` gives the coarsest resolution whose average cell area is no
+            larger than the pixel area. `'log_nearest'` gives the resolution nearest the
+            pixel area on a log scale. Any other word raises. SQL default: ``'not_larger'``.
+
+    Returns:
+        An H3 resolution from 0 to 15 for the pixel at the tile centre, or NULL for a
+        NULL or error tile.
+
+    SQL: ``gbx_rst_h3_fitresolution(tile, [rule])``
+    """
+    return _api.call(
+        "gbx_rst_h3_fitresolution",
+        tile,
+        rule,
+    )
+
+
 def rst_h3_rasterize(
     cells: ColLike,
     out_srid: ColLike,

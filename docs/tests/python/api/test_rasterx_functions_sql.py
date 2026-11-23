@@ -275,6 +275,11 @@ def test_rst_height_sql_example(spark, rasters_view):
     assert "height" in result.columns
 
 
+def test_rst_h3_fitresolution_sql_example(spark, rasters_view):
+    rows = spark.sql(rasterx_functions_sql.rst_h3_fitresolution_sql_example()).collect()
+    assert rows and all(r["h3_res"] == 13 and r["h3_res_log_nearest"] == 13 for r in rows)
+
+
 def test_rst_numbands_sql_example(spark, multiband_rasters_view):
     """Test SQL numbands example (uses multiband fixture — 3 bands)."""
     sql = rasterx_functions_sql.rst_numbands_sql_example()

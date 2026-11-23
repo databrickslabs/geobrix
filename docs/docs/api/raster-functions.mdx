@@ -60,7 +60,7 @@ Many RasterX functions accept CRS parameters. Use `srid` / `out_srid` (integer E
 
 ## Function Categories
 
-RasterX exposes 166 SQL functions (registered as `gbx_rst_*`; available in Python as `rst_*`), organized into the following categories:
+RasterX exposes 167 SQL functions (registered as `gbx_rst_*`; available in Python as `rst_*`), organized into the following categories:
 
 <ThemedImage
   alt="The RasterX functions in their categories, each card listing its function names. Call them from SQL after register(spark), from the rasterx Python API, or from Unity Catalog SQL."
@@ -2834,7 +2834,7 @@ Create overlapping tiles.
 
 See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / assignment / fill model shared by all grids.
 
-Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (9 total).
+Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (10 total).
 
 The `rst_<grid>_rastertogrid<stat>` reducers of all four grids (H3, quadbin, BNG, custom grid) are **table functions** at every implementation level. They return one row per band and cell, with `band` (from 1), `cellID` and `measure`. Call them in the `FROM` clause with `LATERAL`, or through the Python API, which takes the input DataFrame first and returns it joined with the rows:
 
@@ -2970,6 +2970,38 @@ On Unity Catalog a virtual tile is refused, and so is a result over the size lim
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+---
+
+### rst_h3_fitresolution
+
+{/* BEGIN GENERATED gbx_rst_h3_fitresolution: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_fitresolution(tile, [rule])` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_fitresolution(tile, [rule])` | `INT` |
+| Python | `rasterx.functions.rst_h3_fitresolution(tile, rule=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. Clip it to the area of interest first, so its centre pixel is at that latitude. |
+| `rule` | `STRING` | `STRING` | `'not_larger'` | `'not_larger'` gives the coarsest resolution whose average cell area is no larger than the pixel area. `'log_nearest'` gives the resolution nearest the pixel area on a log scale. Any other word raises. |
+{/* END GENERATED gbx_rst_h3_fitresolution */}
+
+:::note Implementation
+Powered by **rasterio** and **pyproj**.
+:::
+
+Return the H3 resolution that fits the pixel size of a raster. The function measures the pixel at the tile centre on the WGS84 ellipsoid. By default, it picks the coarsest resolution whose average cell is no larger than that pixel. A cell then holds at most about one pixel. Clip the raster to your area of interest first, because the pixel area changes with latitude. See [Choosing a resolution](./grid-raster-tessellation.mdx#choosing-a-resolution).
+
+<FunctionExamples
+  name="rst_h3_fitresolution"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ---

@@ -100,6 +100,36 @@ LATERAL gbx_rst_h3_rastertogridavg(r.tile, 7) t;
 
 ---
 
+## Choosing a resolution {#choosing-a-resolution}
+
+Pick the H3 resolution from the pixel size, at the latitude of your data. [`gbx_rst_h3_fitresolution`](./raster-functions.mdx#rst_h3_fitresolution) does it for a tile. It measures the pixel at the tile centre and returns the coarsest resolution whose average cell area is no larger than that pixel. A cell then holds at most about one pixel, and covering assignment gives it the area-weighted mean of the pixels it overlaps.
+
+| Resolution | Average cell area | Average edge |
+|---|---|---|
+| 5 | 252.9 km² | 9.85 km |
+| 6 | 36.13 km² | 3.72 km |
+| 7 | 5.16 km² | 1.41 km |
+| 8 | 0.737 km² | 531 m |
+| 9 | 0.105 km² | 201 m |
+| 10 | 15,048 m² | 75.9 m |
+| 11 | 2,150 m² | 28.7 m |
+| 12 | 307 m² | 10.8 m |
+| 13 | 43.9 m² | 4.1 m |
+
+Average areas are from the [H3 cell statistics table](https://h3geo.org/docs/core-library/restable).
+
+Examples at 42°N:
+
+| Raster | Pixel on the ground | Resolution (`'not_larger'`) | `'log_nearest'` |
+|---|---|---|---|
+| Stage IV precipitation (HRAP, 4.76 km at 60°N) | 4.26 km x 4.26 km | 7 | 6 |
+| 1/24° grids (gridMET, nClimGrid) | 4.63 km x 3.45 km | 7 | 6 |
+| 0.125° grids (GRACE-DA) | 13.9 km x 10.4 km | 6 | 5 |
+| 30 m UTM (Landsat, HLS) | 30 m x 30 m | 12 | 11 |
+| 10 m UTM (Sentinel-2) | 10 m x 10 m | 13 | 13 |
+
+---
+
 ## Per-grid details
 
 <Tabs groupId="grid-type">

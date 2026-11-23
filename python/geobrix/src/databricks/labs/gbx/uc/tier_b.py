@@ -1875,3 +1875,26 @@ def rst_h3_rastertogrid_partial(tile, resolution, coverage, assignment):
 
 _FIELDS = ("count", "sum", "m2", "min", "max")
 HANDLERS["gbx_rst_h3_rastertogrid_partial"] = rst_h3_rastertogrid_partial
+
+
+def rst_h3_fitresolution(tile, rule=None):
+    """gbx_rst_h3_fitresolution over a materialized tile (core.h3fit.fit_resolution_of), header only."""
+    fn = "gbx_rst_h3_fitresolution"
+    rule = "not_larger" if rule is None else rule
+    try:
+        _kernel("h3fit", "check_rule")(rule)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{fn}: {exc}. Fix: pass 'not_larger' or 'log_nearest'."
+        ) from None
+    if tile is None:
+        return None
+    return with_dataset(
+        fn,
+        tile,
+        lambda ds: _kernel("h3fit", "fit_resolution_of")(ds, rule),
+        header_only=True,
+    )
+
+
+HANDLERS["gbx_rst_h3_fitresolution"] = rst_h3_fitresolution

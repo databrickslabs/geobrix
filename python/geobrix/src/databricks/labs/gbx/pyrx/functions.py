@@ -71,7 +71,7 @@ from databricks.labs.gbx.pyrx.core import cellraster as cellraster_core
 from databricks.labs.gbx.pyrx.core import chm as chm_core
 from databricks.labs.gbx.pyrx.core import coords
 from databricks.labs.gbx.pyrx.core import derivedband as derivedband_core
-from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg
+from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg, h3fit
 from databricks.labs.gbx.pyrx.core import land_cover as land_cover_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import ops as ops_core
@@ -4060,6 +4060,23 @@ def _h3_rastertogrid_partial_udf(
     tile, resolution, coverage="complete", assignment="centroid"
 ):  # the row's defaults: no SQL wrapper
     return _rastertogrid_partial_cells(tile, resolution, "h3", coverage, assignment)
+
+
+@_tile_udf(returns=IntegerType())
+def _h3_fitresolution_udf(tile, rule="not_larger"):  # the row's default: no SQL wrapper
+    """gbx_rst_h3_fitresolution: the H3 resolution fitted to the centre pixel (header read only)."""
+    # a bad rule raises, tile or not
+    rule = h3fit.check_rule(h3fit.DEFAULT_RULE if rule is None else rule)
+    if _tile_is_empty(tile):
+        return None
+    from databricks.labs.gbx.pyrx import _env
+
+    try:
+        _env.configure_gdal_env()
+        with ot.open_header(tile) as ds:
+            return h3fit.fit_resolution_of(ds, rule)
+    except Exception:  # noqa: BLE001 - an unreadable or error tile is NULL
+        return None
 
 
 @_tile_udf(returns=_GRID_PARTIAL_SCHEMA)

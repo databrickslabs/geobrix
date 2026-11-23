@@ -573,6 +573,30 @@ rst_pixelwidth_python_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# rst_h3_fitresolution — the H3 resolution that fits the pixel size
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 10.0 m pixels in EPSG:32618, about 100 m2 -> resolution 13)
+# ---------------------------------------------------------------------------
+
+
+def rst_h3_fitresolution_python_example(spark):
+    """Fit an H3 resolution to the pixel size of the raster."""
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    df = spark.table("rasters")
+    result = df.select(rx.rst_h3_fitresolution("tile").alias("h3_res")).first()
+    return result["h3_res"]
+
+
+rst_h3_fitresolution_python_example_output = """
++------+
+|h3_res|
++------+
+|13    |
++------+
+"""
+
+
+# ---------------------------------------------------------------------------
 # rst_rotation — rotation in radians
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — axis-aligned, rotation=0.0)
 # ---------------------------------------------------------------------------

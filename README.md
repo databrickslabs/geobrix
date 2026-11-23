@@ -15,8 +15,8 @@
   python/geobrix/src/databricks/labs/gbx/vizx/__init__.py __all__, and is excluded from the total.
 -->
 <!-- BEGIN GENERATED counts -->
-![Functions](https://img.shields.io/badge/functions-258-2e7d32)
-![RasterX](https://img.shields.io/badge/RasterX-166-1565c0)
+![Functions](https://img.shields.io/badge/functions-259-2e7d32)
+![RasterX](https://img.shields.io/badge/RasterX-167-1565c0)
 ![GridX](https://img.shields.io/badge/GridX-66-1565c0)
 ![VectorX](https://img.shields.io/badge/VectorX-24-1565c0)
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)
@@ -36,7 +36,7 @@ GeoBrix has one function set. You call it from SQL, Python, Unity Catalog SQL or
 
 - **Python level (lightweight)** — runs every function in Python on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR and no init script**. The env wheel carries its own GDAL, PROJ and GEOS. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM**.
 - **JVM level (heavyweight)** — Scala + GDAL on dedicated clusters, kept only for functions where it measured at least 1.2x faster. Add the GeoBrix JAR (`gbx.stage_jar` stages it from the env wheel) as a cluster library, or use the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs) (`mjohns797/geobrix:0.6.0-env6-arm` or `-x86`, DBR 19); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **The code does not change** between the two.
-- **Unity Catalog functions** — `gbx.uc.install(catalog, schema, volume_dir)` creates 226 of the 258 functions as `<catalog>.<schema>.gbx_*`, for SQL warehouses, dashboards and Genie. Aggregates and `PARTITION BY` table functions have no Unity Catalog form. See [Unity Catalog functions](https://databrickslabs.github.io/geobrix/docs/api/uc-functions).
+- **Unity Catalog functions** — `gbx.uc.install(catalog, schema, volume_dir)` creates 227 of the 259 functions as `<catalog>.<schema>.gbx_*`, for SQL warehouses, dashboards and Genie. Aggregates and `PARTITION BY` table functions have no Unity Catalog form. See [Unity Catalog functions](https://databrickslabs.github.io/geobrix/docs/api/uc-functions).
 - **Native kernels where measured faster** — GDAL, plus Rust for BNG cell encoding and TIN triangulation, both in the env wheel. We continue to assess where Rust can help further.
 
 ## Packages

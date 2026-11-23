@@ -58,6 +58,7 @@ CHECKS = {
     "rst_format": lambda r: r == "GTiff",
     "rst_georeference": lambda r: isinstance(r, dict) and r.get("scaleX") == 10.0,
     "rst_getnodata": lambda r: isinstance(r, list) and r[:1] == [0.0],
+    "rst_h3_fitresolution": lambda r: r == 13,
     "rst_height": lambda r: r == 161,
     "rst_memsize": lambda r: isinstance(r, int) and r > 0,
     "rst_metadata": lambda r: isinstance(r, dict) and r.get("driver") == "GTiff",

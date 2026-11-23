@@ -415,6 +415,24 @@ rst_pixelwidth_sql_example_output = """
 """
 
 
+def rst_h3_fitresolution_sql_example():
+    """Fit an H3 resolution to the pixel size of each raster (10 m pixels give resolution 13)."""
+    return """
+SELECT gbx_rst_h3_fitresolution(tile) AS h3_res,
+       gbx_rst_h3_fitresolution(tile, 'log_nearest') AS h3_res_log_nearest
+FROM rasters;
+"""
+
+
+rst_h3_fitresolution_sql_example_output = """
++------+------------------+
+|h3_res|h3_res_log_nearest|
++------+------------------+
+|13    |13                |
++------+------------------+
+"""
+
+
 def rst_pixelheight_sql_example():
     """Get pixel height in coordinate system units (metres for EPSG:32618 rasters)."""
     return """

@@ -136,32 +136,47 @@ def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
     return _bng.point_to_cell_id_vec(e, n, resolution)
 
 
-def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
+def _grouped_measures(
+    cids: np.ndarray, vals: np.ndarray, agg: str, weights: np.ndarray = None
+):
     """Group ``vals`` by ``cids`` and reduce -> (unique_cids, measures).
 
     Loops at most over CELLS (median only), never over pixels. ``count`` yields
     Python floats (changed from int for heavy-tier parity: centroid count = n as
     float; covering count = Sigma-w); every other agg yields Python floats --
     matching the original per-cell ``_reduce`` types and values exactly.
+
+    ``weights`` (one per value, optional) are covering weights (intersection area / pixel area): the count is then
+    Sigma w, the sum Sigma v*w, the mean and M2 weighted, min / max weight-agnostic, and the median the weighted median
+    of ``_weighted_reduce`` -- ``_weighted_reduce``'s formulas with numpy group sums. None means every weight is 1
+    (the centroid path), and takes the same operations as before the argument existed.
     """
     uniq, inv = np.unique(cids, return_inverse=True)
     inv = inv.astype(np.intp)
-    counts = np.bincount(inv, minlength=uniq.size)
+    n = uniq.size
+    w = None if weights is None else np.asarray(weights, dtype="float64")
+    if w is None:
+        counts = np.bincount(inv, minlength=n)
+    else:
+        counts = np.bincount(inv, weights=w, minlength=n)
+
+    def _gsum(x):
+        """Per-cell sum of ``x``, each term times its weight when there are weights."""
+        return np.bincount(inv, weights=x if w is None else x * w, minlength=n)
 
     if agg == _PARTIAL:
         vals = np.asarray(vals, dtype="float64")
-        sums = np.bincount(inv, weights=vals, minlength=uniq.size)
+        sums = _gsum(vals)
         # the two-pass M2 of the variance below: the mean first, then the squared deviations from it
-        m2 = np.bincount(
-            inv, weights=(vals - (sums / counts)[inv]) ** 2, minlength=uniq.size
-        )
-        lo = np.full(uniq.size, np.inf)
+        m2 = _gsum((vals - (sums / counts)[inv]) ** 2)
+        lo = np.full(n, np.inf)
         np.minimum.at(lo, inv, vals)
-        hi = np.full(uniq.size, -np.inf)
+        hi = np.full(n, -np.inf)
         np.maximum.at(hi, inv, vals)
+        cols = (counts, sums, m2, lo, hi)
         return uniq, [
-            (float(n), float(s), float(m), float(a), float(b))
-            for n, s, m, a, b in zip(counts, sums, m2, lo, hi)
+            (float(c), float(s), float(m), float(a), float(b))
+            for c, s, m, a, b in zip(*cols)  # vectorscan: ok (per-cell)
         ]
 
     if agg == "count":
@@ -170,34 +185,41 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
 
     vals = np.asarray(vals, dtype="float64")
     if agg == "avg":
-        sums = np.bincount(inv, weights=vals, minlength=uniq.size)
-        out = sums / counts
+        out = _gsum(vals) / counts
     elif agg == "sum":
         # Total of valid pixel values per cell -- the avg numerator (bincount
         # weighted sum) WITHOUT dividing by counts. A cell is only emitted with
         # >=1 valid pixel (sec 2.6), so sum is always well-defined.
-        out = np.bincount(inv, weights=vals, minlength=uniq.size)
+        out = _gsum(vals)
     elif agg in ("variance", "stddev"):
         # Population (ddof=0), TWO-PASS (numerically stable; NOT E[x^2]-E[x]^2):
         # pass 1 per-cell mean; pass 2 mean of squared deviations. A 1-pixel
         # cell gives variance 0 (clean). stddev = sqrt(variance) so it tracks
         # variance's cross-tier parity exactly.
-        means = np.bincount(inv, weights=vals, minlength=uniq.size) / counts
-        sq = (vals - means[inv]) ** 2
-        var = np.bincount(inv, weights=sq, minlength=uniq.size) / counts
+        means = _gsum(vals) / counts
+        var = _gsum((vals - means[inv]) ** 2) / counts
         out = var if agg == "variance" else np.sqrt(var)
     elif agg == "min":
-        out = np.full(uniq.size, np.inf)
+        out = np.full(n, np.inf)
         np.minimum.at(out, inv, vals)
     elif agg == "max":
-        out = np.full(uniq.size, -np.inf)
+        out = np.full(n, -np.inf)
         np.maximum.at(out, inv, vals)
     elif agg == "median":
         order = np.argsort(inv, kind="stable")
-        sorted_vals = vals[order]
-        bounds = np.cumsum(counts)[:-1]
-        segments = np.split(sorted_vals, bounds)
-        out = np.array([np.median(seg) for seg in segments], dtype="float64")
+        bounds = np.cumsum(np.bincount(inv, minlength=n))[:-1]
+        segments = np.split(vals[order], bounds)
+        if w is None:
+            out = np.array([np.median(seg) for seg in segments], dtype="float64")
+        else:
+            ws = np.split(w[order], bounds)
+            out = np.array(
+                [
+                    _weighted_reduce(list(zip(v.tolist(), x.tolist())), "median")
+                    for v, x in zip(segments, ws)  # vectorscan: ok (per-cell)
+                ],
+                dtype="float64",
+            )
     else:
         raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
 
@@ -284,9 +306,14 @@ def _covering_band(
 
     Reuses the tessellate oracles (``_polyfill_cells``, ``_cell_geom``,
     ``_cell_is_valid``, ``_encode_cellid``) so coverage enumeration is identical
-    to the tessellate covering path.  Intentionally NOT vectorized -- this
-    matches the heavy tier's O(pixels) loop and is suitable for small/coarse
-    tiles only.
+    to the tessellate covering path.  The loop is per pixel, as the heavy tier's
+    O(pixels) loop is, for quadbin, BNG and custom grids and for H3 cells larger
+    than the pixels.
+
+    H3 gate: when ``_use_h3_vectorised`` holds (the ``_H3_COVERING_VECTORISED``
+    flag is on, the geotransform is north-up, and the average H3 cell is smaller
+    than the centre pixel), the band goes to ``_covering_band_h3_vectorised``,
+    which is cell-major and returns the same cells and states within 1e-9.
 
     Interior fast-path (O(boundary) optimisation, mirrors the heavy tier):
     For exact-geometry grids (``_COVERING_FAST_PATH_EXACT``: custom, quadbin,
@@ -410,25 +437,31 @@ def _covering_band(
 def _use_h3_vectorised(work_ds, resolution, gt) -> bool:
     """True when the H3 covering pass takes the vectorised path: the flag is on, the grid is north-up (no rotation
     terms) and the average cell is smaller than the centre pixel (``h3fit``, the recommender's own pixel area).
+
+    A resolution outside 0..15 raises (``_validate_resolution``). A pixel area that is not a positive finite number
+    (a degenerate geotransform) is not applicable and keeps the per-pixel loop; any other error surfaces.
     """
     if not _H3_COVERING_VECTORISED or gt[2] != 0.0 or gt[4] != 0.0:
         return False
     from databricks.labs.gbx.pyrx.core.h3fit import H3_AVG_CELL_AREA_M2, pixel_area_m2
 
-    try:
-        return H3_AVG_CELL_AREA_M2[int(resolution)] < pixel_area_m2(work_ds)
-    except (ValueError, ArithmeticError):
+    resolution = int(resolution)
+    _validate_resolution(resolution, "h3")
+    area = pixel_area_m2(work_ds)
+    if not (math.isfinite(area) and area > 0.0):
         return False
+    return H3_AVG_CELL_AREA_M2[resolution] < area
 
 
-def _h3_candidate_cells(gt: tuple, height: int, width: int, resolution: int) -> list:
-    """Every H3 cell that may overlap a pixel of a north-up grid: one overlap polyfill of the grid bbox, padded by one
+def _h3_candidate_cells(gt: tuple, rows: tuple, cols: tuple, resolution: int) -> list:
+    """Every H3 cell that may overlap a pixel of the window ``rows`` x ``cols`` (``(first, last)``, inclusive) of a
+    north-up grid -- the window that holds the valid pixels: one overlap polyfill of the window's bbox, padded by one
     pixel so a cell whose overlap test sits on the bbox edge is still a candidate (a superset; empty overlaps drop).
     """
     import h3
 
-    xa, xb = gt[0], gt[0] + width * gt[1]
-    ya, yb = gt[3], gt[3] + height * gt[5]
+    xa, xb = gt[0] + cols[0] * gt[1], gt[0] + (cols[1] + 1) * gt[1]
+    ya, yb = gt[3] + rows[0] * gt[5], gt[3] + (rows[1] + 1) * gt[5]
     west, east = min(xa, xb) - abs(gt[1]), max(xa, xb) + abs(gt[1])
     south, north = min(ya, yb) - abs(gt[5]), max(ya, yb) + abs(gt[5])
     box = h3.LatLngPoly([(south, west), (north, west), (north, east), (south, east)])
@@ -476,48 +509,6 @@ def _cell_pixel_pairs(hexes: np.ndarray, gt: tuple, height: int, width: int):
     return cell, rows, cols
 
 
-def _weighted_reduce_vec(
-    inv: np.ndarray, n: int, vals: np.ndarray, w: np.ndarray, agg: str
-) -> list:
-    """Per-cell covering statistic of (value, weight) pairs grouped by ``inv``: ``_weighted_reduce``'s formulas with
-    numpy group sums (the median keeps ``_weighted_reduce`` per cell)."""
-    if agg == "median":
-        order = np.argsort(inv, kind="stable")
-        cuts = np.cumsum(np.bincount(inv, minlength=n))[:-1]
-        vs, ws = np.split(vals[order], cuts), np.split(w[order], cuts)
-        return [
-            _weighted_reduce(list(zip(v.tolist(), x.tolist())), agg)
-            for v, x in zip(vs, ws)  # vectorscan: ok (per-cell)
-        ]
-    sw = np.bincount(inv, weights=w, minlength=n)
-    sv = np.bincount(inv, weights=vals * w, minlength=n)
-    if agg == "count":
-        return [float(x) for x in sw]
-    if agg == "sum":
-        return [float(x) for x in sv]
-    mean = sv / sw
-    if agg == "avg":
-        return [float(x) for x in mean]
-    m2 = np.bincount(inv, weights=w * (vals - mean[inv]) ** 2, minlength=n)
-    if agg in ("variance", "stddev"):
-        var = m2 / sw
-        return [float(x) for x in (var if agg == "variance" else np.sqrt(var))]
-    lo = np.full(n, np.inf)
-    np.minimum.at(lo, inv, vals)
-    hi = np.full(n, -np.inf)
-    np.maximum.at(hi, inv, vals)
-    if agg == "min":
-        return [float(x) for x in lo]
-    if agg == "max":
-        return [float(x) for x in hi]
-    if agg == _PARTIAL:
-        return [
-            (float(a), float(b), float(c), float(d), float(e))
-            for a, b, c, d, e in zip(sw, sv, m2, lo, hi)  # vectorscan: ok (per-cell)
-        ]
-    raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
-
-
 def _covering_band_h3_vectorised(
     band: np.ndarray, mask: np.ndarray, resolution: int, agg: str, gt: tuple
 ) -> list:
@@ -528,11 +519,17 @@ def _covering_band_h3_vectorised(
 
     from databricks.labs.gbx.pyrx.core.tessellate import _encode_cellid
 
-    if not mask.any():
-        return []
+    valid_rows = np.flatnonzero(mask.any(axis=1))
+    if valid_rows.size == 0:
+        return []  # no valid pixel: no cell, and no candidate built
+    valid_cols = np.flatnonzero(mask.any(axis=0))
     height, width = mask.shape
     px_area = abs(gt[1] * gt[5])
-    cells = _h3_candidate_cells(gt, height, width, resolution)
+    window = (
+        (int(valid_rows[0]), int(valid_rows[-1])),
+        (int(valid_cols[0]), int(valid_cols[-1])),
+    )
+    cells = _h3_candidate_cells(gt, *window, resolution)
     out = []
     step = _H3_VEC_CHUNK_CELLS
     for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound pairs)
@@ -560,8 +557,7 @@ def _covering_band_h3_vectorised(
         )
         if cell.size == 0:
             continue
-        uniq, inv = np.unique(cell, return_inverse=True)
-        measures = _weighted_reduce_vec(inv.astype(np.intp), uniq.size, vals, w, agg)
+        uniq, measures = _grouped_measures(cell, vals, agg, weights=w)
         out.extend(
             {"cellID": _encode_cellid(chunk[int(c)], "h3"), "measure": m}
             for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)

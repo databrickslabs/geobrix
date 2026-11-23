@@ -1932,6 +1932,8 @@ def test_cdf5_netcdf_is_not_mistaken_for_a_truncated_file(tmp_path):
         ds.createDimension("x", 8)
         ds.createVariable("y", "f8", ("y",))[:] = np.arange(8.0)
         ds.createVariable("x", "f8", ("x",))[:] = np.arange(8.0)
+        # A bare x / y is no CRS: name the axes geographic, as a real CF file does.
+        ds["y"].standard_name, ds["x"].standard_name = "latitude", "longitude"
         ds.createVariable("r", "f4", ("time", "y", "x"))[0:2] = np.ones((2, 8, 8))
     assert open(path, "rb").read(4) == b"CDF\x05"
     rows, recs = _read(tmp_path, path, "netcdf_gbx")

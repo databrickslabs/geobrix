@@ -25,6 +25,24 @@ _GROUP_KEY = "gbx_group"
 
 _LAT_NAMES = {"lat", "latitude", "y"}
 _LON_NAMES = {"lon", "longitude", "x"}
+# What names a GEOGRAPHIC axis: a bare x / y is not enough to call a grid degrees.
+_GEO_LAT_NAMES = {"lat", "latitude"}
+_GEO_LON_NAMES = {"lon", "longitude"}
+# The CF standard names of a projected axis.
+_PROJ_Y, _PROJ_X = "projection_y_coordinate", "projection_x_coordinate"
+# Metres per unit of a projected axis (CF `units`); degrees are never scaled.
+_METRES_PER_UNIT = {
+    "m": 1.0,
+    "metre": 1.0,
+    "metres": 1.0,
+    "meter": 1.0,
+    "meters": 1.0,
+    "km": 1000.0,
+    "kilometre": 1000.0,
+    "kilometres": 1000.0,
+    "kilometer": 1000.0,
+    "kilometers": 1000.0,
+}
 
 
 def classic_truncation(path: str) -> Optional[str]:
@@ -75,7 +93,7 @@ def _is_lat(var) -> bool:
     sn = str(getattr(var, "standard_name", "")).lower()
     un = str(getattr(var, "units", "")).lower()
     return (
-        sn == "latitude"
+        sn in ("latitude", _PROJ_Y)
         or un in ("degrees_north", "degree_north")
         or var.name.lower() in _LAT_NAMES
     )
@@ -85,22 +103,50 @@ def _is_lon(var) -> bool:
     sn = str(getattr(var, "standard_name", "")).lower()
     un = str(getattr(var, "units", "")).lower()
     return (
-        sn == "longitude"
+        sn in ("longitude", _PROJ_X)
         or un in ("degrees_east", "degree_east")
         or var.name.lower() in _LON_NAMES
     )
 
 
+def _is_geo_axis(var, standard_name: str, units: Tuple[str, str], names) -> bool:
+    """True when ``var`` is a geographic (degrees) axis by its CF standard name, units or name (not a bare x / y)."""
+    return (
+        str(getattr(var, "standard_name", "")).lower() == standard_name
+        or str(getattr(var, "units", "")).lower() in units
+        or var.name.lower() in names
+    )
+
+
+def _is_cf_axis(var) -> bool:
+    """A 1-D coordinate that names itself an axis (CF standard name or degree units), not just by its name."""
+    sn = str(getattr(var, "standard_name", "")).lower()
+    un = str(getattr(var, "units", "")).lower()
+    return var.ndim == 1 and (
+        sn in ("latitude", "longitude", _PROJ_Y, _PROJ_X)
+        or un in ("degrees_north", "degree_north", "degrees_east", "degree_east")
+    )
+
+
+def _pick_axis(candidates):
+    """The axis among ``candidates``: a 1-D CF-identified one before a 2-D auxiliary lat / lon (a projected file lists
+    both, in any order), else the first."""
+    for var in candidates:
+        if _is_cf_axis(var):
+            return var
+    return candidates[0] if candidates else None
+
+
 def _find_lat_lon(ds):
-    """Return (lat_var, lon_var) among ds coords/vars, or (None, None)."""
-    lat = lon = None
+    """Return (lat_var, lon_var) among ds coords/vars, or (None, None). For a projected grid these are its y / x."""
+    lats, lons = [], []
     for name in list(ds.variables):
         v = ds[name]
-        if lat is None and _is_lat(v):
-            lat = v
-        elif lon is None and _is_lon(v):
-            lon = v
-    return lat, lon
+        if _is_lat(v):
+            lats.append(v)
+        elif _is_lon(v):
+            lons.append(v)
+    return _pick_axis(lats), _pick_axis(lons)
 
 
 def _eff_ndim(var) -> int:
@@ -133,10 +179,29 @@ def classify(ds, variable: str) -> str:
     return UNSUPPORTED
 
 
+def _metres_per_unit(axis) -> float:
+    """Metres per unit of a projected axis, from its CF ``units`` (none means metres); 1.0 for degrees.
+    Raises ValueError for a unit it does not know: a guessed scale is a wrong tile."""
+    unit = str(getattr(axis, "units", "") or "m").strip().lower()
+    if unit.startswith("degree"):
+        return 1.0
+    if unit not in _METRES_PER_UNIT:
+        raise ValueError(
+            f"netcdf_gbx: the axis {axis.name!r} has units {unit!r}, not metres or kilometres. "
+            "Fix: set crs_wkt on the grid mapping (the CRS then fixes the unit), or read the file with raster_gbx."
+        )
+    return _METRES_PER_UNIT[unit]
+
+
 def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
-    """Affine transform (north-up) + CRS string for a regular grid variable."""
+    """Affine transform (north-up) + CRS string for a regular grid variable.
+
+    The CRS is resolved first, so a grid with no CRS is refused before its coordinates are read. The transform
+    comes from the 1-D y / x coordinate values; a CRS built from a CF ``grid_mapping`` is in metres, so those
+    coordinates are scaled to metres (``km`` -> 1000)."""
     from affine import Affine
 
+    crs, from_cf = _resolve_crs(ds, variable)
     lat, lon = _find_lat_lon(ds)
     lats = lat.values
     lons = lon.values
@@ -145,12 +210,56 @@ def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
     ulx = float(min(lons)) - px / 2.0
     uly = float(max(lats)) + py / 2.0
     transform = Affine.translation(ulx, uly) * Affine.scale(px, -py)
-    crs = _crs_string(ds)
+    if from_cf:
+        transform = (
+            Affine.scale(_metres_per_unit(lon), _metres_per_unit(lat)) * transform
+        )
     return transform, crs
 
 
-def _crs_string(ds) -> str:
-    """Return the CRS string for a CF grid dataset.
+def _cf_grid_mapping(ds, variable: Optional[str]) -> Optional[dict]:
+    """Attributes of the CF grid-mapping variable of ``variable`` (any data variable when None): the variable named by
+    its ``grid_mapping`` attribute that has a ``grid_mapping_name``. xarray moves ``grid_mapping`` to the encoding
+    when it decodes coordinates, so both are read. The ``latitude_longitude`` mapping names no projection and is
+    not used (a geographic grid keeps its default)."""
+    names = [variable] if variable else list(ds.data_vars)
+    for name in names:
+        da = ds[name]
+        raw = da.attrs.get("grid_mapping") or da.encoding.get("grid_mapping")
+        if not raw:
+            continue
+        mapping = (
+            str(raw).split(":")[0].split()[0] if ":" in str(raw) else str(raw).strip()
+        )
+        if mapping in ds.variables:
+            attrs = dict(ds[mapping].attrs)
+            if (
+                attrs.get("grid_mapping_name")
+                and attrs["grid_mapping_name"] != "latitude_longitude"
+            ):
+                return attrs
+    return None
+
+
+def _is_geographic_grid(ds) -> bool:
+    """True for a grid whose axes are 1-D geographic latitude and longitude."""
+    lat, lon = _find_lat_lon(ds)
+    return (
+        lat is not None
+        and lon is not None
+        and lat.ndim == 1
+        and lon.ndim == 1
+        and _is_geo_axis(
+            lat, "latitude", ("degrees_north", "degree_north"), _GEO_LAT_NAMES
+        )
+        and _is_geo_axis(
+            lon, "longitude", ("degrees_east", "degree_east"), _GEO_LON_NAMES
+        )
+    )
+
+
+def _resolve_crs(ds, variable: Optional[str] = None) -> Tuple[str, bool]:
+    """(CRS string, whether it was built from CF grid-mapping attributes) for a CF grid dataset.
 
     Check order (first match wins):
     1. ``crs_canonical``: authority string ("EPSG:4326", "ESRI:54008") or WKT
@@ -160,26 +269,47 @@ def _crs_string(ds) -> str:
        compliant producers.
     3. ``epsg_code`` / ``spatial_epsg``: legacy integer attribute; returns
        "EPSG:<int>".
-    4. Default: "EPSG:4326" (geographic lon/lat).
+    4. The CF ``grid_mapping`` variable of the data variable (``polar_stereographic``,
+       ``lambert_conformal_conic``, ...), through ``core.crs.crs_from_cf``.
+    5. Default "EPSG:4326", ONLY for a grid with 1-D geographic latitude / longitude. Any other grid has no
+       CRS to give: refused with a Fix, never labelled 4326.
     """
     for name in list(ds.variables):
         v = ds[name]
         # 1. crs_canonical (authority string or WKT — written by current writer)
         canonical = getattr(v, "crs_canonical", None)
         if canonical is not None:
-            return str(canonical)
+            return str(canonical), False
         # 2. crs_wkt (CF standard; rioxarray and compliant writers emit this)
         wkt = getattr(v, "crs_wkt", None)
         if wkt is not None:
-            return str(wkt)
+            return str(wkt), False
         # 3. Legacy EPSG integer attributes
         epsg = getattr(v, "epsg_code", None) or getattr(v, "spatial_epsg", None)
         if epsg is not None:
             code = _epsg_int(epsg)
             if code is not None:
-                return f"EPSG:{code}"
-    # Default: geographic lon/lat.
-    return "EPSG:4326"
+                return f"EPSG:{code}", False
+    # 4. The CF grid mapping
+    attrs = _cf_grid_mapping(ds, variable)
+    if attrs is not None:
+        from databricks.labs.gbx.core.crs import crs_from_cf
+
+        return crs_from_cf(attrs), True
+    # 5. Geographic lon/lat only
+    if _is_geographic_grid(ds):
+        return "EPSG:4326", False
+    what = f"variable {variable!r}" if variable else "the grid"
+    raise ValueError(
+        f"netcdf_gbx: {what} has no CRS: no crs_canonical, crs_wkt or epsg_code attribute and no CF grid_mapping "
+        "variable, and its axes are not 1-D latitude / longitude, so EPSG:4326 would be a guess. "
+        "Fix: set crs_wkt on the grid mapping, or read it with raster_gbx."
+    )
+
+
+def _crs_string(ds, variable: Optional[str] = None) -> str:
+    """The CRS string for a CF grid dataset (see :func:`_resolve_crs` for the order)."""
+    return _resolve_crs(ds, variable)[0]
 
 
 def _epsg_int(epsg) -> Optional[int]:
@@ -188,7 +318,7 @@ def _epsg_int(epsg) -> Optional[int]:
     The attribute is stored inconsistently across producers: a bare int
     (``4326``), a numeric string (``"4326"``), or an authority string
     (``"EPSG:4326"``, ``"epsg:4326"``). Extract the trailing digit run; return
-    None if no code is present so the caller falls back to EPSG:4326.
+    None if no code is present so the caller goes on to the next source.
     """
     import re
 

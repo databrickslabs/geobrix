@@ -307,6 +307,41 @@ def to_pyproj_crs(crs) -> "pyproj.CRS":  # noqa: F821
     return _pyproj.CRS.from_wkt(rio.to_wkt())
 
 
+def _cf_value(value):
+    """A CF attribute value as a plain Python value: pyproj reads numbers and lists, not numpy scalars or arrays."""
+    return value.tolist() if hasattr(value, "tolist") else value
+
+
+def crs_from_cf(attrs: dict) -> str:
+    """The CRS a CF grid-mapping variable describes, as a canonical string.
+
+    ``attrs`` are the attributes of the variable that has ``grid_mapping_name`` (``polar_stereographic``,
+    ``lambert_conformal_conic``, ``transverse_mercator``, ...). The CRS is built from them by pyproj (``CRS.from_cf``),
+    in metres. An authority string (``EPSG:5070``) is returned only when the registry matches at 100% confidence, as
+    :func:`authority_srid_of` does: a close match is a different CRS (a sphere is not an ellipsoid), so any other CRS
+    is returned as WKT. Raises ``ValueError`` with a Fix when the attributes name no mapping or pyproj cannot build it.
+    """
+    import pyproj as _pyproj
+
+    if not attrs or not attrs.get("grid_mapping_name"):
+        raise ValueError(
+            "crs_from_cf: the attributes have no grid_mapping_name. "
+            "Fix: pass the attributes of the CF grid-mapping variable, or set crs_wkt on it."
+        )
+    try:
+        built = _pyproj.CRS.from_cf({k: _cf_value(v) for k, v in attrs.items()})
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - pyproj raises CRSError / KeyError / ValueError by mapping
+        raise ValueError(
+            f"crs_from_cf: cannot build a CRS from the CF grid mapping {attrs.get('grid_mapping_name')!r}: {exc}. "
+            "Fix: set crs_wkt on the grid mapping variable, or read the file with raster_gbx."
+        ) from exc
+    crs = CRS.from_wkt(built.to_wkt())
+    auth = crs.to_authority(confidence_threshold=100)
+    return f"{auth[0]}:{auth[1]}" if auth else crs.to_wkt()
+
+
 def area_m2(geom, crs) -> float:
     """Area of ``geom`` in SQUARE METERS, whatever ``crs`` it is expressed in.
 

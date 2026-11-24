@@ -25,6 +25,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 import inspect
 import os
+import re
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -89,16 +90,40 @@ class EarthdataAuthorizationError(RuntimeError):
     """
 
 
+_EULA_WORD = re.compile(r"\beula\b", re.IGNORECASE)
+_EULA_CLASS = re.compile(r"\bEulaNotAccepted\b")
+_AUTH_STATUS = re.compile(r"\b40[13]\b")
+
+
+def _http_status(exc: BaseException) -> Optional[int]:
+    """Status code from the exception's ``response`` (requests-style), else None."""
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    return code if isinstance(code, int) else None
+
+
 def _is_eula_failure(exc: BaseException) -> bool:
-    """True when ``exc`` (or its cause chain) is earthaccess's EulaNotAccepted, or a
-    401/403-style failure whose message mentions the EULA (older earthaccess)."""
+    """True when ``exc`` or anything in its cause/context chain is a EULA refusal.
+
+    Matches (a) earthaccess's ``EulaNotAccepted`` by type name anywhere in the MRO,
+    or by name inside a wrapping error's message; or (b) for earthaccess releases
+    without that class, an HTTP 401/403 whose text mentions the word "EULA". The
+    status comes from the exception's ``response`` when present, else from the
+    message; a 500, or a URL that merely contains "eula", is not a match.
+    """
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
         if any(c.__name__ == "EulaNotAccepted" for c in type(exc).__mro__):
             return True
-        if "eula" in str(exc).lower():
+        text = str(exc)
+        if _EULA_CLASS.search(text):
             return True
+        if _EULA_WORD.search(text):
+            status = _http_status(exc)
+            if status in (401, 403) or (
+                status is None and _AUTH_STATUS.search(text) is not None
+            ):
+                return True
         exc = exc.__cause__ or exc.__context__
     return False
 
@@ -120,6 +145,10 @@ class EarthdataClient:
     def _ea(self):
         if self._earthaccess is not None:
             return self._earthaccess
+        # tqdm reads TQDM_DISABLE once at import: set it BEFORE earthaccess pulls
+        # tqdm in (the only switch on releases without show_progress). A
+        # user-set value wins.
+        os.environ.setdefault("TQDM_DISABLE", "1")
         try:
             import earthaccess
         except ImportError as exc:
@@ -196,9 +225,7 @@ class EarthdataClient:
         ea = self._ea()
         # earthaccess renders a tqdm/ipywidgets progress bar per file; in a
         # notebook that floods the output. Newer earthaccess takes show_progress;
-        # TQDM_DISABLE covers older ones (tqdm reads it at import, so it only
-        # helps if set before the first import).
-        os.environ["TQDM_DISABLE"] = "1"
+        # older ones rely on TQDM_DISABLE, which _ea() sets before the import.
         dl_kwargs = {"local_path": out_dir}
         if _accepts_kwarg(ea.download, "show_progress"):
             dl_kwargs["show_progress"] = False

@@ -69,6 +69,7 @@ const sidebars = {
             'notebooks/zarr-weather-features',
             'notebooks/zarr-size-ladder',
             'notebooks/raster-genie',
+            'notebooks/h3-pixels-crop-yield',
           ],
         },
         {

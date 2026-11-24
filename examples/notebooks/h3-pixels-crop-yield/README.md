@@ -48,7 +48,7 @@ Each weather, soil and vegetation dataset goes onto H3 once, at the resolution t
 
 ![Notebook 05 — links → raw and weighted → blended](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/h3-pixels-crop-yield/h3-pixels-crop-yield-05.png)
 
-- **Link once.** `h3_field_cell_links` maps each field cell to dataset cells. A cell inside one parent gets `h3_toparent` and 100 percent. A cell that crosses a parent edge gets the exact overlap share from `st_intersection`.
+- **Link once.** `h3_field_cell_links` maps each field cell to dataset cells. A cell inside one parent gets `h3_toparent` and 100 percent. A straddle cell, one that crosses a parent edge, gets the exact overlap share from `st_intersection`. `h3_kring` finds the neighbouring parents to test.
 - **Raw, then weighted.** `h3_field_measures_perc` is a key join of the links to `h3_dataset_measures`. `h3_field_measures_weighted` is the overlap-weighted mean per field cell.
 - **Blended per field.** `h3_field_measures_blended` holds a plain score and an edge-weighted score (`w = min(1, d / 30)`). It also holds the August NDVI mean.
 

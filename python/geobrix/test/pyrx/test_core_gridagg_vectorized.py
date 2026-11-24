@@ -293,11 +293,15 @@ def _cell_pixel_pairs_ref(hexes, gt, height, width):
     return cell, rows, cols
 
 
-def _covering_band_h3_shapely_ref(band, mask, resolution, agg, gt, frame="lonlat"):
+def _covering_band_h3_shapely_ref(
+    band, mask, resolution, agg, gt, frame="lonlat", floor=0.0
+):
     """The shapely covering pass (one ``shapely.intersection`` per (cell, pixel) pair), kept here as the reference.
 
     ``frame="lonlat"`` is the replaced implementation as it was. ``frame="pixel"`` runs the same GEOS intersection on
     the pair moved to its pixel's south-west corner, so GEOS rounds at the pixel's scale rather than the longitude's.
+    ``frame="exact"`` computes each overlap in rational arithmetic. A pair is kept when its weight is above ``floor``
+    (0: the replaced pass).
     """
     import shapely
 
@@ -342,8 +346,17 @@ def _covering_band_h3_shapely_ref(band, mask, resolution, agg, gt, frame="lonlat
                 polys, lambda c: c - np.repeat(corner, n_coords, axis=0)
             )
             boxes = shapely.transform(boxes, lambda c: c - np.repeat(corner, 5, axis=0))
-        w = shapely.area(shapely.intersection(polys, boxes)) / px_area
-        keep = w > 0
+        if frame == "exact":
+            # rational arithmetic per pair (``_exact_overlap``): no GEOS, so no topology error on a distorted ring
+            b = shapely.bounds(boxes)
+            area = [
+                float(_exact_overlap(list(shapely.get_coordinates(p)[:-1]), tuple(q)))
+                for p, q in zip(polys, b)
+            ]
+            w = np.asarray(area) / px_area
+        else:
+            w = shapely.area(shapely.intersection(polys, boxes)) / px_area
+        keep = w > floor
         cell, w = cell[keep], w[keep]
         vals = band[rows[keep], cols[keep]].astype("float64")
         if cell.size == 0:
@@ -574,3 +587,170 @@ def test_box_overlap_area_is_exact_on_a_sliver():
     yc = y0 + (y5 - y0) * (xl - x0) / (x5 - x0)
     exact = float(abs(ya - yc) * (x0 - xl) / 2)
     assert _kernel_area(ring, box) == pytest.approx(exact, rel=1e-9)
+
+
+# --- real distorted H3 rings: more than 6 vertices, not convex in (lon, lat) ----
+# Cells that cross an icosahedron face edge. A box beyond a reflex part of such a ring has no separating edge, so the
+# kernel's integral there is rounding noise (up to ~1e-15 of the box) rather than 0; the covering pass keeps a pair
+# only when its weight is above ``gridagg._COVER_WEIGHT_FLOOR``. Res 3 shows it most (the strongest distortion);
+# res 13 and 9 are the fine cells on one face edge (North Atlantic, 58.5 N 28.6 W).
+_DISTORTED = {
+    "r3_7v": "830136fffffffff",
+    "r3_8v": "8301b0fffffffff",
+    "r9_8v": "89066d34da3ffff",
+    "r13_8v": "8d066d34d34da3f",
+}
+
+
+def _ring_of(cell):
+    return [(lng, lat) for lat, lng in h3.cell_to_boundary(cell)]
+
+
+@pytest.mark.parametrize("key", sorted(_DISTORTED))
+def test_the_distorted_rings_are_real(key):
+    import shapely
+
+    ring = _ring_of(_DISTORTED[key])
+    poly = shapely.Polygon(ring)
+    assert len(ring) == int(key[-2]) and poly.is_valid
+    assert poly.convex_hull.area > poly.area  # not convex
+
+
+def _exact_overlap(ring, box):
+    """Overlap area of ``ring`` and ``box`` in rational arithmetic (Sutherland-Hodgman, then the shoelace)."""
+    from fractions import Fraction as Fr
+
+    def clip(pts, inside, cut):
+        out = []
+        for i, cur in enumerate(pts):
+            prev = pts[i - 1]
+            if inside(cur):
+                if not inside(prev):
+                    out.append(cut(prev, cur))
+                out.append(cur)
+            elif inside(prev):
+                out.append(cut(prev, cur))
+        return out
+
+    def at_x(c):
+        return lambda p, q: (c, p[1] + (q[1] - p[1]) * (c - p[0]) / (q[0] - p[0]))
+
+    def at_y(c):
+        return lambda p, q: (p[0] + (q[0] - p[0]) * (c - p[1]) / (q[1] - p[1]), c)
+
+    xl, yb, xr, yt = (Fr(v) for v in box)
+    pts = [(Fr(x), Fr(y)) for x, y in ring]
+    for inside, cut in (
+        (lambda p: p[0] >= xl, at_x(xl)),
+        (lambda p: p[0] <= xr, at_x(xr)),
+        (lambda p: p[1] >= yb, at_y(yb)),
+        (lambda p: p[1] <= yt, at_y(yt)),
+    ):
+        pts = clip(pts, inside, cut) if pts else pts
+    if len(pts) < 3:
+        return Fr(0)
+    n = len(pts)
+    twice = sum(
+        pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+        for i in range(n)
+    )
+    return abs(twice) / 2
+
+
+def _box_grid(ring, n, margin):
+    """An n x n grid of boxes over the ring's bbox, widened by ``margin`` of its extent on each side."""
+    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+    w, h = max(xs) - min(xs), max(ys) - min(ys)
+    gx = np.linspace(min(xs) - margin * w, max(xs) + margin * w, n + 1)
+    gy = np.linspace(min(ys) - margin * h, max(ys) + margin * h, n + 1)
+    return np.array(
+        [(gx[a], gy[b], gx[a + 1], gy[b + 1]) for a in range(n) for b in range(n)]
+    )
+
+
+@pytest.mark.parametrize("key", sorted(_DISTORTED))
+def test_box_overlap_weights_on_a_distorted_ring_match_rational_arithmetic(key):
+    ring = _ring_of(_DISTORTED[key])
+    boxes = _box_grid(ring, 25, 0.1)
+    vx, vy = np.array([[p[0] for p in ring]]), np.array([[p[1] for p in ring]])
+    got = gridagg._box_overlap_area(vx, vy, np.zeros(len(boxes), np.intp), *boxes.T)
+    pa = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    exact = np.array([float(_exact_overlap(ring, tuple(b))) for b in boxes])
+    assert (exact > 0).sum() > 100 and (exact == 0).sum() > 100
+    assert (np.abs(got - exact) / pa).max() <= 1e-14
+    # the pairs the covering pass keeps are exactly those that overlap
+    kept = got / pa > gridagg._COVER_WEIGHT_FLOOR
+    assert (kept == (exact > 0)).all()
+
+
+@pytest.mark.parametrize(
+    "key,res,px_frac",
+    [("r3_7v", 3, 0.048), ("r3_8v", 3, 0.048), ("r9_8v", 9, 1.5), ("r13_8v", 13, 1.5)],
+)
+@pytest.mark.parametrize("seed", [0, 1])
+def test_h3_covering_around_a_distorted_cell_equals_the_reference(
+    key, res, px_frac, seed
+):
+    # a 25 x 25 north-up grid centred on the distorted cell, pixel side = ``px_frac`` of the cell's lon / lat extent
+    # (res 3: fine pixels over the whole ring, where the kernel leaves noise beyond its reflex part; res 9 and 13:
+    # pixels larger than the cells, as the covering gate takes them). The same cells as rational arithmetic with the
+    # same floor, and min / max (weight-agnostic: one kept noise pair would pull in a whole pixel's value) exactly.
+    ring = _ring_of(_DISTORTED[key])
+    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+    px = ((max(xs) - min(xs)) * px_frac, (max(ys) - min(ys)) * px_frac)
+    cx, cy = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+    n = 25
+    gt = (cx - n / 2 * px[0], px[0], 0.0, cy + n / 2 * px[1], 0.0, -px[1])
+    rng = np.random.default_rng(seed)
+    band = rng.normal(size=(n, n))
+    mask = rng.random((n, n)) < 0.6
+    mask[n // 2 - 1 : n // 2 + 2, n // 2 - 1 : n // 2 + 2] = (
+        True  # the cell's own pixels
+    )
+    new = gridagg._covering_band_h3_vectorised(band, mask, res, gridagg._PARTIAL, gt)
+    old = _covering_band_h3_shapely_ref(
+        band,
+        mask,
+        res,
+        gridagg._PARTIAL,
+        gt,
+        frame="exact",
+        floor=gridagg._COVER_WEIGHT_FLOOR,
+    )
+    assert _DISTORTED[key] in {h3.int_to_str(c) for c in _as_map(old)}
+    _assert_states_match(new, old, _ABS_PIXEL_FRAME)
+    new_map = _as_map(new)
+    for cid, state in _as_map(old).items():
+        assert new_map[cid][3:] == state[3:], cid  # min, max
+
+
+def _distorted_cases():
+    """(ring, box) of a res-3 distorted ring: a box over its reflex part, and one disjoint on an axis."""
+    ring = _ring_of(_DISTORTED["r3_7v"])
+    boxes = _box_grid(ring, 25, 0.1)
+    exact = [_exact_overlap(ring, tuple(b)) for b in boxes]
+    pa = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    # a partial overlap: the box whose overlap is nearest half of it
+    over = tuple(
+        boxes[int(np.argmin([abs(float(e) / a - 0.5) for e, a in zip(exact, pa)]))]
+    )
+    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+    w = max(xs) - min(xs)
+    west = (min(xs) - 0.5 * w, min(ys), min(xs) - 0.1 * w, max(ys))
+    return ring, over, west
+
+
+def test_box_overlap_area_matches_shapely_on_a_distorted_ring():
+    ring, over, _ = _distorted_cases()
+    want = _shapely_area(ring, over)
+    assert want > 0
+    assert _kernel_area(ring, over) == pytest.approx(want, rel=1e-9)
+    assert _kernel_area(ring, over) == pytest.approx(
+        float(_exact_overlap(ring, over)), rel=1e-12
+    )
+
+
+def test_box_overlap_area_is_exactly_zero_off_a_distorted_ring():
+    ring, _, west = _distorted_cases()
+    assert _shapely_area(ring, west) == 0.0
+    assert _kernel_area(ring, west) == 0.0  # separated on an axis

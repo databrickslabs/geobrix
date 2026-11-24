@@ -49,7 +49,12 @@ cell-major and vectorised (``_covering_band_h3_vectorised``): each fine cell ove
 ``_box_overlap_area`` computes every (cell, pixel) overlap area of a chunk in numpy, exactly (each pixel is an
 axis-aligned box in lon/lat). Both give the same cells, and states within 1e-9 relative or 1e-10 absolute: the loop's
 GEOS rounds intersection points at the longitude's scale (a weight off by up to ~1e-11 of a pixel), which shows
-beyond 1e-9 relative only in a cell that a sliver of overlap dominates.
+beyond 1e-9 relative only in a cell that a sliver of overlap dominates. The vectorised pass keeps a (cell, pixel)
+pair only when its weight is above ``_COVER_WEIGHT_FLOOR`` (1e-14 of a pixel). A pair with no overlap beyond the
+concave part of a distorted cell (an H3 cell across an icosahedron face edge) integrates to rounding noise, at most
+~1e-15 of a pixel (measured over 40 res-3 distorted cells); kept, it would add a cell, or pull a neighbouring pixel's
+value into a cell's min / max (both weight-agnostic). The floor sits 10x above that noise and below the smallest real
+overlaps seen on HLS tiles (2.8e-13 of a pixel); GEOS on lon/lat cannot resolve slivers below ~1e-11 of a pixel.
 """
 
 import math
@@ -76,6 +81,10 @@ _COVERING_FAST_PATH_EXACT = frozenset({"custom", "quadbin", "bng"})
 _H3_COVERING_VECTORISED = True
 # Cells per vectorised chunk: bounds the (cell, pixel) pair arrays to a few hundred thousand entries.
 _H3_VEC_CHUNK_CELLS = 20000
+# The vectorised H3 covering pass keeps a (cell, pixel) pair only when its weight (overlap / pixel area) is above this:
+# beyond a reflex part of a distorted cell a pair with no overlap integrates to rounding noise up to ~1e-15 of a pixel
+# (see _box_overlap_area and the module docstring). A real overlap this small carries no measurable mass.
+_COVER_WEIGHT_FLOOR = 1e-14
 
 _AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
 # The statistics that split: each is a plain function of one cell's partial state (see ``measure_of``), so ONE pass over the
@@ -506,18 +515,21 @@ def _box_overlap_area(
     yt: np.ndarray,
 ) -> np.ndarray:
     """Planar overlap area of the polygon ``cell[i]`` (vertex rows ``vx``, ``vy``: cells x M, a ring in either
-    orientation, padded by repeating a vertex) and the axis-aligned box ``[xl, xr] x [yb, yt]``, for every pair ``i``;
-    exactly 0 when they do not overlap or only touch.
+    orientation, padded by repeating a vertex) and the axis-aligned box ``[xl, xr] x [yb, yt]``, for every pair ``i``,
+    accurate to ~1e-15 of the box's area.
 
     The area is the contour integral of x dy over the polygon's boundary pushed into the box by clamping each
     coordinate to the box's range: the clamped curve winds once around every point of the box that the polygon holds
     and never around one it does not, so the integral is the overlap's area (signed by the ring's orientation). Along
     one edge, y is clamped outside the parameter interval where the edge is inside the box's y range (there dy = 0),
     and the clamped x is affine on each of the at most three pieces the box's x range cuts that interval into, so the
-    midpoint rule integrates each piece exactly. Coordinates are taken relative to the box's south-west corner first
-    (exact: the two are close), so the area is accurate to the pixel's scale, not the longitude's. The integral of a
-    pair with no overlap is rounding noise around 0; such a pair is set to exactly 0 when the pair is separated along
-    an axis or by the line of an edge that has its whole polygon on its inner side (a separating axis).
+    midpoint rule integrates each piece exactly. Coordinates are taken relative to the box's south-west corner first,
+    so the area is accurate to the pixel's scale, not the longitude's. The integral of a pair with no overlap is
+    rounding noise around 0; such a pair is set to exactly 0 when the pair is separated along an axis or by the line of
+    an edge that has its whole polygon on its inner side (a separating axis). Every edge of a convex ring is such an
+    edge, so a convex ring's non-overlapping and touching pairs are exactly 0. Beyond a reflex part of a non-convex
+    ring (an H3 cell that crosses an icosahedron face edge, 7-10 vertices, is slightly concave in lon/lat) the noise
+    can stay, so a caller keeps a pair only above a floor (``_COVER_WEIGHT_FLOOR``).
     """
     x = vx[cell] - xl[:, None]
     y = vy[cell] - yb[:, None]
@@ -564,7 +576,7 @@ def _ring_supporting_edges(vx: np.ndarray, vy: np.ndarray) -> tuple:
     whether the edge has nonzero length and every vertex of the ring on its inner side (true of every edge of a
     convex ring) -- the edges whose lines may separate a box from the ring."""
     nxt = np.roll(np.arange(vx.shape[1]), -1)
-    # vertices relative to the first, so the products are of small numbers (exact differences: the two are close)
+    # vertices relative to the first, so the products are of small numbers (accurate to the ring's scale)
     x = vx - vx[:, :1]
     y = vy - vy[:, :1]
     ex, ey = x[:, nxt] - x, y[:, nxt] - y
@@ -638,7 +650,7 @@ def _covering_band_h3_vectorised(
             np.maximum(yt, yb),
         )
         w = area / px_area
-        keep = w > 0
+        keep = w > _COVER_WEIGHT_FLOOR
         cell, w, vals = (
             cell[keep],
             w[keep],

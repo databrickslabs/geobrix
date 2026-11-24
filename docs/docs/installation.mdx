@@ -49,7 +49,7 @@ GeoBrix functions reach you in one of two ways. You can use both.
 | **Where the functions live** | The Spark session: SQL (`gbx_*`), the Python API and the `*_gbx` readers and writers | A Unity Catalog schema: `<catalog>.<schema>.gbx_*` |
 | **Who can call them** | Code in that session | Anyone granted access, on any compute that reads Unity Catalog, including SQL warehouses |
 | **Which functions** | All of them | A subset (see [Unity Catalog functions](./api/uc-functions)) |
-| **What runs them** | The Python level. With the JAR as a cluster library on a dedicated cluster, also the JVM level where it is faster | Python, or SQL where that is faster. Three BNG functions run as Scala when the JAR is in the install folder |
+| **What runs them** | The Python level. With the JAR as a cluster library on a dedicated cluster, also the JVM level where it is faster | Python, or SQL where that is faster. JVM-boosted functions too, when the JAR is in the install folder |
 
 ## Choose an install {#choose-an-install-path}
 
@@ -213,9 +213,9 @@ A schema owner installs the functions once:
 4. **Run it again** after each GeoBrix upgrade.
 
 The functions run as Python, or as SQL where that is faster. If the install folder also holds the JAR of the same
-version, three BNG functions (`gbx_bng_kring`, `gbx_bng_aswkb`, `gbx_bng_centroid`) become Scala functions, with
-the same answers. Scala functions are verified on SQL warehouses only; leave the JAR out of the folder to keep them
-Python. [Unity Catalog functions](./api/uc-functions) lists the functions and the permissions the owner needs.
+version, the install supplies the JVM-boosted functions as well, with the same answers. They are verified on SQL
+warehouses only; leave the JAR out of the folder to keep every function in Python.
+[Unity Catalog functions](./api/uc-functions) lists the functions and the permissions the owner needs.
 
 ## Install options {#install-options}
 

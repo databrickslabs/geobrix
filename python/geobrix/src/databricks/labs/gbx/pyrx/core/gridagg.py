@@ -84,6 +84,8 @@ _H3_VEC_CHUNK_CELLS = 20000
 # The vectorised H3 covering pass keeps a (cell, pixel) pair only when its weight (overlap / pixel area) is above this:
 # beyond a reflex part of a distorted cell a pair with no overlap integrates to rounding noise up to ~1e-15 of a pixel
 # (see _box_overlap_area and the module docstring). A real overlap this small carries no measurable mass.
+# The noise bound holds where the pass runs (cells no larger than the pixel, the _use_h3_vectorised gate): the noise
+# grows with the cell / pixel size ratio, so a caller with pixels much finer than the cell must not reuse this floor.
 _COVER_WEIGHT_FLOOR = 1e-14
 
 _AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")

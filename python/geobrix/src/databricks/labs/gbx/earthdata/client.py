@@ -23,6 +23,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
+import inspect
 import os
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -70,6 +71,46 @@ def _norm_temporal(temporal):
         parts = [p.strip() for p in temporal.split("/") if p.strip()]
         return tuple(parts) if len(parts) == 2 else (temporal,)
     return tuple(temporal)
+
+
+EULA_FIX = (
+    "Fix: the Earthdata user must approve the data provider's application at "
+    "https://urs.earthdata.nasa.gov/profile (Applications > Authorized Apps), "
+    "e.g. 'NASA GESDISC DATA ARCHIVE' for GES DISC; then re-run (valid files "
+    "are kept)."
+)
+
+
+class EarthdataAuthorizationError(RuntimeError):
+    """The Earthdata user has not authorised the data provider (EULA not accepted).
+
+    Not a per-file failure: every download from that provider will fail the same
+    way, so the client raises instead of recording invalid rows.
+    """
+
+
+def _is_eula_failure(exc: BaseException) -> bool:
+    """True when ``exc`` (or its cause chain) is earthaccess's EulaNotAccepted, or a
+    401/403-style failure whose message mentions the EULA (older earthaccess)."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if any(c.__name__ == "EulaNotAccepted" for c in type(exc).__mro__):
+            return True
+        if "eula" in str(exc).lower():
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _accepts_kwarg(fn, name: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
 
 
 class EarthdataClient:
@@ -154,9 +195,13 @@ class EarthdataClient:
         spark = spark or SparkSession.getActiveSession()
         ea = self._ea()
         # earthaccess renders a tqdm/ipywidgets progress bar per file; in a
-        # Databricks notebook that surfaces as a stack of "Loading the widget is
-        # taking longer than expected" placeholders. Force tqdm to no-op.
+        # notebook that floods the output. Newer earthaccess takes show_progress;
+        # TQDM_DISABLE covers older ones (tqdm reads it at import, so it only
+        # helps if set before the first import).
         os.environ["TQDM_DISABLE"] = "1"
+        dl_kwargs = {"local_path": out_dir}
+        if _accepts_kwarg(ea.download, "show_progress"):
+            dl_kwargs["show_progress"] = False
         if hasattr(rows, "collect"):
             rows = [
                 (r["item_id"], r["asset_name"], r["href"])
@@ -177,10 +222,15 @@ class EarthdataClient:
             # returned path; fall back to the basename in out_dir.
             got = None
             try:
-                ret = ea.download([href], local_path=out_dir)
+                ret = ea.download([href], **dl_kwargs)
                 if ret:
                     got = str(ret[0])
-            except Exception:
+            except Exception as exc:
+                if _is_eula_failure(exc):
+                    raise EarthdataAuthorizationError(
+                        f"Earthdata download refused for {href}: the user has not "
+                        f"accepted the data provider's EULA ({exc}). {EULA_FIX}"
+                    ) from exc
                 got = None
             cand = got if (got and os.path.exists(got)) else dest
             if os.path.exists(cand) and validate_fn(cand, asset):

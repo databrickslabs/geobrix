@@ -6,6 +6,9 @@ loop with the shared result contract + repair. Per-dataset downloaders in
 mirroring how the STAC downloaders sit on `StacClient`.
 """
 
-from databricks.labs.gbx.earthdata.client import EarthdataClient
+from databricks.labs.gbx.earthdata.client import (
+    EarthdataAuthorizationError,
+    EarthdataClient,
+)
 
-__all__ = ["EarthdataClient"]
+__all__ = ["EarthdataAuthorizationError", "EarthdataClient"]

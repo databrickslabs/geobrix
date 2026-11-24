@@ -161,3 +161,77 @@ def test_missing_earthaccess_names_the_package_and_separate_step(monkeypatch):
     ) as exc:
         EarthdataClient()._ea()  # accessor that imports earthaccess
     assert "geobrix[earthdata]" not in str(exc.value)  # the extra no longer exists
+
+
+class EulaNotAccepted(Exception):
+    """Stand-in for earthaccess.exceptions.EulaNotAccepted (matched by name)."""
+
+
+def _one_row_client(fake, spark):
+    client = EarthdataClient(_earthaccess=fake)
+    rows = client.search(["SHORT"], "002", BBOX, None, _asset_tif, spark=spark)
+    return client, rows
+
+
+def test_download_disables_earthaccess_progress(spark, tmp_path):
+    seen = {}
+
+    class _Spy(_FakeEarthaccess):
+        def download(self, granules, local_path=None, threads=8, **kw):
+            seen.update(kw)
+            return []
+
+    client, rows = _one_row_client(
+        _Spy([_FakeGranule(["https://x/A_data.tif"])]), spark
+    )
+    client.download(rows, str(tmp_path / "p"), _validate_nonempty, spark=spark)
+    assert seen.get("show_progress") is False
+
+
+def test_download_omits_progress_kwarg_when_unsupported(spark, tmp_path):
+    class _Old(_FakeEarthaccess):
+        def download(self, granules, local_path=None, threads=8):  # no **kw
+            return []
+
+    client, rows = _one_row_client(
+        _Old([_FakeGranule(["https://x/A_data.tif"])]), spark
+    )
+    res = client.download(rows, str(tmp_path / "o"), _validate_nonempty, spark=spark)
+    assert not res.collect()[0]["is_out_file_valid"]  # no TypeError
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        EulaNotAccepted("Eula Acceptance Failure for https://x/A_data.tif"),
+        RuntimeError("403 Forbidden: You must accept the EULA for this dataset"),
+    ],
+)
+def test_download_raises_on_eula_with_fix(spark, tmp_path, exc):
+    class _Eula(_FakeEarthaccess):
+        def download(self, granules, local_path=None, threads=8, **kw):
+            raise exc
+
+    client, rows = _one_row_client(
+        _Eula([_FakeGranule(["https://x/A_data.tif"])]), spark
+    )
+    with pytest.raises(Exception) as ei:
+        client.download(rows, str(tmp_path / "e"), _validate_nonempty, spark=spark)
+    msg = str(ei.value)
+    assert "https://urs.earthdata.nasa.gov/profile" in msg
+    assert "Fix:" in msg and "NASA GESDISC DATA ARCHIVE" in msg
+    assert "valid files are kept" in msg
+
+
+def test_download_other_failure_stays_invalid_row(spark, tmp_path):
+    class _Boom(_FakeEarthaccess):
+        def download(self, granules, local_path=None, threads=8, **kw):
+            raise RuntimeError("Download failed. Status code: 500")
+
+    client, rows = _one_row_client(
+        _Boom([_FakeGranule(["https://x/A_data.tif"])]), spark
+    )
+    r = client.download(
+        rows, str(tmp_path / "b"), _validate_nonempty, spark=spark
+    ).collect()[0]
+    assert not r["is_out_file_valid"]

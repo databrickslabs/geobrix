@@ -5,7 +5,9 @@ import pytest
 pyspark = pytest.importorskip("pyspark")
 from pyspark.sql import SparkSession  # noqa: E402
 
+from databricks.labs.gbx.core import _http  # noqa: E402
 from databricks.labs.gbx.sample import GridmetDownloader, download_gridmet  # noqa: E402
+from databricks.labs.gbx.sample import gridmet as G  # noqa: E402
 
 from .test_http_assets import Fetch, write_nc  # noqa: E402
 
@@ -44,6 +46,17 @@ def test_assets_name_one_file_per_season():
             "https://www.northwestknowledge.net/metdata/data/vs_2023.nc",
             "vs_2023.nc",
         ),
+    ]
+
+
+def test_base_url_host_is_in_the_allow_list_and_reaches_the_fetch(spark, tmp_path):
+    host = G.BASE.split("/")[2].lower()
+    assert _http._allowed(host, G._ALLOWED_HOSTS)
+    assert not _http._allowed("evil.example.com", G._ALLOWED_HOSTS)
+    f = Fetch(write_nc(str(tmp_path / "src.nc"), days=3))
+    GridmetDownloader(_fetch=f).download([2023], str(tmp_path / "gridmet"), spark=spark)
+    assert [(u.split("/")[2], tuple(h)) for u, h in f.calls] == [
+        (host, G._ALLOWED_HOSTS)
     ]
 
 

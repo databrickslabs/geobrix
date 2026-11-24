@@ -84,7 +84,7 @@ def test_fetch_publishes_validates_and_reuses(tmp_path):
 
 
 def test_truncated_netcdf_is_invalid_and_refetched(tmp_path, spark):
-    # Review Focus 4: a half-written file is invalid, publishes nothing, and a re-run fetches only it
+    # a half-written file is invalid, publishes nothing, and a re-run fetches only it
     src = write_nc(str(tmp_path / "src.nc"))
     out = str(tmp_path / "out")
     good = Fetch(src)

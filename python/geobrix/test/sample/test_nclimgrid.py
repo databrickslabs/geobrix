@@ -5,6 +5,7 @@ import pytest
 pyspark = pytest.importorskip("pyspark")
 from pyspark.sql import SparkSession  # noqa: E402
 
+from databricks.labs.gbx.core import _http  # noqa: E402
 from databricks.labs.gbx.sample import NclimgridDownloader  # noqa: E402
 from databricks.labs.gbx.sample import nclimgrid as N  # noqa: E402
 
@@ -24,23 +25,26 @@ def spark():
 
 
 def test_normals_and_monthly_names_and_hosts(spark, tmp_path):
-    seen = []
-
-    class F(Fetch):
-        def __call__(self, url, outpath, allowed_hosts=None, **kw):
-            seen.append(url)
-            return super().__call__(url, outpath, allowed_hosts, **kw)
-
     src = write_nc(str(tmp_path / "n.nc"), var=N.NORMALS_VARIABLE, days=12)
-    dl = NclimgridDownloader(_fetch=F(src))
-    n = dl.normals(str(tmp_path / "normals"), spark=spark).collect()
+    normals_fetch = Fetch(src)
+    n = (
+        NclimgridDownloader(_fetch=normals_fetch)
+        .normals(str(tmp_path / "normals"), spark=spark)
+        .collect()
+    )
     assert n[0]["item_id"] == "prcp_normals_2006_2020" and n[0]["is_out_file_valid"]
-    m_src = write_nc(str(tmp_path / "m.nc"), var=N.MONTHLY_VARIABLE, days=24)
-    NclimgridDownloader(_fetch=F(m_src)).monthly(str(tmp_path / "monthly"), spark=spark)
-    assert seen == [N.NORMALS_URL, N.MONTHLY_URL]
-    for url in seen:
-        host = url.split("/")[2]
-        assert any(host == h or host.endswith(h) for h in N._ALLOWED_HOSTS)
+    monthly_fetch = Fetch(
+        write_nc(str(tmp_path / "m.nc"), var=N.MONTHLY_VARIABLE, days=24)
+    )
+    NclimgridDownloader(_fetch=monthly_fetch).monthly(
+        str(tmp_path / "monthly"), spark=spark
+    )
+    calls = normals_fetch.calls + monthly_fetch.calls
+    assert [url for url, _ in calls] == [N.NORMALS_URL, N.MONTHLY_URL]
+    for url, allowed_hosts in calls:
+        # the allow-list that reaches the fetch must admit the host the URL names, by the rule core._http applies
+        assert tuple(allowed_hosts) == N._ALLOWED_HOSTS
+        assert _http._allowed(url.split("/")[2].lower(), allowed_hosts)
 
 
 def test_wrong_variable_is_invalid(spark, tmp_path):

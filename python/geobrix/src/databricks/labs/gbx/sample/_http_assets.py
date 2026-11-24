@@ -1,4 +1,4 @@
-"""Shared mechanics of the plain-HTTP sample downloaders (gridMET, nClimGrid, Stage IV, CSB).
+"""Shared mechanics of the sample downloaders that fetch plain HTTP files.
 
 Each asset is fetched on the driver with ``core._http.download`` (the host is checked against the downloader's
 allow-list on every redirect) into a scratch folder beside the destination, validated, then published with

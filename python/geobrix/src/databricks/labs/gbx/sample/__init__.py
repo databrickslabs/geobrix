@@ -20,7 +20,9 @@ from databricks.labs.gbx.sample.fire import (
     FirePerimeterDownloader,
     download_fire_perimeter_aoi,
 )
+from databricks.labs.gbx.sample.grace import GraceDaDownloader, download_grace_aoi
 from databricks.labs.gbx.sample.gridmet import GridmetDownloader, download_gridmet
+from databricks.labs.gbx.sample.hls import HlsDownloader, download_hls_aoi
 from databricks.labs.gbx.sample.naip import NaipDownloader, download_naip_aoi
 from databricks.labs.gbx.sample.nasanex import NasaNexDownloader, download_nasanex_aoi
 from databricks.labs.gbx.sample.nclimgrid import (
@@ -40,7 +42,9 @@ __all__ = [
     "DemDownloader",
     "EmitDownloader",
     "FirePerimeterDownloader",
+    "GraceDaDownloader",
     "GridmetDownloader",
+    "HlsDownloader",
     "NasaNexDownloader",
     "NaipDownloader",
     "NclimgridDownloader",
@@ -52,7 +56,9 @@ __all__ = [
     "download_dem_aoi",
     "download_emit_aoi",
     "download_fire_perimeter_aoi",
+    "download_grace_aoi",
     "download_gridmet",
+    "download_hls_aoi",
     "download_naip_aoi",
     "download_nasanex_aoi",
     "download_overture_aoi",

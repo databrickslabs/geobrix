@@ -25,12 +25,11 @@ once and stages it on a Volume.
 Every env wheel ships the GeoBrix JAR inside it, so you do not need to download the JAR on its own. (The release
 also attaches it as `geobrix-<version>-jar-with-dependencies.jar`, the same file.)
 
-GeoBrix does not load the JAR by itself. The JAR is used only in two cases:
+GeoBrix does not load the JAR by itself. The JAR is used only in two cases to help some functions which run faster
+at the JVM level:
 
-- You install it as a **cluster library** on a **dedicated** cluster ([install 2](#env-wheel-and-jar)). Some functions
-  then run faster at the JVM level.
-- You place it in the **Unity Catalog install folder** ([install 3](#uc-functions)). Three BNG functions then run as
-  Scala functions.
+- You install it as a **cluster library** on a **dedicated** cluster ([install 2](#env-wheel-and-jar)).
+- You place it in the **Unity Catalog install folder** ([install 3](#uc-functions)).
 
 The wheel also carries what you need to stage everything on a Volume:
 

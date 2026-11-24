@@ -93,9 +93,10 @@ class EarthdataAuthorizationError(RuntimeError):
 _EULA_WORD = re.compile(r"\beula\b", re.IGNORECASE)
 _EULA_CLASS = re.compile(r"\bEulaNotAccepted\b")
 _URL = re.compile(r"\S+://\S+")
-# An explicit status (phrase, leading code, or "403 Forbidden"), never a bare number.
+# An explicit status phrase ("status code: 403", "HTTP 403", "403 Forbidden"),
+# never a bare number.
 _AUTH_STATUS = re.compile(
-    r"(?:\b(?:status(?:\s+code)?|http|error|code)\b[:=\s]*|^\s*)40[13]\b"
+    r"\b(?:status(?:\s+code)?|http|error|code)\b[:=\s]*40[13]\b"
     r"|\b40[13]\s+(?:forbidden|unauthori[sz]ed|client\s+error)",
     re.IGNORECASE,
 )
@@ -115,7 +116,7 @@ def _is_eula_failure(exc: BaseException) -> bool:
     without that class, an HTTP 401/403 whose text mentions the word "EULA". The
     status comes from the exception's ``response`` when present, else from the
     message with URLs stripped (so a URL containing "eula" or "403" never counts);
-    a 500 is not a match.
+    a 500 is not a match unless the message names ``EulaNotAccepted``.
 
     A message that names ``EulaNotAccepted`` matches without any status: earthaccess
     raises that class only on a 401/403 refusal, so the name alone is conclusive.

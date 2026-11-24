@@ -147,7 +147,8 @@ def test_missing_earthaccess_names_the_package_and_separate_step(monkeypatch):
     import builtins
 
     # _ea() sets TQDM_DISABLE; register an undo so it does not leak into the session.
-    monkeypatch.delenv("TQDM_DISABLE", raising=False)
+    monkeypatch.setenv("TQDM_DISABLE", "x")  # recorded, so teardown removes it
+    monkeypatch.delenv("TQDM_DISABLE")
 
     real_import = builtins.__import__
 
@@ -260,6 +261,8 @@ def test_download_raises_on_eula_with_fix(spark, tmp_path, exc):
         RuntimeError("403 Forbidden for https://x/eulas/A_data.tif"),
         RuntimeError("EULA text fetched, status 500"),
         RuntimeError("Download failed for https://x/eula/403/A.tif. Status code: 500"),
+        RuntimeError("403 granules; EULA check failed. Status code: 500"),
+        RuntimeError("403 bytes EULA page fetch failed"),
         RuntimeError("EULA terms at https://x/403/terms missing. Status code: 500"),
     ],
 )
@@ -295,7 +298,8 @@ def test_download_passes_progress_to_keyword_only_signature(spark, tmp_path):
 def test_ea_sets_tqdm_disable_before_importing_earthaccess(monkeypatch):
     import builtins
 
-    monkeypatch.delenv("TQDM_DISABLE", raising=False)
+    monkeypatch.setenv("TQDM_DISABLE", "x")  # recorded, so teardown removes it
+    monkeypatch.delenv("TQDM_DISABLE")
     at_import = {}
     real_import = builtins.__import__
 

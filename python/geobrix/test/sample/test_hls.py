@@ -18,6 +18,8 @@ ROOT = "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected"
 L = f"{ROOT}/HLSL30.020/HLS.L30.T15TVG.2023213T165345.v2.0/HLS.L30.T15TVG.2023213T165345.v2.0"
 S = f"{ROOT}/HLSS30.020/HLS.S30.T15TVG.2023215T170901.v2.0/HLS.S30.T15TVG.2023215T170901.v2.0"
 
+S2 = f"{ROOT}/HLSS30.020/HLS.S30.T15TVG.2023220T170901.v2.0/HLS.S30.T15TVG.2023220T170901.v2.0"
+
 
 @pytest.fixture(scope="module")
 def spark():
@@ -116,8 +118,11 @@ def test_download_searches_both_collections_and_reads_complete_scenes(spark, tmp
         "HLSL30": [
             _G([L + ".B04.tif", L + ".B05.tif", L + ".Fmask.tif", L + ".B06.tif"])
         ],
-        "HLSS30": [_G([S + ".B04.tif", S + ".B8A.tif"])],
-    }  # the S30 scene lacks its Fmask
+        "HLSS30": [
+            _G([S + ".B04.tif", S + ".B8A.tif"]),  # this S30 scene lacks its Fmask
+            _G([S2 + ".B04.tif", S2 + ".B8A.tif", S2 + ".Fmask.tif", S2 + ".B05.tif"]),
+        ],
+    }
     ea = _EA(links, _writer)
     out = str(tmp_path / "hls")
     res = (
@@ -127,12 +132,16 @@ def test_download_searches_both_collections_and_reads_complete_scenes(spark, tmp
     )
     assert ea.logins == 1 and [s[0] for s in ea.searches] == ["HLSL30", "HLSS30"]
     assert {s[1] for s in ea.searches} == {"2.0"}
-    assert len(res) == 5 and all(r["is_out_file_valid"] for r in res)
+    assert len(res) == 8 and all(r["is_out_file_valid"] for r in res)
     scenes = HlsDownloader(_earthaccess=ea).read_scenes(spark, out).collect()
-    assert [r["scene_id"] for r in scenes] == ["HLS.L30.T15TVG.2023213T165345.v2.0"]
-    assert scenes[0]["red_path"].endswith(".B04.tif") and scenes[0][
-        "nir_path"
-    ].endswith(".B05.tif")
+    assert [r["scene_id"] for r in scenes] == [
+        "HLS.L30.T15TVG.2023213T165345.v2.0",
+        "HLS.S30.T15TVG.2023220T170901.v2.0",
+    ]
+    l30, s30 = scenes
+    assert l30["red_path"].endswith(".B04.tif") and l30["nir_path"].endswith(".B05.tif")
+    assert s30["red_path"].endswith(".B04.tif") and s30["nir_path"].endswith(".B8A.tif")
+    assert s30["fmask_path"].endswith(".Fmask.tif") and s30["sensor"] == "S30"
 
 
 def test_repair_refetches_the_invalid_asset(spark, tmp_path):

@@ -88,6 +88,9 @@ class HlsDownloader:
         )
 
     def read_scenes(self, spark, out_dir: str):
+        """One row per scene with red, NIR and Fmask files in ``out_dir``. Files are listed by name only and
+        not opened: gate on ``is_out_file_valid`` from the download result when a file may be truncated.
+        """
         from databricks.labs.gbx.ds._listing import list_files, to_local_path
 
         files = list_files(

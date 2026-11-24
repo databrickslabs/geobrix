@@ -13,7 +13,6 @@ from databricks.labs.gbx.sample import GraceDaDownloader  # noqa: E402
 from databricks.labs.gbx.sample import grace as G  # noqa: E402
 
 from .test_hls import _EA, _G, BBOX  # noqa: E402
-from .test_http_assets import write_nc  # noqa: E402
 
 URL = "https://hydro1.gesdisc.eosdis.nasa.gov/data/GRACEDA/GRACEDADM_CLSM0125US_7D.4.0/2023/GRACEDADM_CLSM0125US_7D.A20230501.040.nc4"
 
@@ -26,6 +25,21 @@ def spark():
         .config("spark.sql.shuffle.partitions", "4")
         .getOrCreate()
     )
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(s, only=["netcdf_gbx"])
+    # register_sources registers no function: gbx_rst_numbands needs its own registration (the Python level)
+    gbx_manager.register_family(
+        s,
+        ("gbx_rst_", "gbx_pmtiles_"),
+        only=[
+            "gbx_rst_numbands",
+            "gbx_rst_width",
+            "gbx_rst_height",
+            "gbx_rst_georeference",
+        ],
+        level="L3",
+    )
     yield s
     s.stop()
 
@@ -37,15 +51,36 @@ def test_week_date_and_assets():
     assert G.asset_of(URL) == "grace" and G.asset_of(URL + ".xml") is None
 
 
-def _writer(granules, local_path):
+def _write_week(dest, date_stamp="2023-05-01"):
+    """A weekly file shaped like the real one: (time, lat, lon) with a time dimension of size 1."""
     import netCDF4
+    import numpy as np
 
+    with netCDF4.Dataset(dest, "w") as ds:
+        ds.createDimension("time", 1)
+        ds.createDimension("lat", 4)
+        ds.createDimension("lon", 5)
+        t = ds.createVariable("time", "f8", ("time",))
+        t.units, t.calendar = f"days since {date_stamp} 00:00:00", "standard"
+        t[:] = [0.0]
+        ds.createVariable("lat", "f8", ("lat",))[:] = [42.2, 42.1, 42.0, 41.9]
+        ds.createVariable("lon", "f8", ("lon",))[:] = [
+            -94.0,
+            -93.9,
+            -93.8,
+            -93.7,
+            -93.6,
+        ]
+        for i, name in enumerate(G.VARIABLES):
+            ds.createVariable(name, "f4", ("time", "lat", "lon"))[:] = (
+                np.arange(20, dtype="f4").reshape(1, 4, 5) + i
+            )
+
+
+def _writer(granules, local_path):
     os.makedirs(local_path, exist_ok=True)
     for url in granules:
-        dest = os.path.join(local_path, os.path.basename(url))
-        write_nc(dest, var="gws_inst", days=1)
-        with netCDF4.Dataset(dest, "a") as ds:
-            ds.createVariable("sfsm_inst", "f4", ("day", "lat", "lon"))[:] = 1.0
+        _write_week(os.path.join(local_path, os.path.basename(url)))
 
 
 WINDOW = ("2023-05-01", "2023-09-30")
@@ -79,6 +114,40 @@ def test_repair_refetches_the_invalid_week(spark, tmp_path):
     )
     fixed = dl.repair(target, spark=spark, out_dir=out).collect()
     assert fetched == [URL] and len(fixed) == 1 and fixed[0]["is_out_file_valid"]
+
+
+def test_read_gives_one_one_band_tile_per_week(spark, tmp_path):
+    out = str(tmp_path / "g")
+    dl = GraceDaDownloader(_earthaccess=_EA({G.SHORT: [_G([URL])]}, _writer))
+    assert dl.download(BBOX, out, temporal=WINDOW, spark=spark).collect()[0][
+        "is_out_file_valid"
+    ]
+    bbox = (-93.95, 41.95, -93.65, 42.15)
+    rows = (
+        dl.read(spark, out, "gws_inst", bbox)
+        .selectExpr(
+            "source",
+            "gbx_rst_numbands(tile) AS n",
+            "gbx_rst_width(tile) AS w",
+            "gbx_rst_height(tile) AS h",
+            "gbx_rst_georeference(tile) AS gt",
+        )
+        .collect()
+    )
+    r = rows[0]
+    assert len(rows) == 1 and r["n"] == 1 and r["w"] > 0 and r["h"] > 0
+    g, eps = r["gt"], 1e-6
+    east = g["upperLeftX"] + r["w"] * g["scaleX"]
+    south = g["upperLeftY"] + r["h"] * g["scaleY"]
+    assert (
+        g["upperLeftX"] >= bbox[0] - eps and east <= bbox[2] + eps
+    )  # the clip is inside the bbox
+    assert south >= bbox[1] - eps and g["upperLeftY"] <= bbox[3] + eps
+    assert rows[0]["source"].startswith("NETCDF:") and rows[0]["source"].endswith(
+        ":gws_inst"
+    )
+    path = rows[0]["source"].split('"')[1]
+    assert G.week_date_of(path) == date(2023, 5, 1)
 
 
 @pytest.mark.integration

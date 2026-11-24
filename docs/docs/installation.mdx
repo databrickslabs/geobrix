@@ -22,21 +22,13 @@ The GeoBrix env wheels and the JAR are **not on PyPI or Maven**. They are assets
 [GitHub releases](https://github.com/databrickslabs/geobrix/releases). The most common install downloads the env wheel
 once and stages it on a Volume.
 
-Every env wheel ships the GeoBrix JAR inside it, so you do not need to download the JAR on its own. (The release
-also attaches it as `geobrix-<version>-jar-with-dependencies.jar`, the same file.)
+Every env wheel ships the GeoBrix JAR inside it, so you do not need to download the JAR on its own. GeoBrix never
+loads it by itself: the JAR speeds up some functions at the JVM level only as a **cluster library on a dedicated
+cluster** ([install 2](#env-wheel-and-jar)) or in the **Unity Catalog install folder** ([install 3](#uc-functions)).
 
-GeoBrix does not load the JAR by itself. The JAR is used only in two cases to help some functions which run faster
-at the JVM level:
-
-- You install it as a **cluster library** on a **dedicated** cluster ([install 2](#env-wheel-and-jar)).
-- You place it in the **Unity Catalog install folder** ([install 3](#uc-functions)).
-
-The wheel also carries what you need to stage everything on a Volume:
-
-- `gbx.stage_jar` copies the matching JAR to a Volume. `gbx.register(spark)` then checks that a cluster's JAR is
-  that same build.
-- `gbx.stage_deps` stages the wheel's pinned dependencies on a Volume, so an install never calls PyPI. See
-  [Install without PyPI access](#offline-install).
+To stage on a Volume, `gbx.stage_jar` copies the matching JAR, which `gbx.register(spark)` then checks.
+`gbx.stage_deps` stages the wheel's pinned dependencies, so an install never calls PyPI
+([Install without PyPI access](#offline-install)).
 :::
 
 ## How GeoBrix registers its functions

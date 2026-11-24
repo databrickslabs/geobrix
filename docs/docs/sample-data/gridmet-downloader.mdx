@@ -1,0 +1,126 @@
+---
+sidebar_position: 16
+title: gridMET Downloader
+---
+
+## gridMET Downloader
+
+`GridmetDownloader` fetches **gridMET** daily climate grids from the University of Idaho for whole seasons. It stages one NetCDF file per variable and year in a Unity Catalog Volume.
+
+gridMET covers the contiguous US at 1/24° in EPSG:4326 and is released under CC0. Each file `<var>_<YYYY>.nc` has one slice per day, on the dimension `day`. The default variable is `vs`, the daily mean wind speed at 10 m (NetCDF variable `wind_speed`).
+
+:::note Prerequisites
+- GeoBrix installed (the env wheel for the runtime). See [Installation](../installation#env-wheel).
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- No authentication required: gridMET is public HTTPS.
+:::
+
+---
+
+## How It Works
+
+1. **`discover(seasons)`** lists one file per season, with no download.
+2. **`download(seasons, out_dir, ...)`** fetches each file on the driver. It keeps a file only when it opens as NetCDF and holds its variable.
+3. **`repair(target, seasons, out_dir, ...)`** fetches again only the rows of `target` that match `where`.
+4. **`read(spark, out_dir, bbox, season=None)`** cuts each file to `bbox` on read ([`bbox`](../readers/netcdf.mdx#bbox)) and stacks the days as bands. Band `i` of a season's tile is day `i` of that year. The values are in m/s: the file stores counts of 0.1 m/s, and the reader applies the scale.
+
+**Safe re-runs.** Each file is written to a scratch folder, checked, then moved to its final name. A failed fetch leaves no partial file, and a re-run keeps every valid file. Every request goes through the GeoBrix HTTP allow-list.
+
+Serverless-safe: driver-side fetches, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `GridmetDownloader`
+
+```python
+from databricks.labs.gbx.sample import GridmetDownloader
+
+downloader = GridmetDownloader()  # variable="vs" (wind speed)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variable` | `str` | gridMET file prefix. Default `"vs"` (NetCDF variable `wind_speed`). For another prefix, the NetCDF variable must have the same name. |
+| `base` | `str` | URL folder of the `<var>_<YYYY>.nc` files. Default: `https://www.northwestknowledge.net/metdata/data`. |
+| `_fetch` | injectable | Stand-in for the HTTP fetch, for offline unit tests. |
+
+#### `discover(seasons, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `seasons` | `list[int]` | Years, for example `[2023]`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns `item_id` (`<var>_<YYYY>`), `asset_name` (the prefix) and `href`, one row per season.
+
+#### `download(seasons, out_dir, force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `seasons` | `list[int]` | Years to fetch. |
+| `out_dir` | `str` | Output directory: a Volume path (`/Volumes/...`) or a local path. |
+| `force` | `bool` | Fetch again even when a valid file exists. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Returns the result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `repair(target, seasons, out_dir, where="is_out_file_valid = false", spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A Delta table name (repaired rows are merged back by `(item_id, asset_name)`) or a DataFrame (the repaired rows are returned only). |
+| `seasons` | `list[int]` | The same years as the download. |
+| `out_dir` | `str` | The download's output directory. |
+| `where` | `str` | Filter that selects the rows to fetch again. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+#### `read(spark, out_dir, bbox, season=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spark` | `SparkSession` | Active SparkSession. |
+| `out_dir` | `str` | Root directory written by `download()`. |
+| `bbox` | `(minx, miny, maxx, maxy)` | Area of interest in EPSG:4326. The reader cuts each file to it. |
+| `season` | `int \| None` | One year, or `None` for every staged year. |
+
+Returns `source` and `tile` through `netcdf_gbx`: one tile per season, one band per day (band 1 = January 1), in m/s. The `gbx_rst_*` functions take the tile directly.
+
+---
+
+### `download_gridmet` (convenience function)
+
+Constructs a default `GridmetDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample import download_gridmet
+
+download_gridmet(spark, [2023], "/Volumes/main/default/data/gridmet")
+# **kw forwarded to GridmetDownloader.download(), e.g. force=
+```
+
+---
+
+## Copy-Paste Example
+
+```python
+from databricks.labs import gbx
+from databricks.labs.gbx.sample import GridmetDownloader
+
+gbx.register(spark)
+OUT = "/Volumes/main/default/data/gridmet"
+BBOX = (-94.2, 41.9, -93.2, 42.2)  # (minx, miny, maxx, maxy) in EPSG:4326
+
+dl = GridmetDownloader()  # wind speed (vs)
+dl.download([2023], OUT, spark=spark).show()
+
+wind = dl.read(spark, OUT, BBOX, season=2023)  # one band per day of 2023
+wind.selectExpr("source", "gbx_rst_numbands(tile) AS days").show(truncate=False)
+```
+
+---
+
+## Notebook Reference
+
+`GridmetDownloader` stages the daily wind speed in the [H3 Pixels (Crop Yield) example](../notebooks/h3-pixels-crop-yield) (notebook 01). Notebook 03 averages the days to months on H3 cells.

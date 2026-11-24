@@ -101,6 +101,12 @@ const sidebars = {
         'sample-data/wells-downloader',
         'sample-data/fire-perimeter-downloader',
         'sample-data/worldpop-downloader',
+        'sample-data/stage4-downloader',
+        'sample-data/nclimgrid-downloader',
+        'sample-data/gridmet-downloader',
+        'sample-data/grace-da-downloader',
+        'sample-data/hls-downloader',
+        'sample-data/csb-downloader',
       ],
     },
     {

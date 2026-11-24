@@ -1,0 +1,130 @@
+---
+sidebar_position: 19
+title: Crop Sequence Boundaries Downloader
+---
+
+## Crop Sequence Boundaries Downloader
+
+`CsbDownloader` fetches the **USDA NASS Crop Sequence Boundaries (CSB)** 2018-2025 and clips one US state. It stages the state's field polys as a GeoPackage in a Unity Catalog Volume.
+
+CSB field polys carry the Cropland Data Layer crop code of each year, `CDL2018` to `CDL2025`. Corn is code 1. The national file is one zip of a FileGDB, about 3.76 GB, in Albers equal-area (EPSG:5070). It is public domain.
+
+:::note Prerequisites
+- GeoBrix installed (the env wheel for the runtime). See [Installation](../installation#env-wheel).
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- Room on the Volume for one copy of the zip (about 3.76 GB).
+- At least 12 GiB free on the driver's local disk for the zip's extract. A Serverless driver has enough.
+- No authentication required: CSB is public HTTPS.
+:::
+
+---
+
+## How It Works
+
+The zip's main table is compressed, so a range read does not help. `download(out_dir, state_fips)` runs on the driver in three steps:
+
+1. It copies the zip once to `<out_dir>/_source`. The server sends no ETag, so later calls reuse the copy while its size and the server's `Last-Modified` match.
+2. It copies the zip to the driver's local disk and extracts it there. It never extracts on a Volume or on a Spark worker.
+3. It clips one state in a single streaming pass with an OGR attribute filter. The result is `<out_dir>/csb_<state>.gpkg`.
+
+The GeoPackage has the layer `csb` in EPSG:5070, and its geometry column is always `geom`. The clip is written on local disk, then copied to the Volume and renamed into place. A failed call leaves no partial file.
+
+`download` runs on the driver only. Inside a Spark task or a UDF it raises `RuntimeError` with a fix: call it from the notebook. With under 12 GiB of free local disk, it raises `OSError` with a fix. Use a driver with more local disk, or point `GBX_LOCAL_TEMP_DIR` at a larger local folder. A state code with no field polys raises `ValueError`.
+
+**`read(spark, out_dir, state_fips)`** loads the GeoPackage with `gpkg_gbx`.
+
+Serverless-safe: one driver-side fetch and clip, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `CsbDownloader`
+
+```python
+from databricks.labs.gbx.sample import CsbDownloader
+
+downloader = CsbDownloader()  # the national 2018-2025 zip, layer "national1825"
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `href` | `str` | URL of the national zip. Default: the 2018-2025 release on `www.nass.usda.gov`. |
+| `layer` | `str` | FileGDB layer name. Default `"national1825"`. |
+| `_fetch` | injectable | Stand-in for the HTTP fetch, for offline unit tests. |
+| `_probe` | injectable | Stand-in for the HTTP size and `Last-Modified` probe, for offline unit tests. |
+
+#### `download(out_dir, state_fips="19", force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Output directory: a Volume path (`/Volumes/...`) or a local path. |
+| `state_fips` | `str` | Two-digit state FIPS code, for example `"19"` for Iowa. Any other form raises `ValueError`. |
+| `force` | `bool` | Clip again even when a valid GeoPackage exists. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns one row in the result schema (`item_id` `"csb_<state>"`, `asset_name` `"gpkg"`): `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `repair(target, out_dir, state_fips="19", where="is_out_file_valid = false", spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A table name or a DataFrame in the result schema. |
+| `out_dir` | `str` | The download's output directory. |
+| `state_fips` | `str` | The state to check. |
+| `where` | `str` | Filter that selects the rows to repair. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+When the state's row matches `where`, it clips the state again from the cached zip. Otherwise it returns an empty DataFrame.
+
+#### `read(spark, out_dir, state_fips="19") → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spark` | `SparkSession` | Active SparkSession. |
+| `out_dir` | `str` | Directory written by `download()`. |
+| `state_fips` | `str` | The state to read. |
+
+Returns one row per field poly: `CSBID`, `CSBYEARS`, `CSBACRES`, `CDL2018` to `CDL2025`, `STATEFIPS`, `CNTYFIPS`, `INSIDE_X`, `INSIDE_Y`, and `geom` (WKB in EPSG:5070) followed by the string columns `geom_srid` and `geom_srid_proj`.
+
+#### `clip_gdb_to_state(src, layer, state_fips, dest_gpkg, batch_size=100000) → int`
+
+Copies the features of one state from any OGR dataset with the CSB fields to a local GeoPackage, in one streaming pass. Returns the feature count.
+
+---
+
+### `download_csb_state` (convenience function)
+
+Constructs a default `CsbDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample import download_csb_state
+
+download_csb_state(spark, "/Volumes/main/default/data/csb", state_fips="19")
+# **kw forwarded to CsbDownloader.download(), e.g. force=
+```
+
+---
+
+## Copy-Paste Example
+
+```python
+from databricks.labs import gbx
+from databricks.labs.gbx.sample import CsbDownloader
+
+gbx.register(spark)
+OUT = "/Volumes/main/default/data/csb"
+
+dl = CsbDownloader()
+dl.download(OUT, state_fips="19", spark=spark).show()  # the 3.76 GB zip once, then one state
+
+fields = dl.read(spark, OUT, "19")
+corn_2023 = fields.where("CDL2023 = 1").selectExpr("CSBID", "CNTYFIPS", "st_area(st_geomfromwkb(geom)) AS area_m2")
+corn_2023.groupBy("CNTYFIPS").count().orderBy("CNTYFIPS").show()
+```
+
+---
+
+## Notebook Reference
+
+`CsbDownloader` stages the Iowa field polys in the [H3 Pixels (Crop Yield) example](../notebooks/h3-pixels-crop-yield) (notebook 01). Notebook 04 selects the corn field polys and fills them with res-13 H3 cells.

@@ -1,0 +1,156 @@
+---
+sidebar_position: 17
+title: GRACE-DA Groundwater Downloader
+---
+
+## GRACE-DA Groundwater Downloader
+
+`GraceDaDownloader` fetches the **NASA GRACE data-assimilation** weekly groundwater and soil-moisture grids for any bounding-box AOI. It stages them in a Unity Catalog Volume.
+
+The product is `GRACEDADM_CLSM0125US_7D` version 4.0 from NASA GES DISC: one NetCDF4 file per week at 0.125° over the contiguous US. Each file holds the groundwater percentile `gws_inst` and the surface soil-moisture percentile `sfsm_inst`.
+
+:::caution Requires an Earthdata Login token
+GRACE-DA is served by NASA through [`earthaccess`](https://earthaccess.readthedocs.io/) and needs authentication. `GraceDaDownloader` reads the token from the **`EARTHDATA_TOKEN`** environment variable. Populate it from a Unity Catalog secret before you call `download()`:
+
+```python
+import os
+
+token = dbutils.secrets.get("<catalog>", "<schema>", "earthdata_token")
+os.environ["EARTHDATA_TOKEN"] = token
+```
+
+Create an [Earthdata Login](https://urs.earthdata.nasa.gov/) account and token first if you don't have one.
+:::
+
+:::caution Approve the provider's application first
+GRACE-DA comes from NASA GES DISC. Your Earthdata user must approve the provider's application at [Earthdata Login](https://urs.earthdata.nasa.gov/profile), under Applications and Authorized Apps (`NASA GESDISC DATA ARCHIVE` for GES DISC). Until you do, `download()` raises `EarthdataAuthorizationError` with this fix. A re-run keeps every valid file.
+:::
+
+:::note Prerequisites
+- GeoBrix installed (the env wheel for the runtime), and `earthaccess` as a separate step after it: `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"`. See [Installation](../installation#env-wheel).
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `EARTHDATA_TOKEN` set in the environment (see above) before you call `download()`.
+:::
+
+---
+
+## How It Works
+
+`GraceDaDownloader` is a thin wrapper over the generic `EarthdataClient`, as `EmitDownloader` is:
+
+1. **`discover(bbox, temporal=None)`** searches NASA CMR for the weekly files over the AOI, with no download.
+2. **`download(bbox, out_dir, temporal=None, ...)`** logs in with `EARTHDATA_TOKEN` and fetches each file on the driver. It keeps a file only when it opens as NetCDF and holds both variables.
+3. **`repair(target, ...)`** fetches again only the rows of `target` that match `where`.
+4. **`read(spark, out_dir, variable, bbox)`** loads one variable with `netcdf_gbx`, cut to `bbox` on read: one tile per weekly file.
+
+**The week date.** The `A<YYYYMMDD>` stamp in each file name is the first day of its week. `week_date_of(path)` returns it.
+
+Serverless-safe: driver-side fetches, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `GraceDaDownloader`
+
+```python
+from databricks.labs.gbx.sample import GraceDaDownloader
+
+downloader = GraceDaDownloader()  # GRACEDADM_CLSM0125US_7D, version "4.0"
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `_earthaccess` | injectable | Mock `earthaccess`-like module for offline unit tests. |
+| `_client` | injectable | Mock `EarthdataClient` for offline unit tests. |
+
+#### `discover(bbox, temporal=None, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326. |
+| `temporal` | `str \| (str, str) \| None` | CMR date window: a `"start/end"` string or a 2-tuple. `None` searches every week. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns `item_id`, `asset_name` (`"grace"`) and `href`, one row per weekly file.
+
+#### `download(bbox, out_dir, temporal=None, force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326. |
+| `out_dir` | `str` | Output directory: a Volume path (`/Volumes/...`) or a local path. |
+| `temporal` | `str \| (str, str) \| None` | CMR date window, as for `discover()`. |
+| `force` | `bool` | Fetch again even when a valid file exists. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Returns the result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `repair(target, where="is_out_file_valid = false", spark=None, out_dir=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A Delta table name (repaired rows are merged back by `(item_id, asset_name)`) or a DataFrame (the repaired rows are returned only). It needs `item_id`, `asset_name` and `href` columns. |
+| `where` | `str` | Filter that selects the rows to fetch again. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+| `out_dir` | `str \| None` | Destination of the fetched files. `None` takes the directory of a row's `out_file_path`. |
+
+The `download()` result has no `href` column. Join the `discover()` frame on `item_id` and `asset_name` to build a target.
+
+#### `read(spark, out_dir, variable, bbox) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spark` | `SparkSession` | Active SparkSession. |
+| `out_dir` | `str` | Root directory written by `download()`. |
+| `variable` | `str` | `"gws_inst"` or `"sfsm_inst"`. |
+| `bbox` | `(minx, miny, maxx, maxy)` | Area of interest in EPSG:4326. The reader cuts each file to it. |
+
+Returns `source` and `tile`, one tile per weekly file.
+
+---
+
+### `download_grace_aoi` (convenience function)
+
+Constructs a default `GraceDaDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample import download_grace_aoi
+
+download_grace_aoi(spark, (-94.2, 41.9, -93.2, 42.2), "/Volumes/main/default/data/grace",
+                   temporal=("2023-05-01", "2023-09-30"))
+# **kw forwarded to GraceDaDownloader.download(), e.g. force=
+```
+
+---
+
+## Copy-Paste Example
+
+```python
+# The env wheel, then earthaccess as a separate step:
+# %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
+# %pip install "earthaccess>=0.11,<1" "botocore<1.44.0"
+
+import os
+
+from pyspark.sql import functions as F
+
+from databricks.labs.gbx.sample import GraceDaDownloader
+
+os.environ["EARTHDATA_TOKEN"] = dbutils.secrets.get("<catalog>", "<schema>", "earthdata_token")
+OUT = "/Volumes/main/default/data/grace"
+BBOX = (-94.2, 41.9, -93.2, 42.2)  # (minx, miny, maxx, maxy) in EPSG:4326
+
+dl = GraceDaDownloader()
+dl.download(BBOX, OUT, temporal=("2023-05-01", "2023-09-30"), spark=spark).show()
+
+gws = dl.read(spark, OUT, "gws_inst", BBOX)
+week_date = F.to_date(F.regexp_extract("source", r"\.A(\d{8})\.", 1), "yyyyMMdd")  # the A<YYYYMMDD> stamp
+gws.select("source", week_date.alias("week_date")).orderBy("week_date").show(truncate=False)
+```
+
+---
+
+## Notebook Reference
+
+`GraceDaDownloader` stages the groundwater and soil-moisture weeks in the [H3 Pixels (Crop Yield) example](../notebooks/h3-pixels-crop-yield) (notebook 01). Notebook 03 averages the weeks into the month their date falls in.

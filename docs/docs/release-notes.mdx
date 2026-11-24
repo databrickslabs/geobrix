@@ -16,6 +16,13 @@ To migrate from 0.5.x, see the [migration guide](./migration-0-6.mdx). For the 0
 
 ## v0.6.1
 
+### New {#v061-new}
+
+- **[`gbx_rst_h3_fitresolution`](./api/raster-functions.mdx#rst_h3_fitresolution)** returns the H3 resolution that fits a raster's pixel size. See [Choosing a resolution](./api/grid-raster-tessellation.mdx#choosing-a-resolution).
+- **Faster H3 covering for fine cells.** `gbx_rst_h3_rastertogrid*` with `assignment => 'covering'` is vectorised when the cells are smaller than the pixels.
+- **[Crop-data downloaders](./sample-data/overview.mdx#bring-your-own-aoi-downloaders)** for Stage IV, the precipitation normals, nClimGrid, gridMET, GRACE-DA, HLS and USDA Crop Sequence Boundaries.
+- **[H3 Pixels (Crop Yield)](./notebooks/h3-pixels-crop-yield.mdx)**, an example series that scores field polys on H3 against six datasets.
+
 ### Changes {#v061-changes}
 
 - **Fixed: [`netcdf_gbx` raster mode](./readers/netcdf.mdx#bbox).** Its tile is the standard tile, so the `gbx_rst_*` functions take it directly, and `bbox` cuts the grid on read. A table written from an earlier read keeps the three-field tile: rewrite it, or append with `mergeSchema`.

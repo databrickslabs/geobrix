@@ -128,6 +128,12 @@ Examples at 42°N:
 | 30 m UTM (Landsat, HLS) | 30 m x 30 m | 12 | 11 |
 | 10 m UTM (Sentinel-2) | 10 m x 10 m | 13 | 13 |
 
+- Clip the raster to your area first. The pixel area changes with latitude in a lon/lat or polar grid.
+- Grid vector data at the same or a finer resolution than every raster you join it to.
+- `'log_nearest'` picks the resolution whose cell area is nearest the pixel on a log scale. It is often one level coarser.
+- The covering pass is fast for cells smaller than pixels: each cell overlaps only a few pixels.
+- The [crop-data downloaders](../sample-data/overview.mdx#bring-your-own-aoi-downloaders) stage the rasters of the table above.
+
 ---
 
 ## Per-grid details

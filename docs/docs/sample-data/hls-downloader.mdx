@@ -1,0 +1,162 @@
+---
+sidebar_position: 18
+title: HLS Downloader
+---
+
+## HLS Downloader
+
+`HlsDownloader` fetches **NASA Harmonized Landsat and Sentinel-2 (HLS)** version 2.0 red, NIR and Fmask COGs for any bounding-box AOI and date window. It stages them in a Unity Catalog Volume.
+
+HLS puts Landsat (`HLSL30`) and Sentinel-2 (`HLSS30`) on one 30 m grid in UTM, tiled by MGRS. The two sensors name their NIR band differently:
+
+| Sensor | Red | NIR | Cloud mask |
+|---|---|---|---|
+| L30 (Landsat 8 and 9) | `B04` | `B05` | `Fmask` |
+| S30 (Sentinel-2) | `B04` | `B8A` | `Fmask` |
+
+S30 `B05` is a red-edge band, so the downloader skips it.
+
+:::caution Requires an Earthdata Login token
+HLS is served by NASA LP DAAC through [`earthaccess`](https://earthaccess.readthedocs.io/) and needs authentication. `HlsDownloader` reads the token from the **`EARTHDATA_TOKEN`** environment variable. Populate it from a Unity Catalog secret before you call `download()`:
+
+```python
+import os
+
+token = dbutils.secrets.get("<catalog>", "<schema>", "earthdata_token")
+os.environ["EARTHDATA_TOKEN"] = token
+```
+
+Create an [Earthdata Login](https://urs.earthdata.nasa.gov/) account and token first if you don't have one.
+:::
+
+:::caution Approve the provider's application first
+Your Earthdata user must approve the data provider's application at [Earthdata Login](https://urs.earthdata.nasa.gov/profile), under Applications and Authorized Apps. Until you do, `download()` raises `EarthdataAuthorizationError` with this fix. A re-run keeps every valid file.
+:::
+
+:::note Prerequisites
+- GeoBrix installed (the env wheel for the runtime), and `earthaccess` as a separate step after it: `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"`. See [Installation](../installation#env-wheel).
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `EARTHDATA_TOKEN` set in the environment (see above) before you call `download()`.
+:::
+
+---
+
+## How It Works
+
+`HlsDownloader` is a thin wrapper over the generic `EarthdataClient`, as `EmitDownloader` is:
+
+1. **`discover(bbox, temporal=None)`** searches NASA CMR for both collections over the AOI. It keeps the red, NIR and Fmask links of each scene.
+2. **`download(bbox, out_dir, temporal=None, ...)`** logs in with `EARTHDATA_TOKEN` and fetches each COG on the driver. It keeps a COG only when it opens and decodes.
+3. **`repair(target, ...)`** fetches again only the rows of `target` that match `where`.
+4. **`read_scenes(spark, out_dir)`** lists the staged COGs and returns one row per complete scene, with its three file paths.
+
+`read_scenes` lists the files in `out_dir` by name and does not open them. Filter on `is_out_file_valid` from the `download()` result when a file may be cut short. A scene that lacks one of its three assets is left out. Neighbouring MGRS tiles overlap, so one place can appear in two scenes of the same date.
+
+Serverless-safe: driver-side fetches, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `HlsDownloader`
+
+```python
+from databricks.labs.gbx.sample import HlsDownloader
+
+downloader = HlsDownloader()  # HLSL30 + HLSS30, version "2.0"
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `_earthaccess` | injectable | Mock `earthaccess`-like module for offline unit tests. |
+| `_client` | injectable | Mock `EarthdataClient` for offline unit tests. |
+
+#### `discover(bbox, temporal=None, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326. |
+| `temporal` | `str \| (str, str) \| None` | CMR date window: a `"start/end"` string or a 2-tuple. `None` searches every date. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns `item_id` (the file name without `.tif`), `asset_name` (`"red"`, `"nir"` or `"fmask"`) and `href`.
+
+#### `download(bbox, out_dir, temporal=None, force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326. |
+| `out_dir` | `str` | Output directory: a Volume path (`/Volumes/...`) or a local path. |
+| `temporal` | `str \| (str, str) \| None` | CMR date window, as for `discover()`. |
+| `force` | `bool` | Fetch again even when a valid file exists. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Returns the result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `repair(target, where="is_out_file_valid = false", spark=None, out_dir=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A Delta table name (repaired rows are merged back by `(item_id, asset_name)`) or a DataFrame (the repaired rows are returned only). It needs `item_id`, `asset_name` and `href` columns. |
+| `where` | `str` | Filter that selects the rows to fetch again. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+| `out_dir` | `str \| None` | Destination of the fetched files. `None` takes the directory of a row's `out_file_path`. |
+
+The `download()` result has no `href` column. Join the `discover()` frame on `item_id` and `asset_name` to build a target.
+
+#### `read_scenes(spark, out_dir) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spark` | `SparkSession` | Active SparkSession. |
+| `out_dir` | `str` | Directory written by `download()`. |
+
+Lists only the files directly in `out_dir`. Returns one row per complete scene: `scene_id`, `sensor` (`"L30"` or `"S30"`), `mgrs_tile`, `collect_date` (date), `red_path`, `nir_path`, `fmask_path`.
+
+---
+
+### `download_hls_aoi` (convenience function)
+
+Constructs a default `HlsDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample import download_hls_aoi
+
+download_hls_aoi(spark, (-94.2, 41.9, -93.2, 42.2), "/Volumes/main/default/data/hls",
+                 temporal=("2023-08-01", "2023-08-31"))
+# **kw forwarded to HlsDownloader.download(), e.g. force=
+```
+
+---
+
+## Copy-Paste Example
+
+```python
+# The env wheel, then earthaccess as a separate step:
+# %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
+# %pip install "earthaccess>=0.11,<1" "botocore<1.44.0"
+
+import os
+
+from databricks.labs import gbx
+from databricks.labs.gbx.sample import HlsDownloader
+
+gbx.register(spark)
+os.environ["EARTHDATA_TOKEN"] = dbutils.secrets.get("<catalog>", "<schema>", "earthdata_token")
+OUT = "/Volumes/main/default/data/hls"
+BBOX = (-94.2, 41.9, -93.2, 42.2)  # (minx, miny, maxx, maxy) in EPSG:4326
+
+dl = HlsDownloader()
+files = dl.download(BBOX, OUT, temporal=("2023-08-01", "2023-08-31"), spark=spark)
+files.groupBy("asset_name", "is_out_file_valid").count().show()
+
+scenes = dl.read_scenes(spark, OUT)  # red, NIR and Fmask paths per complete scene
+scenes.select("scene_id", "sensor", "collect_date").show(truncate=False)
+red = scenes.selectExpr("scene_id", "gbx_rst_fromfile(red_path, 'GTiff') AS tile")
+```
+
+---
+
+## Notebook Reference
+
+`HlsDownloader` stages the August scenes in the [H3 Pixels (Crop Yield) example](../notebooks/h3-pixels-crop-yield) (notebook 01). Notebook 03 computes NDVI per scene with the cloud bit masked and puts it on H3 cells.

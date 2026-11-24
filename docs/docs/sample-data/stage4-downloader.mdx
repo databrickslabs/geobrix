@@ -1,0 +1,145 @@
+---
+sidebar_position: 14
+title: Stage IV Precipitation Downloader
+---
+
+## Stage IV Precipitation Downloader
+
+`StageIvDownloader` fetches **NCEP Stage IV** daily precipitation for chosen seasons and months. It stages one file per day in a Unity Catalog Volume.
+
+Stage IV is a radar and rain-gauge analysis on the HRAP polar stereographic grid, about 4.76 km at 60°N. The source is the NWS daily CONUS NetCDF. The file for a date holds the 24 h total that ends at 12Z on that date, in the variable `observation`. Its units attribute is `Inches`: `stage4.TO_MM` converts to mm.
+
+:::note Prerequisites
+- GeoBrix installed (the env wheel for the runtime). See [Installation](../installation#env-wheel).
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- No authentication required: the NWS files are public HTTPS.
+:::
+
+---
+
+## How It Works
+
+1. **`discover(seasons, months)`** lists one file per day, with no download. A month's files end on the 2nd of the month through the 1st of the next month.
+2. **`download(seasons, months, out_dir, ...)`** fetches each file on the driver. It keeps a file only when it opens as NetCDF and holds `observation`.
+3. **`repair(target, seasons, months, out_dir, ...)`** fetches again only the rows of `target` that match `where`.
+4. **`read(spark, out_dir)`** loads one tile per day. GDAL opens each file and `gbx_rst_getsubdataset` takes `observation`, so the tile keeps the HRAP grid.
+
+**A day the archive lacks.** `download` and `repair` raise `StageIvDayMissing` for a day the NWS archive does not hold (HTTP 404). The message names NCAR GDEX dataset d507005, which holds Stage IV as monthly GRIB archives. Take that day from there, or leave it out of the seasons and months. A month's window ends on the 1st of the next month, so that file must exist too.
+
+**The 12Z day rule.** A file ends at 12Z (07:00 CDT) on its file date, so 17 of its 24 hours fall on the day before. `collect_date_of` gives that day before. Use it to date each daily total.
+
+**Safe re-runs.** Each file is written to a scratch folder, checked, then moved to its final name. A fetch that fails for another reason leaves no partial file and gives a row with `is_out_file_valid` false. A re-run keeps every valid file. Every request goes through the GeoBrix HTTP allow-list.
+
+Serverless-safe: driver-side fetches, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `StageIvDownloader`
+
+```python
+from databricks.labs.gbx.sample import StageIvDownloader
+
+downloader = StageIvDownloader()
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `template` | `str` | URL template of a daily file, with `{y}`, `{m}` and `{d}`. Default: the NWS archive on `water.noaa.gov`. |
+| `_fetch` | injectable | Stand-in for the HTTP fetch, for offline unit tests. |
+
+#### `discover(seasons, months, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `seasons` | `list[int]` | Years, for example `[2023]`. |
+| `months` | `list[int]` | Months 1-12, for example `[5, 6, 7, 8, 9]`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns `item_id` (`ST4.<YYYYMMDD>`, the end date), `asset_name` (`"apcp_24h"`) and `href`, one row per day.
+
+#### `download(seasons, months, out_dir, force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `seasons` | `list[int]` | Years to fetch. |
+| `months` | `list[int]` | Months to fetch in each year. |
+| `out_dir` | `str` | Output directory: a Volume path (`/Volumes/...`) or a local path. |
+| `force` | `bool` | Fetch again even when a valid file exists. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Returns the result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `repair(target, seasons, months, out_dir, where="is_out_file_valid = false", spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A Delta table name (repaired rows are merged back by `(item_id, asset_name)`) or a DataFrame (the repaired rows are returned only). |
+| `seasons`, `months` | `list[int]` | The same values as the download. |
+| `out_dir` | `str` | The download's output directory. |
+| `where` | `str` | Filter that selects the rows to fetch again. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Returns the repaired rows in the result schema.
+
+#### `read(spark, out_dir) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spark` | `SparkSession` | Active SparkSession. |
+| `out_dir` | `str` | Root directory written by `download()`. |
+
+Returns `source` (the file path) and `tile`, one daily HRAP tile per row. Multiply a value by `stage4.TO_MM` for millimetres.
+
+#### `collect_date_of(end_date) → date` and `file_end_date(name) → date`
+
+`file_end_date` reads the end date from a Stage IV file name. `collect_date_of` returns the day that the total counts for.
+
+```python
+from databricks.labs.gbx.sample.stage4 import collect_date_of, file_end_date
+
+collect_date_of(file_end_date("nws_precip_1day_20230601_conus.nc"))  # datetime.date(2023, 5, 31)
+```
+
+---
+
+### `download_stage4` (convenience function)
+
+Constructs a default `StageIvDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample import download_stage4
+
+download_stage4(spark, [2023], [5, 6, 7, 8, 9], "/Volumes/main/default/data/stage4")
+# **kw forwarded to StageIvDownloader.download(), e.g. force=
+```
+
+---
+
+## Copy-Paste Example
+
+```python
+from pyspark.sql import functions as F
+
+from databricks.labs import gbx
+from databricks.labs.gbx.sample import StageIvDownloader
+
+gbx.register(spark)
+OUT = "/Volumes/main/default/data/stage4"
+
+dl = StageIvDownloader()
+files = dl.download([2023], [5, 6, 7, 8, 9], OUT, spark=spark)
+files.groupBy("is_out_file_valid").count().show()
+
+# One 24 h total per row, dated by the 12Z rule (the day before the file date)
+day = F.to_date(F.regexp_extract("source", r"nws_precip_1day_(\d{8})", 1), "yyyyMMdd")
+daily = dl.read(spark, OUT).withColumn("collect_date", F.date_sub(day, 1))
+daily.select("source", "collect_date").show(5, truncate=False)
+```
+
+---
+
+## Notebook Reference
+
+`StageIvDownloader` stages the daily precipitation in the [H3 Pixels (Crop Yield) example](../notebooks/h3-pixels-crop-yield) (notebook 01). Notebook 03 sums the daily totals to months on H3 cells.

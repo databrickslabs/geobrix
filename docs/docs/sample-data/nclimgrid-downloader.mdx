@@ -1,0 +1,128 @@
+---
+sidebar_position: 15
+title: nClimGrid and Precipitation Normals Downloader
+---
+
+## nClimGrid and Precipitation Normals Downloader
+
+`NclimgridDownloader` fetches two NOAA precipitation grids for the contiguous US and stages them in a Unity Catalog Volume:
+
+- **The 2006-2020 monthly precipitation normals** from NCEI: one file, one slice per calendar month.
+- **nClimGrid monthly precipitation** from the NOAA public S3 bucket: one file, one slice per month from January 1895.
+
+Both grids are 1/24° in EPSG:4326, about 4.6 km x 3.5 km at 42°N, in millimetres.
+
+:::note Which period the normals cover
+The normals file's own title says 1991-2020. Its values match the 2006-2020 nClimGrid monthly mean, to within 0.2% at five Iowa points. Treat the file as the 2006-2020 normals, as its name says.
+:::
+
+:::note Prerequisites
+- GeoBrix installed (the env wheel for the runtime). See [Installation](../installation#env-wheel).
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- No authentication required: both files are public HTTPS.
+:::
+
+---
+
+## How It Works
+
+1. **`normals(out_dir, ...)`** fetches `prcp-2006_2020-monthly-normals-v1.0.nc` (variable `mlyprcp_norm`).
+2. **`monthly(out_dir, ...)`** fetches `nclimgrid_prcp.nc` (variable `prcp`). Call it only when you need the monthly series.
+3. **`repair(target, out_dir, ...)`** fetches again only the rows of `target` that match `where`.
+4. **`read_normals(spark, out_dir, bbox)`** returns one tile with 12 bands, January to December, cut to `bbox` on read.
+5. **`read_monthly(spark, out_dir, bbox)`** returns one tile with one band per month, band 1 = January 1895.
+
+**Safe re-runs.** Each file is fetched on the driver to a scratch folder, checked, then moved to its final name. A file is valid when it opens as NetCDF and holds its variable. A re-run keeps a valid file. Every request goes through the GeoBrix HTTP allow-list.
+
+Serverless-safe: driver-side fetches, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `NclimgridDownloader`
+
+```python
+from databricks.labs.gbx.sample import NclimgridDownloader
+
+downloader = NclimgridDownloader()
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `normals_url` | `str` | URL of the normals file. Default: the NCEI archive copy. |
+| `monthly_url` | `str` | URL of the nClimGrid monthly file. Default: the NOAA public S3 copy. |
+| `_fetch` | injectable | Stand-in for the HTTP fetch, for offline unit tests. |
+
+#### `normals(out_dir, force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Output directory: a Volume path (`/Volumes/...`) or a local path. |
+| `force` | `bool` | Fetch again even when a valid file exists. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns one row in the result schema (`item_id` `"prcp_normals_2006_2020"`, `asset_name` `"normals"`): `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `monthly(out_dir, force=False, spark=None) → DataFrame`
+
+The same parameters as `normals()`. Returns one row (`item_id` `"nclimgrid_prcp"`, `asset_name` `"monthly"`).
+
+#### `repair(target, out_dir, where="is_out_file_valid = false", spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A Delta table name (repaired rows are merged back by `(item_id, asset_name)`) or a DataFrame (the repaired rows are returned only). |
+| `out_dir` | `str` | The download's output directory. |
+| `where` | `str` | Filter that selects the rows to fetch again. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Only the files whose rows are in `target` are fetched again.
+
+#### `read_normals(spark, out_dir, bbox) → DataFrame` and `read_monthly(spark, out_dir, bbox) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spark` | `SparkSession` | Active SparkSession. |
+| `out_dir` | `str` | Directory written by `normals()` or `monthly()`. |
+| `bbox` | `(minx, miny, maxx, maxy)` | Area of interest in EPSG:4326. The reader cuts each grid to it ([`bbox`](../readers/netcdf.mdx#bbox)). |
+
+Each returns `source` and `tile` through `netcdf_gbx`, one tile with the months as bands. The `gbx_rst_*` functions take the tile directly.
+
+---
+
+### `download_precip_normals` (convenience function)
+
+Constructs a default `NclimgridDownloader` and fetches the normals in a single call:
+
+```python
+from databricks.labs.gbx.sample import download_precip_normals
+
+download_precip_normals(spark, "/Volumes/main/default/data/normals")
+# **kw forwarded to NclimgridDownloader.normals(), e.g. force=
+```
+
+---
+
+## Copy-Paste Example
+
+```python
+from databricks.labs import gbx
+from databricks.labs.gbx.sample import NclimgridDownloader
+
+gbx.register(spark)
+OUT = "/Volumes/main/default/data/normals"
+BBOX = (-94.2, 41.9, -93.2, 42.2)  # (minx, miny, maxx, maxy) in EPSG:4326
+
+dl = NclimgridDownloader()
+dl.normals(OUT, spark=spark).show()
+
+normals = dl.read_normals(spark, OUT, BBOX)  # band 1 = January ... band 12 = December
+normals.selectExpr("source", "gbx_rst_numbands(tile) AS months").show(truncate=False)
+```
+
+---
+
+## Notebook Reference
+
+`NclimgridDownloader` stages the 2006-2020 normals in the [H3 Pixels (Crop Yield) example](../notebooks/h3-pixels-crop-yield) (notebook 01). Notebook 03 subtracts each month's normal from the Stage IV total to give the precipitation anomaly.

@@ -8,6 +8,7 @@ import Link from '@docusaurus/Link';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
 import offlineInstall from '!!raw-loader!../tests/python/installation/offline_install.py';
+import quickstartCode from '!!raw-loader!../tests/python/quickstart/examples.py';
 import scalaApiExamples from '!!raw-loader!../tests/scala/api/ScalaApiExamples.scala';
 import jvmJobBody from '!!raw-loader!../tests/scala/api/JvmJobBody.scala';
 
@@ -17,6 +18,10 @@ GeoBrix installs as one Python wheel per runtime family, the **env wheel**. The 
 function, and carries its own GDAL, PROJ and GEOS. For most users, the env wheel is the whole install.
 
 :::tip The env wheel includes the JAR
+The GeoBrix env wheels and the JAR are **not on PyPI or Maven**. They are assets of the
+[GitHub releases](https://github.com/databrickslabs/geobrix/releases). The most common install downloads the env wheel
+once and stages it on a Volume.
+
 Every env wheel ships the GeoBrix JAR inside it, so you do not need to download the JAR on its own. (The release
 also attaches it as `geobrix-<version>-jar-with-dependencies.jar`, the same file.)
 
@@ -27,8 +32,12 @@ GeoBrix does not load the JAR by itself. The JAR is used only in two cases:
 - You place it in the **Unity Catalog install folder** ([install 3](#uc-functions)). Three BNG functions then run as
   Scala functions.
 
-The wheel carries the JAR so that `gbx.stage_jar` can copy the matching JAR to a Volume for you. It also lets
-`gbx.register(spark)` check that a cluster's JAR is that same build.
+The wheel also carries what you need to stage everything on a Volume:
+
+- `gbx.stage_jar` copies the matching JAR to a Volume. `gbx.register(spark)` then checks that a cluster's JAR is
+  that same build.
+- `gbx.stage_deps` stages the wheel's pinned dependencies on a Volume, so an install never calls PyPI. See
+  [Install without PyPI access](#offline-install).
 :::
 
 ## How GeoBrix registers its functions
@@ -95,29 +104,19 @@ dbutils.library.restartPython()
   testFile="docs/tests/python/installation/test_verify_installation.py"
 />
 
-5. <Link id="verify-the-install"></Link>**Verify** that the wheel imports, that rasterio runs the wheel's GDAL, and
-   that a function runs end to end:
+5. <Link id="verify-the-install"></Link>**Verify** with a raster read and one function. Point the path at a GeoTIFF
+   on your Volume:
 
-```python
-import rasterio
-from databricks.labs.gbx.rasterx import functions as rx
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="USE_RASTERX"
+  title="Read a raster and apply a RasterX function"
+  source="docs/tests/python/quickstart/examples.py"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+/>
 
-print("rasterio", rasterio.__version__, "| GDAL", rasterio.__gdal_version__)
-
-# Functional check: load a GeoTIFF and read its properties.
-tiles = (
-    spark.read.format("binaryFile")
-    .load("/Volumes/<catalog>/<schema>/<volume>/path/to/*.tif")
-    .select(rx.rst_fromcontent("content", "GTiff").alias("tile"))
-)
-tiles.select(
-    rx.rst_width("tile").alias("width"),
-    rx.rst_height("tile").alias("height"),
-    rx.rst_srid("tile").alias("srid"),
-).show()
-```
-
-If the query returns the raster dimensions, the install is complete. `gbx.register(spark)` registered every `gbx_*`
+If the query returns the bounding box, width and height, the install is complete. `gbx.register(spark)` registered every `gbx_*`
 SQL function and every `*_gbx` reader and writer for this session. A `%sql` cell in the same notebook can call them.
 
 Use the `+env5` file on Serverless environment 5, DBR 17.3 and DBR 18. To install for every notebook on a cluster,

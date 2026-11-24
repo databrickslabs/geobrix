@@ -146,6 +146,9 @@ def test_download_marks_missing_invalid(spark, tmp_path):
 def test_missing_earthaccess_names_the_package_and_separate_step(monkeypatch):
     import builtins
 
+    # _ea() sets TQDM_DISABLE; register an undo so it does not leak into the session.
+    monkeypatch.delenv("TQDM_DISABLE", raising=False)
+
     real_import = builtins.__import__
 
     def fake_import(name, *a, **k):
@@ -225,6 +228,9 @@ class _HttpError(Exception):
         _HttpError("Forbidden: accept the EULA first", 403),
         RuntimeError("download failed: EulaNotAccepted: Eula Acceptance Failure"),
         _wrapped("pqdm worker failed", EulaNotAccepted("refused")),
+        # the class name alone is conclusive (earthaccess raises it only on 401/403)
+        RuntimeError("worker error: EulaNotAccepted"),
+        RuntimeError("Status code: 403, EULA not accepted for https://x/a.tif"),
     ],
 )
 def test_download_raises_on_eula_with_fix(spark, tmp_path, exc):
@@ -253,6 +259,8 @@ def test_download_raises_on_eula_with_fix(spark, tmp_path, exc):
         _HttpError("server error mentioning the EULA page", 500),
         RuntimeError("403 Forbidden for https://x/eulas/A_data.tif"),
         RuntimeError("EULA text fetched, status 500"),
+        RuntimeError("Download failed for https://x/eula/403/A.tif. Status code: 500"),
+        RuntimeError("EULA terms at https://x/403/terms missing. Status code: 500"),
     ],
 )
 def test_download_eula_lookalike_stays_invalid_row(spark, tmp_path, exc):

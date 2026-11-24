@@ -45,8 +45,11 @@ tier. The H3 encoder stays a scalar comprehension over valid pixels because
 
 The covering path iterates per pixel for quadbin, BNG and custom grids (with an interior fast path, see
 ``_COVERING_FAST_PATH_EXACT``) and for H3 cells larger than the pixels. For H3 cells smaller than the pixels it is
-cell-major and vectorised (``_covering_band_h3_vectorised``): each fine cell overlaps only a few pixels, and shapely
-computes every intersection area in one array call per chunk. Both give the same states within 1e-9.
+cell-major and vectorised (``_covering_band_h3_vectorised``): each fine cell overlaps only a few pixels, and
+``_box_overlap_area`` computes every (cell, pixel) overlap area of a chunk in numpy, exactly (each pixel is an
+axis-aligned box in lon/lat). Both give the same cells, and states within 1e-9 relative or 1e-10 absolute: the loop's
+GEOS rounds intersection points at the longitude's scale (a weight off by up to ~1e-11 of a pixel), which shows
+beyond 1e-9 relative only in a cell that a sliver of overlap dominates.
 """
 
 import math
@@ -313,7 +316,8 @@ def _covering_band(
     H3 gate: when ``_use_h3_vectorised`` holds (the ``_H3_COVERING_VECTORISED``
     flag is on, the geotransform is north-up, and the average H3 cell is smaller
     than the centre pixel), the band goes to ``_covering_band_h3_vectorised``,
-    which is cell-major and returns the same cells and states within 1e-9.
+    which is cell-major and returns the same cells and states (within 1e-9, or
+    the loop's GEOS rounding: see the module docstring).
 
     Interior fast-path (O(boundary) optimisation, mirrors the heavy tier):
     For exact-geometry grids (``_COVERING_FAST_PATH_EXACT``: custom, quadbin,
@@ -454,46 +458,129 @@ def _use_h3_vectorised(work_ds, resolution, gt) -> bool:
 
 
 def _h3_candidate_cells(gt: tuple, rows: tuple, cols: tuple, resolution: int) -> list:
-    """Every H3 cell that may overlap a pixel of the window ``rows`` x ``cols`` (``(first, last)``, inclusive) of a
-    north-up grid -- the window that holds the valid pixels: one overlap polyfill of the window's bbox, padded by one
-    pixel so a cell whose overlap test sits on the bbox edge is still a candidate (a superset; empty overlaps drop).
+    """Every H3 cell (int id) that may overlap a pixel of the window ``rows`` x ``cols`` (``(first, last)``,
+    inclusive) of a north-up grid -- the window that holds the valid pixels: one overlap polyfill of the window's bbox,
+    padded by one pixel so a cell whose overlap test sits on the bbox edge is still a candidate (a superset; empty
+    overlaps drop).
     """
-    import h3
+    from h3.api import basic_int as h3i
 
     xa, xb = gt[0] + cols[0] * gt[1], gt[0] + (cols[1] + 1) * gt[1]
     ya, yb = gt[3] + rows[0] * gt[5], gt[3] + (rows[1] + 1) * gt[5]
     west, east = min(xa, xb) - abs(gt[1]), max(xa, xb) + abs(gt[1])
     south, north = min(ya, yb) - abs(gt[5]), max(ya, yb) + abs(gt[5])
-    box = h3.LatLngPoly([(south, west), (north, west), (north, east), (south, east)])
-    return list(h3.polygon_to_cells_experimental(box, resolution, contain="overlap"))
+    box = h3i.LatLngPoly([(south, west), (north, west), (north, east), (south, east)])
+    return list(h3i.polygon_to_cells_experimental(box, resolution, contain="overlap"))
 
 
-def _h3_hexagons(cells: list) -> np.ndarray:
-    """Shapely (lon, lat) hexagons of H3 cell strings -- the vertices of ``tessellate._cell_polygon_lonlat`` --
-    built with one ``shapely.polygons`` call per vertex count."""
-    import h3
-    import shapely
+def _h3_hexagons(cells: list) -> tuple:
+    """``(lon, lat)`` vertex arrays, each cells x M, of H3 cells (int ids) -- the vertices of
+    ``tessellate._cell_polygon_lonlat``, in ``h3.cell_to_boundary`` order. M is the largest vertex count among the cells
+    (6, or up to 10 for a distorted cell); a shorter ring repeats its last vertex, a zero-length edge that adds no area.
+    """
+    from itertools import chain
 
-    # vectorscan: ok (h3 no array API)
-    rings = [[(lng, lat) for lat, lng in h3.cell_to_boundary(c)] for c in cells]
-    out = np.empty(len(cells), dtype=object)
-    by_n: dict = {}
-    for i, ring in enumerate(rings):  # vectorscan: ok (groups indices by vertex count)
-        by_n.setdefault(len(ring), []).append(i)
-    for idx in by_n.values():  # vectorscan: ok (one array call per vertex count)
-        sel = np.asarray(idx)
-        out[sel] = shapely.polygons(
-            np.asarray([rings[i] for i in idx], dtype="float64")
-        )
-    return out
+    from h3.api import basic_int as h3i
+
+    rings = [h3i.cell_to_boundary(c) for c in cells]  # vectorscan: ok (h3 no array API)
+    n = np.fromiter(map(len, rings), dtype=np.intp, count=len(rings))
+    m = int(n.max())
+    if int(n.min()) != m:
+        # vectorscan: ok (pads the rare ring with fewer vertices, per cell)
+        rings = [r if len(r) == m else r + (r[-1],) * (m - len(r)) for r in rings]
+    flat = np.fromiter(
+        chain.from_iterable(chain.from_iterable(rings)),
+        dtype="float64",
+        count=2 * m * len(rings),
+    ).reshape(len(rings), m, 2)
+    return np.ascontiguousarray(flat[:, :, 1]), np.ascontiguousarray(flat[:, :, 0])
 
 
-def _cell_pixel_pairs(hexes: np.ndarray, gt: tuple, height: int, width: int):
-    """(cell index, row, col) of every pixel in each hexagon's bounding window, as flat arrays (inverse geotransform
-    of the hexagon bounds; north-up grid)."""
-    import shapely
+def _box_overlap_area(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    cell: np.ndarray,
+    xl: np.ndarray,
+    yb: np.ndarray,
+    xr: np.ndarray,
+    yt: np.ndarray,
+) -> np.ndarray:
+    """Planar overlap area of the polygon ``cell[i]`` (vertex rows ``vx``, ``vy``: cells x M, a ring in either
+    orientation, padded by repeating a vertex) and the axis-aligned box ``[xl, xr] x [yb, yt]``, for every pair ``i``;
+    exactly 0 when they do not overlap or only touch.
 
-    b = shapely.bounds(hexes)
+    The area is the contour integral of x dy over the polygon's boundary pushed into the box by clamping each
+    coordinate to the box's range: the clamped curve winds once around every point of the box that the polygon holds
+    and never around one it does not, so the integral is the overlap's area (signed by the ring's orientation). Along
+    one edge, y is clamped outside the parameter interval where the edge is inside the box's y range (there dy = 0),
+    and the clamped x is affine on each of the at most three pieces the box's x range cuts that interval into, so the
+    midpoint rule integrates each piece exactly. Coordinates are taken relative to the box's south-west corner first
+    (exact: the two are close), so the area is accurate to the pixel's scale, not the longitude's. The integral of a
+    pair with no overlap is rounding noise around 0; such a pair is set to exactly 0 when the pair is separated along
+    an axis or by the line of an edge that has its whole polygon on its inner side (a separating axis).
+    """
+    x = vx[cell] - xl[:, None]
+    y = vy[cell] - yb[:, None]
+    w = (xr - xl)[:, None]
+    h = (yt - yb)[:, None]
+    nxt = np.roll(np.arange(vx.shape[1]), -1)
+    dx = x[:, nxt] - x
+    dy = y[:, nxt] - y
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # the edge's parameter interval [lo, hi] with 0 <= y <= h
+        ta = -y / dy
+        tb = (h - y) / dy
+        lo = np.clip(np.fmin(ta, tb), 0.0, 1.0)
+        hi = np.clip(np.fmax(ta, tb), 0.0, 1.0)
+        # [a, b]: where 0 <= x <= w, inside [lo, hi]; a vertical edge (dx == 0) gives +-inf, so a = lo and b = hi
+        # inside the x range, and a = b at the end whose clamped value (x < 0: 0, x > w: w) the pieces below use
+        sa = -x / dx
+        sb = (w - x) / dx
+        a = np.clip(np.fmin(sa, sb), lo, hi)
+        b = np.clip(np.fmax(sa, sb), lo, hi)
+    # the clamped x before a is w when x decreases (else 0), after b w when x increases or is constant (else 0)
+    before = np.where(dx < 0, w, 0.0)
+    after = np.where(dx >= 0, w, 0.0)
+    middle = np.clip(x + dx * ((a + b) * 0.5), 0.0, w)
+    integral = (a - lo) * before + (b - a) * middle + (hi - b) * after
+    area = np.abs(np.einsum("ij,ij->i", dy, integral))
+    # exact 0 for a pair without overlap: separated along an axis, or by a supporting edge's line
+    sep = (x.max(axis=1) <= 0.0) | (x.min(axis=1) >= w[:, 0])
+    sep |= (y.max(axis=1) <= 0.0) | (y.min(axis=1) >= h[:, 0])
+    orient, support = _ring_supporting_edges(vx, vy)
+    # the box corner deepest on the inner side of each edge: cross(edge, corner - start) at its maximum
+    o = orient[cell][:, None]
+    reach = o * (
+        dx * (np.where(o * dx > 0, h, 0.0) - y)
+        - dy * (np.where(o * dy < 0, w, 0.0) - x)
+    )
+    sep |= ((reach <= 0.0) & support[cell]).any(axis=1)
+    area[sep] = 0.0
+    return area
+
+
+def _ring_supporting_edges(vx: np.ndarray, vy: np.ndarray) -> tuple:
+    """Per ring of ``vx``, ``vy`` (cells x M): its orientation (+1 counter-clockwise, -1 clockwise) and, per edge,
+    whether the edge has nonzero length and every vertex of the ring on its inner side (true of every edge of a
+    convex ring) -- the edges whose lines may separate a box from the ring."""
+    nxt = np.roll(np.arange(vx.shape[1]), -1)
+    # vertices relative to the first, so the products are of small numbers (exact differences: the two are close)
+    x = vx - vx[:, :1]
+    y = vy - vy[:, :1]
+    ex, ey = x[:, nxt] - x, y[:, nxt] - y
+    orient = np.where((x * y[:, nxt] - x[:, nxt] * y).sum(axis=1) < 0, -1.0, 1.0)
+    # cross(edge k, vertex j - start of edge k) for every k, j: cells x M x M
+    cross = ex[:, :, None] * (y[:, None, :] - y[:, :, None]) - ey[:, :, None] * (
+        x[:, None, :] - x[:, :, None]
+    )
+    inner = (orient[:, None, None] * cross >= 0.0).all(axis=2)
+    return orient, inner & ((ex != 0.0) | (ey != 0.0))
+
+
+def _cell_pixel_pairs(bounds: np.ndarray, gt: tuple, height: int, width: int):
+    """(cell index, row, col) of every pixel in each cell's bounding window, as flat arrays (inverse geotransform of
+    the cell bounds, cells x ``(xmin, ymin, xmax, ymax)``; north-up grid)."""
+    b = bounds
     ca, cb = (b[:, 0] - gt[0]) / gt[1], (b[:, 2] - gt[0]) / gt[1]
     ra, rb = (b[:, 1] - gt[3]) / gt[5], (b[:, 3] - gt[3]) / gt[5]
     c0 = np.clip(np.floor(np.minimum(ca, cb)), 0, width - 1).astype(np.int64)
@@ -502,7 +589,7 @@ def _cell_pixel_pairs(hexes: np.ndarray, gt: tuple, height: int, width: int):
     r1 = np.clip(np.floor(np.maximum(ra, rb)), -1, height - 1).astype(np.int64)
     ncol, nrow = np.maximum(c1 - c0 + 1, 0), np.maximum(r1 - r0 + 1, 0)
     n = ncol * nrow
-    cell = np.repeat(np.arange(hexes.size), n)
+    cell = np.repeat(np.arange(b.shape[0]), n)
     off = np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)
     cols = np.repeat(c0, n) + off % np.repeat(np.maximum(ncol, 1), n)
     rows = np.repeat(r0, n) + off // np.repeat(np.maximum(ncol, 1), n)
@@ -513,12 +600,10 @@ def _covering_band_h3_vectorised(
     band: np.ndarray, mask: np.ndarray, resolution: int, agg: str, gt: tuple
 ) -> list:
     """``_covering_band`` for H3 cells smaller than the pixels of a north-up EPSG:4326 grid, cell-major: the same
-    cells and states as the per-pixel loop (weight = intersection area / pixel area, kept when > 0).
+    cells and states as the per-pixel loop (weight = intersection area / pixel area, kept when > 0). Each pixel is an
+    axis-aligned box in (lon, lat), so the areas come from ``_box_overlap_area`` over every (cell, pixel) pair of a
+    chunk at once -- the planar overlap GEOS computes, without a geometry per pair.
     """
-    import shapely
-
-    from databricks.labs.gbx.pyrx.core.tessellate import _encode_cellid
-
     valid_rows = np.flatnonzero(mask.any(axis=1))
     if valid_rows.size == 0:
         return []  # no valid pixel: no cell, and no candidate built
@@ -534,21 +619,25 @@ def _covering_band_h3_vectorised(
     step = _H3_VEC_CHUNK_CELLS
     for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound pairs)
         chunk = cells[start : start + step]
-        hexes = _h3_hexagons(chunk)
-        cell, rows, cols = _cell_pixel_pairs(hexes, gt, height, width)
+        vx, vy = _h3_hexagons(chunk)
+        bounds = np.stack([vx.min(1), vy.min(1), vx.max(1), vy.max(1)], axis=1)
+        cell, rows, cols = _cell_pixel_pairs(bounds, gt, height, width)
         ok = mask[rows, cols]
         cell, rows, cols = cell[ok], rows[ok], cols[ok]
         if cell.size == 0:
             continue
         xl, xr = gt[0] + cols * gt[1], gt[0] + (cols + 1) * gt[1]
         yt, yb = gt[3] + rows * gt[5], gt[3] + (rows + 1) * gt[5]
-        boxes = shapely.box(
+        area = _box_overlap_area(
+            vx,
+            vy,
+            cell,
             np.minimum(xl, xr),
             np.minimum(yt, yb),
             np.maximum(xl, xr),
             np.maximum(yt, yb),
         )
-        w = shapely.area(shapely.intersection(hexes[cell], boxes)) / px_area
+        w = area / px_area
         keep = w > 0
         cell, w, vals = (
             cell[keep],
@@ -558,8 +647,9 @@ def _covering_band_h3_vectorised(
         if cell.size == 0:
             continue
         uniq, measures = _grouped_measures(cell, vals, agg, weights=w)
+        # an H3 id is below 2**63, so the int id is already the signed Long ``tessellate._encode_cellid`` gives
         out.extend(
-            {"cellID": _encode_cellid(chunk[int(c)], "h3"), "measure": m}
+            {"cellID": chunk[c], "measure": m}
             for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
         )
     return out

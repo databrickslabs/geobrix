@@ -60,7 +60,9 @@ def _as_map(band, key="measure"):
     return {c["cellID"]: c[key] for c in band}
 
 
-def _assert_same(new, old):
+def _assert_same(new, old, rel=1e-9):
+    # 1e-10 absolute: the per-pixel loop's GEOS rounds intersection points at the longitude's scale (a weight off by up
+    # to ~1e-11 of a pixel), the vectorised pass's exact kernel at the pixel's -- seen only in sliver-dominated cells
     assert len(new) == len(old)
     for nb, ob in zip(new, old):
         nm, om = _as_map(nb), _as_map(ob)
@@ -69,7 +71,7 @@ def _assert_same(new, old):
             if v is None:
                 assert nm[cid] is None
             else:
-                assert nm[cid] == pytest.approx(v, rel=1e-9, abs=1e-12)
+                assert nm[cid] == pytest.approx(v, rel=rel, abs=1e-10)
 
 
 @pytest.mark.parametrize(
@@ -102,7 +104,9 @@ def test_every_statistic_equals_the_per_pixel_loop(stat, monkeypatch):
     old = _run(
         LL, 12, gridagg.raster_to_grid_single, False, monkeypatch, stat=stat, **kw
     )
-    _assert_same(new, old)
+    # the variance divides the loop's sliver-weight rounding by the cell's total weight: one cell here holds 5e-6 of a
+    # pixel, and the loop's variance is off by 5e-8 relative (the vectorised one by 1e-11, against rational arithmetic)
+    _assert_same(new, old, rel=1e-6 if stat in ("variance", "stddev") else 1e-9)
 
 
 def test_the_vectorised_path_is_taken_only_for_finer_cells(monkeypatch):

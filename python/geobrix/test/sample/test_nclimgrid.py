@@ -90,7 +90,7 @@ def real_normals(spark, tmp_path_factory):
     )
     assert (
         rows[0]["is_out_file_valid"] and rows[0]["out_file_sz"] > 100_000_000
-    )  # 280,673,972 bytes when probed
+    )  # 280,673,972 bytes at the time of writing
     return rows[0]["out_file_path"]
 
 
@@ -180,5 +180,5 @@ def test_real_normals_may_matches_the_2006_2020_nclimgrid_may_mean(
     )
     assert max(gaps.values()) <= 0.01, (
         f"the normals' May value differs from the 2006-2020 nClimGrid May mean by up to {max(gaps.values()):.2%}: "
-        "the file may hold the 1991-2020 normals its title names. Stop and report; do not relabel the dataset."
+        "the file may hold the 1991-2020 normals its title names, not the 2006-2020 normals."
     )

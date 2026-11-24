@@ -110,7 +110,7 @@ def test_real_vs_2023(spark, tmp_path):
     res = download_gridmet(spark, [2023], out).collect()
     assert (
         res[0]["is_out_file_valid"] and res[0]["out_file_sz"] > 50_000_000
-    )  # 59,825,061 bytes when probed
+    )  # 59,825,061 bytes at the time of writing
     tile = GridmetDownloader().read(spark, out, DEMO_BBOX, season=2023).first()["tile"]
     with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as rds:
         assert (

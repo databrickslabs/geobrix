@@ -28,6 +28,7 @@ from databricks.labs.gbx.sample.nclimgrid import (
     download_precip_normals,
 )
 from databricks.labs.gbx.sample.overture import OvertureClient, download_overture_aoi
+from databricks.labs.gbx.sample.stage4 import StageIvDownloader, download_stage4
 from databricks.labs.gbx.sample.tropomi import TropomiDownloader, download_tropomi_aoi
 from databricks.labs.gbx.sample.wells import WellsDownloader, download_wells_aoi
 from databricks.labs.gbx.sample.worldpop import (
@@ -44,6 +45,7 @@ __all__ = [
     "NaipDownloader",
     "NclimgridDownloader",
     "OvertureClient",
+    "StageIvDownloader",
     "TropomiDownloader",
     "WellsDownloader",
     "WorldPopDownloader",
@@ -55,6 +57,7 @@ __all__ = [
     "download_nasanex_aoi",
     "download_overture_aoi",
     "download_precip_normals",
+    "download_stage4",
     "download_tropomi_aoi",
     "download_wells_aoi",
     "download_worldpop_aoi",

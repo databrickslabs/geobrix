@@ -43,7 +43,7 @@ GRACE-DA comes from NASA GES DISC. Your Earthdata user must approve the provider
 3. **`repair(target, ...)`** fetches again only the rows of `target` that match `where`.
 4. **`read(spark, out_dir, variable, bbox)`** loads one variable with `netcdf_gbx`, cut to `bbox` on read: one tile per weekly file.
 
-**The week date.** The `A<YYYYMMDD>` stamp in each file name is the first day of its week. `week_date_of(path)` returns it.
+**The week date.** The `A<YYYYMMDD>` stamp in each file name is the week's date. `week_date_of(path)` returns it.
 
 Serverless-safe: driver-side fetches, with no runtime Spark-config mutation or JVM-bridge access.
 
@@ -135,8 +135,10 @@ import os
 
 from pyspark.sql import functions as F
 
+from databricks.labs import gbx
 from databricks.labs.gbx.sample import GraceDaDownloader
 
+gbx.register(spark)
 os.environ["EARTHDATA_TOKEN"] = dbutils.secrets.get("<catalog>", "<schema>", "earthdata_token")
 OUT = "/Volumes/main/default/data/grace"
 BBOX = (-94.2, 41.9, -93.2, 42.2)  # (minx, miny, maxx, maxy) in EPSG:4326

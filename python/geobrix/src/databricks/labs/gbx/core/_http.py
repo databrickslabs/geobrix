@@ -438,11 +438,14 @@ def download(
 @dataclass(frozen=True)
 class RangeProbe:
     """What a one-byte ranged GET learned about an href: whether the server honors ``Range`` (206), the full size of the
-    file, and its ``ETag`` (None when not sent)."""
+    file, and its ``ETag`` and ``Last-Modified`` (None when not sent)."""
 
     supports_range: bool
     size: Optional[int]
     etag: Optional[str]
+    last_modified: Optional[str] = (
+        None  # the Last-Modified header, for a server that sends no ETag
+    )
 
 
 def probe_range(
@@ -463,12 +466,18 @@ def probe_range(
         with resp:
             resp.raise_for_status()
             etag = resp.headers.get("ETag")
+            last_modified = resp.headers.get("Last-Modified")
             if resp.status_code == 206:
                 total = (resp.headers.get("Content-Range") or "").rpartition("/")[2]
-                return RangeProbe(True, int(total) if total.isdigit() else None, etag)
+                return RangeProbe(
+                    True, int(total) if total.isdigit() else None, etag, last_modified
+                )
             length = resp.headers.get("Content-Length")
             return RangeProbe(
-                False, int(length) if (length or "").isdigit() else None, etag
+                False,
+                int(length) if (length or "").isdigit() else None,
+                etag,
+                last_modified,
             )
     finally:
         session.close()

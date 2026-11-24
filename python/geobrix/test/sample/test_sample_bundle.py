@@ -39,6 +39,7 @@ def test_sample_package_all():
     assert hasattr(sample, "run_essential_bundle")
     assert hasattr(sample, "run_complete_bundle")
     assert set(sample.__all__) == {
+        "CsbDownloader",
         "DemDownloader",
         "EmitDownloader",
         "FirePerimeterDownloader",
@@ -53,6 +54,7 @@ def test_sample_package_all():
         "TropomiDownloader",
         "WellsDownloader",
         "WorldPopDownloader",
+        "download_csb_state",
         "download_dem_aoi",
         "download_emit_aoi",
         "download_fire_perimeter_aoi",

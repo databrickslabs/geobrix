@@ -14,6 +14,7 @@ from databricks.labs.gbx.sample._bundle import (
     run_complete_bundle,
     run_essential_bundle,
 )
+from databricks.labs.gbx.sample.csb import CsbDownloader, download_csb_state
 from databricks.labs.gbx.sample.dem import DemDownloader, download_dem_aoi
 from databricks.labs.gbx.sample.emit import EmitDownloader, download_emit_aoi
 from databricks.labs.gbx.sample.fire import (
@@ -39,6 +40,7 @@ from databricks.labs.gbx.sample.worldpop import (
 )
 
 __all__ = [
+    "CsbDownloader",
     "DemDownloader",
     "EmitDownloader",
     "FirePerimeterDownloader",
@@ -53,6 +55,7 @@ __all__ = [
     "TropomiDownloader",
     "WellsDownloader",
     "WorldPopDownloader",
+    "download_csb_state",
     "download_dem_aoi",
     "download_emit_aoi",
     "download_fire_perimeter_aoi",

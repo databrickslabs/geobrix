@@ -80,6 +80,17 @@ Precipitation is the NWS Stage IV daily CONUS NetCDF, with the NCEI 2006-2020 mo
 - The baseline samples each source raster at the field centroid and takes an all-touched NDVI mean per field.
 - The notebook compares the baseline with the H3 scores, interior fields apart from edge fields.
 
+## Measured on the demo area {#measured}
+
+Measured on Serverless environment 6 for the 2023 season in Story and Boone counties.
+
+| Measure | Value |
+|---|---|
+| Corn field polys | 3,500 (of 5,250 in the two counties) |
+| Res-13 field cells / after the 10 m setback | 18,557,719 / 16,865,043 |
+| Raw rows (`h3_field_measures_perc`), size and write time | 782,383,772 rows, 5.3 GB, 1 min |
+| H3 covering time per HLS scene at res 12 | 24 s for 3.1 million cells with a valid pixel; 85 s for 15.5 million cells with every covered cell |
+
 ## Tables {#tables}
 
 | Notebook | Table | One row per |

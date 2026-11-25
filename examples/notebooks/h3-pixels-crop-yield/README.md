@@ -35,12 +35,14 @@ Each weather, soil and vegetation dataset goes onto H3 once, at the resolution t
 - **One covering pass per dataset.** `gbx_rst_h3_rastertogrid_partial` with `assignment='covering'` shares each pixel over the cells it overlaps, by area. `attr_measure` is the area-weighted mean. `pixel_weight` is the sum of the pixel-area shares.
 - **Months from days.** Stage IV daily totals sum to a month, and gridMET wind averages to a month. The normals and GRACE-DA go to months too. The precipitation anomaly is the Stage IV month minus the normal.
 - **NDVI per August scene.** `gbx_rst_mapalgebra` masks Fmask bit 1 (cloud) and computes NDVI. Each scene goes to H3 at res 12.
+- **Measured.** Covering one HLS scene at res 12 takes 24 s for 3.1 million cells with a valid pixel, and 85 s for 15.5 million cells when every covered cell is kept (Serverless environment 6).
 
 ### 04 — Field polys to cells
 
 ![Notebook 04 — CSB corn polys → res-13 fill → h3_field_cells](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/h3-pixels-crop-yield/h3-pixels-crop-yield-04.png)
 
 - **Demo fields.** The demo keeps 3,500 corn polys near the Story County centre. For 2023 there are 5,250 corn polys in Story and Boone counties.
+- **Measured.** The 3,500 polys fill 18,557,719 res-13 cells, and 16,865,043 stay after the 10 m setback.
 - **Res-13 fill.** `h3_polyfillash3` keeps the cells whose centre is in the poly. Each cell gets `edge_dist_m` and `centroid_dist_m` in metres (`st_distance`, `st_boundary`, `st_centroid`).
 - **Setback later.** `h3_field_cells` keeps every filled cell. The 10 m setback applies in notebook 05, so changing it needs no re-fill.
 
@@ -50,6 +52,7 @@ Each weather, soil and vegetation dataset goes onto H3 once, at the resolution t
 
 - **Link once.** `h3_field_cell_links` maps each field cell to dataset cells. A cell inside one parent gets `h3_toparent` and 100 percent. A straddle cell, one that crosses a parent edge, gets the exact overlap share from `st_intersection`. `h3_kring` finds the neighbouring parents to test.
 - **Raw, then weighted.** `h3_field_measures_perc` is a key join of the links to `h3_dataset_measures`. `h3_field_measures_weighted` is the overlap-weighted mean per field cell.
+- **Size.** `h3_field_measures_perc` holds 782,383,772 rows (5.3 GB) and takes about 1 minute to write on Serverless environment 6.
 - **Blended per field.** `h3_field_measures_blended` holds a plain score and an edge-weighted score (`w = min(1, d / 30)`). It also holds the August NDVI mean.
 
 ### 06 — Centroid baseline

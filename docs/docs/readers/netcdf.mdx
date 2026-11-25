@@ -287,7 +287,7 @@ filters yours lack. `GBX_NATIVE_DISABLE=1` turns the env wheel's native payload,
 The `spatial_epsg` attribute is also read.
 Without these, the CRS comes from the CF `grid_mapping` variable, for example `polar_stereographic` or `lambert_conformal_conic`.
 
-For a projected CRS, the reader scales `x` / `y` from their CF `units` to the units of the CRS, for example `km` to metres.
+For a projected CRS, the reader scales `x` / `y` from their CF `units` to the units of the CRS, for example `km` or `ft` to metres. It knows `m`, `km`, `ft` and `US_survey_foot`, and refuses any other unit.
 `EPSG:4326` is the default only for a grid with 1-D `lat` / `lon`.
 The reader refuses any other grid that has no CRS, and the error gives the fix.
 

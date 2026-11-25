@@ -34,6 +34,8 @@ _LAT_UNITS = ("degrees_north", "degree_north")
 _LON_UNITS = ("degrees_east", "degree_east")
 _PROJ_Y, _PROJ_X = "projection_y_coordinate", "projection_x_coordinate"
 # Metres per unit of a projected axis (CF `units`); degrees are never scaled.
+_FOOT_M = 0.3048
+_US_SURVEY_FOOT_M = 1200.0 / 3937.0
 _METRES_PER_UNIT = {
     "m": 1.0,
     "metre": 1.0,
@@ -45,6 +47,12 @@ _METRES_PER_UNIT = {
     "kilometres": 1000.0,
     "kilometer": 1000.0,
     "kilometers": 1000.0,
+    "ft": _FOOT_M,
+    "foot": _FOOT_M,
+    "feet": _FOOT_M,
+    "international_foot": _FOOT_M,
+    "us_survey_foot": _US_SURVEY_FOOT_M,
+    "us_survey_feet": _US_SURVEY_FOOT_M,
 }
 
 
@@ -208,6 +216,26 @@ def _axis_scale(axis, crs_unit_m: float) -> float:
     return _METRES_PER_UNIT[unit] / crs_unit_m
 
 
+def _pixel_size(ds, axis) -> float:
+    """The pixel size along a 1-D coordinate ``axis``: the step of its first two values. An axis of one value has no
+    step: its CF ``bounds`` variable (the edges of its one cell) gives the size, else the grid is refused with a Fix.
+    """
+    vals = axis.values
+    if len(vals) > 1:
+        return float(abs(vals[1] - vals[0]))
+    name = axis.attrs.get("bounds") or axis.encoding.get("bounds")
+    if name and name in ds.variables:
+        edges = ds[name].values.ravel()
+        if edges.size >= 2 and edges[0] != edges[1]:
+            return float(abs(edges[1] - edges[0]))
+    raise ValueError(
+        f"netcdf_gbx: the axis {axis.name!r} has one value, so its pixel size is not known: a step needs two values, "
+        "and the axis has no CF bounds variable to give the edges of its cell. "
+        f"Fix: add a bounds variable to {axis.name!r} (its `bounds` attribute names it), or write the grid with "
+        "two or more values along that axis."
+    )
+
+
 def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
     """Affine transform (north-up) + CRS string for a regular grid variable.
 
@@ -223,8 +251,8 @@ def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
     lat, lon = _find_lat_lon(ds)
     lats = lat.values
     lons = lon.values
-    px = float(abs(lons[1] - lons[0]))
-    py = float(abs(lats[1] - lats[0]))
+    px = _pixel_size(ds, lon)
+    py = _pixel_size(ds, lat)
     ulx = float(min(lons)) - px / 2.0
     uly = float(max(lats)) + py / 2.0
     transform = Affine.translation(ulx, uly) * Affine.scale(px, -py)
@@ -551,8 +579,29 @@ def point_arrays(
         lat_flat = np.asarray(ds[lat.name].values).ravel()
     attrs: Dict[str, object] = {}
     for name in variables:
+        if kind == CURVILINEAR:
+            _warn_dropped_slices(ds, name, lat)
         attrs[name] = np.asarray(ds[name].values).ravel()
     return lon_flat, lat_flat, attrs, "4326"
+
+
+def _warn_dropped_slices(ds, variable: str, lat) -> None:
+    """Vector mode places one point per cell of the 2-D lat / lon, so a variable with another dimension longer than
+    one (a leading ``time``) gives its first slice only. The result is unchanged; the warning names the variable and
+    the slice taken (the Python logger of the reading process, as ``array_2d``'s)."""
+    da = ds[variable]
+    for dim in da.dims:
+        size = int(da.sizes[dim])
+        if dim not in lat.dims and size > 1:
+            _logger.warning(
+                "netcdf_gbx: variable %r has dimension %r of size %d; vector mode reads one point per cell, so it "
+                "takes index 0 of %r and drops the other %d slice(s).",
+                variable,
+                dim,
+                size,
+                dim,
+                size - 1,
+            )
 
 
 # CF-1.8 discrete sampling geometry (DSG) feature types the vector mode reads, one point per observation.

@@ -95,6 +95,8 @@ Session configuration, the JVM bridge, and the resilient-distributed-dataset API
 are all untouched.
 """
 
+import threading
+from collections import OrderedDict
 from typing import Optional, Union
 
 import numpy as np
@@ -112,10 +114,12 @@ from shapely import transform as shapely_transform
 from shapely.ops import transform
 
 from databricks.labs.gbx.core.crs import (
+    _transformer_cache,
     authority_srid_of,
     crs_to_canonical,
     get_transformer,
     resolve_crs,
+    to_pyproj_crs,
 )
 
 from ._geom import parse_geom
@@ -365,6 +369,102 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     return to_wkb(g, include_srid=True)
 
 
+# One (source, target) pair per row would repeat, for every row of a column, work that depends on the two CRSes alone:
+# parsing each, the full-confidence authority search that identifies an authority-less target (4 ms for the NWS HRAP
+# WKT on a laptop, 170 ms per row on a Serverless worker), the PROJ operation search and the area-of-use CRS. The pair is
+# kept per thread (a pyproj object is not shared across threads), bounded, and built from the canonical helpers of
+# ``core.crs``. Only a pair that resolved is kept: a bad argument raises on every row, as before.
+_PAIR_CACHE_SIZE = 64
+_pairs = threading.local()
+
+
+class _Pair:
+    """What ``st_transformcrs`` needs of one (source, target) pair, resolved once."""
+
+    __slots__ = ("src", "tgt", "tr", "tgt_pyproj", "tgt_srid", "_lonlat", "_owner")
+
+    def __init__(self, src, tgt):
+        self.src, self.tgt = src, tgt
+        _configure_env()  # before the transformer is built: it reads the grid dirs on its search path
+        self.tr = get_transformer(src, tgt)
+        # the transformer cache this pair's transformer came from: a caller that drops the cache (the way to take
+        # up grid dirs registered after a transformer was built) drops the pairs with it
+        self._owner = _transformer_cache()
+        try:
+            self.tgt_pyproj = to_pyproj_crs(tgt)
+        except Exception:
+            self.tgt_pyproj = tgt  # fallback: area_of_use absent -> skip
+        self.tgt_srid = authority_srid_of(tgt)
+        self._lonlat = None
+
+    def lonlat_transformer(self):
+        """The transformer of a projected source to EPSG:4326, for the area-of-use check."""
+        if self._lonlat is None:
+            self._lonlat = get_transformer(self.src, resolve_crs(4326))
+        return self._lonlat
+
+
+def _pair_cache():
+    cache = getattr(_pairs, "cache", None)
+    if cache is None:
+        cache = _pairs.cache = OrderedDict()
+    return cache
+
+
+def _clear_pair_cache() -> None:
+    """Forget the pairs of this thread (a test, or a process that changed what its CRS names resolve to)."""
+    _pair_cache().clear()
+
+
+def _configure_env() -> None:
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.pyrx import _env
+
+    grid_dirs = proj_grids.get_registered_dirs()
+    if not grid_dirs and _gdal_policy._in_spark_task():
+        grid_dirs = _env.pyproj_grid_dirs()
+    _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+
+
+def _pair_of(embedded_srid: int, source_crs, target_crs) -> Optional[_Pair]:
+    """The pair of a geometry's source CRS (its embedded SRID, else ``source_crs``) and ``target_crs``; None when
+    there is no source (no SRID and no ``source_crs``) or the embedded SRID does not resolve (DATA errors). A bad
+    ``source_crs`` or ``target_crs`` (PARAMETERS) raises ``ValueError`` on every call.
+    """
+    if embedded_srid > 0:
+        skey = ("srid", embedded_srid)
+    elif source_crs is not None:
+        skey = ("crs", type(source_crs).__name__, source_crs)
+    else:
+        return None
+    key = (skey, type(target_crs).__name__, target_crs)
+    cache = _pair_cache()
+    try:
+        hit = cache.get(key)
+    except TypeError:  # an unhashable argument is not cached
+        key, hit = None, None
+    if hit is not None and hit._owner is _transformer_cache() and hit._owner:
+        cache.move_to_end(key)
+        return hit
+    if embedded_srid > 0:
+        try:
+            src = resolve_crs(embedded_srid)
+        except Exception:
+            # Unresolvable embedded SRID — the SRID rides in the geometry = DATA.
+            return None
+    else:
+        # An explicit source_crs is a PARAMETER — let resolve_crs raise ValueError.
+        src = resolve_crs(source_crs)
+    # target_crs is a PARAMETER — resolve_crs raises ValueError if invalid.
+    pair = _Pair(src, resolve_crs(target_crs))
+    if key is not None:
+        cache[key] = pair
+        if len(cache) > _PAIR_CACHE_SIZE:
+            cache.popitem(last=False)
+    return pair
+
+
 def st_transformcrs(
     geom,
     target_crs: Union[int, str],
@@ -426,27 +526,18 @@ def st_transformcrs(
     if g is None:
         # Unparseable geometry DATA -> NULL (not a parameter error).
         return None
-    # Resolve source CRS — data errors degrade to NULL; parameter errors raise.
+    # Resolve the (source, target) pair — data errors degrade to NULL; parameter errors raise. The answer is a pure
+    # function of the pair, so a row reads it from the per-thread cache (see ``_pair_of``).
     embedded_srid = int(get_srid(g))
-    src = None
-    if embedded_srid > 0:
-        try:
-            src = resolve_crs(embedded_srid)
-        except Exception:
-            # Unresolvable embedded SRID — the SRID rides in the geometry = DATA.
-            return None
-    elif source_crs is not None:
-        # An explicit source_crs is a PARAMETER — let resolve_crs raise ValueError.
-        src = resolve_crs(source_crs)
-
-    if src is None:
-        # No source CRS at all: plain geometry with no embedded SRID and no
-        # explicit override.  Cannot reproject — DATA has no CRS -> NULL.
+    pair = _pair_of(embedded_srid, source_crs, target_crs)
+    if pair is None:
+        # No source CRS at all (a plain geometry with no embedded SRID and no explicit override), or an embedded
+        # SRID that does not resolve: the DATA has no usable CRS -> NULL.
         return None
+    src = pair.src
 
-    # target_crs is a PARAMETER — resolve_crs raises ValueError if invalid.
-    tgt = resolve_crs(target_crs)
-    # Make any user-registered PROJ grid dirs findable before building the transformer.
+    # Make any user-registered PROJ grid dirs findable before the transformer is used (a cached one was built
+    # after the same call, on the first row of its pair).
     # On the driver this passes the grid-dir registry; it pushes
     # the dirs into pyproj's search path (a PROJ_DATA env var alone never reaches
     # pyproj), so a CRS string that references a grid by filename (e.g. +nadgrids=..)
@@ -455,16 +546,8 @@ def st_transformcrs(
     # empty one (cleared, or replaced with nothing) takes every grid dir off the search path. A worker's registry is
     # always empty (driver-side state): there the dirs already on the search path (put there by the UDF closure,
     # _build_transformcrs_udf) are passed on, not read as "no grids" and removed.
-    from databricks.labs.gbx import _gdal_policy
-    from databricks.labs.gbx.core import proj_grids
-    from databricks.labs.gbx.pyrx import _env
-
-    grid_dirs = proj_grids.get_registered_dirs()
-    if not grid_dirs and _gdal_policy._in_spark_task():
-        grid_dirs = _env.pyproj_grid_dirs()
-    _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
-    tr = get_transformer(src, tgt)
-    g_proj = _reproject(tr, g)
+    _configure_env()
+    g_proj = _reproject(pair.tr, g)
 
     # Non-finite X/Y guard — return NULL rather than propagating Infinity/NaN coordinates.
     #
@@ -504,33 +587,26 @@ def st_transformcrs(
     # If the target CRS has no area_of_use metadata (e.g. raw PROJ4, custom WKT without
     # USAGE blocks) the check returns None and is skipped — never NULL what cannot be disproved.
     #
-    # ``tgt`` is a rasterio CRS (from ``resolve_crs``), which does not carry area_of_use.
-    # Convert via the authority tuple when available (preserves the registry bounds); fall
-    # back to from_wkt otherwise (area_of_use will be None -> skip).
-    try:
-        from databricks.labs.gbx.core.crs import to_pyproj_crs
-
-        _tgt_pyproj = to_pyproj_crs(tgt)
-    except Exception:
-        _tgt_pyproj = tgt  # fallback: area_of_use absent -> skip
-
+    # ``tgt`` is a rasterio CRS (from ``resolve_crs``), which does not carry area_of_use. The pair holds the pyproj
+    # CRS (the authority tuple when available, which keeps the registry bounds; from_wkt otherwise, so area_of_use is
+    # None -> skip).
     from databricks.labs.gbx.core.crs import in_target_domain
 
     lonlat = (
         get_coordinates(g)
         if src.is_geographic
         else get_coordinates(
-            transform(get_transformer(src, resolve_crs(4326)).transform, force_2d(g))
+            transform(pair.lonlat_transformer().transform, force_2d(g))
         )
     )
-    dom = in_target_domain(lonlat, _tgt_pyproj)
+    dom = in_target_domain(lonlat, pair.tgt_pyproj)
     if dom is False:
         return None
     # dom is True (in-domain) or None (no area_of_use -> skip) -> proceed
 
     # Determine output SRID from the target's integer authority code (None for a
     # raw WKT / PROJ4 target, or for a non-numeric code such as OGC:CRS84).
-    tgt_srid = authority_srid_of(tgt)
+    tgt_srid = pair.tgt_srid
     if tgt_srid is not None:
         g_proj = set_srid(g_proj, tgt_srid)
         if text:

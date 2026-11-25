@@ -119,3 +119,42 @@ def test_the_cache_is_bounded():
     for i in range(_crs._PAIR_CACHE_SIZE + 10):
         _crs.st_transformcrs("POINT (1 1)", f"+proj=utm +zone=33 +x_0={i}", 4326)
     assert len(_crs._pair_cache()) <= _crs._PAIR_CACHE_SIZE
+
+
+def _the_pair():
+    (pair,) = _crs._pair_cache().values()
+    return pair
+
+
+def test_a_pair_does_not_survive_a_transformer_cache_clear_and_refill():
+    """The way to take up grid dirs registered after a transformer was built is to drop the transformer cache. A
+    clear in place followed by any other transformer lookup refills it: the pair must still be rebuilt.
+    """
+    from databricks.labs.gbx.core import crs as corecrs
+
+    _crs.st_transformcrs("POINT (-100 35)", 5070, 4326)
+    before = _the_pair()
+    corecrs._transformer_cache().clear()
+    corecrs.get_transformer(4326, 3857)  # refills the cache, as other code does
+    _crs.st_transformcrs("POINT (-100 35)", 5070, 4326)
+    after = _the_pair()
+    assert after is not before
+    assert after.tr is not before.tr
+
+
+def test_a_pair_does_not_survive_the_cache_being_replaced():
+    from databricks.labs.gbx.core import crs as corecrs
+
+    _crs.st_transformcrs("POINT (-100 35)", 5070, 4326)
+    before = _the_pair()
+    corecrs._thread_local.__dict__.pop("transformers", None)
+    corecrs.get_transformer(4326, 3857)
+    _crs.st_transformcrs("POINT (-100 35)", 5070, 4326)
+    assert _the_pair() is not before
+
+
+def test_an_untouched_cache_keeps_its_pair():
+    _crs.st_transformcrs("POINT (-100 35)", 5070, 4326)
+    before = _the_pair()
+    _crs.st_transformcrs("POINT (-99 36)", 5070, 4326)
+    assert _the_pair() is before

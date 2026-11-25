@@ -381,7 +381,16 @@ _pairs = threading.local()
 class _Pair:
     """What ``st_transformcrs`` needs of one (source, target) pair, resolved once."""
 
-    __slots__ = ("src", "tgt", "tr", "tgt_pyproj", "tgt_srid", "_lonlat", "_owner")
+    __slots__ = (
+        "src",
+        "tgt",
+        "tr",
+        "tgt_pyproj",
+        "tgt_srid",
+        "_lonlat",
+        "_owner",
+        "_generation",
+    )
 
     def __init__(self, src, tgt):
         self.src, self.tgt = src, tgt
@@ -390,12 +399,19 @@ class _Pair:
         # the transformer cache this pair's transformer came from: a caller that drops the cache (the way to take
         # up grid dirs registered after a transformer was built) drops the pairs with it
         self._owner = _transformer_cache()
+        self._generation = self._owner.generation
         try:
             self.tgt_pyproj = to_pyproj_crs(tgt)
         except Exception:
             self.tgt_pyproj = tgt  # fallback: area_of_use absent -> skip
         self.tgt_srid = authority_srid_of(tgt)
         self._lonlat = None
+
+    def _current(self) -> bool:
+        """Whether the transformer cache this pair's transformer came from is the one in use and has not been
+        cleared since (a clear in place, then a refill, leaves it non-empty)."""
+        owner = _transformer_cache()
+        return owner is self._owner and owner.generation == self._generation
 
     def lonlat_transformer(self):
         """The transformer of a projected source to EPSG:4326, for the area-of-use check."""
@@ -444,7 +460,7 @@ def _pair_of(embedded_srid: int, source_crs, target_crs) -> Optional[_Pair]:
         hit = cache.get(key)
     except TypeError:  # an unhashable argument is not cached
         key, hit = None, None
-    if hit is not None and hit._owner is _transformer_cache() and hit._owner:
+    if hit is not None and hit._current():
         cache.move_to_end(key)
         return hit
     if embedded_srid > 0:

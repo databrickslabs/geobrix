@@ -491,10 +491,21 @@ def _wkt_transformer_key(wkt: str) -> str:
     return wkt
 
 
+class _TransformerCache(OrderedDict):
+    """The per-thread transformer cache. ``generation`` counts its clears, so a holder of a transformer taken from it
+    (``pyvx._crs``'s pairs) can tell that the cache was dropped and refilled since."""
+
+    generation = 0
+
+    def clear(self):
+        self.generation += 1
+        super().clear()
+
+
 def _transformer_cache() -> "OrderedDict":
     cache = getattr(_thread_local, "transformers", None)
     if cache is None:
-        cache = OrderedDict()
+        cache = _TransformerCache()
         _thread_local.transformers = cache
     return cache
 

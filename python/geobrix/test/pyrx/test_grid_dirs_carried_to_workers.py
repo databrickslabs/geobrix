@@ -134,3 +134,27 @@ def test_registration_builds_the_udf_with_the_registered_dirs():
         assert CALLS == [("/Volumes/reg/grids",)]
     finally:
         proj_grids.set_registered_dirs([], replace=True)
+
+
+def test_registering_a_table_function_builds_it_with_the_registered_dirs(
+    spark, monkeypatch
+):
+    """The registrar hands the driver's dirs to a raster-to-grid table function: a live SQL binding carries them."""
+    from databricks.labs.gbx import _transport, manager
+
+    seen = []
+    real = _transport.SessionTileUdtf.with_grid_dirs
+
+    def spy(self, dirs):
+        seen.append(tuple(dirs))
+        return real(self, dirs)
+
+    monkeypatch.setattr(_transport.SessionTileUdtf, "with_grid_dirs", spy)
+    proj_grids.set_registered_dirs(["/Volumes/reg/grids"], replace=True)
+    try:
+        manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_h3_rastertogridavg"], level="L3"
+        )
+    finally:
+        proj_grids.set_registered_dirs([], replace=True)
+    assert seen == [("/Volumes/reg/grids",)]

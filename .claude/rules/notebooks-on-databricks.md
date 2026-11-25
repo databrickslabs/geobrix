@@ -18,13 +18,29 @@ These facts have been painfully rediscovered by multiple agents. Follow them; do
 - **Don't auto-retry a failed job.** Report `result_state` / `state_message` / `run_page_url` and stop; a failure is almost always structural.
 - **Staging on dogfood** (a non-account-admin identity is assumed): wheels/data → the Volume **`/Volumes/geospatial_docs/geobrix/sample-data/`** via SDK `files.upload` (streaming). The configured `GBX_ARTIFACT_VOLUME` default (`…/gdal_artifacts/noble/geobrix`) **does not exist on dogfood** and returns a *misleading* `PermissionDenied: … not account admin` — that's a missing-schema error, not a real block. Notebooks → WSFS **`/Users/<you>/jobs/geobrix/<fresh dated subfolder>`** (job notebooks; the demo notebooks live apart in `/Users/<you>/geobrix/`) (dogfood aggressively GCs old notebooks). **Import a notebook with `w.workspace.import_(path, format=ImportFormat.JUPYTER, content=base64(nb_bytes), overwrite=True)` after `w.workspace.mkdirs(parent)`** — this classic `/api/2.0/workspace/import` endpoint WORKS for a non-admin (it errors `ResourceDoesNotExist` if the parent folder is absent — hence the mkdirs). Do **NOT** use the `w.workspace.upload()` SDK mixin — *that* routes through the gated path and returns the misleading "not account admin" error. `gbx:test:notebooks-serverless` already does the `import_` for you. `files.download`/`files.list` are gated — read job results via `jobs.get_run_output(task_run_id).notebook_output.result`, never `files.download`.
 - **stage-wheel SDK vs CLI**: SDK can exit 0 while bytes didn't land — verify. On dogfood use direct `files.upload`.
-- **Notebook `%pip` install of the wheel** — ALWAYS the **env wheel for the runtime**, by file:
-  `@ file:///Volumes/…/geobrix-<ver>+env6-py3-none-any.whl` (Serverless env 6, DBR 19, DBR 19 ML) or
-  `…+env5-py3-none-any.whl` (Serverless env 5, DBR 17.3 / 18, Lakeflow on DBR 18), with **feature extras only**:
+- **Notebook `%pip` install of the wheel** — ALWAYS the **env wheel for the runtime**, by URL or file:
+  `…+env6-py3-none-any.whl` (Serverless env 6, DBR 19, DBR 19 ML) or `…+env5-py3-none-any.whl` (Serverless env 5,
+  DBR 17.3 / 18, Lakeflow on DBR 18), with **feature extras only**:
   `[stac]`, `[vizx]`, `[databricks]`, and `[zarr]` on env6. **Never a `light_*` extra**: since 0.6.0 every
   `light_*` / `light_*_all` name is a tripwire (pip `ResolutionImpossible`, naming the env wheel to install), and the
   other family's env wheel refuses to import. The plain `geobrix-<ver>-py3-none-any.whl` is for off Databricks only.
-  - **INTERACTIVE** (refresh a live session) — two steps: step 1 **bare, no extra**
+  - **EXAMPLE notebooks (shipped, user-facing)** — one convention, every series: the install cell is the env wheel from
+    the **GitHub release** in a single line, with the Volume alternative as a comment and the installation link:
+    ```
+    # GeoBrix: the env6 wheel from the v0.6.0 GitHub release (other installs: https://databrickslabs.github.io/geobrix/docs/installation).
+    %pip install --quiet "geobrix[vizx] @ https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"
+    # No access to github.com: stage the wheel on a Volume and install it from there instead:
+    # %pip install --quiet "geobrix[vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.6.0+env6-py3-none-any.whl"
+    ```
+    Keep each notebook's own env and extras; the URL is a literal (no Python variable in `%pip`); no two-step, because a
+    release asset never changes. The Lakeflow bundles list `geobrix[extras]@${var.gbx_wheel}` (no spaces around `@`),
+    `gbx_wheel` defaulting to the same URL. **On a release, move each example's URL to the new release only after that
+    example ran on it.** A dev run installs the build under test through the runner (below), never by editing the
+    notebook: `--pip-wheel <staged wheel>` rewrites a geobrix `%pip` line whose source is a release URL or a Volume path
+    in the uploaded copy; on a classic cluster a forced install goes before it; the wheel guard compares with the notebook's
+    own Volume wheel, else `--wheel` (a release URL names no wheel, so a classic run that skips `--pip-wheel` fails the guard
+    when the release is not the build under test, instead of silently testing the release).
+  - **INTERACTIVE dev refresh** (an ad-hoc or probe notebook, a live session on a rebuilt Volume wheel) — two steps: step 1 **bare, no extra**
     `--no-deps --force-reinstall "geobrix @ file://…+env6…"`, then step 2 the plain install **with the feature
     extras** `"geobrix[stac,vizx] @ file://…+env6…"` (no flags), then `restartPython()`. (`--force-reinstall` swaps
     fresh bytes of an already-installed same-version wheel; `--no-deps` keeps it from touching preinstalled deps;
@@ -35,7 +51,7 @@ These facts have been painfully rediscovered by multiple agents. Follow them; do
     (moves fsspec), `"pycolmap==4.2.1"` / `"pycolmap-cuda12==4.2.1"`, the GeoSAM GPU pins
     (`torch==2.9.0 torchvision==0.24.0 segment-geospatial opencv-python-headless==4.11.0.86`).
   - **Never `--force-reinstall` WITHOUT `--no-deps`** (serverless hard-fails `violate preinstalled package …`; classic
-    `Failure starting repl`). **Never a bare `geobrix[EXTRA]`** without `@ file://` (it resolves from PyPI).
+    `Failure starting repl`). **Never a bare `geobrix[EXTRA]`** without `@ <url or file://>` (it resolves from PyPI).
   - `gbx:test:notebooks-serverless` builds the Serverless environment spec from the env wheel's own extra files:
     `--wheel` (default the env6 wheel on the sample-data Volume), `--extras` = that wheel's extras (no `light_*`),
     `--extra-deps` for the separate steps, `--wheel …+env5… --env-version 5` for an env-5 notebook, and

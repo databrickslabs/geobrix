@@ -97,6 +97,12 @@ def wheel_problem(wheel: str, text: str) -> Optional[str]:
     return None
 
 
+def wheel_source(wheel: str) -> str:
+    """The value of ``--var gbx_wheel``: the bundles list ``geobrix[extras]@${var.gbx_wheel}``, so a staged ``/Volumes``
+    wheel goes in as ``file://...`` and a wheel URL (the GitHub release) as it is."""
+    return wheel if "://" in wheel else f"file://{wheel}"
+
+
 def default_wheel(env: int = DEFAULT_WHEEL_ENV) -> str:
     sys.path.insert(0, str(_SCRIPT_DIR))
     from run_notebooks_serverless import default_wheel as _dw  # the one place the staged layout is spelled
@@ -412,7 +418,7 @@ def main(argv=None) -> int:
     problem = wheel_problem(wheel, text)
     if problem:
         p.error(problem)
-    variables = {"gbx_wheel": wheel, **variables}
+    variables = {"gbx_wheel": wheel_source(wheel), **variables}
     if not args.validate_only and not args.no_run and not args.no_table_check and not args.warehouse_id:
         p.error("--warehouse-id is required for the table check (or --no-table-check)")
 

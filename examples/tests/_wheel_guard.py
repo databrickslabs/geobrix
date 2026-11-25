@@ -330,33 +330,57 @@ def guard_source(wheel=None, git_sha=None, digest=None, workers=True):
 
 FORCE_FLAGS = "--force-reinstall --no-deps"
 _PIP_FILE = re.compile(r"@\s*file://(/[^\"'\s]+\.whl)")
+# an example installs the env wheel from a Volume path or from the GitHub release: both are a geobrix `%pip` source
+_PIP_URL = re.compile(r"@\s*(https?://[^\"'\s]+\.whl)")
+
+
+def _geobrix_pip(line):
+    """True for a ``%pip install`` line that installs geobrix (a commented-out line and another package are not)."""
+    return line.lstrip().startswith("%pip install") and "geobrix" in line.split("@")[0]
+
+
+def _pip_source(line):
+    """The source a geobrix ``%pip`` line installs: a ``/Volumes`` wheel path, an ``https://`` wheel URL, or None."""
+    m = _PIP_FILE.search(line) or _PIP_URL.search(line)
+    return m.group(1) if m and _geobrix_pip(line) else None
 
 
 def force_line(wheel, quiet=False):
-    """The ``%pip`` line that puts the staged wheel in place whatever same-version geobrix is installed (geobrix only)."""
-    return '%%pip install %s%s "geobrix @ file://%s"' % ("--quiet " if quiet else "", FORCE_FLAGS, wheel)
+    """The ``%pip`` line that puts the staged wheel (a Volume path or an ``https://`` URL) in place whatever same-version
+    geobrix is installed (geobrix only)."""
+    src = wheel if wheel.startswith(("http://", "https://")) else "file://" + wheel
+    return '%%pip install %s%s "geobrix @ %s"' % ("--quiet " if quiet else "", FORCE_FLAGS, src)
 
 
 def force_pip_lines(lines):
     """``lines`` (the lines of a notebook's code cells, each with its newline) with a forced geobrix install before every
-    ``%pip install ... geobrix ... @ file://<wheel>`` line that is not forced already. Returns (lines, count)."""
+    ``%pip install ... geobrix ... @ file://<wheel>`` (or ``@ https://<release wheel>``) line that is not forced already.
+    Returns (lines, count)."""
     out, count = [], 0
     for line in lines:
-        s = line.lstrip()
-        m = _PIP_FILE.search(line)
-        if s.startswith("%pip install") and m and "geobrix" in line.split("@")[0] and "--force-reinstall" not in line \
-                and not (out and out[-1] == force_line(m.group(1), quiet="--quiet" in line) + "\n"):
-            out.append(force_line(m.group(1), quiet="--quiet" in line) + "\n")
+        src = _pip_source(line)
+        if src and "--force-reinstall" not in line \
+                and not (out and out[-1] == force_line(src, quiet="--quiet" in line) + "\n"):
+            out.append(force_line(src, quiet="--quiet" in line) + "\n")
             count += 1
         out.append(line)
     return out, count
 
 
 def pip_wheel_of(lines):
-    """The wheel (a path) the first ``%pip install ... geobrix @ file://...whl`` line installs, or None."""
+    """The wheel (a Volume path) the first ``%pip install ... geobrix @ file://...whl`` line installs, or None. A release
+    URL names no wheel the compute can read: the guard then compares with the staged one (``pip_url_of`` finds the URL)."""
     for line in lines:
         m = _PIP_FILE.search(line)
-        if line.lstrip().startswith("%pip") and m and "geobrix" in line.split("@")[0]:
+        if m and _geobrix_pip(line):
             return m.group(1)
     return None
 
+
+def pip_url_of(lines):
+    """The release URL the first ``%pip install ... geobrix @ https://...whl`` line installs, or None."""
+    for line in lines:
+        m = _PIP_URL.search(line)
+        if m and _geobrix_pip(line):
+            return m.group(1)
+    return None

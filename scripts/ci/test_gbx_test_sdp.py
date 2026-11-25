@@ -61,6 +61,15 @@ def test_the_bundles_run_the_pipeline_on_the_preview_channel_with_a_fallback_var
         assert "+env6-py3-none-any.whl" in text, name
 
 
+def test_a_volume_wheel_is_passed_as_a_file_url_and_a_release_url_as_it_is(sdp):
+    """The bundles list `geobrix[extras]@${var.gbx_wheel}`: the variable is a requirement source, so a staged
+    `/Volumes` wheel goes in as `file://...` and the default GitHub release URL stays as it is."""
+    vol = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
+    url = "https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"
+    assert sdp.wheel_source(vol) == "file://" + vol and sdp.wheel_source(url) == url
+    assert sdp.wheel_env(url) == 6 and sdp.wheel_problem(url, "environment_version: '6'") is None
+
+
 def test_the_cli_lines_carry_the_profile_target_and_vars(sdp):
     cmd = sdp.cli(["validate"], "p", "dev", {"gbx_wheel": "/V/w.whl", "full_aoi": "false"}, output_json=True)
     assert cmd == ["databricks", "bundle", "validate", "--profile", "p", "--target", "dev",

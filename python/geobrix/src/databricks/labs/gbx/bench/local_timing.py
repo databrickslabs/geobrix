@@ -415,11 +415,13 @@ def _family_sets() -> Dict[str, SetSpec]:
             fn="gbx_rst_combineavg",
             **tiles,
         ),
+        # a factory-built row (its UDF carries the driver's PROJ grid dirs) names no variants: its light form is `l3`
         "raster-aggregate": gen_fn(
             "raster-aggregate",
             "gbx_rst_bng_rasterize_agg",
             "cells",
             (400_000, 1_600_000, 6_400_000),
+            "l3",
         ),
         "cell-aggregate": gen_fn(
             "cell-aggregate", "gbx_bng_cellfill", "cells", (100_000, 400_000, 1_600_000)

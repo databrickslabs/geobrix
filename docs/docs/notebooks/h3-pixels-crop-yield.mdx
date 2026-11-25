@@ -70,7 +70,7 @@ Precipitation is the NWS Stage IV daily CONUS NetCDF, with the NCEI 2006-2020 mo
 
 ![Notebook 05: links, raw and weighted measures, blended scores](../../../resources/images/diagrams/h3-pixels-crop-yield/h3-pixels-crop-yield-05.png)
 
-- A field cell links to its dataset cell once; a cell that straddles two gets exact overlap shares.
+- A field cell links to its dataset cell once; a cell that straddles more than one gets exact overlap shares.
 - Field scores are a plain mean and an edge-weighted mean, `w = min(1, d / 30 m)`.
 
 ### 06 — Centroid baseline

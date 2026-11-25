@@ -41,7 +41,7 @@ The footprint used for covered-cell enumeration is the raster's **outline** (its
 - **`covering`** — the meaning differs by function family:
   - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData. A source without NoData gets its data type's fallback value (for example 65535 for `uint16`), and its pixels equal to that value are NoData too.
   - **Scalar-reducing (`rst_<grid>_rastertogrid*`):** area-weighted. Each pixel contributes to every cell its footprint overlaps, weighted by the fraction of the pixel's area inside that cell. Interior pixels (entirely within one cell) carry weight 1; only boundary pixels split. This fills centroid-aliasing gaps — a cell that catches no centroid in `centroid` mode receives area-weighted contributions under `covering`. `sum` and `count` remain globally mass-conserving.
-  - The overlap is measured on the raster's own pixels. A raster in another CRS than the grid's is not reprojected: each cell is moved into the raster's CRS instead. So `count` is in source pixels, and a weight is within about 1e-4 of the exact share. The exception is a raster whose pixel corners leave its CRS's valid area (for example a Mollweide or Robinson world raster, whose corners are off the globe). It is reprojected to the grid's CRS first, so its `count` is in reprojected pixels.
+  - The overlap is measured on the raster's own pixels. A raster in another CRS than the grid's is not reprojected: each cell is moved into the raster's CRS instead. So `count` is in source pixels, and a weight is within about 1e-4 of the exact share. One exception is a raster whose pixel corners leave its CRS's valid area, such as a Mollweide or Robinson world raster. Its corners are off the globe. It is reprojected to the grid's CRS first, so its `count` is in reprojected pixels.
 
 The interaction between the two policies:
 
@@ -70,6 +70,21 @@ One tie-break rule applies uniformly across H3, quadbin, BNG, and custom grids: 
 ### Large rasters
 
 `rst_<grid>_tessellate` with `assignment='centroid'` assigns pixels to cells a strip of rows at a time, so its memory grows with the pixel count, not with cells × pixels. With `assignment='covering'`, it reads only each cell's window of the raster. For scene-sized tiles, run `gbx_rst_retile` before tessellating to spread the work across tasks. A cell on a seam between two of those tiles then appears in more than one row, once per tile it overlaps. Group by `cellid` to combine them. See [Large Rasters](./large-rasters) for preparing scenes that are too big to load whole.
+
+### Run a function once after a shuffle {#run-once-after-a-shuffle}
+
+Plain `LATERAL VIEW inline(<table function>) c` after a `repartition` lets Spark infer a `size(...) > 0` filter. Spark pushes that filter below the shuffle.
+The GeoBrix function then runs twice, once before the shuffle in one task per input.
+Write `LATERAL VIEW OUTER inline(...) c` and add `WHERE c.cellid IS NOT NULL`:
+
+```sql
+SELECT c.band, c.cellid, c.count
+FROM (SELECT /*+ REPARTITION(64, path) */ path, tile FROM rasters) r
+LATERAL VIEW OUTER inline(gbx_rst_h3_rastertogrid_partial(r.tile, 7)) c
+WHERE c.cellid IS NOT NULL
+```
+
+See also [`rst_h3_rastertogrid_partial`](./raster-functions.mdx#rst_h3_rastertogrid_partial).
 
 ---
 
@@ -147,8 +162,8 @@ Examples at 42°N:
 **CRS handling:**
 - `rst_h3_tessellate` reprojects the tile extent to **EPSG:4326** internally before H3 cell lookups. Any CRS supported by GDAL is accepted; no pre-transformation of the tile is required.
 - `rst_h3_rastertogrid*` grids the tile in its own CRS, so pixels are never resampled. With `covering`, each H3 cell is moved into the tile's CRS and shares out the pixels it overlaps. With `centroid`, each pixel centre is moved to EPSG:4326. A tile in a projected CRS (e.g., UTM) needs no upstream `rst_transform`. A tile with no CRS is assumed to be in EPSG:4326 already.
-- A tile across the antimeridian or around a pole is gridded the same way. A cell across the tile CRS's own seam (for example EPSG:3857 at 180°) is cut on that meridian, and each piece is moved on its own side. Only a tile with points that do not transform is reprojected to EPSG:4326 first, with nearest-neighbour resampling. A tile with no pixel inside its CRS's valid area raises an error with a `Fix:`.
-- A lon/lat tile has no seam: its longitudes continue past 180°. A global tile, a tile across 180°, and a tile with longitudes 0–360 (as GRIB data often has) give every pixel to its cells, on any datum. A tile in a cylindrical CRS that extends past the CRS's seam (for example EPSG:3857 past x = 20037508 m) is gridded the same way.
+- A tile across the antimeridian or around a pole is gridded the same way. A cell across the tile CRS's own seam (for example EPSG:3857 at 180°) is cut on that meridian. Each piece is moved on its own side. Only a tile with points that do not transform is reprojected to EPSG:4326 first, with nearest-neighbour resampling. A tile with no pixel inside its CRS's valid area raises an error with a `Fix:`.
+- A lon/lat tile has no seam: its longitudes continue past 180°. A global tile, a tile across 180°, and a tile with longitudes 0–360 (as GRIB data often has) all work. Every pixel goes to its cells, on any datum. A tile in a cylindrical CRS that extends past the CRS's seam (for example EPSG:3857 past x = 20037508 m) is gridded the same way.
 
 **Resolution:** an integer level 0–15 (higher = finer hexagons; level 7 ≈ 5 km² per cell; level 9 ≈ 0.1 km²).
 

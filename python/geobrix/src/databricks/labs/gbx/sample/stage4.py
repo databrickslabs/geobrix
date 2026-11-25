@@ -1,6 +1,6 @@
 """NCEP Stage IV daily precipitation on the HRAP grid, for chosen seasons and months, from the NWS daily CONUS NetCDF.
 
-The file dated D holds the 24 h total that ends at 12Z (07:00 CDT) on D: 17 of its 24 hours fall on D - 1, so it
+The file dated D holds the 24 h total that ends at 12Z (06:00 CST or 07:00 CDT) on D: 17 or 18 of its 24 hours fall on D - 1, so it
 counts for D - 1 (``collect_date_of``). The NetCDF holds the daily total (``NWS_VARIABLE``, in ``NWS_UNITS``) and
 other variables; ``read`` takes the total through GDAL, which reads the CF polar stereographic grid mapping. Days
 the NWS archive lacks are in NCAR GDEX dataset d507005 (monthly tars of daily GRIB files).

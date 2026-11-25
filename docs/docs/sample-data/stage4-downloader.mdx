@@ -26,7 +26,7 @@ Stage IV is a radar and rain-gauge analysis on the HRAP polar stereographic grid
 
 **A day the archive lacks.** `download` and `repair` raise `StageIvDayMissing` for a day the NWS archive does not hold (HTTP 404). The message names NCAR GDEX dataset d507005, which holds Stage IV as monthly GRIB archives. Take that day from there, or leave it out of the seasons and months. A month's window ends on the 1st of the next month, so that file must exist too.
 
-**The 12Z day rule.** A file ends at 12Z (07:00 CDT) on its file date, so 17 of its 24 hours fall on the day before. `collect_date_of` gives that day before. Use it to date each daily total.
+**The 12Z day rule.** A file ends at 12Z (06:00 CST or 07:00 CDT) on its file date, so 17 or 18 of its 24 hours fall on the day before. `collect_date_of` gives that day before. Use it to date each daily total.
 
 **Safe re-runs.** Each file is written to a scratch folder, checked, then moved to its final name. A fetch that fails for another reason leaves no partial file and gives a row with `is_out_file_valid` false. A re-run keeps every valid file. Every request goes through the GeoBrix HTTP allow-list.
 

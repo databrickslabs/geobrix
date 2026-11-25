@@ -172,9 +172,9 @@ H3 and quadbin cells are in EPSG:4326, and BNG cells in EPSG:27700. `rst_<grid>_
 - **`covering`** moves each cell into the raster's CRS and shares every valid pixel out by the overlapping area.
 - **`centroid`** moves each valid pixel's centre to the grid's CRS and bins it there.
 
-Pixel values are never resampled, and `count` is in source pixels. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster. A cell that crosses the raster CRS's own seam (for example EPSG:3857 at 180°) is cut on that meridian of the CRS's own longitudes, and each piece is moved on its own side. A cell whose seam crossing cannot be traced is refused, with a Fix: the seam of an oblique projection. Only a raster with points that do not transform is reprojected to the grid's CRS first, with nearest-neighbour resampling: for example a Mollweide or Robinson world raster, whose pixel corners are off the globe. Its `count` is then in reprojected pixels, not source pixels. A raster with no pixel inside its CRS's valid area is refused, with a Fix.
+Pixel values are never resampled, and `count` is in source pixels. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster. A cell that crosses the raster CRS's own seam (for example EPSG:3857 at 180°) is cut on that meridian. Each piece is moved on its own side. A cell whose seam crossing cannot be traced is refused, with a Fix: the seam of an oblique projection. Only a raster with points that do not transform is reprojected to the grid's CRS first, with nearest-neighbour resampling. An example is a Mollweide or Robinson world raster, whose pixel corners are off the globe. Its `count` is then in reprojected pixels, not source pixels. A raster with no pixel inside its CRS's valid area is refused, with a Fix.
 
-A lon/lat raster (EPSG:4326 or any other datum) has no seam: its longitudes continue past 180°, and a cell meets the raster's pixels a whole turn away too. So a global raster, a raster across 180°, and a raster with longitudes 0–360 are gridded like any other. A raster in a cylindrical CRS that extends past the CRS's seam is gridded the same way. Pixels outside the grid are dropped: beyond ±85.05° for quadbin, west or south of the origin for BNG.
+A lon/lat raster (EPSG:4326 or any other datum) has no seam. Its longitudes continue past 180°, and a cell meets the raster's pixels a whole turn away too. So a global raster, a raster across 180°, and a raster with longitudes 0–360 are gridded like any other. A raster in a cylindrical CRS that extends past the CRS's seam is gridded the same way. Pixels outside the grid are dropped: beyond ±85.05° for quadbin, west or south of the origin for BNG.
 
 ### Performance
 
@@ -208,7 +208,7 @@ With OSTN15, EPSG:27700 to ETRS89 matches Ordnance Survey's published test point
 
 ## Registering custom grid files
 
-Some workflows depend on a datum-grid transform. Examples are OSGB36↔ETRS89 via OSTN15, NAD27↔NAD83 via NADCON, a national geoid grid, or any CRS whose WKT or PROJ4 string references a grid file. Stage the grid files to a Unity Catalog Volume, and register the directory with GeoBrix once at session start. After that, every CRS-handling function across all packages finds the files automatically on the PROJ search path. Volume-hosted grids are a Python-level capability; the JVM level reads grids from a cluster-local path instead — see [Level support](#level-support) below.
+Some workflows depend on a datum-grid transform. Examples are OSGB36↔ETRS89 via OSTN15, NAD27↔NAD83 via NADCON, a national geoid grid, or any CRS whose WKT or PROJ4 string references a grid file. Stage the grid files to a Unity Catalog Volume, and register the directory with GeoBrix once at session start. After that, the CRS-handling functions across all packages find the files automatically on the PROJ search path, except the raster-to-grid functions named below. Volume-hosted grids are a Python-level capability; the JVM level reads grids from a cluster-local path instead — see [Level support](#level-support) below.
 
 ### Stage your grid files to a Volume
 
@@ -244,7 +244,7 @@ gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids")
 gbx.register(spark)
 ```
 
-After this call, every CRS-handling function at the Python level finds your grid files on its PROJ search path, on every worker. These include `rst_transformcrs`, `st_transformcrs`, grid-aggregation reprojection and all raster-reader clipping. The JVM level cannot read a Volume path; see [Level support](#level-support).
+After this call, the CRS-handling functions at the Python level find your grid files on their PROJ search path, on every worker. These include `rst_transformcrs`, `st_transformcrs` and all raster-reader clipping. The `rst_<grid>_rastertogrid*` functions and `rst_h3_fitresolution` do not read these grids on workers. The JVM level cannot read a Volume path; see [Level support](#level-support).
 
 You can also pass a list of directories, or accumulate directories across multiple calls:
 
@@ -347,7 +347,7 @@ The Python and JVM levels describe the **same** CRS for the same raster. For a C
 
 Each discrete global grid has a fixed native CRS, so GridX functions don't take a CRS argument. They assume the grid's CRS and reproject for you where needed:
 
-- **H3** and **quadbin** operate in **EPSG:4326** (WGS84 lon/lat). A raster in another CRS is reprojected for you. The raster-to-grid functions warp it to EPSG:4326, and the tessellation functions reproject its footprint (see [Grid raster tessellation](./grid-raster-tessellation)).
+- **H3** and **quadbin** operate in **EPSG:4326** (WGS84 lon/lat). A raster in another CRS is reprojected for you. The raster-to-grid functions grid it on its own pixels, with no warp (see [Grid aggregation](#grid-aggregation-works-in-the-rasters-own-crs)). The tessellation functions reproject its footprint (see [Grid raster tessellation](./grid-raster-tessellation)).
 - **BNG** (British National Grid) is **EPSG:27700**. BNG geometry outputs are plain WKB in EPSG:27700 with no SRID; assign the CRS when you read them back, e.g. `ST_GeomFromWKB(bng_geom, 27700)`.
 
 Visualization helpers such as [`plot_static`](./vizx-vector#static-maps) reproject each grid's native CRS onto the basemap automatically.

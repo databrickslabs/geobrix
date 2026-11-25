@@ -3008,7 +3008,7 @@ def rst_h3_fitresolution(
 
     Returns:
         An H3 resolution from 0 to 15 for the pixel at the tile centre, or NULL for a
-        NULL or error tile.
+        NULL or error tile. A tile with no CRS is read as EPSG:4326.
 
     SQL: ``gbx_rst_h3_fitresolution(tile, [rule])``
     """

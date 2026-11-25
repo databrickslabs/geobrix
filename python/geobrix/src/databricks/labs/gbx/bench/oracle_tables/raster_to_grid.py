@@ -552,6 +552,11 @@ _FIT_ROWS = (
     Case("h3_fit_error_tile", FIT, (ERR,), "null", None, BOTH),
     Case("h3_fit_corrupt_tile", FIT, (CORRUPT,), "null", None, BOTH),
     Case("h3_fit_bad_rule", FIT, (LL, "nearest"), "raises", "rule", ONLY),
+    Case("uc_h3_fit_bad_rule", FIT, (LL, "nearest"), "raises", "rule", ("uc",)),
+    # a virtual tile (a window of the 0.01 degree file at (-1, 52), as `rtg_ll`) is read in place by the session
+    # forms and refused on UC with a Fix naming the function
+    Case("h3_fit_virtual", FIT, (VIRTUAL,), "exact", 8, ONLY),
+    Case("uc_h3_fit_virtual_refused", FIT, (VIRTUAL,), "uc_refused", None, ("uc",)),
 )
 
 RASTER_TO_GRID = (

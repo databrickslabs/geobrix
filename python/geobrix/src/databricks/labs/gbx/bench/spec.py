@@ -36,6 +36,7 @@ from databricks.labs.gbx.pyrx.core import (
     features,
     focal,
     gridagg,
+    h3fit,
     ops,
     stretch,
     tessellate,
@@ -2432,6 +2433,19 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         variant_of="rst_h3_tessellate",
+    ),
+    # header-only scalar: the H3 resolution fitted to the centre pixel (no pixel I/O, no heavyweight level)
+    "rst_h3_fitresolution": FnSpec(
+        "rst_h3_fitresolution",
+        "gbx_rst_h3_fitresolution",
+        "accessor",
+        _BOTH,
+        {"rule": "not_larger"},
+        core_fn=lambda ds, a: h3fit.fit_resolution_of(ds, a["rule"]),
+        col_fn=lambda t, a: rx.rst_h3_fitresolution(t, F.lit(a["rule"])),
+        sources=(_PYRX + "h3fit.py", _PYRX + "crs.py", _NODATA),
+        core=False,
+        heavy=False,  # no heavyweight level
     ),
     # --- H3 raster->grid aggregates (gridagg.py): {avg,count,max,median,min} ---
     "rst_h3_rastertogridavg": FnSpec(

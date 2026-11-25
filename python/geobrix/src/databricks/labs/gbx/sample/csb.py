@@ -11,6 +11,7 @@ import os
 import shutil
 import zipfile
 
+from databricks.labs.gbx import _gdal_policy
 from databricks.labs.gbx.core import _http
 from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.ds._scratch import new_scratch_dir, remove_scratch_dir
@@ -50,8 +51,7 @@ def clip_gdb_to_state(
 ) -> int:
     """Copy the features of ``state_fips`` from ``src`` (any OGR dataset with the CSB fields) to a local GeoPackage
     in one streaming pass; return the feature count."""
-    import pyogrio
-    import pyogrio.raw
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
     info = pyogrio.read_info(src, layer=layer)
     cols = [c for c in FIELDS if c in list(info["fields"])]
@@ -245,9 +245,7 @@ def _gpkg_valid(path: str) -> bool:
     if not os.path.exists(path) or os.path.getsize(path) <= 1024:
         return False
     try:
-        import pyogrio
-
-        return pyogrio.read_info(path, layer="csb")["features"] > 0
+        return _gdal_policy.pyogrio().read_info(path, layer="csb")["features"] > 0
     except Exception:  # noqa: BLE001 - an unreadable file is invalid
         return False
 

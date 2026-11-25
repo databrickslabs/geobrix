@@ -30,6 +30,14 @@ def spark():
     s.stop()
 
 
+@pytest.fixture(autouse=True)
+def _no_local_disk_floor(monkeypatch):
+    """The tests use tiny zips: the library's free-disk floor (the real national zip's size) must not read the
+    runner's disk. ``test_download_refuses_without_local_disk`` sets it huge to prove the raise.
+    """
+    monkeypatch.setattr(C, "MIN_LOCAL_FREE_BYTES", 0)
+
+
 def _tiny_national(tmp_path):
     """A GeoPackage with the CSB layer name and fields: 3 Iowa polys, 2 Illinois, zipped like the national file."""
     import pyogrio

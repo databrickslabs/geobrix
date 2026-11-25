@@ -1,6 +1,6 @@
 ---
 sidebar_position: 2
-description: Install GeoBrix the way your compute needs — the env wheel for the runtime, the env wheel plus the GeoBrix JAR on a dedicated cluster, a Databricks Container Service image, or Unity Catalog functions for SQL warehouses.
+description: Install GeoBrix three ways — the env wheel for a session (most common), the env wheel plus the JAR on a dedicated cluster, or Unity Catalog functions for SQL warehouses and any compute.
 ---
 
 import Link from '@docusaurus/Link';
@@ -8,176 +8,83 @@ import Link from '@docusaurus/Link';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
 import offlineInstall from '!!raw-loader!../tests/python/installation/offline_install.py';
+import quickstartCode from '!!raw-loader!../tests/python/quickstart/examples.py';
 import scalaApiExamples from '!!raw-loader!../tests/scala/api/ScalaApiExamples.scala';
 import jvmJobBody from '!!raw-loader!../tests/scala/api/JvmJobBody.scala';
 
 # Installation
 
-GeoBrix installs as one **env wheel** for your runtime. The wheel runs every function at the Python
-level. A dedicated cluster can also load the GeoBrix JAR, a performance add-on that adds a JVM level to
-some functions. You never choose a level in code: `gbx.register(spark)` picks the faster one the compute
-offers. These docs call the Python level **lightweight** and the JVM level **heavyweight**. See
-[Surfaces & Levels](./api/execution-tiers.mdx#the-levels).
-Pick the install path that matches your compute.
+GeoBrix installs as one Python wheel per runtime family, the **env wheel**. The env wheel runs every GeoBrix
+function, and carries its own GDAL, PROJ and GEOS. For most users, the env wheel is the whole install.
 
-## Choose an install path {#choose-an-install-path}
+:::tip The env wheel includes the JAR
+The GeoBrix env wheels and the JAR are **not on PyPI or Maven**. They are assets of the
+[GitHub releases](https://github.com/databrickslabs/geobrix/releases). The most common install downloads the env wheel
+once and stages it on a Volume ([install 1](#env-wheel)).
 
-![Three ways to install GeoBrix. The question is which levels you need, and on which compute. Path a, the env wheel, is recommended for the Python level only. It installs the env wheel for the runtime (env5 or env6) from a Volume or the GitHub release. It runs on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, and carries its own GDAL, PROJ and GEOS. Path b, cluster libraries, adds the JVM level on a dedicated cluster. It installs the env wheel and the GeoBrix JAR as cluster libraries from a Volume. It runs with x86 on DBR 17.3, 18 or 19 or Graviton on DBR 19, and the wheel's own GDAL serves the JVM. Path c, Databricks Container Service, adds the JVM level on arm64 or x86 with DBR 19. A GeoBrix image holds the env6 wheel, its native GDAL and the JAR, with no library to attach. Paths b and c run both the Python and JVM levels](../../resources/images/diagrams/installation/installation-paths.png)
+Every env wheel ships the GeoBrix JAR inside it, so you do not need to download the JAR on its own. GeoBrix never
+loads it by itself: the JAR speeds up some functions at the JVM level only as a **cluster library on a dedicated
+cluster** ([install 2](#env-wheel-and-jar)) or in the **Unity Catalog install folder** ([install 3](#uc-functions)).
 
-| Path | Runs | Compute | What you install |
+To stage on a Volume, `gbx.stage_jar` copies the matching JAR, which `gbx.register(spark)` then checks.
+`gbx.stage_deps` stages the wheel's pinned dependencies, so an install never calls PyPI
+([Install without PyPI access](#offline-install)).
+:::
+
+## How GeoBrix registers its functions
+
+GeoBrix functions reach you in one of two ways. You can use both.
+
+| | Session registration | Unity Catalog functions |
+|---|---|---|
+| **How** | `gbx.register(spark)`, once in each session | `gbx.uc.install(...)`, once, by a schema owner |
+| **Where the functions live** | The Spark session: SQL (`gbx_*`), the Python API and the `*_gbx` readers and writers | A Unity Catalog schema: `<catalog>.<schema>.gbx_*` |
+| **Who can call them** | Code in that session | Anyone granted access, on any compute that reads Unity Catalog, including SQL warehouses |
+| **Which functions** | All of them | A subset (see [Unity Catalog functions](./api/uc-functions)) |
+| **What runs them** | The Python level. With the JAR as a cluster library on a dedicated cluster, also the JVM level where it is faster | Python, or SQL where that is faster. JVM-boosted functions too, when the JAR is in the install folder |
+
+## Choose an install {#choose-an-install-path}
+
+| Install | Runs on | You install | Then |
 |---|---|---|---|
-| **(a) [Env wheel](#env-wheel)** — recommended | Every function, in Python | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) |
-| **(b) [Env wheel and JAR](#env-wheel-and-jar)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, x86 on DBR 17.3 / 18 / 19, Graviton (arm64) on DBR 19 | The env wheel and the GeoBrix JAR, both as cluster libraries |
-| **(c) [Databricks Container Service](./installation/dcs.mdx)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image (the env6 wheel, its native GDAL and the JAR) — no library to attach |
+| **[1. Session: the env wheel](#env-wheel)** (most common) | Serverless, standard and dedicated clusters, Lakeflow declarative pipelines | The env wheel | `gbx.register(spark)` |
+| **[2. Session: the env wheel and the JAR](#env-wheel-and-jar)** | Clusters in **dedicated** access mode only | The env wheel and the JAR, as cluster libraries (or a GeoBrix container image) | `gbx.register(spark)` |
+| **[3. Unity Catalog functions](#uc-functions)** | SQL warehouses, and any compute that reads Unity Catalog | Nothing, for callers. A schema owner runs `gbx.uc.install` once | Call `<catalog>.<schema>.gbx_*` |
 
-**(a) Env wheel** is the default: if you don't specifically need the JVM engine, install
-the wheel and stop there. The full install steps are [below](#env-wheel).
+**Start with install 1.** Your code is the same with or without the JAR: `gbx.register(spark)` picks the faster
+level the compute offers. Only a dedicated cluster can load the JAR. Serverless and standard access mode run Spark
+Connect, which gives GeoBrix no JVM, so install 1 is the complete install there.
 
-**(b) Env wheel and JAR** adds the JVM engine. A dedicated cluster installs the env wheel
-and the GeoBrix JAR as cluster libraries. `gbx.stage_jar` puts the JAR on a Volume for you. The wheel carries the native GDAL, PROJ and GEOS, and the JVM
-loads them from the wheel, so nothing else is installed. Verified on dedicated
-clusters with x86 on DBR 17.3, 18 and 19, and Graviton (arm64) on DBR 19. See [below](#env-wheel-and-jar).
+These docs call the Python level **lightweight** and the JVM level **heavyweight**. See
+[Surfaces & Levels](./api/execution-tiers.mdx#the-levels).
 
-**(c) Databricks Container Service** starts a dedicated DBR 19 cluster from a GeoBrix container image.
-The image already holds the env6 wheel with its native GDAL, and the GeoBrix JAR, so there is no library
-to attach. It runs on both Graviton (arm64) and x86 (amd64) instance types, each with its own image tag.
-See [Databricks Container Service](./installation/dcs.mdx).
+### Pick the env wheel for your runtime
 
-The **JVM engine needs dedicated compute** (a dedicated access mode cluster), through (b) or
-(c). On standard access mode and Serverless, use **(a)**: every function runs there in Python.
-
-**SQL warehouses** run no wheel. An owner installs the [Unity Catalog functions](#uc-functions) once, and users call them by their three-part names.
-
-## Supported Databricks Runtimes
-
-GeoBrix supports the following Databricks Runtime releases:
-
-| DBR | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
-|---|---|---|---|---|---|---|
-| **17.3** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
-| **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
-| **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
-
-A **single JAR** runs on 17.3, 18, and 19. Scala 2.13 minor versions are binary-compatible. The JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
-
-On Databricks, GeoBrix installs as the **env wheel** for the runtime's family. There is one wheel per
-family, and no light extra to pick:
-
-| Runtime | Wheel |
+| Runtime | Env wheel |
 |---|---|
-| Serverless environment 6 (recommended), DBR 19, DBR 19 ML, Lakeflow declarative pipelines on the `PREVIEW` channel, SQL warehouses and UC functions | `geobrix-<version>+env6-py3-none-any.whl` |
+| Serverless environment 6 (recommended), DBR 19, DBR 19 ML, Lakeflow declarative pipelines on the `PREVIEW` channel | `geobrix-<version>+env6-py3-none-any.whl` |
 | Serverless environment 5, DBR 17.3, DBR 18, Lakeflow declarative pipelines on the `CURRENT` channel | `geobrix-<version>+env5-py3-none-any.whl` |
 
-See [Env wheel](#env-wheel) below for the install steps.
-
-:::note PySpark comes from the runtime
-On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark.
-:::
+The wheel of the other family refuses to import and names the file to install. The wheels are assets of the
+[GitHub releases](https://github.com/databrickslabs/geobrix/releases), not PyPI packages.
 
 <Link id="whl-only"></Link>
 
-## Env wheel {#env-wheel}
+## 1. Install for a session: the env wheel {#env-wheel}
 
-The env wheel is a single Python wheel for your runtime — **no separate JAR and no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS, and the GeoBrix [Rust module](./api/execution-tiers.mdx#rust-kernels); there is nothing else to install. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo`, built against them. A process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole library: RasterX (`databricks.labs.gbx.rasterx`), GridX (`databricks.labs.gbx.gridx.<grid>`), VectorX (`databricks.labs.gbx.vectorx`) and `pmtiles`.
+**Runs on:** Serverless, clusters in standard or dedicated access mode, and Lakeflow declarative pipelines, on
+x86 and ARM.
 
-:::note Choose the wheel for your runtime
-| Runtime | Install command |
-|---|---|
-| Serverless environment 6 (recommended), DBR 19, DBR 19 ML | `%pip install "geobrix @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` |
-| Serverless environment 5, DBR 17.3, DBR 18 | `%pip install "geobrix @ file:///Volumes/…/geobrix-<version>+env5-py3-none-any.whl"` |
-
-**Feature extras.** Add them in brackets, on the same line: `"geobrix[stac,vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`.
-
-| Extra | What it adds | Wheels |
-|---|---|---|
-| `[stac]` | The STAC client (`pystac-client`, `planetary-computer`) | env5, env6 |
-| `[vizx]` | Visualization (`matplotlib`, `mapclassify`, `anywidget`, `tippecanoe`, `imageio`; the wheel carries `geopandas` and `contextily`) | env5, env6 |
-| `[zarr]` | Zarr transactional stores (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`) | env6 |
-| `[databricks]` | The Databricks SDK, for the sample-data uploads | env5, env6 |
-
-*What an install changes on the runtime. The env wheel and its extras keep the runtime's preinstalled packages, with these exceptions. Every install upgrades `idna` (the runtime ships 3.7 or 3.11) and installs `httpx2` and `httpcore2`, which `rio-tiler` uses to read remote rasters and which need `idna` 3.18 or later. On Serverless environment 5 and DBR 17.3 / 18 it also upgrades `anyio` and `typing_extensions` (`rio-tiler` 9 needs 4.13 or later). On DBR 17.3 it also upgrades `h11` (to 0.16, the fix for CVE-2025-43859) and `httpcore` (from 1.0.2, which does not accept that `h11`, to 1.0.9). On those env5 runtimes `[stac]` and `[vizx]` also raise `requests` from 2.32.3 to the latest 2.32 release, which fixes CVE-2024-47081. Databricks may show a one-time "a core package changed" notice; it is harmless, and the restart that follows the install picks up the new versions.*
-
-*`[overture]` and `[earthdata]` are not extras of the env wheels: each changes further preinstalled packages. Install their packages as a **separate step** after the wheel, if you need them, and accept the changes. For Overture, run `%pip install "overturemaps>=1.0.2,<2"` (the Overture CLI, the fast path of [Overture Maps](./sample-data/overture-downloader)). It raises `click` to 8.5 and `tqdm` to 4.70 or later, and installs PyPI's `shapely`, which a GeoBrix process does not use. For Earthdata, run `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` ([NASA Earthdata / EMIT](./sample-data/emit-downloader)). It raises `fsspec` from 2023.5.0 to a current release. The Overture downloader works without the CLI, through the STAC catalog.*
-
-The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume. See
-the install steps below for the exact pattern, including the PEP 508 `package @ file://` quoting
-required on Serverless.
-:::
-
-:::warning Install the env wheel for the runtime's family
-The env wheel of the other family refuses to import, naming the file to install. Install the `+env6`
-wheel on Serverless environment 6 and DBR 19, and the `+env5` wheel on Serverless environment 5, DBR 17.3 and DBR 18.
-:::
-
-:::note Upgrading from GeoBrix 0.5.x?
-**GeoBrix 0.5.x** installed with a runtime extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]`, or their `_all` forms. In **0.6.0** those extras are gone: install the env wheel for the runtime instead, with no light extra. Replace `"geobrix[light_env6,vizx] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with `"geobrix[vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` (`+env5` for `light_env5` and `light_dbr17` / `light_dbr18`). An `_all` form becomes `[stac,vizx]`, and `[stac,vizx,zarr]` on the env6 wheel. An old install line fails at resolution (pip: `ResolutionImpossible`), naming the env wheel to install, rather than installing something else.
-
-The 0.5.x GPU extras `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all` name the `+env6` wheel. The UDF workers of the Serverless GPU runtime run environment 6. A driver-only GPU step, such as dense MVS with `pycolmap-cuda12`, can stay on the `+env5` wheel with no extra. Install the GPU packages as a separate step after the wheel.
-:::
-
-:::tip On Serverless, use environment 6
-**Environment v6 is recommended for Serverless.** Install the `+env6` wheel and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use the `+env5` wheel instead.
-
-**Force-reload on Serverless without touching dependencies.** To swap in fresh wheel bytes during an interactive session, run this in a cell towards the top of your notebook:
+1. **Download** the env wheel for your runtime from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases).
+2. **Stage** it on a Volume your compute can read, for example `/Volumes/<catalog>/<schema>/<volume>/geobrix/`.
+3. **Install** it in a notebook cell, then restart Python:
 
 ```python
-%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
 %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
 dbutils.library.restartPython()
 ```
 
-Keep `--no-deps` alongside `--force-reinstall` — without it, pip force-reinstalls dependencies that are already preinstalled and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out; add your feature extras on that line.
-:::
-
-The wheels ship as **GitHub release artifacts** — they are **not** published to PyPI. Install from a Unity Catalog Volume so the same path works on both Serverless and Classic compute:
-
-1. **Download** the env wheel for your runtime, `geobrix-<version>+env6-py3-none-any.whl` or `geobrix-<version>+env5-py3-none-any.whl`, from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases).
-2. **Stage** it in a Unity Catalog Volume your compute can read, e.g. `/Volumes/<catalog>/<schema>/<volume>/geobrix/`.
-3. **Install** it in one of two ways. Notebook-scoped, use the `%pip` magic (it installs across the whole cluster for the notebook session; plain `pip` installs only on the driver). Or add a [cluster-scoped library](https://docs.databricks.com/aws/en/libraries/notebooks-python-libraries#manage-libraries-with-pip-commands) pointing at the same Volume path (works on Serverless and Classic):
-
-```python
-%pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
-```
-
-:::warning Serverless install form
-**Use the quoted `geobrix[<extras>] @ file://…` form.** Install with the **PEP 508
-named form above**, wrapped in quotes as a single argument. Do **not** put an
-extra on the path (`'/Volumes/…/geobrix-<version>+env6-py3-none-any.whl[vizx]'`). On
-**Serverless**, `%pip` writes the requirement to a file *including the
-surrounding quotes*. Pip then reads `[vizx]` as part of the filename and fails.
-The error is *"Expected package name at the start of dependency specifier."* The named
-form installs cleanly on **Serverless**, standard/shared, and ARM.
-:::
-
-**Or install straight from the GitHub release.** When your compute can reach github.com, skip the
-download-and-stage steps and point pip at the release asset. Keep the same quoted PEP 508 named
-form, with the wheel for your runtime:
-
-```python
-%pip install "geobrix @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl"
-dbutils.library.restartPython()
-```
-
-On DBR 17.3 or 18, use the `+env5` wheel instead. For a Serverless job, add the requirement as a
-dependency line of the job's environment, written **without spaces around `@`**. Use the wheel for
-its environment version (`+env5` for version 5, `+env6` for version 6):
-
-```text
-geobrix@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl
-```
-
-Environment dependencies are installed with an unquoted `%pip install`, so spaces around `@` split
-the requirement and the install fails. A Lakeflow pipeline's dependency lines follow the same rule.
-The pipeline runs on the Databricks Runtime of its channel, not on a Serverless environment
-version. It therefore takes the wheel for that runtime (`+env5` for DBR 18, `+env6` for DBR 19). See
-[Lakeflow SDP](./ingestion/lakeflow-sdp#environment).
-
-Workspaces that restrict outbound network access (for example, Serverless egress controls) can
-block GitHub — install from a Unity Catalog Volume, as above, in that case.
-
-### Register {#register}
-
-Register once per session. One call registers every SQL function and the `*_gbx` readers and writers:
+4. <Link id="register"></Link>**Register** the functions, once per session:
 
 <CodeFromTest
   code={verifyInstallation}
@@ -188,54 +95,47 @@ Register once per session. One call registers every SQL function and the `*_gbx`
   testFile="docs/tests/python/installation/test_verify_installation.py"
 />
 
-`register` picks the best implementation of each function for the compute and prints one line when it falls back. The Python API also registers a function on its first call.
+5. <Link id="verify-the-install"></Link>**Verify** with a raster read and one function. Point the path at a GeoTIFF
+   on your Volume:
 
-Registering every function takes about 45 seconds on Serverless. To register only the functions you call, pass their names: `gbx.register(spark, only=["rst_avg", "bng_cellarea"])`. Names may be SQL names or short names. The old per-package `register()` functions are removed; see the [migration guide](./migration-0-6).
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="USE_RASTERX"
+  title="Read a raster and apply a RasterX function"
+  source="docs/tests/python/quickstart/examples.py"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+/>
 
-### Verify the install
+If the query returns the bounding box, width and height, the install is complete. `gbx.register(spark)` registered every `gbx_*`
+SQL function and every `*_gbx` reader and writer for this session. A `%sql` cell in the same notebook can call them.
 
-Confirm the wheel imports, the env wheel's GDAL is the one rasterio runs, and a function runs end to end. The check below exercises RasterX (`rst_*`); VectorX (`st_*`) and GridX ship in the same wheel and run the same way:
+Use the `+env5` file on Serverless environment 5, DBR 17.3 and DBR 18. To install for every notebook on a cluster,
+add the same Volume path as a [cluster-scoped library](https://docs.databricks.com/aws/en/libraries/notebooks-python-libraries#manage-libraries-with-pip-commands)
+instead of `%pip`.
 
-```python
-import rasterio
-from databricks.labs.gbx.rasterx import functions as rx
+:::warning Use the quoted named form
+Write the requirement as `"geobrix @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`, in quotes, as one
+argument. To add an extra, put it after the name: `"geobrix[vizx] @ file:///…"`. Do **not** append it to the path
+(`'/Volumes/…/geobrix-<version>+env6-py3-none-any.whl[vizx]'`). On Serverless, `%pip` keeps the quotes in its
+requirements file, and pip then reads `[vizx]` as part of the file name. The error is *"Expected package name at
+the start of dependency specifier."*
+:::
 
-print("rasterio", rasterio.__version__, "| GDAL", rasterio.__gdal_version__)
-
-# Functional check: load a GeoTIFF and read its properties.
-tiles = (
-    spark.read.format("binaryFile")
-    .load("/Volumes/<catalog>/<schema>/<volume>/path/to/*.tif")
-    .select(rx.rst_fromcontent("content", "GTiff").alias("tile"))
-)
-tiles.select(
-    rx.rst_width("tile").alias("width"),
-    rx.rst_height("tile").alias("height"),
-    rx.rst_srid("tile").alias("srid"),
-).show()
-```
-
-If the import succeeds and the query returns raster dimensions, the install is ready. To add the JVM engine, continue with [Env wheel and JAR](#env-wheel-and-jar) or [Databricks Container Service](./installation/dcs.mdx).
+For extras, jobs, pipelines and installs straight from GitHub, see [Install options](#install-options).
 
 <Link id="heavyweight"></Link>
 
-## Env wheel and JAR {#env-wheel-and-jar}
+## 2. Install for a session: the env wheel and the JAR {#env-wheel-and-jar}
 
-The JVM engine runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. On first use, each node copies the native libraries to local disk. The JVM loads them from that copy, so a finished notebook's Python environment cannot remove them.
+**Runs on:** clusters in **dedicated** access mode only: x86 on DBR 17.3, 18 or 19, or Graviton (arm64) on DBR 19.
 
-1. Stage the env wheel for the runtime in a Unity Catalog Volume: `+env5` on DBR 17.3 and 18, `+env6` on DBR 19.
-2. Stage the JAR with `gbx.stage_jar`, as described [below](#stage-jar).
-3. Create a cluster with **Dedicated** access mode on DBR 17.3, 18 or 19. Use an x86 instance type on any of them, or Graviton (arm64) on DBR 19.
-4. Under **Libraries**, install the wheel (Python whl) and the JAR (JAR) from their Volume paths.
-5. Start the cluster, attach a notebook and [register](#register).
+**Why:** some functions run faster at the JVM level. Your code does not change, and every other function still runs
+in Python. The JVM uses the wheel's GDAL, PROJ and GEOS, so nothing else is installed.
 
-A cluster loads one GeoBrix JAR, so install only one. On DBR 19 you can also install the wheel from a notebook with `%pip` and keep the JAR as a cluster library.
-
-Standard access mode refuses the JVM functions. Every function still runs in Python there.
-
-### Stage the JAR with `gbx.stage_jar` {#stage-jar}
-
-The env wheel carries the JAR that matches its version. `gbx.stage_jar` copies it to a Volume folder, so you need no separate download:
+1. **Stage the env wheel** on a Volume: `+env5` for DBR 17.3 and 18, `+env6` for DBR 19.
+2. <Link id="stage-jar"></Link>**Stage the JAR** from that wheel with `gbx.stage_jar`. Run it in any notebook that has
+   the same env wheel installed:
 
 <CodeFromTest
   code={verifyInstallation}
@@ -246,54 +146,51 @@ The env wheel carries the JAR that matches its version. `gbx.stage_jar` copies i
   testFile="docs/tests/python/installation/test_verify_installation.py"
 />
 
-The call does this:
-
-- It copies the JAR to the folder and writes a `.sha256` file beside it.
-- It checks that the JAR matches the wheel's version and the hash in the wheel's `RECORD`.
-- It refuses a folder that already holds another GeoBrix JAR. A cluster must load one.
-- It prints the next step and returns the staged path.
-
-Pass `overwrite=True` to copy the JAR again. Then add the printed path as a cluster library and **restart the cluster**: a running cluster cannot load a JAR.
-
-On standard access mode, a metastore admin must first add the Volume path to the artifact allowlist. Dedicated clusters need no allowlist entry.
-
-Then install the same env wheel on the cluster. `gbx.register(spark)` checks that the JAR and the wheel are the same version.
-
-:::warning Upgrading from GeoBrix 0.5.x
-GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Breaking changes in 0.6.0](./release-notes/0-6/breaking.mdx#init-script) and the [migration guide](./migration-0-6).
-:::
-
-:::note Staying on GeoBrix 0.5.x
-These pages describe 0.6.x. To install 0.5.x with its init script, use the assets of the [v0.5.2 release](https://github.com/databrickslabs/geobrix/releases/tag/v0.5.2). They include the init script, the GDAL bundle and `geobrix-docs-0.5.2.zip`, the docs for that release.
-:::
-
-Three optional settings apply to the JVM engine:
-
-- **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster. See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
-- **HTTP.** Leave `GDAL_HTTP_VERSION` unset. See [Remote reads](./readers/raster#remote-reads-over-https).
-- **Native copy location.** Each node copies the native libraries once per GeoBrix build, about 130 MB. It uses `/local_disk0/geobrix/native` when no other user owns `/local_disk0`, else `/tmp/geobrix/native`. Each candidate needs three times the copy's size free. Set `spark.databricks.labs.gbx.native.copy.dir` in the cluster's Spark config to use one folder only. An existing folder must belong to the JVM's user, with no access for group or others (mode 0700). Set it to `off` to load from the wheel.
-
-### Verify the JVM engine
-
-Register GeoBrix, then describe one raster function:
+3. **Create a cluster** in **dedicated** access mode. Under **Libraries**, install the wheel (Python whl) and the JAR
+   (JAR) from their Volume paths.
+4. **Start** the cluster, attach a notebook, and **register**: `gbx.register(spark)`, the same call as install 1.
+5. **Verify** the JVM level. Each registered name maps to the level it runs at:
 
 <CodeFromTest
   code={verifyInstallation}
   language="python"
   functionName="VERIFY_PYTHON_INSTALLATION"
-  title="Verify the install"
+  title="Verify the JVM level"
   source="docs/tests/python/installation/verify_installation.py"
   testFile="docs/tests/python/installation/test_verify_installation.py"
   outputConstant="VERIFY_PYTHON_INSTALLATION_output"
 />
 
-If `gbx_rst_boundingbox` shows a level and a signature, the install is ready. The line `register` prints names the level it picked for each function.
+If `gbx_rst_boundingbox` shows a level and a signature, the install is complete. `register` also prints one line
+for each function that falls back to Python, with the reason.
 
-## SQL warehouses and Unity Catalog functions {#uc-functions}
+What `gbx.stage_jar` does:
 
-A SQL warehouse runs no wheel. Users call GeoBrix as Unity Catalog functions, such as `<catalog>.<schema>.gbx_bng_pointascell`, and install nothing.
+- It copies the JAR to the folder and writes a `.sha256` file beside it.
+- It checks that the JAR matches the wheel's version and the hash in the wheel's `RECORD`.
+- It refuses a folder that already holds another GeoBrix JAR, because a cluster must load only one.
+- It prints the next step and returns the staged path. Pass `overwrite=True` to copy the JAR again.
 
-An owner installs the functions once. Run `gbx.uc.install` from a notebook on Serverless environment 6 or DBR 19. The Volume folder holds the same version's env 6 wheel:
+Keep these rules in mind:
+
+- One JAR runs on DBR 17.3, 18 and 19. Install only one GeoBrix JAR on a cluster.
+- A running cluster cannot load a JAR. Restart the cluster after you add or change the JAR library.
+- `gbx.register(spark)` checks that the JAR and the wheel are the same build. A mismatched JAR is not used.
+- On DBR 19 you can install the wheel with `%pip` in the notebook and keep only the JAR as a cluster library.
+
+**Or use a container image.** A GeoBrix image for [Databricks Container Service](./installation/dcs.mdx) starts a
+dedicated DBR 19 cluster with the env6 wheel and the JAR already in place, so steps 1 to 3 are not needed. There is
+one image tag for Graviton (arm64) and one for x86 (amd64).
+
+## 3. Install the Unity Catalog functions {#uc-functions}
+
+**Runs on:** SQL warehouses, and any compute that reads Unity Catalog. Callers install nothing and run no
+`register`. They call a function by its three-part name, such as `<catalog>.<schema>.gbx_bng_pointascell`.
+
+A schema owner installs the functions once:
+
+1. **Stage** the env6 wheel on a Volume folder.
+2. **Run** `gbx.uc.install` from a notebook on Serverless environment 6 or DBR 19:
 
 <CodeFromTest
   code={verifyInstallation}
@@ -304,15 +201,141 @@ An owner installs the functions once. Run `gbx.uc.install` from a notebook on Se
   testFile="docs/tests/python/installation/test_verify_installation.py"
 />
 
-Run it again after each upgrade. The [Unity Catalog functions](./api/uc-functions) page lists the functions and the permissions the owner needs.
+3. **Grant** callers access to the schema's functions.
+4. **Run it again** after each GeoBrix upgrade.
+
+The functions run as Python, or as SQL where that is faster. If the install folder also holds the JAR of the same
+version, the install supplies the JVM-boosted functions as well, with the same answers. They are verified on SQL
+warehouses only; leave the JAR out of the folder to keep every function in Python.
+[Unity Catalog functions](./api/uc-functions) lists the functions and the permissions the owner needs.
+
+## Install options {#install-options}
+
+### Supported Databricks Runtimes {#supported-databricks-runtimes}
+
+| DBR | Ubuntu | Spark | Python | Scala | Java |
+|---|---|---|---|---|---|
+| **17.3** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 |
+| **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 |
+| **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 |
+
+On Serverless, use **environment 6**: set the environment version to **6** in the Environment side panel, or
+`environment_version: "6"` on a job. GeoBrix uses the PySpark that the runtime provides. Installing GeoBrix never
+downloads PySpark.
+
+### Feature extras
+
+Add extras in brackets after the name, on the same line:
+`"geobrix[stac,vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`.
+
+| Extra | What it adds | Wheels |
+|---|---|---|
+| `[stac]` | The STAC client (`pystac-client`, `planetary-computer`) | env5, env6 |
+| `[vizx]` | Visualization (`matplotlib`, `mapclassify`, `anywidget`, `tippecanoe`, `imageio`; the wheel carries `geopandas` and `contextily`) | env5, env6 |
+| `[zarr]` | Zarr transactional stores (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`) | env6 |
+| `[databricks]` | The Databricks SDK, for the sample-data uploads | env5, env6 |
+
+Overture and NASA Earthdata are not extras. Install their packages as a separate step after the wheel, only if you
+use them:
+
+- Overture CLI, the fast path of [Overture Maps](./sample-data/overture-downloader): `%pip install "overturemaps>=1.0.2,<2"`.
+  It raises `click` to 8.5 and `tqdm` to 4.70 or later, and installs PyPI's `shapely`, which GeoBrix does not use.
+  The Overture downloader also works without the CLI, through the STAC catalog.
+- Earthdata ([NASA Earthdata / EMIT](./sample-data/emit-downloader)): `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"`.
+  It raises `fsspec` from 2023.5.0 to a current release.
+
+### Install from the GitHub release
+
+When your compute can reach github.com, you can skip the download and the Volume. Point pip at the release asset,
+in the same quoted named form:
+
+```python
+%pip install "geobrix @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl"
+dbutils.library.restartPython()
+```
+
+A workspace that restricts outbound network access (for example, Serverless egress controls) can block GitHub.
+Install from a Volume in that case.
+
+### Serverless jobs and Lakeflow pipelines
+
+Add the wheel as a dependency line of the job's environment. Write it **without spaces around `@`**:
+
+```text
+geobrix@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl
+```
+
+The environment installs its dependencies with an unquoted `%pip install`, so a space around `@` splits the
+requirement and the install fails. Use the wheel of the job's environment version: `+env5` for 5, `+env6` for 6.
+
+A Lakeflow pipeline's dependency lines follow the same rule. A pipeline runs on the Databricks Runtime of its
+channel, not on a Serverless environment version. Use `+env5` on the `CURRENT` channel (DBR 18) and `+env6` on
+`PREVIEW` (DBR 19). See [Lakeflow SDP](./ingestion/lakeflow-sdp#environment).
+
+### Register only some functions
+
+Registering every function takes about 45 seconds on Serverless. To register only the functions you call, pass
+their names: `gbx.register(spark, only=["rst_avg", "bng_cellarea"])`. Names may be SQL names or short names. The
+Python API also registers a function on its first call.
+
+### Reinstall the same version on Serverless
+
+To load fresh wheel bytes of the same version during a session, run this near the top of the notebook:
+
+```python
+%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
+%pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
+dbutils.library.restartPython()
+```
+
+Keep `--no-deps` with `--force-reinstall`. Without it, pip reinstalls the runtime's preinstalled packages and
+Serverless fails the cell. The second, plain install adds back any dependency the first one skipped. Put your
+extras on that second line.
+
+### What the install changes on the runtime
+
+The env wheel keeps the runtime's preinstalled packages, with these exceptions:
+
+- Every install upgrades `idna` (the runtime ships 3.7 or 3.11) and adds `httpx2` and `httpcore2`. `rio-tiler`
+  uses them to read remote rasters, and they need `idna` 3.18 or later.
+- On Serverless environment 5 and DBR 17.3 / 18, it also upgrades `anyio` and `typing_extensions` (`rio-tiler` 9
+  needs 4.13 or later).
+- On DBR 17.3, it also upgrades `h11` to 0.16 (the fix for CVE-2025-43859), and `httpcore` from 1.0.2 to 1.0.9,
+  because 1.0.2 does not accept that `h11`.
+- On those env5 runtimes, `[stac]` and `[vizx]` also raise `requests` from 2.32.3 to the latest 2.32 release, which
+  fixes CVE-2024-47081.
+
+Databricks may show a one-time "a core package changed" notice. It is harmless: the Python restart after the
+install picks up the new versions.
+
+The wheel also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4`, GDAL's own `osgeo` and the GeoBrix
+[Rust module](./api/execution-tiers.mdx#rust-kernels), all built against its GDAL. A process runs one GDAL. One
+wheel covers the whole library: RasterX (`databricks.labs.gbx.rasterx`), GridX (`databricks.labs.gbx.gridx.<grid>`),
+VectorX (`databricks.labs.gbx.vectorx`) and `pmtiles`.
+
+### JVM settings for install 2
+
+- **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment
+  variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster.
+  See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
+- **HTTP.** Leave `GDAL_HTTP_VERSION` unset. See [Remote reads](./readers/raster#remote-reads-over-https).
+- **Native copy location.** On first use, each node copies the wheel's native libraries to local disk, about 130 MB
+  per GeoBrix build. The JVM loads that copy, so a finished notebook's Python environment cannot remove them. The
+  copy goes to `/local_disk0/geobrix/native` when no other user owns `/local_disk0`, else to `/tmp/geobrix/native`.
+  Each candidate needs three times the copy's size free. To use one folder only, set
+  `spark.databricks.labs.gbx.native.copy.dir` in the cluster's Spark config. An existing folder must belong to the
+  JVM's user, with no access for group or others (mode 0700). Set it to `off` to load from the wheel.
 
 ## Install without PyPI access {#offline-install}
 
-Some workspaces cannot reach PyPI, and on some the Unity Catalog sandbox cannot either. An install that needs PyPI then fails. The env wheel lists every wheel it needs, pinned and hashed, for each architecture. Download those wheels once, stage them on a Volume, then install from the Volume.
+Some workspaces cannot reach PyPI, and on some the Unity Catalog sandbox cannot either. An install that needs PyPI
+then fails. The env wheel lists every wheel it needs, pinned and hashed, for each architecture. Download those wheels
+once, stage them on a Volume, then install from the Volume.
 
 ### Download the wheels
 
-Run the download on any machine with PyPI access and Python 3.12. It needs the env wheel installed, and no GeoBrix checkout:
+Run the download on any machine with PyPI access and Python 3.12. It needs the env wheel installed, and no GeoBrix
+checkout:
 
 <CodeFromTest
   code={offlineInstall}
@@ -358,7 +381,9 @@ The same steps run from Python, in `databricks.labs.gbx.stage`:
   testFile="docs/tests/python/installation/test_offline_install.py"
 />
 
-On Databricks compute it copies through the Volume's mount. Elsewhere it uses the Databricks SDK with its default authentication. It checks each file's sha256 before and after the copy. It refuses a folder that holds another GeoBrix wheel. It prints the install lines for that folder.
+On Databricks compute it copies through the Volume's mount. Elsewhere it uses the Databricks SDK with its default
+authentication. It checks each file's sha256 before and after the copy. It refuses a folder that holds another
+GeoBrix wheel. It prints the install lines for that folder.
 
 ### Install from the Volume
 
@@ -384,7 +409,8 @@ In a Serverless environment, add these lines to the environment's dependencies, 
   testFile="docs/tests/python/installation/test_offline_install.py"
 />
 
-On a cluster, add `requirements-<arch>.txt` from the Volume folder as a cluster library. `gbx.stage_deps` writes one for each architecture.
+On a cluster, add `requirements-<arch>.txt` from the Volume folder as a cluster library. `gbx.stage_deps` writes one
+for each architecture.
 
 For the Unity Catalog functions, pass `deps="volume"`:
 
@@ -397,13 +423,19 @@ For the Unity Catalog functions, pass `deps="volume"`:
   testFile="docs/tests/python/installation/test_offline_install.py"
 />
 
-The functions install from the Volume folders with `--no-index`. `wheels_dir` names the folder `gbx.stage_deps` filled. It defaults to `volume_dir`. Pass `arch="aarch64"` or `arch="x86_64"` to name the sandbox's folder. By default the install lists both, and pip takes the wheels that fit. Before any statement, the install checks that each folder holds every wheel it needs. A missing wheel stops it with a `Fix:`.
+The functions install from the Volume folders with `--no-index`. `wheels_dir` names the folder `gbx.stage_deps`
+filled; it defaults to `volume_dir`. Pass `arch="aarch64"` or `arch="x86_64"` to name the sandbox's folder. By
+default the install lists both, and pip takes the wheels that fit. Before any statement, the install checks that each
+folder holds every wheel it needs. A missing wheel stops it with a `Fix:`.
 
 Use bare `/Volumes/...` paths. A `dbfs:/Volumes/...` path is refused.
 
-## SQL from a JVM job {#jvm-sql}
+## Call GeoBrix from Scala or Java {#jvm-sql}
 
-GeoBrix registers its SQL functions from Python with `gbx.register(spark)`. The registration lives in one Spark session. JVM code on the same session, in Scala or Java, calls the functions by SQL name. The JAR adds faster implementations for many functions. It registers no SQL names.
+Most users can skip this section. It is for code on the JVM, in Scala or Java, that calls GeoBrix functions.
+
+`gbx.register(spark)` registers the SQL functions from Python, in one Spark session. JVM code on the same session
+calls them by SQL name. The JAR adds faster implementations for many functions, but it registers no SQL names.
 
 Choose the route by where the code runs:
 
@@ -411,14 +443,16 @@ Choose the route by where the code runs:
 |---|---|---|
 | [Python entry point, Scala body](#jvm-python-entry) | A job task on a dedicated cluster | All of them. A table function cannot go in a select list, as described below. |
 | [A notebook that mixes languages](#jvm-notebook) | A notebook on dedicated compute | All of them |
-| [Unity Catalog functions](#jvm-uc) | Any compute that reads Unity Catalog, including Serverless JAR tasks | The Unity Catalog slice |
+| [Unity Catalog functions](#jvm-uc) | Any compute that reads Unity Catalog, including Serverless JAR tasks | The Unity Catalog subset |
 
 ### Python entry point, Scala body {#jvm-python-entry}
 
-A job that has no notebook makes its first task a Python task. The task registers the functions, then calls your Scala object with the same session.
+A job that has no notebook makes its first task a Python task. The task registers the functions, then calls your
+Scala object with the same session.
 
-1. Create the job cluster with **Dedicated** access mode.
-2. Install the env wheel, your JAR and the GeoBrix JAR as libraries of the task. Install the GeoBrix JAR only if you want the JVM implementations.
+1. Create the job cluster in **dedicated** access mode.
+2. Install the env wheel, your JAR and the GeoBrix JAR as libraries of the task. The GeoBrix JAR is optional: add it
+   only if you want the JVM implementations.
 3. Write the Python task:
 
 <CodeFromTest
@@ -430,7 +464,8 @@ A job that has no notebook makes its first task a Python task. The task register
   testFile="docs/tests/python/installation/test_verify_installation.py"
 />
 
-4. Write the Scala body. It calls the functions by name and registers nothing. Name the package and object as the Python task calls them:
+4. Write the Scala body. It calls the functions by name and registers nothing. Name the package and object as the
+   Python task calls them:
 
 <CodeFromTest
   code={jvmJobBody}
@@ -447,21 +482,27 @@ What the Scala code can call, checked on a dedicated cluster on DBR 17.3:
 - A table function, in `SELECT * FROM gbx_x(...)` and in `FROM t, LATERAL gbx_x(...)`.
 - A `*_gbx` data source, such as `spark.read.format("raster_gbx")`.
 
-A table function at the Python level does not resolve in a select list: `SELECT gbx_x(...)` and `call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See [Surfaces & Levels](./api/execution-tiers.mdx).
+A table function at the Python level does not resolve in a select list: `SELECT gbx_x(...)` and
+`call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See
+[Surfaces & Levels](./api/execution-tiers.mdx).
 
 :::note Dedicated clusters only
-`spark._jvm` and `spark._jsparkSession` exist only where Python and the JVM share a process. That is a dedicated cluster. Standard access mode and Serverless run Spark Connect, which gives Python no access to the JVM. Use the Unity Catalog route there.
+`spark._jvm` and `spark._jsparkSession` exist only where Python and the JVM share a process, which is a dedicated
+cluster. Standard access mode and Serverless run Spark Connect, which gives Python no access to the JVM. Use the
+Unity Catalog route there.
 :::
 
 ### A notebook that mixes languages {#jvm-notebook}
 
-On dedicated compute, run `gbx.register(spark)` in a Python cell. Cells in other languages use the same Spark session, so a `%sql` or `%scala` cell calls the functions by name.
+On dedicated compute, run `gbx.register(spark)` in a Python cell. Cells in other languages use the same Spark
+session, so a `%sql` or `%scala` cell calls the functions by name.
 
 Serverless notebooks have no Scala cells.
 
 ### Unity Catalog functions {#jvm-uc}
 
-Install the functions once with `gbx.uc.install`, as [above](#uc-functions). The job then calls a three-level name with `spark.sql`. This route needs no registration and no Python task.
+Install the functions once with `gbx.uc.install`, as in [install 3](#uc-functions). The job then calls a three-level
+name with `spark.sql`. This route needs no registration and no Python task.
 
 <CodeFromTest
   code={scalaApiExamples}
@@ -472,13 +513,15 @@ Install the functions once with `gbx.uc.install`, as [above](#uc-functions). The
   title="Call a Unity Catalog function from Scala"
 />
 
-Unity Catalog carries a slice of GeoBrix. See [Unity Catalog functions](./api/uc-functions).
-
 ### The Scala DataFrame API
 
-The `com.databricks.labs.gbx.<package>.functions` objects hold Column wrappers, such as `rasterx.functions.rst_boundingbox`. The packages are `rasterx`, `gridx.bng`, `gridx.h3`, `gridx.custom` and `vectorx`.
+The `com.databricks.labs.gbx.<package>.functions` objects hold Column wrappers, such as
+`rasterx.functions.rst_boundingbox`. The packages are `rasterx`, `gridx.bng`, `gridx.h3`, `gridx.custom` and
+`vectorx`.
 
-A wrapper calls the function by its SQL name, so the session must resolve that name. Register in Python first, or put a schema that holds the Unity Catalog functions on the path. See [Names and the path](./api/uc-functions#names-and-the-path).
+A wrapper calls the function by its SQL name, so the session must resolve that name. Register in Python first, or
+put a schema that holds the Unity Catalog functions on the path. See
+[Names and the path](./api/uc-functions#names-and-the-path).
 
 <CodeFromTest
   code={scalaApiExamples}
@@ -493,7 +536,35 @@ A function whose JVM implementation was removed has no wrapper. Call it with `ca
 
 ### Tasks of a job do not share a session
 
-Each task of a job has its own session. Functions registered in a Python task are not visible to a later JAR task. Put the Scala call in the same Python task, as above.
+Each task of a job has its own session. Functions registered in a Python task are not visible to a later JAR task.
+Put the Scala call in the same Python task, as above.
+
+## Upgrading from GeoBrix 0.5.x {#upgrade-from-0-5}
+
+- **Install lines.** 0.5.x installed with a runtime extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`,
+  `[light_dbr18]` or `[light_dbr19]`, or their `_all` forms. In 0.6.0 those extras are gone: install the env wheel
+  for the runtime, with no runtime extra.
+  - Replace `"geobrix[light_env6,vizx] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with
+    `"geobrix[vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`.
+  - Use `+env5` in place of `light_env5`, `light_dbr17` and `light_dbr18`.
+  - An `_all` form becomes `[stac,vizx]`, or `[stac,vizx,zarr]` on the env6 wheel.
+  - An old install line fails at resolution (pip: `ResolutionImpossible`) and names the env wheel to install. It
+    never installs something else.
+- **GPU extras.** The 0.5.x extras `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all` map to the `+env6`
+  wheel, because the UDF workers of the Serverless GPU runtime run environment 6. A driver-only GPU step, such as
+  dense MVS with `pycolmap-cuda12`, can stay on the `+env5` wheel with no extra. Install the GPU packages as a
+  separate step after the wheel.
+- **Init script.** 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the
+  cluster**, and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one
+  cluster. See [Breaking changes in 0.6.0](./release-notes/0-6/breaking.mdx#init-script).
+- **The JAR.** In 0.5.x the JAR was only a separate release asset. In 0.6.0 it also ships inside the env wheel:
+  stage it with `gbx.stage_jar` ([install 2](#env-wheel-and-jar)), which checks that it matches the wheel.
+- **Registration.** The per-package `register()` functions are removed. `gbx.register(spark)` replaces them.
+
+See the [migration guide](./migration-0-6) for every change.
+
+To stay on 0.5.x, use the assets of the [v0.5.2 release](https://github.com/databrickslabs/geobrix/releases/tag/v0.5.2).
+They include the init script, the GDAL bundle and `geobrix-docs-0.5.2.zip`, the docs for that release.
 
 ## Next Steps
 

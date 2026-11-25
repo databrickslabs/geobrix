@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "bbfd034cae7c26bb2d1cca1c0b4f0d692f4a81849fbd9e167f4834c4be34760f",
-  "date": "2026-11-20",
+  "native_inputs_sha256": "9c9fe1c394c9ebbc9e82bf8706db093e0c40ef49918f78589c996458fe3b1f14",
+  "date": "2026-11-25",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "8482914f08d4e13809cdac79178df248f463af95",
+  "built_from": "0ddb4520c06fffe8b34875cb717c8cd30a8ce0db",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -64,7 +64,7 @@
     "python/geobrix/envs/runtimes/env6.txt": "d6b970fefc50039a8a7349ec4d61ca4343281be5659eb29d514f84af246dcdfb",
     "python/geobrix/envs/runtimes/env6ml.txt": "56804a31edfefc62670d4b63ebe7606c13ed4151a8a912c2ff5fc340295f69ca",
     "python/geobrix/envs/size-budget.json": "cd25bf2adb67934327c5627eddd7dd3513d48dbc55c3671777060097fd2d8ad5",
-    "python/geobrix/pyproject.toml": "98c5cfd10194e14a3ea88541ce7d01a6d424467f2be87abc0f1ac749b226b729",
+    "python/geobrix/pyproject.toml": "a92878adff84856e2271358ebf934d37d66759591d652dc14b5273f2ac154107",
     "python/geobrix/requirements-build.txt": "6f62c3d236582984ee9a5df564200e94b97e5ce162aac12071c493abc708e45e",
     "python/geobrix/src/_gbx_native_path.py": "91439a475d1c3910874667efef67770407ddd5ff03854c40bfa85d0bb2ce0361",
     "python/geobrix/src/databricks/labs/gbx/_native/__init__.py": "b4c7570a75640fd57ab6d5e0eebcbdb7694fcb3b1df3e419570f7276ca1f4429",

@@ -14,6 +14,7 @@ conftest.py's ContainerSandbox): no daemon, no Maven. The lock itself is real.
 import fcntl
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -658,6 +659,35 @@ def test_work_that_outlasts_the_wait_names_itself_in_the_timeout(demo):
     assert res.returncode == 75
     assert "Timed out after 1s waiting for earlier work" in res.output
     assert "pid=9 cmd=orphan" in res.output
+    assert _events(demo) == []  # no work was started
+
+
+@pytest.mark.parametrize(
+    "held_lock, env, status",
+    [
+        ("work", {"GBX_TEST_LOCK_TIMEOUT": "1"}, "WORK_TIMEOUT"),
+        ("run", {"GBX_LOCK_NO_WAIT": "true"}, "BUSY"),
+    ],
+)
+def test_a_helper_that_ends_right_after_its_status_line_is_not_reported_as_failed(
+    demo, held_lock, env, status
+):
+    """The helper writes its final status line (TIMEOUT, BUSY) and exits at once. The host loop reads the status, then
+    checks the helper is alive: when the helper ended in between, the line was missed and the run died with exit 70
+    ("exited without taking the lock") instead of 75 (a CI flake under load). A `grep` that is slow after reading
+    the status widens that window to a certainty."""
+    real_grep = shutil.which("grep")
+    slow = demo.bin / "grep"
+    slow.write_text(
+        f'#!/bin/sh\n"{real_grep}" "$@"\nrc=$?\ncase "$*" in *TIMEOUT*) sleep 2 ;; esac\nexit $rc\n'
+    )
+    slow.chmod(0o755)
+    lock = demo.work_lock_file if held_lock == "work" else demo.lock_file
+    with demo.lock_held_by("pid=9 cmd=orphan since=then", lock=lock):
+        res = demo.run("lockdemo.sh", **env)
+
+    assert res.returncode == 75, res.output
+    assert "exited without taking the lock" not in res.output
     assert _events(demo) == []  # no work was started
 
 

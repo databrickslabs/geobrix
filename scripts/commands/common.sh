@@ -401,7 +401,7 @@ gbx_acquire_test_lock() {
         echo -e "${CYAN}🔒 test lock: held by the parent command (pid ${GBX_TEST_LOCK_HELD_BY}); this run is pid $$${NC}"
         return 0
     fi
-    local info dir status fifo holder_pid line saved_traps start="$SECONDS" next_note=30 waiting=false
+    local info dir status fifo holder_pid line saved_traps start="$SECONDS" next_note=30 waiting=false helper_alive
     info="pid=$$ cmd=${GBX_LOCK_CMD} since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     dir="$(mktemp -d "${TMPDIR:-/tmp}/gbx-lock.XXXXXX")" || return 1
     status="$dir/status"
@@ -430,6 +430,10 @@ gbx_acquire_test_lock() {
     holder_pid=$!
     exec 6<&-
     while :; do
+        # Ask whether the helper is alive BEFORE reading its status: it writes its last line (BUSY, TIMEOUT) and
+        # exits at once, so a liveness check after the read could find it gone and miss that line.
+        helper_alive=true
+        kill -0 "$holder_pid" 2>/dev/null || helper_alive=false
         if grep -q '^ACQUIRED' "$status"; then
             break
         fi
@@ -457,7 +461,7 @@ gbx_acquire_test_lock() {
                     exit 70 ;;
             esac
         fi
-        if ! kill -0 "$holder_pid" 2>/dev/null; then
+        if [ "$helper_alive" = false ]; then
             echo -e "${RED}❌ The container lock helper exited without taking the lock:${NC}"
             sed 's/^/   /' "$status"
             rm -rf "$dir"

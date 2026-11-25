@@ -186,6 +186,9 @@ def _grid_cells(ds, src_crs, grid, res):
         lon, lat = get_transformer(src_crs, 4326).transform(
             *(t * (cc.ravel(), rr.ravel()))
         )
+        # a padded sample past the CRS's valid area (beyond an orthographic disk) has no place
+        ok = np.isfinite(lon) & np.isfinite(lat)
+        lon, lat = np.asarray(lon)[ok], np.asarray(lat)[ok]
         if grid == "h3":
             seen = {h3.latlng_to_cell(la, lo, res) for lo, la in zip(lon, lat)}
             for c in set().union(*(h3.grid_disk(c, 1) for c in seen)):
@@ -813,14 +816,14 @@ def test_a_seam_that_is_no_meridian_is_refused_with_a_fix():
 
 
 def test_points_that_do_not_transform_take_the_warp():
-    # a Mollweide raster whose padded outline leaves the globe's edge (no lon/lat there): covering takes the warp to
-    # EPSG:4326, as before; centroid needs no outline and stays native
+    # a Mollweide raster whose east column's corners are past the globe's edge (no lon/lat there): covering takes the
+    # warp to EPSG:4326, as before; centroid needs only the pixel centres, which are on the globe, and stays native
     moll = "+proj=moll +lon_0=0 +datum=WGS84 +units=m +no_defs"
     edge = get_transformer(4326, moll).transform(180.0, 1.0)[0]
     b = _tif(
         _ramp(10, 10, holes=False),
         moll,
-        from_origin(edge - 10 * 20000.0 - 5000.0, 100000.0, 20000.0, 20000.0),
+        from_origin(edge - 10 * 20000.0 + 5000.0, 100000.0, 20000.0, 20000.0),
     )
     with _open(b) as ds:
         warped = gridagg._warp_to_4326_if_needed(ds, None)
@@ -830,6 +833,44 @@ def test_points_that_do_not_transform_take_the_warp():
     assert {c: r["count"] for c, r in lib.items()} == {
         c: n for c, (n, _) in ref.items()
     }
+
+
+def test_a_raster_whose_padded_outline_leaves_the_globe_stays_native(monkeypatch):
+    # a Mollweide raster 5 km inside the globe's edge: only its outline padded by a pixel leaves the globe. It is
+    # gridded on its own pixels (before, it took the warp): every pixel shared out whole, and each cell away from
+    # the seam as the exact reference has it
+    def no_warp(*a, **k):
+        raise AssertionError("the warp ran")
+
+    monkeypatch.setattr(gridagg, "_warp_to_4326_if_needed", no_warp)
+    moll = "+proj=moll +lon_0=0 +datum=WGS84 +units=m +no_defs"
+    edge = get_transformer(4326, moll).transform(180.0, 1.0)[0]
+    b = _tif(
+        _ramp(10, 10, holes=False),
+        moll,
+        from_origin(edge - 10 * 20000.0 - 5000.0, 100000.0, 20000.0, 20000.0),
+    )
+    lib = _partial(b, "h3", 5)
+    assert sum(c["count"] for c in lib.values()) == pytest.approx(100.0, rel=1e-6)
+    with _open(b) as ds:
+        quads, _, _ = _pixel_quads(ds)
+        cells = _native_cells(ds, moll, "h3", 5)
+    px_area = shapely.area(quads[0])
+    checked = 0
+    for cid, poly in cells.items():
+        lons = [lng for _, lng in h3.cell_to_boundary(h3.int_to_str(cid))]
+        if (
+            max(lons) - min(lons) > 180.0
+        ):  # across the seam: the reference does not cut it
+            continue
+        w = shapely.area(shapely.intersection(quads, poly)) / px_area
+        if w.sum() > _SLIVER:
+            partial = int(((w > 0) & (w < 1.0 - 1e-9)).sum())
+            assert lib[cid]["count"] == pytest.approx(
+                w.sum(), abs=_W_TOL * max(partial, 1)
+            ), cid
+            checked += 1
+    assert checked > 10
 
 
 def _bng_edge_raster(e0, n0):

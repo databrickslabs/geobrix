@@ -9,9 +9,14 @@
   frame, ``_Frame`` / ``_grid_native``): ``centroid`` moves each pixel centre to the
   grid's CRS; ``covering`` moves each cell into the raster's CRS (``_native_rings``,
   each edge walked to within ``_NATIVE_EDGE_TOLERANCE``) and shares the native pixels
-  by overlap area, so ``count`` is in source pixels. Only a raster the frame cannot
-  hold (a cell across its CRS's own seam, or a point that does not transform) is
-  warped to the grid's CRS (nearest) first, as all were before.
+  by overlap area, so ``count`` is in source pixels. A cell across the CRS's own seam
+  is cut there. A lon/lat CRS has no seam: its longitude runs on by turns, so a moved
+  cell is unwrapped, closed over a pole it holds, and repeated by turns over the
+  raster (``_periodic_rings``); a cylindrical CRS the raster reaches past the seam of
+  runs on the same way. An EPSG:4326 raster that is global, crosses 180 or holds
+  longitudes outside -180..180 takes this frame too (``_lonlat_needs_frame``); a
+  regional one keeps the planar lon/lat pass. Only a raster with a point that does not
+  transform is warped to the grid's CRS (nearest) first.
   A pixel is valid for a band when the band's own mask says so (NoData, the raster's
   own mask band) and, for a raster with an alpha band, its alpha is above 0
   (``_nodata.band_valid_mask``): every band is judged alone, and a transparent pixel
@@ -152,6 +157,14 @@ def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
     numpy core the scalar ``point_to_cell_id`` wraps, so cell ids are identical.
     """
     return _bng.point_to_cell_id_vec(e, n, resolution)
+
+
+def _bng_inside(e, n, cids, resolution) -> np.ndarray:
+    """Whether each EPSG:27700 point (``e``, ``n``) with its cell id ``cids`` is inside BNG: a valid id, and no
+    negative easting or northing (the encoder truncates a point up to 100 km west or south of the grid's origin into
+    the first column or row, a cell it is not in)."""
+    e, n = np.asarray(e, dtype="float64"), np.asarray(n, dtype="float64")
+    return _bng.is_valid_vec(cids, resolution) & (e >= 0.0) & (n >= 0.0)
 
 
 def _grouped_measures(
@@ -308,6 +321,40 @@ def _weighted_reduce(pairs: list, agg: str) -> float:
     raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
 
 
+def _fast_cell_encoder(grid: str, resolution, conf=None):
+    """The interior fast-path point->cell encoder of ``_covering_band`` for exact-geometry grids: the RAW cell id
+    (same type as polyfill candidates) of a point, or None when the point is outside the grid; None (no fast path)
+    for h3 and any grid not in ``_COVERING_FAST_PATH_EXACT``. That set is read at call time, so tests can
+    monkeypatch it to frozenset() to force the overlap path on all grids."""
+    if grid not in _COVERING_FAST_PATH_EXACT:
+        return None
+    if grid == "custom":
+        from databricks.labs.gbx.pygx import _custom as _custom_fp
+
+        def _fast_cell(cx, cy):
+            return _custom_fp.point_to_cell_id_or_none(conf, cx, cy, resolution)
+
+    elif grid == "quadbin":
+        from databricks.labs.gbx.pygx import _quadbin as _qb_fp
+
+        def _fast_cell(cx, cy):
+            # a corner beyond quadbin's latitudes is in no cell (point_as_cell would clamp it into the
+            # first or last row): the pixel takes the overlap path, which counts only its part inside
+            if not _qb_fp._LAT_MIN <= cy <= _qb_fp._LAT_MAX:
+                return None
+            return _qb_fp.point_as_cell(cx, cy, resolution)
+
+    else:  # bng
+
+        def _fast_cell(cx, cy):
+            if cx < 0.0 or cy < 0.0:
+                return None  # west or south of the grid (the encoder would truncate it into a cell)
+            cid = _bng.point_to_cell_id(cx, cy, resolution)
+            return cid if _bng.is_valid(cid) else None
+
+    return _fast_cell
+
+
 def _covering_band(
     work_ds,
     bi: int,
@@ -362,39 +409,14 @@ def _covering_band(
         _polyfill_cells,
     )
 
-    # Set up the interior fast-path point→cell encoder for exact-geometry grids.
-    # Returns the RAW cell id (same type as polyfill candidates) or None when the
-    # point is outside the grid bounds.  _fast_cell=None disables the fast-path
-    # (h3 and any grid not in _COVERING_FAST_PATH_EXACT use the old path).
-    # The outer gate reads _COVERING_FAST_PATH_EXACT at call time so tests can
-    # monkeypatch it to frozenset() to force the old path on all grids.
-    if grid in _COVERING_FAST_PATH_EXACT:
-        if grid == "custom":
-            from databricks.labs.gbx.pygx import _custom as _custom_fp
-
-            def _fast_cell(cx, cy):  # noqa: F811
-                return _custom_fp.point_to_cell_id_or_none(conf, cx, cy, resolution)
-
-        elif grid == "quadbin":
-            from databricks.labs.gbx.pygx import _quadbin as _qb_fp
-
-            def _fast_cell(cx, cy):  # noqa: F811
-                return _qb_fp.point_as_cell(cx, cy, resolution)
-
-        else:  # bng
-
-            def _fast_cell(cx, cy):  # noqa: F811
-                cid = _bng.point_to_cell_id(cx, cy, resolution)
-                return cid if _bng.is_valid(cid) else None
-
-    else:
-        _fast_cell = None  # h3 and any grid not in the exact-geometry set
+    _fast_cell = _fast_cell_encoder(grid, resolution, conf)
 
     ys, xs = np.nonzero(mask)
     if ys.size == 0:
         return []
 
     acc: dict = {}  # raw_cell_id -> [(value, weight)]
+    geoms: dict = {}  # raw_cell_id -> its polygon, built once per band
 
     for y_i, x_i in zip(ys, xs):  # vectorscan: ok (covering intentionally per-pixel)
         y, x = int(y_i), int(x_i)
@@ -430,10 +452,16 @@ def _covering_band(
         if px_area == 0.0:
             continue
 
-        for cell in _polyfill_cells(pixel_poly, resolution, grid, conf=conf):
+        if grid in ("h3", "bng"):
+            cands = _pixel_candidates(pixel_poly, resolution, grid)
+        else:
+            cands = _polyfill_cells(pixel_poly, resolution, grid, conf=conf)
+        for cell in cands:
             if not _cell_is_valid(cell, grid, conf=conf):
                 continue
-            cell_poly = _cell_geom(cell, grid, conf=conf)
+            cell_poly = geoms.get(cell)
+            if cell_poly is None:
+                cell_poly = geoms[cell] = _cell_geom(cell, grid, conf=conf)
             inter = cell_poly.intersection(pixel_poly)
             if inter is not None and inter.area > 0:
                 w = inter.area / px_area
@@ -451,6 +479,31 @@ def _covering_band(
         }
         for cell, pairs in acc.items()  # vectorscan: ok (per-cell)
     ]
+
+
+def _pixel_candidates(pixel_poly, resolution, grid: str) -> list:
+    """The cells (the raw ids ``_cell_geom`` takes) that may overlap one pixel of the planar pass: the polyfill's,
+    then those it missed from ``_box_cells`` (h3: the cells around the pixel's box; BNG: the lattice squares under
+    it). Both polyfills can miss a cell: h3's overlap mode returned only a neighbour of a 30 m pixel inside a res-9
+    cell, and BNG's flood fill missed 30 of the 240 res-4 cells under a 2 km box. The polyfill's cells keep their
+    order, so a pixel's pairs come in the order they did."""
+    from databricks.labs.gbx.pyrx.core.tessellate import _polyfill_cells
+
+    found = list(_polyfill_cells(pixel_poly, resolution, grid))
+    seen = set(found)
+    if grid == "h3":
+        import h3
+
+        extra = (
+            h3.int_to_str(c) for c in _box_cells([pixel_poly.bounds], resolution, grid)
+        )
+    else:
+        extra = _bng_box_cells(pixel_poly.bounds, resolution)
+    for cell in extra:  # vectorscan: ok (a pixel's few cells)
+        if cell not in seen:
+            seen.add(cell)
+            found.append(cell)
+    return found
 
 
 def _use_h3_vectorised(work_ds, resolution, gt, area=None) -> bool:
@@ -774,6 +827,13 @@ _NATIVE_RING_BUDGET = 2_500_000
 _OUTLINE_STEP_PIXELS = 16
 
 
+def _wrap(d, period):
+    """``d`` written within half a ``period`` of 0 (unchanged when ``period`` is None)."""
+    if not period:
+        return d
+    return (d + 0.5 * period) % period - 0.5 * period
+
+
 class _NeedsWarp(Exception):
     """The native frame cannot hold the raster: a point does not transform."""
 
@@ -1090,7 +1150,19 @@ class _Frame:
         # pick different operations for the two directions (measured: 122 m apart between EPSG:27700 and a PROJ-string
         # Mercator on +datum=WGS84), and a cell and its pixels must agree
         self.gt = gt = ds.transform.to_gdal()
+        cols, rows = self._probe(ds)
+        xs = gt[0] + cols[:4] * gt[1] + rows[:4] * gt[2]
+        self.x_range = (float(xs.min()), float(xs.max()))
         forward = get_transformer(src_crs, grid_crs)
+        # a lon/lat raster CRS has no seam: its longitude runs on by whole turns (``period``, in its own unit), so a
+        # moved cell is unwrapped and repeated by turns over the raster's x range (``_periodic_rings``); a projected
+        # raster that reaches past its CRS's seam by a constant shift (a cylindrical CRS) repeats its cells the same way
+        self.lonlat_src = bool(pcrs.is_geographic)
+        if self.lonlat_src:
+            unit = pcrs.axis_info[0].unit_conversion_factor if pcrs.axis_info else 0.0
+            self.period = 2.0 * math.pi / unit if unit else 360.0
+        else:
+            self.period = self._seam_period(forward, ds, gt)
         self.pinned = not self._round_trips(forward, ds, gt, pcrs)
         if self.pinned:
             forward = get_operation_transformer(
@@ -1105,7 +1177,8 @@ class _Frame:
         self.px_area = abs(gt[1] * gt[5] - gt[2] * gt[4])
         self.px_side = math.sqrt(self.px_area)
         self.poles = {}
-        if self.geographic:
+        # in a lon/lat raster CRS a pole is a row, not a point: an outline never winds around it
+        if self.geographic and not self.lonlat_src:
             inv = ~ds.transform
             for sign in (1, -1):
                 x, y = self.to_native(0.0, 90.0 * sign)
@@ -1156,9 +1229,22 @@ class _Frame:
         seam's meridian through degrees of the grid's longitude, past tracing; no pixel lies above the cap.
         """
         if getattr(self, "_cap_lat", None) is None:
+            # the raster's farthest latitude is on its outline (unpadded: a padded box, grown for candidate cells, can
+            # reach the pole and leave no room for the cap), unless it holds a pole
             ds = self.ds
-            boxes = self.window_boxes((0, ds.height - 1), (0, ds.width - 1))
-            far = max(max(abs(s), abs(n)) for _, s, _, n in boxes)
+            far = 90.0
+            inside = any(
+                0.0 <= c <= ds.width and 0.0 <= r <= ds.height
+                for c, r in self.poles.values()
+            )
+            if not inside:
+                try:
+                    _, y = self._outline_points(
+                        (0, ds.height - 1), (0, ds.width - 1), 0
+                    )
+                    far = float(np.abs(y).max())
+                except _NeedsWarp:
+                    pass
             self._cap_lat = min(_POLE_CAP_LAT, 0.5 * (far + 90.0))
         return self._cap_lat
 
@@ -1178,7 +1264,14 @@ class _Frame:
         with np.errstate(all="ignore"):
             gx, gy = forward.transform(x, y)
             bx, by = forward.transform(gx, gy, direction="INVERSE")
-            miss = np.hypot(np.asarray(bx) - x, np.asarray(by) - y)
+            # a point that comes back whole turns away is the same point (``period``); in a lon/lat CRS a longitude
+            # step counts by the cosine of the latitude (at a pole every longitude is the same point)
+            dx = _wrap(np.asarray(bx) - x, self.period)
+            if self.lonlat_src:
+                dx = dx * np.cos(
+                    np.clip(y * (math.tau / self.period), -math.pi, math.pi)
+                )
+            miss = np.hypot(dx, np.asarray(by) - y)
         side = math.sqrt(abs(gt[1] * gt[5] - gt[2] * gt[4]))
         if pcrs.is_geographic:
             floor = 1e-7
@@ -1187,6 +1280,36 @@ class _Frame:
             floor = 0.01 / (metres or 1.0)
         finite = np.isfinite(miss)
         return bool(not finite.any() or (miss[finite] <= max(1e-3 * side, floor)).all())
+
+    @staticmethod
+    def _seam_period(forward, ds, gt):
+        """The x shift by which a projected raster's points past its CRS's seam come back from the grid's CRS (the
+        CRS's width, e.g. 2 pi R for EPSG:3857), when every such point comes back by the same shift and on its own
+        row: then the CRS runs on by that period (a cylindrical CRS). None when no point of the raster is past the
+        seam, or the shift changes from row to row (a pseudo-cylindrical CRS, whose outside is off the globe). Pixel
+        centres are sampled, never the raster's edge: an edge on the seam comes back on either side of it.
+        """
+        k = 9
+        cols = np.tile((np.arange(k) + 0.5) * ds.width / k, k)
+        rows = np.repeat((np.arange(k) + 0.5) * ds.height / k, k)
+        cols = np.concatenate([cols, np.full(k, 0.5), np.full(k, ds.width - 0.5)])
+        rows = np.concatenate([rows, np.tile((np.arange(k) + 0.5) * ds.height / k, 2)])
+        x, y = gt[0] + cols * gt[1] + rows * gt[2], gt[3] + cols * gt[4] + rows * gt[5]
+        with np.errstate(all="ignore"):
+            gx, gy = forward.transform(x, y)
+            bx, by = forward.transform(gx, gy, direction="INVERSE")
+            d, dy = x - np.asarray(bx), np.asarray(by) - y
+        side = math.sqrt(abs(gt[1] * gt[5] - gt[2] * gt[4]))
+        ok = np.isfinite(d) & np.isfinite(dy)
+        off = ok & (np.abs(d) > max(1e-3 * side, 1e-6))
+        if not off.any():
+            return None
+        shift = np.abs(d[off])
+        if (np.abs(shift - shift[0]) > 1e-9 * shift[0]).any() or (
+            np.abs(dy[off]) > max(1e-3 * side, 1e-6)
+        ).any():
+            return None
+        return float(shift[0])
 
     def _lonlat_area(self, ds):
         """The raster's lon/lat box (corners and centre), for picking one operation; None when it does not move."""
@@ -1208,7 +1331,23 @@ class _Frame:
     def window_boxes(self, rows, cols, pad: int = 1) -> list:
         """``_padded_boxes`` of the pixel window ``rows`` x ``cols`` (``(first, last)``, inclusive) padded by ``pad``
         pixels: its outline walked every ``_OUTLINE_STEP_PIXELS`` pixels (at least 20 per side) and moved to the grid's
-        CRS."""
+        CRS. A padded outline that leaves the CRS's domain (a raster whose edge is on the CRS's seam, as for
+        ``+proj=robin +lon_0=180``) is taken unpadded: the boxes grow by the outline's bend and 1% all the same.
+        """
+        try:
+            return self._window_boxes(rows, cols, pad)
+        except _NeedsWarp:
+            if not pad:
+                raise
+            return self._window_boxes(rows, cols, 0)
+
+    def _window_boxes(self, rows, cols, pad: int) -> list:
+        x, y, gpad, pole = self._outline_points(rows, cols, pad, full=True)
+        return _padded_boxes(x[0], y[0], gpad[0], pole[0], self.geographic)
+
+    def _outline_points(self, rows, cols, pad: int, full: bool = False):
+        """The outline of the pixel window, padded by ``pad`` pixels, walked and moved to the grid's CRS: its points
+        (``_moved_outlines``; all of what it returns with ``full``)."""
         r0, r1 = rows[0] - pad, rows[1] + 1 + pad
         c0, c1 = cols[0] - pad, cols[1] + 1 + pad
         n = max(20, math.ceil(max(r1 - r0, c1 - c0) / _OUTLINE_STEP_PIXELS))
@@ -1229,8 +1368,8 @@ class _Frame:
                 r1 - frac * (r1 - r0),
             ]
         )
-        x, y, gpad, pole = _moved_outlines(self, cs[None, :], rs[None, :])
-        return _padded_boxes(x[0], y[0], gpad[0], pole[0], self.geographic)
+        out = _moved_outlines(self, cs[None, :], rs[None, :])
+        return out if full else (out[0][0], out[1][0])
 
     def pixel_area_m2(self) -> float:
         """Geodesic area in m2 of the centre pixel (as ``h3fit.pixel_area_m2``, through this frame's CRS)."""
@@ -1269,11 +1408,19 @@ def _move_rings(frame: _Frame, gx, gy, wrap: bool = True) -> tuple:
     xs, ys = _move(frame.to_native, gx, gy)
     mx, my = _move(frame.to_native, gx + 0.5 * dx, gy + 0.5 * dy)
     nx_, ny_ = xs[:, nxt], ys[:, nxt]
+    # a lon/lat raster CRS has no seam: each moved point is taken within half a turn of its edge's start
+    period = frame.period if frame.lonlat_src else None
+    if period:
+        nx_ = xs + _wrap(nx_ - xs, period)
+        mx = xs + _wrap(mx - xs, period)
     length = np.hypot(nx_ - xs, ny_ - ys)
     offset = np.hypot(mx - 0.5 * (xs + nx_), my - 0.5 * (ys + ny_))
-    jumps = _jumping(frame, gx, gy, dx, dy, offset > _SEAM_DEVIATION * length).any(
-        axis=1
-    )
+    if period:
+        jumps = np.zeros(gx.shape[0], dtype=bool)
+    else:
+        jumps = _jumping(frame, gx, gy, dx, dy, offset > _SEAM_DEVIATION * length).any(
+            axis=1
+        )
     # the bend: the moved midpoint's distance from the chord's midpoint, which bounds it also where the moved edge runs
     # unevenly along its chord; an edge whose moved midpoint is on the chord's line (within a quarter of the
     # tolerance) is straight, however unevenly it runs (a Mercator meridian), and needs no points
@@ -1290,7 +1437,7 @@ def _move_rings(frame: _Frame, gx, gy, wrap: bool = True) -> tuple:
     need = np.clip(need, 1.0, _NATIVE_EDGE_MAX_POINTS)
     need[jumps] = 1.0
     if (need == 1.0).all():
-        return xs, ys, jumps
+        return _unwrap_rings(xs, period), ys, jumps
     per_edge = need.astype(np.intp).ravel()
     total = int(per_edge.sum())
     edge = np.repeat(np.arange(per_edge.size), per_edge)
@@ -1311,7 +1458,18 @@ def _move_rings(frame: _Frame, gx, gy, wrap: bool = True) -> tuple:
     vx[edge // k, pos], vy[edge // k, pos] = px, py
     col = np.minimum(np.arange(m)[None, :], per_ring[:, None] - 1)
     row = np.arange(gx.shape[0])[:, None]
-    return vx[row, col], vy[row, col], jumps
+    return _unwrap_rings(vx[row, col], period), vy[row, col], jumps
+
+
+def _unwrap_rings(x, period):
+    """The rings ``x`` (rings x M) with each step taken within half a ``period`` (unchanged when None): continuous
+    from each ring's first vertex."""
+    if not period:
+        return x
+    step = _wrap(np.diff(x, axis=1), period)
+    return x[:, :1] + np.concatenate(
+        [np.zeros((x.shape[0], 1)), np.cumsum(step, axis=1)], axis=1
+    )
 
 
 def _jumping(frame: _Frame, gx, gy, dx, dy, nominated) -> np.ndarray:
@@ -1391,7 +1549,7 @@ def _native_rings(frame: _Frame, cells) -> tuple:
     vx, vy, jumps = _move_rings(frame, gx, gy)
     owner = np.arange(len(cells))
     if not jumps.any():
-        return vx, vy, owner
+        return _periodic_rings(frame, vx, vy, owner)
     pieces, piece_owner = [], []
     cut = _seam_pieces if frame.meridian_cut else _traced_pieces
     for i in np.flatnonzero(jumps):  # vectorscan: ok (per cell across the seam, a few)
@@ -1403,7 +1561,7 @@ def _native_rings(frame: _Frame, cells) -> tuple:
             piece_owner.append(i)
     keep = np.flatnonzero(~jumps)
     if not pieces:
-        return vx[keep], vy[keep], owner[keep]
+        return _periodic_rings(frame, vx[keep], vy[keep], owner[keep])
     m = max(len(px) for px, _ in pieces)
     qx = np.array([np.pad(px, (0, m - len(px)), mode="edge") for px, _ in pieces])
     qy = np.array([np.pad(py, (0, m - len(py)), mode="edge") for _, py in pieces])
@@ -1411,11 +1569,55 @@ def _native_rings(frame: _Frame, cells) -> tuple:
     if still.any():
         raise ValueError(_seam_refusal(frame))
     m = max(vx.shape[1], qx.shape[1])
-    return (
+    return _periodic_rings(
+        frame,
         np.concatenate([_pad_rings(vx[keep], m), _pad_rings(qx, m)]),
         np.concatenate([_pad_rings(vy[keep], m), _pad_rings(qy, m)]),
         np.concatenate([owner[keep], np.asarray(piece_owner, dtype=owner.dtype)]),
     )
+
+
+def _periodic_rings(frame: _Frame, x, y, owner) -> tuple:
+    """``(x, y, owner)`` of moved rings (rings x M) in a raster CRS that runs on by ``frame.period``: a lon/lat
+    raster CRS, or a cylindrical one the raster reaches past the seam of. Unchanged for any other.
+
+    * In a lon/lat raster CRS (rings unwrapped, ``_move_rings``) a ring that winds once around a pole (a cell that
+      holds it) is closed over that pole: its pole is the row at latitude +-90 there, so the ring runs on to its first
+      vertex a turn on, then along the pole and back.
+    * Each ring is then repeated by whole turns over the raster's x range (``frame.x_range``), so a cell across the
+      antimeridian, a 0..360 raster and a raster wider than the grid's -180..180 all meet their pixels. A ring that
+      meets none keeps the turn nearest the raster (it overlaps no pixel either way).
+    """
+    period = frame.period
+    if not period:
+        return x, y, owner
+    if frame.lonlat_src:
+        close = x[:, 0] + _wrap(x[:, 0] - x[:, -1], period) + x[:, -1] - x[:, 0]
+        winding = close - x[:, 0]  # 0, or a turn for a ring around a pole
+        around = np.abs(winding) > 0.5 * period
+        if around.any():
+            quarter = 0.25 * period  # 90 degrees in the CRS's unit
+            north = np.where(y[around].mean(axis=1) > 0.0, quarter, -quarter)
+            x0, y0, xe = x[around, 0], y[around, 0], x[around, 0] + winding[around]
+            tail_x = np.stack([xe, xe, x0], axis=1)
+            tail_y = np.stack([y0, north, north], axis=1)
+            m = x.shape[1] + 3
+            x, y = _pad_rings(x, m), _pad_rings(y, m)
+            x[around] = np.concatenate([x[around, :-3], tail_x], axis=1)
+            y[around] = np.concatenate([y[around, :-3], tail_y], axis=1)
+    lo, hi = frame.x_range
+    a, b = x.min(axis=1), x.max(axis=1)
+    k0 = np.ceil((lo - b) / period)
+    k1 = np.floor((hi - a) / period)
+    none = k0 > k1
+    near = np.round((0.5 * (lo + hi) - 0.5 * (a + b)) / period)
+    k0, k1 = np.where(none, near, k0), np.where(none, near, k1)
+    n = (k1 - k0 + 1).astype(np.intp)
+    if (n == 1).all() and (k0 == 0).all():
+        return x, y, owner
+    ring = np.repeat(np.arange(x.shape[0]), n)
+    turn = np.repeat(k0, n) + (np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n))
+    return x[ring] + (turn * period)[:, None], y[ring], owner[ring]
 
 
 def _seam_refusal(frame: _Frame) -> str:
@@ -1490,53 +1692,49 @@ def _traced_pieces(frame: _Frame, gx, gy):
         if whole.geom_type != "Polygon" or whole.area <= 1e-12 * area:
             continue
         west, south, east, north = whole.bounds
-        if east - west <= 90.0:
-            cut = _trace_cut(frame, whole)
-            if cut is None:
-                return None
-            out.extend(cut)
-            continue
-        for k in range(
-            math.ceil((east - west) / 90.0)
-        ):  # vectorscan: ok (at most 5 strips)
-            part = whole.intersection(
-                _box(
-                    west + 90.0 * k,
-                    south - 1.0,
-                    min(west + 90.0 * (k + 1), east),
-                    north + 1.0,
+        strips = [whole]
+        if east - west > 90.0:
+            strips = []
+            for k in range(
+                math.ceil((east - west) / 90.0)
+            ):  # vectorscan: ok (at most 5 strips)
+                part = whole.intersection(
+                    _box(
+                        west + 90.0 * k,
+                        south - 1.0,
+                        min(west + 90.0 * (k + 1), east),
+                        north + 1.0,
+                    )
                 )
-            )
-            for p in getattr(
-                part, "geoms", [part]
-            ):  # vectorscan: ok (the parts of one strip)
-                if p.geom_type != "Polygon" or p.area <= 1e-12 * area:
-                    continue  # a sliver where a strip's edge meets a vertex
-                xy = np.asarray(p.exterior.coords)[:-1]
-                g = _seam_side(frame, xy[:, 0], xy[:, 1])
-                # across the seam, not its antipode (where g wraps a turn but the CRS runs on): a 90-degree
-                # strip cannot hold both
-                if g.max() - g.min() < 180.0 and g.min() < frame.seam_src < g.max():
-                    cut = _trace_cut(frame, p)
-                    if cut is None:
-                        return None
-                    out.extend(cut)
-                else:
-                    out.append((xy[:, 0], xy[:, 1]))
+                strips.extend(getattr(part, "geoms", [part]))
+        for p in strips:  # vectorscan: ok (the parts of one cell, at most a few)
+            if p.geom_type != "Polygon" or p.area <= 1e-12 * area:
+                continue  # a sliver where a strip's edge meets a vertex
+            xy = np.asarray(p.exterior.coords)[:-1]
+            g = _seam_side(frame, xy[:, 0], xy[:, 1])
+            # only a part across the seam is cut (a part of a pole cell, clipped at the cap, may lie wholly on one
+            # side); across the seam, not its antipode (where g wraps a turn but the CRS runs on): a part at most
+            # 90 degrees wide cannot hold both
+            if g.max() - g.min() < 180.0 and g.min() < frame.seam_src < g.max():
+                cut = _trace_cut(frame, p)
+                if cut is None:
+                    return None
+                out.extend(cut)
+            else:
+                out.append((xy[:, 0], xy[:, 1]))
     return out
 
 
 def _trace_cut(frame: _Frame, cell):
     """``_trace_once`` with ``_SEAM_TRACE_LINES`` lines, then 4 times as many (up to ``_SEAM_TRACE_MAX_LINES``) while
-    a piece still reaches across the seam between two lines (near a pole a datum shift bends the seam sharply in the
-    grid's longitude): a piece's vertices and edge midpoints must all keep to one side (``_seam_side``).
+    the trace fails (between two lines the seam left a line's ends on one side) or a piece still reaches across the
+    seam between two lines (near a pole a datum shift bends the seam sharply in the grid's longitude): a piece's
+    vertices and edge midpoints must all keep to one side (``_seam_side``).
     """
     n = _SEAM_TRACE_LINES
     while n <= _SEAM_TRACE_MAX_LINES:  # vectorscan: ok (at most 3 tries)
         out = _trace_once(frame, cell, n)
-        if out is None:
-            return None
-        if all(
+        if out is not None and all(
             _one_side(frame, px, py) for px, py in out
         ):  # vectorscan: ok (per piece)
             return out
@@ -1559,8 +1757,9 @@ def _trace_once(frame: _Frame, cell, lines_n: int):
     """The pieces (rings) of the polygon ``cell`` (grid CRS) on each side of the raster CRS's seam: the cut
     boundaries, ``_SEAM_GAP_TRACED_DEG`` on each side of it, are traced by bisection along ``lines_n`` lines across
     the cell (``_seam_side``), and the pieces keep the cell's own edges. None when the seam does not cross every line
-    once, the same way, or the pieces miss more of the cell than the strip between the boundaries can hold (a seam
-    crossing a line three times would drop a middle piece)."""
+    the same way. The two regions and the strip between the boundaries cover the lines' span by construction, so the
+    pieces hold the whole cell but that strip; a piece that a seam crossing a line more than once leaves across it
+    is caught by ``_trace_cut``'s side test."""
     from shapely.geometry import Polygon
 
     x0, y0, x1, y1 = cell.bounds
@@ -1575,7 +1774,7 @@ def _trace_once(frame: _Frame, cell, lines_n: int):
     if not (rising_lines.all() or not rising_lines.any()):
         return None
     rising = bool(rising_lines.all())
-    out, bounds = [], []
+    out = []
     for target in (
         frame.seam_src - _SEAM_GAP_TRACED_DEG,
         frame.seam_src + _SEAM_GAP_TRACED_DEG,
@@ -1592,7 +1791,6 @@ def _trace_once(frame: _Frame, cell, lines_n: int):
             below = (_seam_side(frame, mid, lines) < target) == rising
             lo, hi = np.where(below, mid, lo), np.where(below, hi, mid)
         xs = 0.5 * (lo + hi)
-        bounds.append(xs)
         # the side of this boundary away from the seam: west of the west one, east of the east one (in g)
         side_x = west if (target < frame.seam_src) == rising else east
         region = Polygon(list(zip(xs, lines)) + list(zip(side_x[::-1], lines[::-1])))
@@ -1605,10 +1803,6 @@ def _trace_once(frame: _Frame, cell, lines_n: int):
             if p.geom_type == "Polygon" and p.area > 1e-12 * cell.area:
                 xy = np.asarray(p.exterior.coords)[:-1]
                 out.append((xy[:, 0], xy[:, 1]))
-    kept = sum(Polygon(zip(px, py)).area for px, py in out)
-    strip = float(np.abs(bounds[1] - bounds[0]).max()) * (hi_y - lo_y)
-    if cell.area - kept > 2.0 * strip + 1e-9 * cell.area:
-        return None
     return out
 
 
@@ -1656,14 +1850,33 @@ def _native_id(cell, grid: str):
     return _bng.format(int(cell)) if grid == "bng" else int(cell)
 
 
+def _in_lon_range(lon):
+    """Longitudes written in -180..180: one outside (a 0..360 raster, or past the antimeridian) is taken a turn back;
+    one in the range, 180 included, is kept as it is."""
+    lon = np.asarray(lon, dtype="float64")
+    out = (lon < -180.0) | (lon > 180.0)
+    return np.where(out, (lon + 180.0) % 360.0 - 180.0, lon) if out.any() else lon
+
+
+def _in_quadbin_lat(lat) -> np.ndarray:
+    """Whether each latitude is inside quadbin's -85.05..85.05: a point beyond has no cell (``point_as_cell`` would
+    clamp it into the first or last row)."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    lat = np.asarray(lat, dtype="float64")
+    return (lat >= _quadbin._LAT_MIN) & (lat <= _quadbin._LAT_MAX)
+
+
 def _corner_cells(gx, gy, resolution, grid: str) -> np.ndarray:
-    """The quadbin / BNG cell (int64) of each grid-CRS point, -1 for a point outside BNG."""
+    """The quadbin / BNG cell (int64) of each grid-CRS point, -1 for a point outside BNG or beyond quadbin's
+    latitudes."""
     if grid == "quadbin":
         from databricks.labs.gbx.pygx import _quadbin
 
-        return _quadbin.point_as_cell_vec(gx, gy, resolution)
+        cells = _quadbin.point_as_cell_vec(_in_lon_range(gx), gy, resolution)
+        return np.where(_in_quadbin_lat(gy), cells, -1)
     cells = _bng_cells(gx, gy, resolution)
-    return np.where(_bng.is_valid_vec(cells, resolution), cells, -1)
+    return np.where(_bng_inside(gx, gy, cells, resolution), cells, -1)
 
 
 def _covering_band_h3_native(
@@ -1877,10 +2090,14 @@ def _centroid_band_native(frame: _Frame, band, mask, resolution, grid: str, agg:
     elif grid == "quadbin":
         from databricks.labs.gbx.pygx import _quadbin
 
-        cids = _quadbin.point_as_cell_vec(gx, gy, resolution)
+        keep = _in_quadbin_lat(gy)  # a centre beyond quadbin's latitudes is in no cell
+        cids = _quadbin.point_as_cell_vec(_in_lon_range(gx[keep]), gy[keep], resolution)
+        vals = vals[keep]
+        if cids.size == 0:
+            return []
     else:
         cids = _bng_cells(gx, gy, resolution)
-        keep = _bng.is_valid_vec(cids, resolution)
+        keep = _bng_inside(gx, gy, cids, resolution)
         cids, vals = cids[keep], vals[keep]
         if cids.size == 0:
             return []
@@ -1960,7 +2177,29 @@ def _grid_native(
             out.append(result)
         return out
     except _NeedsWarp:
+        if not _any_pixel_transforms(frame):
+            raise ValueError(
+                f"{frame.fn}: no pixel of the raster lies inside its CRS's valid area "
+                f"({_crs_label(src_crs)}), so it has no place on the grid. Fix: check the raster's CRS and "
+                "geotransform (gbx_rst_georeference shows them; gbx_rst_setsrid or gbx_rst_setcrs relabels a wrong CRS)."
+            ) from None
         return None
+
+
+def _any_pixel_transforms(frame: _Frame) -> bool:
+    """Whether any pixel centre of the frame's raster (sampled on a grid of at most 65 x 65) moves to the grid's
+    CRS: a raster none of whose pixels does is outside its CRS's valid area (off the globe), and a warp of it fails
+    with GDAL's "too many points failed to transform"."""
+    ds = frame.ds
+    cols = (np.linspace(0.0, ds.width - 1, min(ds.width, 65)) + 0.5)[None, :]
+    rows = (np.linspace(0.0, ds.height - 1, min(ds.height, 65)) + 0.5)[:, None]
+    x, y = frame.native_xy(
+        np.broadcast_to(cols, (rows.size, cols.size)),
+        np.broadcast_to(rows, (rows.size, cols.size)),
+    )
+    with np.errstate(all="ignore"):
+        gx, gy = frame.to_grid(np.ravel(x), np.ravel(y))
+    return bool((np.isfinite(np.asarray(gx)) & np.isfinite(np.asarray(gy))).any())
 
 
 def _foreign_crs(ds, crs):
@@ -2270,14 +2509,22 @@ def _raster_to_grid(
                     lon = gt[0] + x_off * gt[1] + y_off * gt[2]
                     lat = gt[3] + x_off * gt[4] + y_off * gt[5]
                     vals = band[ys, xs]
+                    if grid == "quadbin":
+                        # a centre beyond quadbin's latitudes is in no cell (as a BNG centre outside the grid)
+                        keep = _in_quadbin_lat(lat)
+                        if not keep.all():
+                            lon, lat, vals = lon[keep], lat[keep], vals[keep]
 
-                    cids = encode(lon, lat, resolution)
-                    uniq, measures = _grouped_measures(cids, vals, agg)
-                    band_result = [
-                        # vectorscan: ok (per-cell)
-                        {"cellID": int(cid), "measure": m}
-                        for cid, m in zip(uniq.tolist(), measures)
-                    ]
+                    if vals.size == 0:
+                        band_result = []
+                    else:
+                        cids = encode(lon, lat, resolution)
+                        uniq, measures = _grouped_measures(cids, vals, agg)
+                        band_result = [
+                            # vectorscan: ok (per-cell)
+                            {"cellID": int(cid), "measure": m}
+                            for cid, m in zip(uniq.tolist(), measures)
+                        ]
             else:  # covering
                 band_result = _covering_band(
                     work_ds, bi, band, mask, resolution, grid, agg, gt
@@ -2291,22 +2538,70 @@ def _raster_to_grid(
             out.append(band_result)
         return out
 
+    def _run_lonlat(work_ds):
+        # a lon/lat raster in the grid's CRS: planar in lon/lat, unless a cell it meets crosses the antimeridian or
+        # holds a pole, or its longitudes leave -180..180; then the native frame, whose lon/lat runs on by turns
+        if _lonlat_needs_frame(work_ds, grid, resolution):
+            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+            native = _grid_native(
+                work_ds,
+                resolve_crs(4326),
+                resolution,
+                grid,
+                agg,
+                coverage,
+                assignment,
+            )
+            if native is not None:
+                return native
+        return _run(work_ds)
+
     # A raster in another CRS is gridded on its own pixels. The embedded raster CRS
     # wins; else the `crs` override (for a CRS-less-but-known raster); else None ->
     # assume grid-native 4326 and process unchanged (never errors).
     src_crs = _foreign_crs(ds, crs)
     if src_crs is None:
-        return _run(ds)
+        return _run_lonlat(ds)
     native = _grid_native(ds, src_crs, resolution, grid, agg, coverage, assignment)
     if native is not None:
         return native
-    # The native frame cannot hold it (a cell across the CRS's seam, or a point that
-    # does not transform): warp to 4326 (nearest), as before.
+    # The native frame cannot hold it (a point that does not transform): warp to
+    # 4326 (nearest), as before.
     warped_bytes = _warp_to_4326_if_needed(ds, crs)
     from rasterio.io import MemoryFile
 
     with MemoryFile(warped_bytes) as mf, open_bytes(mf) as work_ds:
-        return _run(work_ds)
+        return _run_lonlat(work_ds)
+
+
+def _lonlat_needs_frame(ds, grid: str, resolution) -> bool:
+    """Whether a raster in EPSG:4326 (or CRS-less, taken as 4326) needs the native frame rather than the planar
+    lon/lat pass: its pixels reach outside longitudes -180..180 (a 0..360 raster), or, for H3, a cell that may meet
+    them crosses the antimeridian or holds a pole (the planar pass draws such a cell the wrong way round). The margin
+    is three average cell edges, plus a pixel. A regional raster away from both keeps the planar pass, unchanged.
+    """
+    t = ds.transform
+    xs, ys = t * (
+        np.array([0.0, ds.width, ds.width, 0.0]),
+        np.array([0.0, 0.0, ds.height, ds.height]),
+    )
+    west, east = float(np.min(xs)), float(np.max(xs))
+    if west < -180.0 or east > 180.0:
+        return True
+    if grid != "h3":
+        return False
+    from h3.api import basic_int as h3i
+
+    side = max(abs(t.a), abs(t.b), abs(t.d), abs(t.e))
+    dlat = side + math.degrees(
+        3.0 * h3i.average_hexagon_edge_length(int(resolution), "m") / _EARTH_RADIUS_M
+    )
+    far = float(np.max(np.abs(ys))) + dlat
+    if far >= 90.0:
+        return True
+    dlon = dlat / math.cos(math.radians(far))
+    return west - dlon <= -180.0 or east + dlon >= 180.0
 
 
 def _raster_to_bng(
@@ -2382,7 +2677,7 @@ def _raster_to_bng(
                     cids = _bng_cells(e, n, resolution)
                     # Drop out-of-GB pixels (is_valid) BEFORE grouping so a cell is
                     # only emitted for >=1 valid, in-GB pixel (sec 2.6). Vectorized.
-                    keep = _bng.is_valid_vec(cids, resolution)
+                    keep = _bng_inside(e, n, cids, resolution)
                     cids = cids[keep]
                     vals = vals[keep]
                     if cids.size == 0:

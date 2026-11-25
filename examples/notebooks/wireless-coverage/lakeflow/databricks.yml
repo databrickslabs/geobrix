@@ -23,6 +23,8 @@ variables:
   # CURRENT channel (DBR 18) set pipeline_channel=CURRENT, gbx_wheel to the +env5 wheel and the
   # job environment_version to "5": the wheel must follow the channel.
   pipeline_channel: {default: "PREVIEW"}
+  # A bundle installs the wheel from a Volume: bundle dependency paths cannot hold a URL with extras.
+  # Stage the wheel with the steps on the installation page: https://databrickslabs.github.io/geobrix/docs/installation
   gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"}
 
 resources:

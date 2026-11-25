@@ -55,9 +55,10 @@ PROVENANCE_TAG = "WHEEL GUARD provenance: "
 META_KEY = "geobrix_run"
 
 # a forced install the classic runner puts before each geobrix %pip line (see _wheel_guard.force_line)
-_FORCED_PIP = re.compile(r'^%pip install (--quiet )?--force-reinstall --no-deps "geobrix @ file://[^"]+"\s*$')
-_PIP_WHEEL = re.compile(r"@\s*file://(/[^\"'\s]+\.whl)")
-_GEOBRIX_PIP = re.compile(r"^\s*%pip\s+install\b.*geobrix.*@\s*file://", re.M)
+_FORCED_PIP = re.compile(r'^%pip install (--quiet )?--force-reinstall --no-deps "geobrix @ (file|https?)://[^"]+"\s*$')
+# a geobrix %pip source is a Volume wheel or the GitHub release wheel; another package's URL is left as it is
+_PIP_WHEEL = re.compile(r"@\s*(?:(file)://(?:/[^\"'\s]+\.whl)|https?://[^\"'\s]+\.whl)")
+_GEOBRIX_PIP = re.compile(r"^\s*%pip\s+install\b.*geobrix.*@\s*(file|https?)://", re.M)
 _SETUP_MAGIC = ("%pip", "%restart_python")
 
 
@@ -94,11 +95,17 @@ def _src(src) -> str:
     return "".join(src) if isinstance(src, list) else (src or "")
 
 
+def _wheel_placeholder(line: str) -> str:
+    """``line`` with each ``@ file://<wheel>`` (and, in a geobrix line, each ``@ https://<release wheel>``) as ``@ file://<wheel>``."""
+    gbx = "geobrix" in line.split("@")[0]
+    return _PIP_WHEEL.sub(lambda m: "@ file://<wheel>" if m.group(1) or gbx else m.group(0), line)
+
+
 def _norm(src) -> str:
     """The matching key of a cell or command: trailing spaces off, the runner's forced install lines out, and every
-    ``@ file://<wheel>`` the same (``--pip-wheel`` repoints them in the uploaded copy)."""
+    ``@ file://<wheel>`` the same (``--pip-wheel`` repoints them in the uploaded copy, a release URL included)."""
     lines = [line.rstrip() for line in _src(src).strip().splitlines()]
-    lines = [_PIP_WHEEL.sub("@ file://<wheel>", line) for line in lines if not _FORCED_PIP.match(line.strip())]
+    lines = [_wheel_placeholder(line) for line in lines if not _FORCED_PIP.match(line.strip())]
     return "\n".join(lines).strip()
 
 

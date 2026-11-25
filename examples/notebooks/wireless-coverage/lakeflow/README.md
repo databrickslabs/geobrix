@@ -143,7 +143,7 @@ The override file is layered in automatically via `include: ["*.override.yml"]`.
 
 - **Schedule**: the job ships with a daily schedule (`0 0 7 * * ?`, America/Chicago) but **paused** (`pause_status: PAUSED`) — unpause it in the workspace (or in `databricks.yml`) once you've confirmed a manual run.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~4.9 GB download (about 24,000 LAZ tiles for the full city).
-- **GeoBrix wheel**: `gbx_wheel` defaults to a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
+- **GeoBrix wheel**: `gbx_wheel` defaults to a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives. The notebooks install the wheel from the v0.6.0 release; the bundle installs it from a Volume. Stage it with the steps on the [installation page](https://databrickslabs.github.io/geobrix/docs/installation).
 
 ### Streaming `wc_lidar_pts`: upgrade and resets
 

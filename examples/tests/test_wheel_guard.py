@@ -150,6 +150,27 @@ def test_every_geobrix_pip_line_gets_a_forced_install_first_and_a_forced_one_is_
     assert g.pip_wheel_of(lines) == w and g.pip_wheel_of(other[:1]) is None
 
 
+URL = "https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def test_a_release_url_geobrix_pip_line_gets_a_forced_install_of_that_url_first():
+    forced = '%pip install --quiet --force-reinstall --no-deps "geobrix @ ' + URL + '"\n'
+    comment = '# %pip install --quiet "geobrix[vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.6.0+env6-py3-none-any.whl"\n'
+    lines = ["# GeoBrix: the env6 wheel from the v0.6.0 GitHub release.\n",
+             '%pip install --quiet "geobrix[vizx] @ ' + URL + '"\n', comment]
+    out, n = g.force_pip_lines(lines)
+    assert n == 1 and out == [lines[0], forced, lines[1], comment]  # the commented Volume alternative is not a pip line
+    assert g.force_pip_lines(out) == (out, 0)
+    other = ['%pip install "overturemaps @ https://example.com/o-1.0-py3-none-any.whl"\n']
+    assert g.force_pip_lines(other) == (other, 0)  # only geobrix
+
+
+def test_a_release_url_names_no_wheel_so_the_guard_compares_with_the_staged_one():
+    lines = ['%pip install "geobrix[vizx] @ ' + URL + '"\n']
+    assert g.pip_wheel_of(lines) is None and g.pip_url_of(lines) == URL
+    assert g.pip_url_of(['%pip install "geobrix @ file:///Volumes/c/s/v/x.whl"\n']) is None
+
+
 # ---- the notebook runner: what the uploaded copy of a notebook gets
 
 import base64
@@ -318,3 +339,11 @@ def test_the_worker_check_is_one_stage_of_tasks_and_dedupes_on_the_driver(monkey
     got = g.collect_workers(Spark(), tasks=8)
     assert calls[0] == ("range", (0, 8, 1, 8)), "one partition per task, in the range itself"
     assert sorted(w["host"] for w in got) == ["w1", "w2"], "the identities, each once"
+
+
+def test_a_classic_run_of_a_release_url_notebook_forces_the_url_and_guards_the_staged_wheel_not_the_release(tmp_path):
+    nb = _nb(tmp_path, '%pip install --quiet "geobrix[vizx] @ ' + URL + '"\n%restart_python', "import databricks.labs.gbx\n")
+    cells = _uploaded(nb, strip_pip=False)
+    assert cells[0].startswith('%pip install --quiet --force-reinstall --no-deps "geobrix @ ' + URL + '"\n%pip install --quiet "geobrix[vizx]')
+    assert "'wheel': '/Volumes/c/s/v/default.whl'" in cells[1]  # --wheel (the build under test), never the release URL
+    assert URL not in cells[1]

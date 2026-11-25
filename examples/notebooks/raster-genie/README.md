@@ -31,7 +31,7 @@ The first notebook is a vertical slice on one event: the **2024 Smokehouse Creek
 
 | File | Purpose |
 |---|---|
-| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel (two-step: `--no-deps` first, then with extras), registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `MAX_NODATA`, `BURN_RES_M`, `GENIE_SPACE_ID`, `GENIE_SPACE_ID_PRECOMPUTED`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
+| `config_nb.ipynb` | Shared setup (`%run ./config_nb`). Installs the env6 wheel with extras, registers the functions with `gbx.register(spark)`, holds the USER SETTINGS (`catalog_name`, `schema_name`, the fire, the pre and post windows, `MAX_CLOUD`, `MAX_NODATA`, `BURN_RES_M`, `GENIE_SPACE_ID`, `GENIE_SPACE_ID_PRECOMPUTED`), creates the schema, the `data` Volume and its directory tree, and defines `finalize_delta`. |
 | `01_smokehouse_creek.ipynb` | The Smokehouse Creek slice: `aois`, Sentinel-2 master COGs, WorldPop, the `rasters` FILE table, the `coverage` view, the burn severity query, a map and the Genie Agent. |
 | [`genie/agent_spec.py`](genie/agent_spec.py) | The two Genie Agents (live and precomputed): their tables, attached GeoBrix functions, instruction text and example SQL. |
 | [`genie/seed_agent.py`](genie/seed_agent.py) | Creates or updates a Genie space from `agent_spec` and prints its id: `python genie/seed_agent.py --profile <name> --warehouse-id <id> --variant live\|precomputed [--space-id <id>]`. |
@@ -45,7 +45,7 @@ Tables in `geospatial_catalog.raster_genie`: `aois` (the perimeter, the counties
 ## Prerequisites
 
 - **Serverless environment 6** (or Databricks Runtime 19), Python 3.12. The series needs no JAR.
-- **GeoBrix 0.6.0.** `config_nb` installs the env6 wheel from the Hub Volume: `/Volumes/geospatial_catalog/geobrix/sample-data/env6/geobrix-0.6.0+env6-py3-none-any.whl`.
+- **GeoBrix 0.6.0.** `config_nb` installs the env6 wheel from the v0.6.0 GitHub release: `https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl`. For other installs, see [Installation](https://databrickslabs.github.io/geobrix/docs/installation).
 - **The GeoBrix UC functions installed** in your catalog, if you want to query the `rasters` table from a SQL warehouse or Genie. The notebook itself calls the session functions.
 - **Unity Catalog.** `config_nb` creates the schema and a Volume named `data` under it (`CREATE ... IF NOT EXISTS`), so you need `CREATE SCHEMA` and `CREATE VOLUME` on the catalog. Edit `catalog_name` and `schema_name` to change them.
 - **The whole folder.** Open the series from a Git folder, or copy the `lakeflow/` folder next to the notebooks, so that `lakeflow/land/scenes.py` sits beside notebook 01: it imports `stack_scene` from `./lakeflow` and stops with a Fix if the file is missing.

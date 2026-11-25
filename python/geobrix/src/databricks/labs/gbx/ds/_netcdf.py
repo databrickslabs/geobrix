@@ -587,10 +587,11 @@ def point_arrays(
 
 def _warn_dropped_slices(ds, variable: str, lat) -> None:
     """Vector mode places one point per cell of the 2-D lat / lon and reads a variable's values in file order, the
-    first one per point. A dimension beside lat / lon longer than one is not split: when every dimension before it
-    has size 1 the points get its first slice (index 0), and otherwise (``y, time, x``) the values of its slices
-    interleave and do not line up with the points. The result is unchanged; the warning says which (the Python
-    logger of the reading process, as ``array_2d``'s)."""
+    first one per point. A dimension beside lat / lon longer than one is not split. When every dimension before it
+    has size 1, the points get its first slice (index 0): the result is unchanged and a warning says so (the Python
+    logger of the reading process, as ``array_2d``'s). After another dimension (``y, time, x``) the values of its
+    slices interleave and no slice lines up with the points: that is refused, never read.
+    """
     da = ds[variable]
     for pos, dim in enumerate(da.dims):
         size = int(da.sizes[dim])
@@ -607,15 +608,12 @@ def _warn_dropped_slices(ds, variable: str, lat) -> None:
                 size - 1,
             )
         else:
-            _logger.warning(
-                "netcdf_gbx: variable %r has dimension %r of size %d after another dimension; vector mode reads one "
-                "point per cell and takes the values in file order, so %r is not split and its values do not line "
-                "up with the points. Fix: select one %r slice before writing the file.",
-                variable,
-                dim,
-                size,
-                dim,
-                dim,
+            raise ValueError(
+                f"netcdf_gbx: variable {variable!r} has dimensions {tuple(da.dims)} with {dim!r} (size {size}) "
+                "after another dimension longer than one, so its values interleave in file order and no slice "
+                "lines up with the 2-D lat / lon points. Fix: select one slice of "
+                f"{dim!r} before reading (for example `ncks -d {dim},0 in.nc out.nc`), or put it first "
+                f"(`ncpdq -a {dim} in.nc out.nc`). Vector mode has no dimIndex option."
             )
 
 

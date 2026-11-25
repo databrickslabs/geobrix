@@ -230,6 +230,10 @@ no target grid or resampling method is chosen for you.
 A projected grid whose CF `coordinates` name 2-D `lat` / `lon` gives one point per cell at those positions (EPSG:4326).
 Vector mode refuses a projected grid without them: read it in raster mode.
 
+A variable with a dimension beside 2-D `lat` / `lon` (for example `time`) gives its first slice when that dimension comes first, with a logged warning.
+When it comes after another dimension longer than one, such as `y, time, x`, the reader refuses it with a `Fix:`.
+Select one slice of it before reading, or put it first.
+
 #### CF discrete sampling geometries
 
 A file with a `featureType` of `point`, `profile` or `trajectory` gives one point per observation.

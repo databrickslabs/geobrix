@@ -186,16 +186,38 @@ def test_vector_mode_over_one_slice_stays_quiet(tmp_path, caplog):
     assert not [r for r in caplog.records if "temp" in r.getMessage()]
 
 
-def test_a_dimension_after_another_is_not_called_index_zero(tmp_path, caplog):
-    # (y, time, x): the values of the slices interleave in file order, so "index 0 of time" would be false
+def test_a_dimension_after_another_is_refused_not_read_from_interleaved_values(
+    tmp_path, caplog
+):
+    # (y, time, x): the values of the slices interleave in file order, so no slice could be taken as "index 0"
     p = _write_swath_stack(str(tmp_path / "ytx.nc"), nt=3, dim_order=("y", "time", "x"))
+    with pytest.raises(ValueError) as err:
+        _vector_rows(p)
+    msg = str(err.value)
+    assert "'temp'" in msg and "('y', 'time', 'x')" in msg and "'time'" in msg
+    assert "Fix:" in msg and "ncks" in msg
+    assert not [r for r in caplog.records if "temp" in r.getMessage()]
+
+
+def test_a_leading_dimension_after_size_one_dimensions_still_warns(tmp_path, caplog):
+    # (one, time, y, x) with one == 1: every dimension before time has size 1, so slice 0 is the first y*x values
+    p = str(tmp_path / "onetime.nc")
+    with Dataset(p, "w") as ds:
+        for name, n in (("one", 1), ("time", 2), ("y", 3), ("x", 4)):
+            ds.createDimension(name, n)
+        lat = ds.createVariable("lat", "f8", ("y", "x"))
+        lon = ds.createVariable("lon", "f8", ("y", "x"))
+        lat.standard_name, lon.standard_name = "latitude", "longitude"
+        lat.units, lon.units = "degrees_north", "degrees_east"
+        lat[:] = 45.0 + np.arange(12).reshape(3, 4) * 0.01
+        lon[:] = -100.0 + np.arange(12).reshape(3, 4) * 0.01
+        v = ds.createVariable("temp", "f4", ("one", "time", "y", "x"))
+        v.coordinates = "lat lon"
+        v[:] = np.arange(24, dtype="f4").reshape(1, 2, 3, 4)
     with caplog.at_level(logging.WARNING, logger=_netcdf.__name__):
         _, rows = _vector_rows(p)
-    texts = [r.getMessage() for r in caplog.records if "temp" in r.getMessage()]
-    assert len(texts) == 1
-    assert "file order" in texts[0] and "index 0" not in texts[0]
-    assert "'time'" in texts[0]
-    assert len(rows) == 12
+    assert [r[0] for r in rows] == list(range(12))
+    assert any("index 0" in r.getMessage() for r in caplog.records)
 
 
 def test_a_regular_grid_with_a_stack_is_not_read_in_vector_mode_at_all(tmp_path):

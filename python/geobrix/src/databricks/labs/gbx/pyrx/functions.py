@@ -3549,9 +3549,10 @@ class _RstMakeTilesUDTF:
             return
 
 
-@_tile_udtf(returnType=V2_TILE_SCHEMA)
-class _RstH3TessellateUDTF:
+class _RstH3TessellateBase:
     """Streaming UDTF: yield one clipped tile struct per overlapping H3 cell."""
+
+    _grid_dirs = None  # the driver's PROJ grid dirs, set by ``_tessellate_udtf``
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
@@ -3571,7 +3572,7 @@ class _RstH3TessellateUDTF:
             )
         from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=self._grid_dirs)
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile, file_ref=file_ref) as ds:
@@ -3612,9 +3613,10 @@ def _light_rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
     return _RstRetileUDTF(tc, _col(tile_width), _col(tile_height), file_ref_arg(tc))
 
 
-@_tile_udtf(returnType=V2_TILE_SCHEMA)
-class _RstQuadbinTessellateUDTF:
+class _RstQuadbinTessellateBase:
     """Streaming UDTF: yield one clipped tile struct per overlapping quadbin cell."""
+
+    _grid_dirs = None  # the driver's PROJ grid dirs, set by ``_tessellate_udtf``
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
@@ -3634,7 +3636,7 @@ class _RstQuadbinTessellateUDTF:
             )
         from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=self._grid_dirs)
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile, file_ref=file_ref) as ds:
@@ -3655,8 +3657,7 @@ class _RstQuadbinTessellateUDTF:
             return
 
 
-@_tile_udtf(returnType=V2_TILE_SCHEMA)
-class _RstBngTessellateUDTF:
+class _RstBngTessellateBase:
     """Streaming UDTF: yield one clipped tile struct per overlapping BNG cell.
 
     BNG cell ids are Strings (e.g. ``"TQ38SW"``). The tile struct ``cellid``
@@ -3666,6 +3667,8 @@ class _RstBngTessellateUDTF:
     ``cellid`` struct field (as the other grid tessellates do),
     NOT the metadata map.
     """
+
+    _grid_dirs = None  # the driver's PROJ grid dirs, set by ``_tessellate_udtf``
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
@@ -3691,7 +3694,7 @@ class _RstBngTessellateUDTF:
         _bng.get_resolution(
             resolution
         )  # a resolution BNG does not define is a parameter error: it raises
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=self._grid_dirs)
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile, file_ref=file_ref) as ds:
@@ -3719,9 +3722,10 @@ class _RstBngTessellateUDTF:
 # cellID is LONG (custom cell IDs are signed int64 by construction).
 
 
-@_tile_udtf(returnType=V2_TILE_SCHEMA)
-class _RstCustomTessellateUDTF:
+class _RstCustomTessellateBase:
     """Streaming UDTF: yield one clipped tile struct per overlapping custom-grid cell."""
+
+    _grid_dirs = None  # the driver's PROJ grid dirs, set by ``_tessellate_udtf``
 
     def eval(
         self,
@@ -3755,7 +3759,7 @@ class _RstCustomTessellateUDTF:
         from databricks.labs.gbx.pygx import _custom as _custom_mod
         from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=self._grid_dirs)
         try:
             conf = _custom_mod.conf_from_row(grid_struct)
             with ot._open(tile, file_ref=file_ref) as ds:
@@ -3775,6 +3779,24 @@ class _RstCustomTessellateUDTF:
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"gbx_rst_custom_tessellate: {e}")
             return
+
+
+def _tessellate_udtf(base):
+    """The SessionTileUdtf of a tessellate table function whose handler class is ``base``. A registration builds it
+    again with the PROJ grid directories of the driver (``with_grid_dirs``), since a worker has no registry; the
+    class it ships is a subclass that holds them."""
+
+    def make(dirs=None):
+        cls = type(base.__name__, (base,), {"_grid_dirs": dirs})
+        return _SessionTileUdtf(cls, V2_TILE_SCHEMA, rebuild=lambda d: make(tuple(d)))
+
+    return make()
+
+
+_RstH3TessellateUDTF = _tessellate_udtf(_RstH3TessellateBase)
+_RstQuadbinTessellateUDTF = _tessellate_udtf(_RstQuadbinTessellateBase)
+_RstBngTessellateUDTF = _tessellate_udtf(_RstBngTessellateBase)
+_RstCustomTessellateUDTF = _tessellate_udtf(_RstCustomTessellateBase)
 
 
 # --- Accessors and statistics ----------------------------------------
@@ -5212,152 +5234,172 @@ def _rasterize_agg_body(
     )
 
 
-@pandas_udf(BinaryType())
-def _rst_h3_rasterize_agg_udf(
-    cellid: pd.Series,
-    value: pd.Series,
-    srid: pd.Series,
-    pixel_size: pd.Series,
-    xmin: pd.Series,
-    ymin: pd.Series,
-    xmax: pd.Series,
-    ymax: pd.Series,
-    width: pd.Series,
-    height: pd.Series,
-    mode: pd.Series,
-    kring_pad: pd.Series,
-    out_crs: pd.Series = None,
-) -> bytes:
-    from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
+def _build_rst_h3_rasterize_agg_udf(grid_dirs=None):
+    """The ``gbx_rst_h3_rasterize_agg`` UDF of a registration: it carries the PROJ grid directories registered on
+    the driver (a worker has no registry); the output CRS may need a grid. None: this process's own.
+    """
 
-    _env.configure_gdal_env()
-    # Zip cellid and value TOGETHER first so each value stays paired with its own
-    # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
-    # would misalign values when nulls appear in the middle of the series.
-    # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
-    # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
-    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
-    if not pairs:
-        return None
-    # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
-    # PySpark/Arrow to upcast the Series), any H3 id > 2**53 has already been
-    # silently rounded.  Fail loud instead of burning wrong pixels.  The Python
-    # wrapper (rst_h3_rasterize_agg) casts to STRING before calling this UDF, so
-    # it never triggers this guard.  SQL callers that pass a BIGINT column with
-    # nulls should use CAST(cellid AS STRING).
-    if pd.api.types.is_float_dtype(cellid) and any(
-        abs(float(c)) > 2**53 for c, _ in pairs
-    ):
-        raise ValueError(
-            "rst_h3_rasterize_agg: cellid column contains large H3 ids (> 2**53) "
-            "but arrived as float64 — a null in a BIGINT cellid column caused "
-            "PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
-            "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
-            "rst_h3_rasterize_agg() wrapper which applies this cast automatically."
+    @pandas_udf(BinaryType())
+    def _rst_h3_rasterize_agg_udf(
+        cellid: pd.Series,
+        value: pd.Series,
+        srid: pd.Series,
+        pixel_size: pd.Series,
+        xmin: pd.Series,
+        ymin: pd.Series,
+        xmax: pd.Series,
+        ymax: pd.Series,
+        width: pd.Series,
+        height: pd.Series,
+        mode: pd.Series,
+        kring_pad: pd.Series,
+        out_crs: pd.Series = None,
+    ) -> bytes:
+        from databricks.labs.gbx.pyrx import _env
+        from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        # Zip cellid and value TOGETHER first so each value stays paired with its own
+        # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
+        # would misalign values when nulls appear in the middle of the series.
+        # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
+        # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
+        pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+        if not pairs:
+            return None
+        # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
+        # PySpark/Arrow to upcast the Series), any H3 id > 2**53 has already been
+        # silently rounded.  Fail loud instead of burning wrong pixels.  The Python
+        # wrapper (rst_h3_rasterize_agg) casts to STRING before calling this UDF, so
+        # it never triggers this guard.  SQL callers that pass a BIGINT column with
+        # nulls should use CAST(cellid AS STRING).
+        if pd.api.types.is_float_dtype(cellid) and any(
+            abs(float(c)) > 2**53 for c, _ in pairs
+        ):
+            raise ValueError(
+                "rst_h3_rasterize_agg: cellid column contains large H3 ids (> 2**53) "
+                "but arrived as float64 — a null in a BIGINT cellid column caused "
+                "PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
+                "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
+                "rst_h3_rasterize_agg() wrapper which applies this cast automatically."
+            )
+        cells = [int(c) for c, _ in pairs]
+        # A null value arrives as None or np.nan (a typed Double column); the helper reads
+        # both as null, and resolves a repeated cell by the id the grid stores it under.
+        vals = [None if pd.isna(v) else v for _, v in pairs]
+        cell_values = _max_value_per_cell(
+            cells, vals, cr._adapter("h3").to_key, typed=value.dtype != object
         )
-    cells = [int(c) for c, _ in pairs]
-    # A null value arrives as None or np.nan (a typed Double column); the helper reads
-    # both as null, and resolves a repeated cell by the id the grid stores it under.
-    vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(
-        cells, vals, cr._adapter("h3").to_key, typed=value.dtype != object
-    )
-    _srid = _cell_out_srid(
-        "gbx_rst_h3_rasterize_agg",
-        None if srid is None else srid.iloc[0],
-        None if out_crs is None else out_crs.iloc[0],
-    )
-    return _rasterize_agg_body(
-        cell_values,
-        cells,
-        cr._adapter("h3"),
-        "h3",
-        _srid,
-        pixel_size,
-        xmin,
-        ymin,
-        xmax,
-        ymax,
-        width,
-        height,
-        mode,
-        kring_pad,
-    )
-
-
-@pandas_udf(BinaryType())
-def _rst_quadbin_rasterize_agg_udf(
-    cellid: pd.Series,
-    value: pd.Series,
-    srid: pd.Series,
-    pixel_size: pd.Series,
-    xmin: pd.Series,
-    ymin: pd.Series,
-    xmax: pd.Series,
-    ymax: pd.Series,
-    width: pd.Series,
-    height: pd.Series,
-    mode: pd.Series,
-    kring_pad: pd.Series,
-    out_crs: pd.Series = None,
-) -> bytes:
-    from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
-
-    _env.configure_gdal_env()
-    # Zip cellid and value TOGETHER first so each value stays paired with its own
-    # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
-    # would misalign values when nulls appear in the middle of the series.
-    # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
-    # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
-    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
-    if not pairs:
-        return None
-    # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
-    # PySpark/Arrow to upcast the Series), any quadbin id > 2**53 has already been
-    # silently rounded.  Fail loud instead of burning wrong pixels.  The Python
-    # wrapper (rst_quadbin_rasterize_agg) casts to STRING before calling this UDF,
-    # so it never triggers this guard.  SQL callers that pass a BIGINT column with
-    # nulls should use CAST(cellid AS STRING).
-    if pd.api.types.is_float_dtype(cellid) and any(
-        abs(float(c)) > 2**53 for c, _ in pairs
-    ):
-        raise ValueError(
-            "rst_quadbin_rasterize_agg: cellid column contains large quadbin ids "
-            "(> 2**53) but arrived as float64 — a null in a BIGINT cellid column "
-            "caused PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
-            "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
-            "rst_quadbin_rasterize_agg() wrapper which applies this cast automatically."
+        _srid = _cell_out_srid(
+            "gbx_rst_h3_rasterize_agg",
+            None if srid is None else srid.iloc[0],
+            None if out_crs is None else out_crs.iloc[0],
         )
-    cells = [int(c) for c, _ in pairs]
-    # A null value arrives as None or np.nan (a typed Double column); the helper reads
-    # both as null, and resolves a repeated cell by the id the grid stores it under.
-    vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(
-        cells, vals, cr._adapter("quadbin").to_key, typed=value.dtype != object
-    )
-    _srid = _cell_out_srid(
-        "gbx_rst_quadbin_rasterize_agg",
-        None if srid is None else srid.iloc[0],
-        None if out_crs is None else out_crs.iloc[0],
-    )
-    return _rasterize_agg_body(
-        cell_values,
-        cells,
-        cr._adapter("quadbin"),
-        "quadbin",
-        _srid,
-        pixel_size,
-        xmin,
-        ymin,
-        xmax,
-        ymax,
-        width,
-        height,
-        mode,
-        kring_pad,
-    )
+        return _rasterize_agg_body(
+            cell_values,
+            cells,
+            cr._adapter("h3"),
+            "h3",
+            _srid,
+            pixel_size,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width,
+            height,
+            mode,
+            kring_pad,
+        )
+
+    return _rst_h3_rasterize_agg_udf
+
+
+_rst_h3_rasterize_agg_udf = _build_rst_h3_rasterize_agg_udf()
+
+
+def _build_rst_quadbin_rasterize_agg_udf(grid_dirs=None):
+    """The ``gbx_rst_quadbin_rasterize_agg`` UDF of a registration: it carries the PROJ grid directories registered on
+    the driver (a worker has no registry); the output CRS may need a grid. None: this process's own.
+    """
+
+    @pandas_udf(BinaryType())
+    def _rst_quadbin_rasterize_agg_udf(
+        cellid: pd.Series,
+        value: pd.Series,
+        srid: pd.Series,
+        pixel_size: pd.Series,
+        xmin: pd.Series,
+        ymin: pd.Series,
+        xmax: pd.Series,
+        ymax: pd.Series,
+        width: pd.Series,
+        height: pd.Series,
+        mode: pd.Series,
+        kring_pad: pd.Series,
+        out_crs: pd.Series = None,
+    ) -> bytes:
+        from databricks.labs.gbx.pyrx import _env
+        from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        # Zip cellid and value TOGETHER first so each value stays paired with its own
+        # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
+        # would misalign values when nulls appear in the middle of the series.
+        # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
+        # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
+        pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+        if not pairs:
+            return None
+        # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
+        # PySpark/Arrow to upcast the Series), any quadbin id > 2**53 has already been
+        # silently rounded.  Fail loud instead of burning wrong pixels.  The Python
+        # wrapper (rst_quadbin_rasterize_agg) casts to STRING before calling this UDF,
+        # so it never triggers this guard.  SQL callers that pass a BIGINT column with
+        # nulls should use CAST(cellid AS STRING).
+        if pd.api.types.is_float_dtype(cellid) and any(
+            abs(float(c)) > 2**53 for c, _ in pairs
+        ):
+            raise ValueError(
+                "rst_quadbin_rasterize_agg: cellid column contains large quadbin ids "
+                "(> 2**53) but arrived as float64 — a null in a BIGINT cellid column "
+                "caused PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
+                "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
+                "rst_quadbin_rasterize_agg() wrapper which applies this cast automatically."
+            )
+        cells = [int(c) for c, _ in pairs]
+        # A null value arrives as None or np.nan (a typed Double column); the helper reads
+        # both as null, and resolves a repeated cell by the id the grid stores it under.
+        vals = [None if pd.isna(v) else v for _, v in pairs]
+        cell_values = _max_value_per_cell(
+            cells, vals, cr._adapter("quadbin").to_key, typed=value.dtype != object
+        )
+        _srid = _cell_out_srid(
+            "gbx_rst_quadbin_rasterize_agg",
+            None if srid is None else srid.iloc[0],
+            None if out_crs is None else out_crs.iloc[0],
+        )
+        return _rasterize_agg_body(
+            cell_values,
+            cells,
+            cr._adapter("quadbin"),
+            "quadbin",
+            _srid,
+            pixel_size,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width,
+            height,
+            mode,
+            kring_pad,
+        )
+
+    return _rst_quadbin_rasterize_agg_udf
+
+
+_rst_quadbin_rasterize_agg_udf = _build_rst_quadbin_rasterize_agg_udf()
 
 
 # The refusal of a non-NULL out_crs: the same text on both tiers (the heavy tier's RST_BNG_RasterizeAgg.OutCrsRefusal).
@@ -5367,160 +5409,180 @@ BNG_OUT_CRS_REFUSAL = (
 )
 
 
-@pandas_udf(BinaryType())
-def _rst_bng_rasterize_agg_udf(
-    cellid: pd.Series,
-    value: pd.Series,
-    srid: pd.Series,
-    pixel_size: pd.Series,
-    xmin: pd.Series,
-    ymin: pd.Series,
-    xmax: pd.Series,
-    ymax: pd.Series,
-    width: pd.Series,
-    height: pd.Series,
-    mode: pd.Series,
-    kring_pad: pd.Series,
-    out_crs: pd.Series = None,
-) -> bytes:
-    from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
+def _build_rst_bng_rasterize_agg_udf(grid_dirs=None):
+    """The ``gbx_rst_bng_rasterize_agg`` UDF of a registration: it carries the PROJ grid directories registered on
+    the driver (a worker has no registry); the output CRS may need a grid. None: this process's own.
+    """
 
-    if out_crs is not None and any(pd.notna(v) for v in out_crs):
-        raise ValueError(BNG_OUT_CRS_REFUSAL)
-    _env.configure_gdal_env()
-    # BNG cell ids are STRING on the public surface (e.g. "TQ3080"); the adapter
-    # parses each to the internal Long via pygx._bng.parse (single source of truth).
-    # Zip cellid and value TOGETHER first so each value stays paired with its own
-    # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
-    # would misalign values when nulls appear in the middle of the series.
-    # pd.notna guards both Python None and float NaN consistently across grid types.
-    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
-    if not pairs:
-        return None
-    cells = [str(c) for c, _ in pairs]
-    # A null value arrives as None or np.nan (a typed Double column); the helper reads
-    # both as null, and resolves a repeated cell by the id the grid stores it under.
-    vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(
-        cells, vals, cr._adapter("bng").to_key, typed=value.dtype != object
-    )
-    # BNG is EPSG:27700-native; the srid arg is a no-op (forced 27700). The sample
-    # points and output raster are both 27700 -- NO WGS84 hop.
-    return _rasterize_agg_body(
-        cell_values,
-        cells,
-        cr._adapter("bng"),
-        "bng",
-        27700,
-        pixel_size,
-        xmin,
-        ymin,
-        xmax,
-        ymax,
-        width,
-        height,
-        mode,
-        kring_pad,
-    )
+    @pandas_udf(BinaryType())
+    def _rst_bng_rasterize_agg_udf(
+        cellid: pd.Series,
+        value: pd.Series,
+        srid: pd.Series,
+        pixel_size: pd.Series,
+        xmin: pd.Series,
+        ymin: pd.Series,
+        xmax: pd.Series,
+        ymax: pd.Series,
+        width: pd.Series,
+        height: pd.Series,
+        mode: pd.Series,
+        kring_pad: pd.Series,
+        out_crs: pd.Series = None,
+    ) -> bytes:
+        from databricks.labs.gbx.pyrx import _env
+        from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+        if out_crs is not None and any(pd.notna(v) for v in out_crs):
+            raise ValueError(BNG_OUT_CRS_REFUSAL)
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        # BNG cell ids are STRING on the public surface (e.g. "TQ3080"); the adapter
+        # parses each to the internal Long via pygx._bng.parse (single source of truth).
+        # Zip cellid and value TOGETHER first so each value stays paired with its own
+        # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
+        # would misalign values when nulls appear in the middle of the series.
+        # pd.notna guards both Python None and float NaN consistently across grid types.
+        pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+        if not pairs:
+            return None
+        cells = [str(c) for c, _ in pairs]
+        # A null value arrives as None or np.nan (a typed Double column); the helper reads
+        # both as null, and resolves a repeated cell by the id the grid stores it under.
+        vals = [None if pd.isna(v) else v for _, v in pairs]
+        cell_values = _max_value_per_cell(
+            cells, vals, cr._adapter("bng").to_key, typed=value.dtype != object
+        )
+        # BNG is EPSG:27700-native; the srid arg is a no-op (forced 27700). The sample
+        # points and output raster are both 27700 -- NO WGS84 hop.
+        return _rasterize_agg_body(
+            cell_values,
+            cells,
+            cr._adapter("bng"),
+            "bng",
+            27700,
+            pixel_size,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width,
+            height,
+            mode,
+            kring_pad,
+        )
+
+    return _rst_bng_rasterize_agg_udf
+
+
+_rst_bng_rasterize_agg_udf = _build_rst_bng_rasterize_agg_udf()
 
 
 # --- custom rasterize_agg (13-arg: cellid, value, grid struct, then options) ---
 
 
-@pandas_udf(BinaryType())
-def _rst_custom_rasterize_agg_udf(
-    cellid: pd.Series,
-    value: pd.Series,
-    grid: pd.Series,
-    out_srid: pd.Series,
-    pixel_size: pd.Series,
-    xmin: pd.Series,
-    ymin: pd.Series,
-    xmax: pd.Series,
-    ymax: pd.Series,
-    width: pd.Series,
-    height: pd.Series,
-    mode: pd.Series,
-    kring_pad: pd.Series,
-) -> bytes:
-    """Rasterize custom-grid cells onto a regular pixel grid (centroid burn).
-
-    Arg order (pinned, must match heavy RST_Custom_RasterizeAgg):
-        cellid, value, grid, out_srid, pixel_size,
-        xmin, ymin, xmax, ymax, width, height, mode, kring_pad  -- 13 args.
-
-    ``grid`` is a CUSTOM_GRID_SCHEMA struct column (produced by
-    ``gbx_custom_grid(...)``).  All rows in a group carry the same grid conf;
-    only the first row is read.  ``out_srid`` defaults to the grid's ``srid``
-    when null; if both are absent (grid.srid==-1 and out_srid is null),
-    raises ValueError.
+def _build_rst_custom_rasterize_agg_udf(grid_dirs=None):
+    """The ``gbx_rst_custom_rasterize_agg`` UDF of a registration: it carries the PROJ grid directories registered on
+    the driver (a worker has no registry); the output CRS may need a grid. None: this process's own.
     """
-    from databricks.labs.gbx.pygx._custom import conf_from_row
-    from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
 
-    _env.configure_gdal_env()
-    # Zip cellid and value TOGETHER first so each value stays paired with its own
-    # cellid, then drop pairs whose cellid is null.
-    # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
-    # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
-    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
-    if not pairs:
-        return None
-    # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
-    # PySpark/Arrow to upcast the Series), any custom id > 2**53 has already been
-    # silently rounded.  The Python wrapper (rst_custom_rasterize_agg) casts to
-    # STRING before calling this UDF, so it never triggers.  SQL callers that pass
-    # a BIGINT column with nulls should use CAST(cellid AS STRING).
-    if pd.api.types.is_float_dtype(cellid) and any(
-        abs(float(c)) > 2**53 for c, _ in pairs
-    ):
-        raise ValueError(
-            "rst_custom_rasterize_agg: cellid column contains large custom ids "
-            "(> 2**53) but arrived as float64 — a null in a BIGINT cellid column "
-            "caused PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
-            "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
-            "rst_custom_rasterize_agg() wrapper which applies this cast automatically."
+    @pandas_udf(BinaryType())
+    def _rst_custom_rasterize_agg_udf(
+        cellid: pd.Series,
+        value: pd.Series,
+        grid: pd.Series,
+        out_srid: pd.Series,
+        pixel_size: pd.Series,
+        xmin: pd.Series,
+        ymin: pd.Series,
+        xmax: pd.Series,
+        ymax: pd.Series,
+        width: pd.Series,
+        height: pd.Series,
+        mode: pd.Series,
+        kring_pad: pd.Series,
+    ) -> bytes:
+        """Rasterize custom-grid cells onto a regular pixel grid (centroid burn).
+
+        Arg order (pinned, must match heavy RST_Custom_RasterizeAgg):
+            cellid, value, grid, out_srid, pixel_size,
+            xmin, ymin, xmax, ymax, width, height, mode, kring_pad  -- 13 args.
+
+        ``grid`` is a CUSTOM_GRID_SCHEMA struct column (produced by
+        ``gbx_custom_grid(...)``).  All rows in a group carry the same grid conf;
+        only the first row is read.  ``out_srid`` defaults to the grid's ``srid``
+        when null; if both are absent (grid.srid==-1 and out_srid is null),
+        raises ValueError.
+        """
+        from databricks.labs.gbx.pygx._custom import conf_from_row
+        from databricks.labs.gbx.pyrx import _env
+        from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        # Zip cellid and value TOGETHER first so each value stays paired with its own
+        # cellid, then drop pairs whose cellid is null.
+        # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
+        # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
+        pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+        if not pairs:
+            return None
+        # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
+        # PySpark/Arrow to upcast the Series), any custom id > 2**53 has already been
+        # silently rounded.  The Python wrapper (rst_custom_rasterize_agg) casts to
+        # STRING before calling this UDF, so it never triggers.  SQL callers that pass
+        # a BIGINT column with nulls should use CAST(cellid AS STRING).
+        if pd.api.types.is_float_dtype(cellid) and any(
+            abs(float(c)) > 2**53 for c, _ in pairs
+        ):
+            raise ValueError(
+                "rst_custom_rasterize_agg: cellid column contains large custom ids "
+                "(> 2**53) but arrived as float64 — a null in a BIGINT cellid column "
+                "caused PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
+                "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
+                "rst_custom_rasterize_agg() wrapper which applies this cast automatically."
+            )
+        cells = [int(c) for c, _ in pairs]
+        # A null value arrives as None or np.nan (a typed Double column); the helper reads
+        # both as null. Custom ids are stored as the int they arrive as, so no key is needed.
+        vals = [None if pd.isna(v) else v for _, v in pairs]
+        cell_values = _max_value_per_cell(cells, vals, typed=value.dtype != object)
+
+        # Extract the grid conf from the first row (per-group constant).
+        conf = conf_from_row(grid.iloc[0])
+
+        # Resolve output CRS: out_srid arg wins; else grid's srid; else error.
+        if out_srid is not None and out_srid.iloc[0] is not None:
+            _srid = int(out_srid.iloc[0])
+        elif conf.srid != -1:
+            _srid = conf.srid
+        else:
+            raise ValueError(
+                "rst_custom_rasterize_agg: grid has no CRS (srid=-1); "
+                "supply out_srid explicitly."
+            )
+        # Build a per-call custom adapter; fallback_srid makes _reproject a no-op
+        # when the grid has srid==-1 and out_srid was supplied.
+        _ad = cr._CustomAdapter(conf, fallback_srid=_srid)
+        return _rasterize_agg_body(
+            cell_values,
+            cells,
+            _ad,
+            "custom",
+            _srid,
+            pixel_size,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width,
+            height,
+            mode,
+            kring_pad,
         )
-    cells = [int(c) for c, _ in pairs]
-    # A null value arrives as None or np.nan (a typed Double column); the helper reads
-    # both as null. Custom ids are stored as the int they arrive as, so no key is needed.
-    vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals, typed=value.dtype != object)
 
-    # Extract the grid conf from the first row (per-group constant).
-    conf = conf_from_row(grid.iloc[0])
+    return _rst_custom_rasterize_agg_udf
 
-    # Resolve output CRS: out_srid arg wins; else grid's srid; else error.
-    if out_srid is not None and out_srid.iloc[0] is not None:
-        _srid = int(out_srid.iloc[0])
-    elif conf.srid != -1:
-        _srid = conf.srid
-    else:
-        raise ValueError(
-            "rst_custom_rasterize_agg: grid has no CRS (srid=-1); "
-            "supply out_srid explicitly."
-        )
-    # Build a per-call custom adapter; fallback_srid makes _reproject a no-op
-    # when the grid has srid==-1 and out_srid was supplied.
-    _ad = cr._CustomAdapter(conf, fallback_srid=_srid)
-    return _rasterize_agg_body(
-        cell_values,
-        cells,
-        _ad,
-        "custom",
-        _srid,
-        pixel_size,
-        xmin,
-        ymin,
-        xmax,
-        ymax,
-        width,
-        height,
-        mode,
-        kring_pad,
-    )
+
+_rst_custom_rasterize_agg_udf = _build_rst_custom_rasterize_agg_udf()
 
 
 # --- the scalar twins of the cell rasterizers: the group arrives as an array of (cellid, value) structs ------------

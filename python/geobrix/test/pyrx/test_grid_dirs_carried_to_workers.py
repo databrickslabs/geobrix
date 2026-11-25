@@ -103,17 +103,22 @@ def _rows_to_carry():
         for n in fns
         if n == "gbx_rst_h3_fitresolution"
         or (
-            "_rastertogrid" in n
-            and n.startswith("gbx_rst_")
+            n.startswith("gbx_rst_")
+            and ("_rastertogrid" in n or n.endswith("_tessellate"))
             and "L3" in fns[n].levels
             and fns[n].levels["L3"].get("register") in ("udf", "udtf")
+        )
+        or (
+            n.startswith("gbx_rst_")
+            and n.endswith("_rasterize_agg")
+            and n != "gbx_rst_rasterize_agg"
         )
     )
 
 
 def test_every_row_that_reads_the_raster_declares_the_dirs():
     rows = _rows_to_carry()
-    assert len(rows) == 1 + 4 + 32
+    assert len(rows) == 1 + 4 + 32 + 4 + 4
     fns = manifest.load().functions
     missing = [
         n for n in rows if fns[n].levels["L3"].get("factory_args") != "proj_grid_dirs"
@@ -158,3 +163,94 @@ def test_registering_a_table_function_builds_it_with_the_registered_dirs(
     finally:
         proj_grids.set_registered_dirs([], replace=True)
     assert seen == [("/Volumes/reg/grids",)]
+
+
+# --- the tessellate table functions, the cell rasterize aggregates, the reader ----------------------------------------
+
+import pandas as pd  # noqa: E402
+from pyspark import cloudpickle  # noqa: E402
+
+from .test_custom_raster_grid import _conf_row, _make_conf  # noqa: E402
+
+GRID_RES = {"h3": 5, "quadbin": 5, "bng": "1km"}
+
+
+def _grid_args(grid):
+    """The arguments of a raster-to-grid / tessellate eval after the tile (the custom grid takes its struct first)."""
+    if grid == "custom":
+        return (_conf_row(_make_conf()), 1)
+    return (GRID_RES[grid],)
+
+
+def _udtf(name):
+    return _unwrap(getattr(prx, name))
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin", "bng", "custom"])
+def test_tessellate_udtf_hands_its_dirs_to_the_env(grid):
+    udtf = _udtf(f"_Rst{grid.capitalize()}TessellateUDTF").with_grid_dirs(DIRS)
+    list(udtf._cls().eval(_tile(), *_grid_args(grid)))
+    assert CALLS and CALLS[0] == DIRS
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin", "bng", "custom"])
+def test_tessellate_udtf_without_dirs_keeps_the_driver_default(grid):
+    udtf = _udtf(f"_Rst{grid.capitalize()}TessellateUDTF")
+    list(udtf._cls().eval(_tile(), *_grid_args(grid)))
+    assert CALLS and CALLS[0] is None
+
+
+def test_custom_rastertogrid_udtf_hands_its_dirs_to_the_env():
+    udtf = _udtf("_RstCustomRasterToGridAvgUDTF").with_grid_dirs(DIRS)
+    list(udtf._cls().eval(_tile(), *_grid_args("custom")))
+    assert CALLS and CALLS[0] == DIRS
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin", "bng", "custom"])
+def test_cell_rasterize_agg_hands_its_dirs_to_the_env(grid):
+    udf = getattr(prx, f"_build_rst_{grid}_rasterize_agg_udf")(DIRS)
+    n = len(__import__("inspect").signature(udf.func).parameters)
+    try:
+        udf.func(*[pd.Series([None])] * n)
+    except Exception:  # noqa: BLE001 - the env call comes first
+        pass
+    assert CALLS and CALLS[0] == DIRS
+
+
+def test_the_reader_carries_the_registered_dirs_to_read():
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    proj_grids.set_registered_dirs(["/Volumes/reg/grids"], replace=True)
+    try:
+        reader = RasterGbxReader({"path": "/tmp/none.tif"})
+    finally:
+        proj_grids.set_registered_dirs([], replace=True)
+    reader = cloudpickle.loads(cloudpickle.dumps(reader))  # as the executor receives it
+    list(reader.read(None))
+    assert CALLS and CALLS[0] == ("/Volumes/reg/grids",)
+
+
+# --- the dirs ride in the pickled payload ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("_RstH3RasterToGridAvgUDTF", _grid_args("h3")),
+        ("_RstCustomRasterToGridAvgUDTF", _grid_args("custom")),
+        ("_RstH3TessellateUDTF", _grid_args("h3")),
+        ("_RstCustomTessellateUDTF", _grid_args("custom")),
+    ],
+)
+def test_a_rebuilt_udtf_carries_its_dirs_through_cloudpickle(name, args):
+    cls = _udtf(name).with_grid_dirs(DIRS)._cls
+    shipped = cloudpickle.loads(cloudpickle.dumps(cls))  # what a worker receives
+    list(shipped().eval(_tile(), *args))
+    assert CALLS and CALLS[0] == DIRS
+
+
+def test_a_fitresolution_udf_carries_its_dirs_through_cloudpickle():
+    udf = prx._build_h3_fitresolution_udf(DIRS)
+    shipped = cloudpickle.loads(cloudpickle.dumps(_func(udf)))
+    assert shipped(_tile()) is not None
+    assert CALLS == [DIRS]

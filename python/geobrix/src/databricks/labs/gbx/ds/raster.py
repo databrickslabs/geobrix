@@ -1104,6 +1104,11 @@ def _read_tile_index(spark, table: str, version_as_of, timestamp_as_of):
 
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
+        from databricks.labs.gbx.core import proj_grids
+
+        # The PROJ grid directories registered on the driver, carried to the executors with the pickled reader: a
+        # clip polygon in another CRS than the raster is moved by PROJ there, and a worker has no registry.
+        self.grid_dirs = tuple(proj_grids.get_registered_dirs())
         self.path = options.get("path")
         if not self.path:
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
@@ -1440,7 +1445,7 @@ class RasterGbxReader(DataSourceReader):
     def read(self, partition: "_TilePartition") -> Iterator[Tuple]:
         from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=getattr(self, "grid_dirs", None))
 
         # Spark's Python DataSource V2 calls read once with a placeholder when the partition
         # list is empty (e.g. all clip polygons miss): None on OSS Spark, a bare InputPartition

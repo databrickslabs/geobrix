@@ -14,20 +14,8 @@ It comes in two flavors. One is a **Lakeflow pipeline** that can run
 on a schedule to stay current. The other is an **interactive notebook series**. The series is more of a quick
 start for understanding the GeoBrix functions involved in the detection cascade.
 
-:::note Minimum GeoBrix version
-- **Notebook series: GeoBrix 0.5.0 or newer (minimum)** — the series depends on capabilities introduced in
-  0.4.1. These are the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` /
-  `EmitDownloader` / `WellsDownloader` sample downloaders. It installs `geobrix[stac,vizx]` (the env6
-  wheel, with `earthaccess` as a separate step; the env5 wheel on Serverless environment 5).
-- **Lakeflow SDP pipeline: GeoBrix 0.6.0 or newer** — it reads its files with
-  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the env wheel for its Lakeflow
-  runtime channel (see the Lakeflow tab).
-:::
-
 <Tabs groupId="vapor-eyes-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP + AI/BI Maps" default>
-
-**Requires GeoBrix 0.6.0 or newer.**
 
 A standalone Permian Basin methane-monitoring pipeline. It is a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/). It packages as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and runs at the GeoBrix Python level over Serverless compute.
 
@@ -38,7 +26,7 @@ This is the production counterpart to the notebook series (see the other tab). I
 :::
 
 :::info Runs on Serverless
-As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline installs `geobrix[stac,vizx]` from the env6 wheel. Its `land` downloader task (Serverless environment version 6) installs the same wheel. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Each task takes the staged wheel as a single pip dependency entry. The notebooks install the wheel from the v0.6.0 release; the bundle installs it from a Volume. Stage it with the steps on the [installation page](https://databrickslabs.github.io/geobrix/docs/installation). The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces & Levels](../api/execution-tiers).
+Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline installs `geobrix[stac,vizx]` from the env6 wheel. Its `land` downloader task (Serverless environment version 6) installs the same wheel. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Each task takes the staged wheel as a single pip dependency entry. The notebooks install the wheel from the v0.6.0 release; the bundle installs it from a Volume. Stage it with the steps on the [installation page](https://databrickslabs.github.io/geobrix/docs/installation). The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces & Levels](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard

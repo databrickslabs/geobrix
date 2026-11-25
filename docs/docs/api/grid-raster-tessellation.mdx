@@ -41,7 +41,7 @@ The footprint used for covered-cell enumeration is the raster's **outline** (its
 - **`covering`** — the meaning differs by function family:
   - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData. A source without NoData gets its data type's fallback value (for example 65535 for `uint16`), and its pixels equal to that value are NoData too.
   - **Scalar-reducing (`rst_<grid>_rastertogrid*`):** area-weighted. Each pixel contributes to every cell its footprint overlaps, weighted by the fraction of the pixel's area inside that cell. Interior pixels (entirely within one cell) carry weight 1; only boundary pixels split. This fills centroid-aliasing gaps — a cell that catches no centroid in `centroid` mode receives area-weighted contributions under `covering`. `sum` and `count` remain globally mass-conserving.
-  - The overlap is measured on the raster's own pixels. A raster in another CRS than the grid's is not reprojected: each cell is moved into the raster's CRS instead. So `count` is in source pixels, and a weight is within about 1e-4 of the exact share.
+  - The overlap is measured on the raster's own pixels. A raster in another CRS than the grid's is not reprojected: each cell is moved into the raster's CRS instead. So `count` is in source pixels, and a weight is within about 1e-4 of the exact share. The exception is a raster whose pixel corners leave its CRS's valid area (for example a Mollweide or Robinson world raster, whose corners are off the globe). It is reprojected to the grid's CRS first, so its `count` is in reprojected pixels.
 
 The interaction between the two policies:
 
@@ -197,7 +197,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **CRS handling:** `rst_quadbin_tessellate` reprojects the tile extent to geographic coordinates internally. `rst_quadbin_rastertogrid*` grids the tile in its own CRS, as for H3. Any CRS supported by GDAL is accepted; no pre-transformation required.
 
-**Latitude range:** quadbin cells stop at ±85.05°. In `rst_quadbin_rastertogrid*`, a pixel beyond that latitude is in no cell, as a pixel outside the grid is for BNG: with `covering` only the part of a pixel inside the range counts, and with `centroid` a pixel whose centre is beyond it is dropped.
+**Latitude range:** quadbin cells stop at ±85.05°. A pixel beyond that latitude is in no cell, as a pixel outside the grid is for BNG. In `rst_quadbin_rastertogrid*` with `covering`, only the part of a pixel inside the range counts. With `centroid`, in `rst_quadbin_rastertogrid*` and `rst_quadbin_tessellate` alike, a pixel whose centre is beyond it is dropped.
 
 **Resolution:** an integer zoom level 0–20 (higher = finer tiles). Quadbin cells align with Web Mercator tile boundaries.
 
@@ -212,7 +212,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **Cell-id type:** `STRING` — a human-readable BNG cell reference (e.g., `TQ38`, `TQ3882`).
 
-**CRS handling:** `rst_bng_tessellate` reprojects the tile to **EPSG:27700** (British National Grid) internally, so each chip is a 27700 raster aligned to its cell. `rst_bng_rastertogrid*` grids the tile in its own CRS, as for H3: each BNG cell is moved into the tile's CRS. Any CRS supported by GDAL is accepted. A pixel west or south of the grid's origin (a negative easting or northing) is outside the grid and drops.
+**CRS handling:** `rst_bng_tessellate` reprojects the tile to **EPSG:27700** (British National Grid) internally, so each chip is a 27700 raster aligned to its cell. `rst_bng_rastertogrid*` grids the tile in its own CRS, as for H3: each BNG cell is moved into the tile's CRS. Any CRS supported by GDAL is accepted. A pixel west or south of the grid's origin (a negative easting or northing) is outside the grid. With `centroid`, both functions drop a pixel whose centre is there. With `covering`, only the part of a pixel inside the grid counts.
 
 **Resolution:** an integer index 1–6, where 1 = 100 km, 2 = 10 km, and 3 = 1 km. Index 4 = 100 m, 5 = 10 m, and 6 = 1 m. A string key from the BNG resolution map (e.g., `"1km"`, `"100m"`) also works. Negative indices (−1 to −6) select quadrant sub-cells.
 

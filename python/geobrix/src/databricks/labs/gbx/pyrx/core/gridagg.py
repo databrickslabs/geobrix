@@ -418,6 +418,22 @@ def _covering_band(
     acc: dict = {}  # raw_cell_id -> [(value, weight)]
     geoms: dict = {}  # raw_cell_id -> its polygon, built once per band
 
+    def share(cells, pixel_poly, px_area, val) -> float:
+        """Add the pixel's weight in each of ``cells`` to ``acc``; return the share of the pixel they hold."""
+        total = 0.0
+        for cell in cells:  # vectorscan: ok (a pixel's few cells)
+            if not _cell_is_valid(cell, grid, conf=conf):
+                continue
+            cell_poly = geoms.get(cell)
+            if cell_poly is None:
+                cell_poly = geoms[cell] = _cell_geom(cell, grid, conf=conf)
+            inter = cell_poly.intersection(pixel_poly)
+            if inter is not None and inter.area > 0:
+                w = inter.area / px_area
+                acc.setdefault(cell, []).append((val, w))
+                total += w
+        return total
+
     for y_i, x_i in zip(ys, xs):  # vectorscan: ok (covering intentionally per-pixel)
         y, x = int(y_i), int(x_i)
         val = float(band[y, x])
@@ -452,22 +468,15 @@ def _covering_band(
         if px_area == 0.0:
             continue
 
-        if grid in ("h3", "bng"):
-            cands = _pixel_candidates(pixel_poly, resolution, grid)
-        else:
-            cands = _polyfill_cells(pixel_poly, resolution, grid, conf=conf)
-        for cell in cands:
-            if not _cell_is_valid(cell, grid, conf=conf):
-                continue
-            cell_poly = geoms.get(cell)
-            if cell_poly is None:
-                cell_poly = geoms[cell] = _cell_geom(cell, grid, conf=conf)
-            inter = cell_poly.intersection(pixel_poly)
-            if inter is not None and inter.area > 0:
-                w = inter.area / px_area
-                if cell not in acc:
-                    acc[cell] = []
-                acc[cell].append((val, w))
+        cands = list(_polyfill_cells(pixel_poly, resolution, grid, conf=conf))
+        shared = share(cands, pixel_poly, px_area, val)
+        if grid in ("h3", "bng") and shared < _SHARED_WHOLE:
+            share(
+                _missed_cells(pixel_poly, resolution, grid, set(cands)),
+                pixel_poly,
+                px_area,
+                val,
+            )
 
     if not acc:
         return []
@@ -481,16 +490,12 @@ def _covering_band(
     ]
 
 
-def _pixel_candidates(pixel_poly, resolution, grid: str) -> list:
-    """The cells (the raw ids ``_cell_geom`` takes) that may overlap one pixel of the planar pass: the polyfill's,
-    then those it missed from ``_box_cells`` (h3: the cells around the pixel's box; BNG: the lattice squares under
-    it). Both polyfills can miss a cell: h3's overlap mode returned only a neighbour of a 30 m pixel inside a res-9
-    cell, and BNG's flood fill missed 30 of the 240 res-4 cells under a 2 km box. The polyfill's cells keep their
-    order, so a pixel's pairs come in the order they did."""
-    from databricks.labs.gbx.pyrx.core.tessellate import _polyfill_cells
-
-    found = list(_polyfill_cells(pixel_poly, resolution, grid))
-    seen = set(found)
+def _missed_cells(pixel_poly, resolution, grid: str, seen) -> list:
+    """The cells (the raw ids ``_cell_geom`` takes) that may overlap one pixel of the planar pass and are not in
+    ``seen`` (the polyfill's): h3, the cells of ``_box_cells`` around the pixel's box; BNG, the lattice squares under
+    it. Both polyfills can miss a cell: h3's overlap mode returned only a neighbour of a 30 m pixel inside a res-9
+    cell, and BNG's flood fill missed cells under a pixel larger than them. The caller asks only for a pixel the
+    polyfill's cells do not share out whole."""
     if grid == "h3":
         import h3
 
@@ -499,11 +504,14 @@ def _pixel_candidates(pixel_poly, resolution, grid: str) -> list:
         )
     else:
         extra = _bng_box_cells(pixel_poly.bounds, resolution)
-    for cell in extra:  # vectorscan: ok (a pixel's few cells)
-        if cell not in seen:
-            seen.add(cell)
-            found.append(cell)
-    return found
+    return [
+        c for c in dict.fromkeys(extra) if c not in seen
+    ]  # vectorscan: ok (a pixel's few cells)
+
+
+# A pixel whose polyfill cells hold less than this share of it looks for the cells the polyfill missed
+# (``_missed_cells``): an interior pixel's shares sum to 1 within GEOS rounding (~1e-12).
+_SHARED_WHOLE = 1.0 - 1e-9
 
 
 def _use_h3_vectorised(work_ds, resolution, gt, area=None) -> bool:
@@ -1411,8 +1419,11 @@ def _move_rings(frame: _Frame, gx, gy, wrap: bool = True) -> tuple:
     # a lon/lat raster CRS has no seam: each moved point is taken within half a turn of its edge's start
     period = frame.period if frame.lonlat_src else None
     if period:
-        nx_ = xs + _wrap(nx_ - xs, period)
-        mx = xs + _wrap(mx - xs, period)
+        # only a step past half a turn is rewritten: elsewhere the points stay bit for bit as moved
+        nx_ = np.where(
+            np.abs(nx_ - xs) > 0.5 * period, xs + _wrap(nx_ - xs, period), nx_
+        )
+        mx = np.where(np.abs(mx - xs) > 0.5 * period, xs + _wrap(mx - xs, period), mx)
     length = np.hypot(nx_ - xs, ny_ - ys)
     offset = np.hypot(mx - 0.5 * (xs + nx_), my - 0.5 * (ys + ny_))
     if period:
@@ -1463,13 +1474,20 @@ def _move_rings(frame: _Frame, gx, gy, wrap: bool = True) -> tuple:
 
 def _unwrap_rings(x, period):
     """The rings ``x`` (rings x M) with each step taken within half a ``period`` (unchanged when None): continuous
-    from each ring's first vertex."""
+    from each ring's first vertex. A ring with no step past half a turn (away from 180) is kept bit for bit.
+    """
     if not period:
         return x
-    step = _wrap(np.diff(x, axis=1), period)
-    return x[:, :1] + np.concatenate(
-        [np.zeros((x.shape[0], 1)), np.cumsum(step, axis=1)], axis=1
+    step = np.diff(x, axis=1)
+    jump = (np.abs(step) > 0.5 * period).any(axis=1)
+    if not jump.any():
+        return x
+    x = x.copy()
+    s = _wrap(step[jump], period)
+    x[jump] = x[jump, :1] + np.concatenate(
+        [np.zeros((s.shape[0], 1)), np.cumsum(s, axis=1)], axis=1
     )
+    return x
 
 
 def _jumping(frame: _Frame, gx, gy, dx, dy, nominated) -> np.ndarray:

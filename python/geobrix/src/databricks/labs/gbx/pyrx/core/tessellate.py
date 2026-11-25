@@ -30,7 +30,12 @@ from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
 from databricks.labs.gbx.pyrx.core._nodata import valid_mask
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
-from databricks.labs.gbx.pyrx.core.gridagg import _bng_cells, _h3_cells
+from databricks.labs.gbx.pyrx.core.gridagg import (
+    _bng_cells,
+    _h3_cells,
+    _in_lon_range,
+    _in_quadbin_lat,
+)
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = _quadbin._MAX_POLYFILL_RES
@@ -412,13 +417,18 @@ def _pixel_cells(xs, ys, resolution, grid: str, conf=None) -> np.ndarray:
     rule ``gridagg.raster_to_grid`` uses); bng: the Long id (validity is checked per
     unique cell by :func:`_raw_cell`); custom: the id, or ``-1`` where the centre
     falls outside the grid. h3 and custom encode one point at a time (no array API).
+    As in ``gridagg``, a quadbin centre beyond 85.05 degrees and a BNG centre west or
+    south of the origin are ``-1`` (outside the grid; the encoders would put them in
+    its first row or column), and a longitude outside -180..180 is taken a turn back.
     """
     if grid == "h3":
         return _h3_cells(xs, ys, resolution)
     if grid == "quadbin":
-        return _quadbin.point_as_cell_vec(xs, ys, resolution)
+        cells = _quadbin.point_as_cell_vec(_in_lon_range(xs), ys, resolution)
+        return np.where(_in_quadbin_lat(ys), cells, -1)
     if grid == "bng":
-        return _bng_cells(xs, ys, resolution)
+        cells = _bng_cells(xs, ys, resolution)
+        return np.where((np.asarray(xs) >= 0.0) & (np.asarray(ys) >= 0.0), cells, -1)
     from databricks.labs.gbx.pygx import _custom as _custom_mod
 
     to_cell = _custom_mod.point_to_cell_id_or_none
@@ -439,16 +449,17 @@ def _pixel_cells(xs, ys, resolution, grid: str, conf=None) -> np.ndarray:
 def _raw_cell(key: int, grid: str):
     """The raw cell of a :func:`_pixel_cells` key, as the grid helpers take it.
 
-    ``None`` drops the key's pixels: a bng cell outside the grid (``_bng.is_valid``)
-    or a pixel outside a custom grid's bounds.
+    ``None`` drops the key's pixels: a pixel outside the grid (``-1``: a custom grid's
+    bounds, quadbin's latitudes, BNG west or south of the origin) or a bng cell that is
+    not valid (``_bng.is_valid``).
     """
     if grid == "h3":
         return h3.int_to_str(key)
+    if key < 0:
+        return None
     if grid == "bng":
         return key if _bng.is_valid(key) else None
-    if grid == "custom":
-        return None if key < 0 else key
-    return key  # quadbin
+    return key  # quadbin, custom
 
 
 def _grow_windows(windows: np.ndarray, n: int) -> np.ndarray:

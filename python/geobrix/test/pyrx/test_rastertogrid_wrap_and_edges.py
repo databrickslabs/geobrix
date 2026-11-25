@@ -510,3 +510,24 @@ def test_a_coarse_world_mercator_on_another_datum_is_cut_not_refused(n, res):
     )
     lib = _partial(b, "h3", res)
     assert sum(c["count"] for c in lib.values()) == pytest.approx(n * n, rel=1e-5)
+
+
+# --- a regional lon/lat raster on another datum: the turns change nothing -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "crs", ["EPSG:4258", "EPSG:4269", "EPSG:4230", _ED50_LL, _SPHERE_LL]
+)
+def test_a_regional_lonlat_raster_moves_its_cells_as_without_turns(crs):
+    # away from 180 no step of a moved ring reaches half a turn: the rings, and so the states, are bit for bit those of
+    # the frame with no period (before, the unwrap re-added each step and moved them by up to ~1e-11)
+    b = _tif(_ramp(24, 30), crs, from_origin(5.0, 45.3, 0.01, 0.01))
+    with _open(b) as ds:
+        frame = gridagg._Frame(ds, ds.crs, "h3")
+        boxes = frame.window_boxes((0, ds.height - 1), (0, ds.width - 1))
+        cells = gridagg._box_cells(boxes, 7, "h3")
+        x, y, owner = gridagg._native_rings(frame, cells)
+        frame.lonlat_src, frame.period = False, None
+        x0, y0, owner0 = gridagg._native_rings(frame, cells)
+    assert np.array_equal(owner, owner0)
+    assert np.array_equal(x, x0) and np.array_equal(y, y0)

@@ -24,8 +24,10 @@ once and stages it on a Volume ([install 1](#env-wheel)). You can also install d
 network permissions allow ([Install from the GitHub release](#install-from-the-github-release)).
 
 Every env wheel ships the GeoBrix JAR inside it, so you do not need to download the JAR on its own. GeoBrix never
-loads it by itself: the JAR speeds up some functions at the JVM level only as a **cluster library on a dedicated
-cluster** ([install 2](#env-wheel-and-jar)) or in the **Unity Catalog install folder** ([install 3](#uc-functions)).
+loads it by itself. The JAR speeds up some functions at the JVM level in two places:
+
+- as a **cluster library on a dedicated cluster** ([install 2](#env-wheel-and-jar));
+- in the **Unity Catalog install folder** ([install 3](#uc-functions)).
 
 To stage on a Volume, `gbx.stage_jar` copies the matching JAR, which `gbx.register(spark)` then checks.
 `gbx.stage_deps` stages the wheel's pinned dependencies, so an install never calls PyPI
@@ -180,7 +182,7 @@ Keep these rules in mind:
 - On DBR 19 you can install the wheel with `%pip` in the notebook and keep only the JAR as a cluster library.
 
 **Or use a container image.** A GeoBrix image for [Databricks Container Service](./installation/dcs.mdx) starts a
-dedicated DBR 19 cluster with the env6 wheel and the JAR already in place, so steps 1 to 3 are not needed. There is
+dedicated DBR 19 cluster. The env6 wheel and the JAR are already in place, so steps 1 to 3 are not needed. There is
 one image tag for Graviton (arm64) and one for x86 (amd64).
 
 ## 3. Install the Unity Catalog functions {#uc-functions}

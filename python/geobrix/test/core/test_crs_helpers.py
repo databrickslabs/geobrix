@@ -266,3 +266,17 @@ def test_crs_equal_of_two_texts_is_kept_for_the_next_call(monkeypatch):
     assert crs_mod.crs_equal(wkt, "EPSG:32632") and crs_mod.crs_equal(wkt, "EPSG:32632")
     assert len(calls) == 2  # both texts, once
     assert not crs_mod.crs_equal(wkt, "EPSG:4326")
+
+
+def test_get_operation_transformer_takes_one_operation_both_ways():
+    """For Great Britain, EPSG:27700 -> EPSG:4326 is an OSGB36 to WGS 84 operation, never the ballpark; the
+    transformer is lon/lat ordered and its inverse is that operation's inverse (a point comes back).
+    """
+    from databricks.labs.gbx.core.crs import get_operation_transformer
+
+    t = get_operation_transformer(27700, 4326, (-8.0, 50.0, 2.0, 60.0))
+    assert "OSGB36 to WGS 84" in t.description and "allpark" not in t.description
+    lon, lat = t.transform(530000.0, 180000.0)
+    assert -0.2 < lon < -0.05 and 51.4 < lat < 51.6
+    e, n = t.transform(lon, lat, direction="INVERSE")
+    assert abs(e - 530000.0) < 1e-3 and abs(n - 180000.0) < 1e-3

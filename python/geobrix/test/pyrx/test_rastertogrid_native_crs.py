@@ -8,12 +8,15 @@ library's kernel, its candidate cells and its edge walk.
 """
 
 import contextlib
+import math
 
 import h3
 import numpy as np
 import pytest
 import quadbin
 import shapely
+from pyproj import CRS as PyprojCRS
+from pyproj import Transformer
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine, from_origin
 from shapely import STRtree
@@ -218,7 +221,7 @@ def _grid_cells(ds, src_crs, grid, res):
                     ]
 
 
-def _native_cells(ds, src_crs, grid, res, unwrap=None, forward=None):
+def _native_cells(ds, src_crs, grid, res, unwrap=None, forward=None, move=None):
     """``{cell id: the cell's polygon in the raster CRS}``: each grid-CRS edge walked with 64 points (or 16 per pixel
     side of the edge's moved length, up to 2048: a long edge near a pole bends far), then moved. ``unwrap`` (moved
     x -> x) makes the raster CRS continuous past its seam, for a cell across it.
@@ -226,9 +229,10 @@ def _native_cells(ds, src_crs, grid, res, unwrap=None, forward=None):
     # the inverse of the raster -> grid operation, as the library moves cells (PROJ may pick another one for the
     # grid -> raster direction)
     forward = forward or get_transformer(src_crs, 27700 if grid == "bng" else 4326)
+    if move is None:
 
-    def move(x, y):
-        return forward.transform(x, y, direction="INVERSE")
+        def move(x, y):
+            return forward.transform(x, y, direction="INVERSE")
 
     def to_native(x, y):
         x, y = move(x, y)
@@ -253,7 +257,7 @@ def _native_cells(ds, src_crs, grid, res, unwrap=None, forward=None):
     return out
 
 
-def _native_reference(b, src_crs, grid, res, unwrap=None, forward=None):
+def _native_reference(b, src_crs, grid, res, unwrap=None, forward=None, move=None):
     """``{cell id: (count, sum, m2, min, max, smallest pair weight, partial pairs)}``: the valid pixels shared over the
     cells by exact overlap area in the raster's CRS (shapely), weight = overlap / pixel area; a partial pair is one
     with a weight below 1 (a pixel on the cell's edge)."""
@@ -261,7 +265,7 @@ def _native_reference(b, src_crs, grid, res, unwrap=None, forward=None):
         band = ds.read(1).astype("float64").ravel()
         mask = band_valid_mask(ds, 1).ravel()
         quads, _, _ = _pixel_quads(ds)
-        cells = _native_cells(ds, src_crs, grid, res, unwrap, forward)
+        cells = _native_cells(ds, src_crs, grid, res, unwrap, forward, move)
     quads, vals = quads[mask], band[mask]
     px_area = shapely.area(quads[0])
     tree = STRtree(quads)
@@ -826,3 +830,124 @@ def test_points_that_do_not_transform_take_the_warp():
     assert {c: r["count"] for c, r in lib.items()} == {
         c: n for c, (n, _) in ref.items()
     }
+
+
+def _bng_edge_raster(e0, n0):
+    """A 40 x 40 EPSG:4326 raster over the 9.4 km EPSG:27700 square with lower-left corner (e0, n0)."""
+    t = get_transformer(27700, 4326)
+    lon0, lat0 = t.transform(e0, n0 + 9400.0)
+    lon1, lat1 = t.transform(e0 + 9400.0, n0)
+    return _tif(
+        np.ones((40, 40)),
+        "EPSG:4326",
+        from_origin(lon0, lat0, (lon1 - lon0) / 40, (lat0 - lat1) / 40),
+    )
+
+
+@pytest.mark.parametrize("res", [1, 2, 3])
+@pytest.mark.parametrize(
+    "e0,n0",
+    [(700300.0, 300000.0), (400000.0, 1300300.0)],
+    ids=["east-of-E700000", "north-of-N1300000"],
+)
+def test_bng_keeps_its_last_column_and_row(e0, n0, res):
+    # cells with origin easting 700000 or northing 1300000 (e.g. JH0000) are BNG's last valid column and row
+    b = _bng_edge_raster(e0, n0)
+    ref = _native_reference(b, "EPSG:4326", "bng", res)
+    lib = _partial(b, "bng", res)
+    assert {c for c, r in ref.items() if r[0] > _SLIVER} <= set(lib)
+    for cid, r in ref.items():
+        if r[0] > _SLIVER:
+            assert lib[cid]["count"] == pytest.approx(
+                r[0], abs=_W_TOL * max(r[6], 1)
+            ), cid
+    tol = sum(_W_TOL * max(r[6], 1) for r in ref.values())
+    assert sum(c["count"] for c in lib.values()) == pytest.approx(
+        sum(r[0] for r in ref.values()), abs=tol
+    )
+
+
+# seam CRSs on other datums than WGS 84: the seam is a meridian of the raster CRS's own lon/lat
+_ED50_MERC180 = (
+    "+proj=merc +lon_0=180 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs"
+)
+_SPHERE_EQC180 = "+proj=eqc +lon_0=180 +R=6371007 +units=m +no_defs"
+_ED50_MERC0 = (
+    "+proj=merc +lon_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs"
+)
+_DATUM_SEAMS = {
+    # label: (CRS, half the world's width in x, the seam's lon in the CRS's own lon/lat, top lat, n, pixel, grid)
+    "ed50-merc180-bng": (
+        _ED50_MERC180,
+        math.pi * 6378388.0,
+        0.0,
+        52.0,
+        20,
+        2000.0,
+        "bng",
+    ),
+    "sphere-eqc180-bng": (
+        _SPHERE_EQC180,
+        math.pi * 6371007.0,
+        0.0,
+        53.0,
+        30,
+        5000.0,
+        "bng",
+    ),
+    "ed50-merc0-h3": (_ED50_MERC0, math.pi * 6378388.0, 180.0, 60.0, 20, 5000.0, "h3"),
+}
+
+
+def _datum_seam_raster(label):
+    crs, half, lon_e, lat_top, n, px, _ = _DATUM_SEAMS[label]
+    to_crs = Transformer.from_crs(
+        PyprojCRS(crs).geodetic_crs, PyprojCRS(crs), always_xy=True
+    )
+    y = to_crs.transform(lon_e - 0.5, lat_top)[1]
+    return _tif(_ramp(n, n), crs, from_origin(half - n * px, y, px, px))
+
+
+@pytest.mark.parametrize(
+    "label,res",
+    [
+        ("ed50-merc180-bng", 2),
+        ("ed50-merc180-bng", 3),
+        ("sphere-eqc180-bng", 1),
+        ("sphere-eqc180-bng", 2),
+        ("ed50-merc0-h3", 2),
+        ("ed50-merc0-h3", 4),
+    ],
+)
+def test_a_seam_on_another_datum_is_cut_on_its_own_meridian(label, res):
+    # the raster's east edge is on its CRS's seam; cells across it are cut there (traced in the CRS's own lon/lat).
+    # The reference moves each cell continuously past the seam (a moved x below 0 is one turn east) through the
+    # library's own operation chain (the cell geometry, not the datum choice, is under test)
+    crs, half, _, _, _, _, grid = _DATUM_SEAMS[label]
+    b = _datum_seam_raster(label)
+    with _open(b) as ds:
+        to_native = gridagg._Frame(ds, ds.crs, grid).to_native
+
+    def unwrap(x):
+        return np.where(x < 0.0, x + 2.0 * half, x)
+
+    ref = _native_reference(b, crs, grid, res, unwrap, move=to_native)
+    lib = _partial(b, grid, res)
+    assert {c for c, r in ref.items() if r[0] > _SLIVER} <= set(lib)
+    for cid, r in ref.items():
+        if r[0] > _SLIVER:
+            assert lib[cid]["count"] == pytest.approx(
+                r[0], abs=_W_TOL * max(r[6], 1)
+            ), cid
+    with _open(b) as ds:
+        data = ds.read(1)[band_valid_mask(ds, 1)].astype("float64")
+    assert sum(c["count"] for c in lib.values()) == pytest.approx(data.size, rel=1e-5)
+
+
+def test_millimetre_round_trip_noise_does_not_pin_an_operation():
+    # a 1 m Krovak (EPSG:5514) raster: its default transformer misses by ~6 mm there and back, which is round-off
+    # of a Helmert shift, not two operations; the frame keeps the default (a pin would move it by ~0.6 m)
+    x, y = get_transformer(4326, 5514).transform(17.325, 49.395)
+    b = _tif(np.ones((10, 10)), "EPSG:5514", from_origin(x, y, 1.0, 1.0))
+    with _open(b) as ds:
+        assert not gridagg._Frame(ds, ds.crs, "h3").pinned

@@ -278,7 +278,8 @@ def _cell_source(cell) -> list:
 
 
 def _force_geobrix_pip(nb_bytes: bytes) -> bytes:
-    """Put a forced geobrix install before every `%pip install ... geobrix @ file://...whl` line of the notebook."""
+    """Put a forced geobrix install before every `%pip install ... geobrix @ file://...whl` (or `@ https://...whl`, the
+    GitHub release wheel) line of the notebook."""
     nb = json.loads(nb_bytes)
     total = 0
     for cell in nb.get("cells", []):
@@ -294,12 +295,23 @@ def _force_geobrix_pip(nb_bytes: bytes) -> bytes:
 
 
 def _notebook_wheel(nb_bytes: bytes) -> Optional[str]:
-    """The wheel the notebook's own `%pip` lines install, or None."""
+    """The wheel (a Volume path) the notebook's own `%pip` lines install, or None. A release URL names none: the guard
+    compares with --wheel then."""
     for cell in json.loads(nb_bytes).get("cells", []):
         if cell.get("cell_type") == "code":
             wheel = _wheel_guard.pip_wheel_of(_cell_source(cell))
             if wheel:
                 return wheel
+    return None
+
+
+def _notebook_release_url(nb_bytes: bytes) -> Optional[str]:
+    """The GitHub release wheel URL the notebook's own `%pip` lines install, or None."""
+    for cell in json.loads(nb_bytes).get("cells", []):
+        if cell.get("cell_type") == "code":
+            url = _wheel_guard.pip_url_of(_cell_source(cell))
+            if url:
+                return url
     return None
 
 
@@ -336,7 +348,7 @@ def _warn_cluster_wheel_libraries(w, cluster_id: str, wheel: str) -> None:
               "and the wheel guard fails the run if a worker still imports the library", flush=True)
 
 
-# --pip-wheel: the wheel the `%pip install ... @ file://<...>.whl` lines of an uploaded copy install instead of theirs
+# --pip-wheel: the wheel the geobrix `%pip install ... @ file://<...>.whl` (or `@ https://<release>.whl`) lines of an uploaded copy install instead of theirs
 PIP_WHEEL: Optional[str] = None
 # --keep-notebooks: the imports are not recorded, so gbx:workspace:sweep never removes them.
 KEEP_NOTEBOOKS = False
@@ -357,13 +369,14 @@ def _release_import(w, ws_path: str, ok: bool) -> None:
     """At the end of a run: keep the notebook for the window (60 min, 24 h after a failure); the sweep removes it after."""
     if not KEEP_NOTEBOOKS:
         _workspace_sweep.release(w, [ws_path], scope="notebooks", succeeded=ok, out=lambda m: print(f"    {m}", flush=True))
-_PIP_FILE_WHEEL = re.compile(r"@\s*file://(/Volumes/[^\"'\s]+\.whl)")
+_PIP_FILE_WHEEL = re.compile(r"@\s*(?:file://(/Volumes/[^\"'\s]+\.whl)|(https?://[^\"'\s]+\.whl))")
 
 
 def _repoint_pip_wheel(nb_bytes: bytes, wheel: str) -> bytes:
-    """Point every `%pip install ... @ file:///Volumes/....whl` line of the notebook at `wheel` (a `/Volumes` path), so
-    a probe installs the wheel of an isolated staging folder. Only `%pip` lines change; the committed notebook is not
-    touched."""
+    """Point every `%pip install ... @ file:///Volumes/....whl` line of the notebook, and every geobrix
+    `%pip install ... @ https://....whl` line (the GitHub release wheel), at `wheel` (a `/Volumes` path), so a run
+    installs the build under test or the wheel of an isolated staging folder. Only `%pip` lines change; the committed
+    notebook is not touched."""
     nb = json.loads(nb_bytes)
     changed = 0
     for cell in nb.get("cells", []):
@@ -374,8 +387,10 @@ def _repoint_pip_wheel(nb_bytes: bytes, wheel: str) -> bytes:
         out = []
         for line in lines:
             if line.lstrip().startswith("%pip") and _PIP_FILE_WHEEL.search(line):
-                line = _PIP_FILE_WHEEL.sub(f"@ file://{wheel}", line)
-                changed += 1
+                gbx = "geobrix" in line.split("@")[0]  # another package's wheel URL stays as it is
+                new = _PIP_FILE_WHEEL.sub(lambda m: f"@ file://{wheel}" if m.group(1) or gbx else m.group(0), line)
+                changed += new != line
+                line = new
             out.append(line)
         cell["source"] = out
     if changed:
@@ -569,6 +584,10 @@ def _import_notebook(
         nb_bytes = _strip_pip_cells(nb_bytes)
     elif PIP_WHEEL:
         nb_bytes = _repoint_pip_wheel(nb_bytes, PIP_WHEEL)
+    elif guard and WHEEL_GUARD["on"] and _notebook_release_url(nb_bytes):
+        print("    NOTE: the notebook installs the GitHub release wheel, so this run tests the release, not the build "
+              "under test; pass --pip-wheel <staged wheel> to install that build instead (the wheel guard compares "
+              "with --wheel)", flush=True)
     guard_wheel = None
     if guard and WHEEL_GUARD["on"]:
         if not strip_pip:  # a classic cluster keeps the %pip cells: put the staged wheel in over any same-version geobrix
@@ -1306,7 +1325,8 @@ def main() -> int:
         metavar="VOLPATH",
         default=None,
         help=(
-            "Classic modes (%%pip kept): point every `%%pip install ... @ file:///Volumes/....whl` line of the "
+            "Classic modes (%%pip kept): point every geobrix `%%pip install ... @ file:///Volumes/....whl` or "
+            "`@ https://....whl` (GitHub release) line of the "
             "uploaded copy at this /Volumes wheel, for example the env6 wheel of an isolated staging folder. "
             "Without --wheel it is also the wheel of the environment and the cluster library."
         ),

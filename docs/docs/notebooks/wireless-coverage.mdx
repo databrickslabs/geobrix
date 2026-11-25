@@ -16,16 +16,6 @@ line-of-sight viewsheds score each candidate site. It comes in two flavors. One 
 pipeline** that runs the whole flow as a scheduled job. The other is an **interactive notebook
 series** that walks through each step and the GeoBrix functions behind it.
 
-:::note Minimum GeoBrix version
-- **Notebook series: GeoBrix 0.5.2 or newer (minimum)** — it depends on capabilities introduced in
-  0.5.2: the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
-  `rst_isoband`), and `h3_viewshed_towers`. On Serverless it installs `geobrix[vizx]` (the env6 wheel;
-  the env5 wheel on environment 5).
-- **Lakeflow SDP pipeline: GeoBrix 0.6.0 or newer** — it reads its LiDAR files with
-  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the env wheel for its Lakeflow
-  runtime channel (see the Lakeflow tab).
-:::
-
 ## Executed output — full San Francisco
 
 These screenshots come from the executed [Notebook Series](?flavor=notebooks), run end to end over the whole San Francisco AOI (`DEMO=False`). The committed notebooks ship the smaller Golden Gate Park demo (`DEMO=True`).
@@ -47,48 +37,18 @@ Finally, the Golden Gate Park demo makes the ranked sites legible. Part 4 scores
 <Tabs groupId="wireless-coverage-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP" default>
 
-**Requires GeoBrix 0.6.0 or newer.**
-
 A Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task. A [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) packages it, and it runs entirely on **Serverless** compute with the GeoBrix Python API.
 
 This is the production counterpart to the notebook series (see the other tab). It uses the same San Francisco AOI and USGS 3DEP LiDAR sources. It runs as a scheduled medallion pipeline instead of one-off notebook outputs. A `land` downloader task stages the data. The pipeline then cascades bronze → silver → gold through declared table-to-table dependencies. A `siting` task runs the H3-native tower analysis. A `validate` notebook confirms all outputs.
 
-:::warning `wc_lidar_pts` is a streaming table — upgrading needs a one-time rebuild
-**Each update reads only the new tiles.** `wc_lidar_pts` is a streaming table over the `laz_inventory` stream. [`read_paths`](../ingestion/read-paths) reads only the `.laz` tiles inventoried since the last update. It does not re-read every tile (about 817 M points for full San Francisco) on each update. Each row keeps the settings of the update that read it.
-
-**Upgrading an existing deployment.** In earlier versions of this example `wc_lidar_pts` was a materialized view. A pipeline table cannot change type in place, so the first update after `databricks bundle deploy` fails with:
-
-```text
-[CANNOT_CHANGE_DATASET_TYPE] Cannot change the dataset type of a pipeline table from MATERIALIZED_VIEW to STREAMING_TABLE for `geospatial_docs`.`wireless_coverage_lf`.`wc_lidar_pts`.
-To change the dataset type, please drop the existing dataset first.
-```
-
-A full refresh fails with the same error. The failed update still resets the tables it names. A full refresh that names `laz_inventory` empties the inventory. Drop the old table once, in your catalog and schema, then run the pipeline. The update rebuilds `wc_lidar_pts` from every inventoried tile:
-
-```sql
-DROP MATERIALIZED VIEW geospatial_docs.wireless_coverage_lf.wc_lidar_pts;
-```
-
-```bash
-# rebuild the points only
-databricks bundle run wireless_coverage_lf_pipeline --refresh laz_inventory,wc_lidar_pts
-# or the whole run: points, surfaces, grids, siting and validation
-databricks bundle run wireless_coverage_lf_job
-```
-
-**Changes that need a full refresh.** A setting `wc_lidar_pts` applies while it reads a tile holds only for the tiles read after the change:
-
-- `full_aoi` (the AOI clip and the tile grid), `wireless_coverage.tile_m`, `wireless_coverage.srid`, or a GeoBrix upgrade that changes the LiDAR reader: run `databricks bundle run wireless_coverage_lf_pipeline --full-refresh wc_lidar_pts`.
-- For `laz_dir` (or `volume`, which sets the default LAZ folder), run `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. Run the same command for a `.laz` file deleted from the Volume (its points stay). Run it also for a tile that `on_error="skip"` skipped or that was replaced at the same path (later updates read neither). Always reset `laz_inventory` together with `wc_lidar_pts`.
-- The other settings (`simplify`, `water_mask_dir`, `wireless_coverage.pixel_m`, `wireless_coverage.tin_max_pts`, `h3_res` and the siting keys) are used by the materialized views and the siting task, which recompute on the next run: no reset.
-:::
+`wc_lidar_pts` is a streaming table, so each update reads only the `.laz` tiles inventoried since the last one. Some setting changes need a reset, listed in the [bundle README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow/README.md#streaming-wc_lidar_pts-and-resets).
 
 :::tip View on GitHub
 **[examples/notebooks/wireless-coverage/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow)** — the bundle, pipeline transformations, siting task, validation notebook, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow/README.md) for deploy/run steps, prerequisites, and configuration notes.
 :::
 
 :::info Runs on Serverless
-As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline and its `land` and `siting` tasks use `geobrix[vizx,stac]` from the env6 wheel, with the Overture CLI as a separate entry. Each takes it as a single pip dependency entry. The code uses the `rasterx` and `gridx` Python API with no JAR, on Serverless throughout. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Check the [Lakeflow runtime channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy. The bundle **defaults to Serverless**. For heavier runs (notably full San Francisco) switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Surfaces & Levels](../api/execution-tiers).
+Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline and its `land` and `siting` tasks use `geobrix[vizx,stac]` from the env6 wheel, with the Overture CLI as a separate entry. Each takes it as a single pip dependency entry. The code uses the `rasterx` and `gridx` Python API with no JAR, on Serverless throughout. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Check the [Lakeflow runtime channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy. The bundle **defaults to Serverless**. For heavier runs (notably full San Francisco) switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Surfaces & Levels](../api/execution-tiers).
 :::
 
 ## How it works: from staged LiDAR to ranked tower sites
@@ -120,9 +80,7 @@ The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in 
 
 Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles. These tiles roll up into the res-10 H3 gold grids:
 
-![A full San Francisco wireless_coverage_lf_pipeline run. wc_lidar_pts (817 M records) feeds wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands. The gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids follow. Each dataset shows its type, duration, output record count, and expectations. This run is from an earlier version of the example, where wc_lidar_pts was a materialized view.](../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
-
-This run is from an earlier version of the example. There, `wc_lidar_pts` was a materialized view that re-read every tile on each update (shown as *Full recompute*). It is now a streaming table: after the first update, an update reads only the newly inventoried tiles.
+![A full San Francisco wireless_coverage_lf_pipeline run. wc_lidar_pts (817 M records) feeds wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands. The gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids follow. Each dataset shows its type, duration, output record count, and expectations.](../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
 
 ## Table catalog
 
@@ -176,7 +134,7 @@ The bundle validates and deploys with the committed defaults in `databricks.yml`
 
 - **Schedule**: the job ships paused (`pause_status: PAUSED`, daily at `0 0 7 * * ?` America/Chicago) — unpause it in the workspace once you've confirmed a manual run.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file. This reuses those files and skips the ~4.9 GB download (about 24,000 LAZ tiles for the full city). See `databricks.override.yml.example` for the exact paths.
-- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
+- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives. The notebooks install the wheel from the v0.6.0 release; the bundle installs it from a Volume. Stage it with the steps on the [installation page](https://databrickslabs.github.io/geobrix/docs/installation).
 
 ## Configuration
 

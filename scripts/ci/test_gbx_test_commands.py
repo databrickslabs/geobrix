@@ -2574,6 +2574,22 @@ def test_pip_wheel_repoints_only_the_pip_file_lines(monkeypatch):
     assert out["cells"][2]["source"] == nb["cells"][2]["source"]
 
 
+def test_pip_wheel_repoints_a_geobrix_release_url_line_and_no_other_url(monkeypatch):
+    import json as _json
+
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    url = "https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"
+    nb = {"cells": [
+        {"cell_type": "code", "source": ["# the env6 wheel from the release\n", f'%pip install --quiet "geobrix[vizx] @ {url}"\n',
+                                         '# %pip install --quiet "geobrix[vizx] @ file:///Volumes/<c>/<s>/<v>/g.whl"\n']},
+        {"cell_type": "code", "source": ['%pip install "other @ https://example.com/other-1.0-py3-none-any.whl"\n']},
+    ]}  # fmt: skip
+    out = _json.loads(runner._repoint_pip_wheel(_json.dumps(nb).encode(), "/Volumes/c/s/iso/g+env6.whl"))
+    assert out["cells"][0]["source"][1] == '%pip install --quiet "geobrix[vizx] @ file:///Volumes/c/s/iso/g+env6.whl"\n'
+    assert out["cells"][0]["source"][2] == nb["cells"][0]["source"][2]  # a comment is not a pip line
+    assert out["cells"][1]["source"] == nb["cells"][1]["source"]
+
+
 def test_a_dcs_image_cluster_starts_from_the_image_with_volumes_on(monkeypatch):
     pytest.importorskip("databricks.sdk.service.compute")
     runner = _launcher("run_notebooks_serverless", monkeypatch)

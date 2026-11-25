@@ -5,11 +5,8 @@ wireless-coverage analysis directly from a USGS 3DEP **LiDAR point cloud** — d
 analytics later. The surfaces produced (CHM, DSM, bare-earth DTM) are the inputs later parts
 consume for antenna siting and line-of-sight analysis.
 
-> **Requires GeoBrix 0.5.2 or newer (minimum).** The series depends on capabilities introduced in
-> 0.5.2 — the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
-> `rst_isoband`), and `h3_viewshed_towers`. The notebooks install `geobrix[vizx]` (the env6 wheel) on
-> Serverless environment 6 (the env5 wheel on environment 5). The [Lakeflow pipeline](lakeflow/README.md)
-> needs 0.6.0 or newer.
+> The notebooks install `geobrix[vizx]` (the env6 wheel) on Serverless environment 6, from the v0.6.0 release.
+> The [Lakeflow pipeline](lakeflow/README.md) is the scheduled version of this flow.
 
 ![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
 

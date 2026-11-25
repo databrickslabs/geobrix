@@ -48,10 +48,12 @@ pycolmap==4.2.1    (a separate step; pycolmap-cuda12 for the GPU pass)
 
 The env5 wheel carries `rasterio` and `pmtiles`; `pycolmap` installs after it.
 
-The wheel is fetched from:
+The wheel comes from the v0.6.0 GitHub release:
 ```
-/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl
+https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env5-py3-none-any.whl
 ```
+
+If the cluster cannot reach github.com, stage the wheel on a Volume and install it from there. For other installs, see [Installation](https://databrickslabs.github.io/geobrix/docs/installation).
 
 `01b_sfm_orthomosaic_gpu` installs the env6 wheel (with `pycolmap-cuda12`) instead, because it runs on the GPU runtime.
 

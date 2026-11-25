@@ -125,7 +125,7 @@ The notebook writes these tables to `geospatial_catalog.raster_genie`:
 ## Prerequisites
 
 - **Serverless environment 6, or Databricks Runtime 19** (Python 3.12). The series needs no JAR.
-- **GeoBrix** (version 0.6.0). `config_nb` installs the env6 wheel from the Hub Volume. Change the path in `config_nb` if your staged wheel lives elsewhere.
+- **GeoBrix** (version 0.6.0). `config_nb` installs the env6 wheel from the v0.6.0 GitHub release. For other installs, see [Installation](https://databrickslabs.github.io/geobrix/docs/installation).
 - **The GeoBrix Unity Catalog functions**, installed in your catalog, if you want to query `rasters` from a SQL warehouse or Genie. The notebook itself calls the session functions. See [Unity Catalog functions](../api/uc-functions) and the [Unity Catalog SQL examples](../examples/uc-functions).
 - **Unity Catalog permissions.** `config_nb` creates the schema and a Volume named `data` if they are missing. You need `CREATE SCHEMA` and `CREATE VOLUME` on the catalog.
 - **The whole folder.** Notebook 01 imports `stack_scene` from `lakeflow/land/scenes.py`. Open the series from a Git folder, or copy `lakeflow/` next to the notebooks.

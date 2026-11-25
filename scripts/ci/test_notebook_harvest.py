@@ -166,6 +166,18 @@ def test_a_classic_runs_forced_install_and_repointed_wheel_still_match_the_insta
     assert texts[0] == "Successfully installed geobrix\n" and texts[-1].startswith("GeoBrix 0.6.0+env6 installed")
 
 
+def test_a_release_url_install_cell_matches_the_forced_and_repointed_lines_of_a_classic_run():
+    url = "https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"
+    local = f'# GeoBrix: the env6 wheel from the release.\n%pip install --quiet "geobrix[vizx] @ {url}"\n'
+    ran = ("# GeoBrix: the env6 wheel from the release.\n" + _wheel_guard.force_line(WHEEL, quiet=True) + "\n"
+           + f'%pip install --quiet "geobrix[vizx] @ file://{WHEEL}"\n')
+    nb = {"cells": [_code(local, STALE)]}
+    model = {"commands": [_cmd(1, ran, {"type": "ansi", "data": "Successfully installed geobrix\n"})]}
+    hno.apply_outputs(nb, model, provenance=PROV, run_context={"compute": "cluster", "label": "Databricks Runtime 19.0"})
+    texts = ["".join(o["text"]) for o in nb["cells"][0]["outputs"]]
+    assert texts[0] == "Successfully installed geobrix\n" and texts[-1].startswith("GeoBrix 0.6.0+env6 installed")
+
+
 def test_a_serverless_install_cell_gets_the_provenance_line_and_other_pip_cells_are_cleared():
     nb = {"cells": [
         _code('%pip install "geobrix[stac] @ file:///Volumes/x/geobrix-0.6.0+env6-py3-none-any.whl"', STALE),

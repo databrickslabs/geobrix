@@ -58,8 +58,8 @@ run and reference timings from Databricks Runtime 19 and Serverless. It needs on
 
 - **Serverless environment 6, or Databricks Runtime 19** (Python 3.12). Zarr stores need one of
   the two.
-- **GeoBrix 0.6.0.** Point the `%pip install` cell at your staged
-  `geobrix-0.6.0+env6-py3-none-any.whl`, with the extras `zarr` and `vizx`.
+- **GeoBrix 0.6.0.** The `%pip install` cell installs the env6 wheel
+  from the v0.6.0 GitHub release, with the extras `zarr` and `vizx` (other installs: [Installation](https://databrickslabs.github.io/geobrix/docs/installation)).
 - **A schema and a Volume you can write to.** The notebook creates two Unity Catalog tables in
   `CATALOG.SCHEMA` (the store's manifest table and the features table) and writes the files of
   its writes to a folder under `WORK_DIR`. Each run gets its own `RUN_ID`, so runs never collide.

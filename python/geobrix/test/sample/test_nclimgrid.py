@@ -1,5 +1,10 @@
 """Offline tests for NclimgridDownloader (normals and monthly)."""
 
+import contextlib
+import os
+import shutil
+import sys
+
 import pytest
 
 pyspark = pytest.importorskip("pyspark")
@@ -83,15 +88,13 @@ IOWA_POINTS = [
 
 @pytest.fixture(scope="module")
 def real_normals(spark, tmp_path_factory):
-    rows = (
-        NclimgridDownloader()
-        .normals(str(tmp_path_factory.mktemp("normals")), spark=spark)
-        .collect()
-    )
+    folder = tmp_path_factory.mktemp("normals")
+    rows = NclimgridDownloader().normals(str(folder), spark=spark).collect()
     assert (
         rows[0]["is_out_file_valid"] and rows[0]["out_file_sz"] > 100_000_000
     )  # 280,673,972 bytes at the time of writing
-    return rows[0]["out_file_path"]
+    yield rows[0]["out_file_path"]
+    shutil.rmtree(folder, ignore_errors=True)  # not left in pytest's basetemp
 
 
 def _nearest(values, target):
@@ -100,26 +103,59 @@ def _nearest(values, target):
     return int(np.abs(np.asarray(values, dtype="f8") - target).argmin())
 
 
+@contextlib.contextmanager
 def _open_monthly(tmp_path_factory, spark):
     """nClimGrid monthly, opened by HTTP byte ranges (netCDF-C ``#mode=bytes``: only the header, the coordinates and
     the chunks read travel; no OPeNDAP server). A netCDF-C without byte-range support raises OSError; the whole
-    1.8 GB file is then downloaded once (several minutes), which is why this check is integration-marked.
+    1.8 GB file is then downloaded once (several minutes), which is why this check is integration-marked. That
+    download is removed when the block ends, so it does not stay in pytest's basetemp.
     """
     import netCDF4
 
     try:
-        return netCDF4.Dataset(N.MONTHLY_URL + "#mode=bytes")
+        ds = netCDF4.Dataset(N.MONTHLY_URL + "#mode=bytes")
+        folder = None
     except OSError as exc:
         print(
             f"... byte-range open refused ({exc}); downloading the whole nClimGrid monthly file (1.8 GB)"
         )
-        rows = (
-            NclimgridDownloader()
-            .monthly(str(tmp_path_factory.mktemp("monthly")), spark=spark)
-            .collect()
-        )
+        folder = tmp_path_factory.mktemp("monthly")
+        rows = NclimgridDownloader().monthly(str(folder), spark=spark).collect()
         assert rows[0]["is_out_file_valid"]
-        return netCDF4.Dataset(rows[0]["out_file_path"])
+        ds = netCDF4.Dataset(rows[0]["out_file_path"])
+    try:
+        yield ds
+    finally:
+        ds.close()
+        if folder is not None:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+def test_the_whole_file_fallback_leaves_nothing_in_the_temp_folder(
+    spark, tmp_path, tmp_path_factory, monkeypatch
+):
+    """Without byte-range support the monthly file is downloaded; it is removed when the check is done."""
+    import netCDF4
+
+    real = netCDF4.Dataset
+
+    def no_ranges(path, *a, **kw):
+        if str(path).endswith("#mode=bytes"):
+            raise OSError("byte ranges refused")
+        return real(path, *a, **kw)
+
+    downloader = NclimgridDownloader  # the real class, before the name is replaced
+    monthly = write_nc(str(tmp_path / "m.nc"), var=N.MONTHLY_VARIABLE, days=12)
+    monkeypatch.setattr(netCDF4, "Dataset", no_ranges)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "NclimgridDownloader",
+        lambda: downloader(_fetch=Fetch(monthly)),
+    )
+    with _open_monthly(tmp_path_factory, spark) as ds:
+        folder = os.path.dirname(ds.filepath())
+        assert os.path.exists(ds.filepath())
+    assert not os.path.exists(folder)
 
 
 @pytest.mark.integration

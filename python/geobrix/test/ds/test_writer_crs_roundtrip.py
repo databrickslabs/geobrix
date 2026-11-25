@@ -14,7 +14,7 @@ import pytest
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
-# ── 1. _crs_to_srid_proj (vector.py lines 182-198) ───────────────────────────
+# ── 1. _crs_to_srid_proj (ds/vector.py) ───────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -46,7 +46,7 @@ def test_crs_to_srid_proj_production(src, expected_srid):
 # test_vector_gdb_pyogrio.py::test_crs_is_written[esri-54008].
 
 
-# ── 3. _build_mosaic_vrt SRS element (cog_writer.py line 320) ────────────────
+# ── 3. _build_mosaic_vrt SRS element (ds/cog_writer.py) ───────────────────────
 
 
 @pytest.mark.parametrize(
@@ -88,7 +88,7 @@ def test_build_mosaic_vrt_srs_preserves_authority(src, expected, tmp_path):
     assert srs_text == expected, f"SRS element for {src}: {srs_text!r}"
 
 
-# ── 4. _write_crs_var (_write_netcdf.py lines 67-71) ─────────────────────────
+# ── 4. _write_crs_var (ds/_write_netcdf.py) ──────────────────────
 
 
 def test_write_crs_var_esri_sets_spatial_epsg(tmp_path):
@@ -108,7 +108,7 @@ def test_write_crs_var_esri_sets_spatial_epsg(tmp_path):
     assert epsg == 54008, f"Expected spatial_epsg=54008, got {epsg!r}"
 
 
-# ── 5. _infer_crs_from_parts (_write_lidar.py lines 147-151) ─────────────────
+# ── 5. _infer_crs_from_parts (ds/_write_lidar.py) ───────────────────────
 
 
 def _write_las_esri54008(path: str) -> None:
@@ -149,7 +149,7 @@ def test_infer_crs_from_parts_esri54008(tmp_path):
     assert crs == "ESRI:54008", f"Expected 'ESRI:54008', got {crs!r}"
 
 
-# ── 6. _warp_to_4326_if_needed (gridagg.py line 499) ─────────────────────────
+# ── 6. _warp_to_4326_if_needed (pyrx/core/gridagg.py) ───────────────────────
 
 
 def _make_raster_bytes(crs_str: str, size: int = 4):

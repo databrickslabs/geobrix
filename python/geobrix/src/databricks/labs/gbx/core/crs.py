@@ -298,13 +298,30 @@ def to_pyproj_crs(crs) -> "pyproj.CRS":  # noqa: F821
     Consumers that need pyproj-only properties (``is_geographic``, ``ellipsoid``,
     ``area_of_use``, ``laspy`` header CRS) call this.
     """
+    rio = _as_crs(crs)
+    return _pyproj_crs_of_wkt(rio.to_wkt())
+
+
+def _pyproj_crs_of_wkt(wkt: str):
+    """:func:`to_pyproj_crs` of the CRS whose WKT is ``wkt``, kept per thread (pyproj objects are not shared across
+    threads): the full-confidence authority search takes 70-85 ms for an authority-less CRS (NWS HRAP), once per
+    tile otherwise."""
     import pyproj as _pyproj
 
-    rio = _as_crs(crs)
+    cache = getattr(_thread_local, "pyproj_crs", None)
+    if cache is None:
+        cache = _thread_local.pyproj_crs = OrderedDict()
+    hit = cache.get(wkt)
+    if hit is not None:
+        cache.move_to_end(wkt)
+        return hit
+    rio = CRS.from_wkt(wkt)
     _auth = rio.to_authority(confidence_threshold=100)
-    if _auth:
-        return _pyproj.CRS.from_authority(*_auth)
-    return _pyproj.CRS.from_wkt(rio.to_wkt())
+    out = _pyproj.CRS.from_authority(*_auth) if _auth else _pyproj.CRS.from_wkt(wkt)
+    cache[wkt] = out
+    if len(cache) > _TRANSFORMER_CACHE_SIZE:
+        cache.popitem(last=False)
+    return out
 
 
 def _cf_value(value):

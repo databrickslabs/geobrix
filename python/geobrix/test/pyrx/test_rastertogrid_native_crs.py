@@ -951,3 +951,48 @@ def test_millimetre_round_trip_noise_does_not_pin_an_operation():
     b = _tif(np.ones((10, 10)), "EPSG:5514", from_origin(x, y, 1.0, 1.0))
     with _open(b) as ds:
         assert not gridagg._Frame(ds, ds.crs, "h3").pinned
+
+
+def _world_mercator(crs, half, n=128):
+    return _tif(
+        np.ones((n, n)), crs, from_origin(-half, half, 2 * half / n, 2 * half / n)
+    )
+
+
+@pytest.mark.parametrize("res", [0, 1, 2])
+def test_a_world_mercator_written_as_a_proj_string_grids_like_epsg_3857(
+    res, monkeypatch
+):
+    # a sphere Mercator (+R=6378137: EPSG:3857's formulas) and an ellipsoidal one on +datum=WGS84 keep the grid's
+    # longitude, so their seam is cut exactly on the meridian, pole cells included, as for EPSG:3857
+    def no_warp(*a, **k):
+        raise AssertionError("the warp ran")
+
+    monkeypatch.setattr(gridagg, "_warp_to_4326_if_needed", no_warp)
+    want = _partial(_world_mercator("EPSG:3857", _SEAM_3857), "h3", res)
+    sphere = _partial(
+        _world_mercator("+proj=merc +lon_0=0 +R=6378137 +units=m +no_defs", _SEAM_3857),
+        "h3",
+        res,
+    )
+    assert set(sphere) == set(want)
+    for cid, c in want.items():
+        assert sphere[cid]["count"] == pytest.approx(c["count"], abs=1e-9), cid
+    wgs84 = _partial(
+        _world_mercator(
+            "+proj=merc +lon_0=0 +datum=WGS84 +units=m +no_defs", _SEAM_3857
+        ),
+        "h3",
+        res,
+    )
+    assert sum(c["count"] for c in wgs84.values()) == pytest.approx(128 * 128, rel=1e-9)
+
+
+@pytest.mark.parametrize("res", [0, 1, 2])
+def test_pole_cells_on_another_datum_are_traced_not_refused(res):
+    # a world Mercator on ED50 (+towgs84): its longitude is not the grid's, so the seam is traced, and the cells
+    # around the poles are closed over the pole first, as on WGS 84
+    crs = "+proj=merc +lon_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs"
+    half = math.pi * 6378388.0
+    lib = _partial(_world_mercator(crs, half), "h3", res)
+    assert sum(c["count"] for c in lib.values()) == pytest.approx(128 * 128, rel=1e-5)

@@ -758,8 +758,9 @@ _SEAM_BISECTIONS = 50
 # Degrees of the raster CRS's own longitude kept clear of the seam when a cell is cut on a traced seam
 # (``_traced_pieces``): above the bow of a straight step between two traced points; ~0.1 m.
 _SEAM_GAP_TRACED_DEG = 1e-6
-# Lines across a cell along which its seam is traced.
+# Lines across a cell along which its seam is traced, at first and at most (``_trace_cut``).
 _SEAM_TRACE_LINES = 257
+_SEAM_TRACE_MAX_LINES = 4097
 # Degrees kept clear on each side of the seam meridian where a cell is cut.
 _SEAM_GAP_DEG = 1e-9
 # The latitude that closes a cell around a pole before it is cut, for a CRS in which the pole is not a point.
@@ -1073,15 +1074,13 @@ class _Frame:
 
     def __init__(self, ds, src_crs, grid: str):
         from databricks.labs.gbx.core.crs import (
-            crs_equal,
             get_operation_transformer,
             get_transformer,
-            resolve_crs,
             to_pyproj_crs,
         )
 
         self.ds, self.grid, self.src_crs = ds, grid, src_crs
-        pcrs = to_pyproj_crs(src_crs)
+        self._pcrs = pcrs = to_pyproj_crs(src_crs)
         self.seam = (
             None  # the seam's longitude, found when a cell crosses it (``_jumping``)
         )
@@ -1099,16 +1098,9 @@ class _Frame:
             )
         self.to_grid = forward.transform
         self.to_native = partial(forward.transform, direction="INVERSE")
-        # the raster CRS's own lon/lat (its inverse projection, no datum shift): its seam is a meridian there
-        # (``_traced_pieces``). A raster on WGS 84 gridded to lon/lat cuts on the meridian directly (``_seam_pieces``)
-        self.to_src_lonlat, self.seam_src, self.meridian_cut = None, None, False
-        geo = pcrs.geodetic_crs
-        if geo is not None:
-            geo_crs = resolve_crs(geo.to_wkt())
-            self.to_src_lonlat = get_transformer(src_crs, geo_crs).transform
-            self.meridian_cut = self.geographic and crs_equal(
-                geo_crs, resolve_crs(4326)
-            )
+        # the seam's longitude in the raster CRS's own lon/lat (``_jumping``); that lon/lat and the meridian-cut
+        # choice are built on the first cell across the seam (``to_src_lonlat``, ``meridian_cut``)
+        self.seam_src, self._src_lonlat, self._meridian_cut = None, False, None
         self.fn = f"gbx_rst_{grid}_rastertogrid"  # the function, for a message (``_grid_native`` names it)
         self.px_area = abs(gt[1] * gt[5] - gt[2] * gt[4])
         self.px_side = math.sqrt(self.px_area)
@@ -1119,6 +1111,56 @@ class _Frame:
                 x, y = self.to_native(0.0, 90.0 * sign)
                 if math.isfinite(x) and math.isfinite(y):
                     self.poles[sign] = inv * (x, y)
+
+    @property
+    def to_src_lonlat(self):
+        """The raster CRS's own lon/lat of its points (the inverse projection to its geodetic CRS: no datum shift),
+        where its seam is a meridian (``_traced_pieces``); None for a CRS with no geodetic CRS.
+        """
+        if self._src_lonlat is False:
+            from databricks.labs.gbx.core.crs import get_transformer, resolve_crs
+
+            geo = self._pcrs.geodetic_crs
+            self._src_lonlat = (
+                None
+                if geo is None
+                else get_transformer(self.src_crs, resolve_crs(geo.to_wkt())).transform
+            )
+        return self._src_lonlat
+
+    @property
+    def meridian_cut(self) -> bool:
+        """Whether a lon/lat grid's longitude is the raster CRS's own (sampled at 9 points; a sphere or a WGS 84
+        datum, however the CRS is written): then its seam is a meridian of the grid too, cut exactly
+        (``_seam_pieces``). Else (another datum, or a planar grid) the seam is traced (``_traced_pieces``).
+        """
+        if self._meridian_cut is None:
+            self._meridian_cut = False
+            if self.geographic and self.to_src_lonlat is not None:
+                lon = np.array([-150.0, -30.0, 90.0] * 3)
+                lat = np.repeat([-60.0, 0.0, 60.0], 3)
+                try:
+                    x, y = _move(self.to_native, lon, lat)
+                    back = np.asarray(self.to_src_lonlat(x, y)[0], dtype="float64")
+                except _NeedsWarp:
+                    back = None
+                if back is not None and np.isfinite(back).all():
+                    turn = (back - lon + 180.0) % 360.0 - 180.0
+                    self._meridian_cut = bool((np.abs(turn) < 1e-9).all())
+        return self._meridian_cut
+
+    @property
+    def cap_lat(self) -> float:
+        """The latitude that closes a traced cell around a pole (``_traced_pieces``): halfway from the raster's
+        farthest latitude to the pole, at most ``_POLE_CAP_LAT``. Near the pole a datum shift of metres swings the
+        seam's meridian through degrees of the grid's longitude, past tracing; no pixel lies above the cap.
+        """
+        if getattr(self, "_cap_lat", None) is None:
+            ds = self.ds
+            boxes = self.window_boxes((0, ds.height - 1), (0, ds.width - 1))
+            far = max(max(abs(s), abs(n)) for _, s, _, n in boxes)
+            self._cap_lat = min(_POLE_CAP_LAT, 0.5 * (far + 90.0))
+        return self._cap_lat
 
     @staticmethod
     def _probe(ds):
@@ -1308,7 +1350,10 @@ def _jumping(frame: _Frame, gx, gy, dx, dy, nominated) -> np.ndarray:
         ax[:, None] + np.stack([lo, hi], 1) * bx[:, None],
         ay[:, None] + np.stack([lo, hi], 1) * by[:, None],
     )
-    jump = np.hypot(x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]) > 0.01 * chord
+    # a seam's last step is the CRS's width; on an edge of micrometres float noise passes 1% of the chord
+    jump = np.hypot(x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]) > np.maximum(
+        0.01 * chord, 1e-3 * frame.px_side
+    )
     out[r, e] = jump
     if jump.any() and frame.seam is None:
         k = int(np.flatnonzero(jump)[0])
@@ -1411,34 +1456,126 @@ def _seam_side(frame: _Frame, x, y):
 def _traced_pieces(frame: _Frame, gx, gy):
     """The rings (grid CRS) of one cell across the raster CRS's seam, cut on it where the seam is: a meridian of the
     raster CRS's own lon/lat (``frame.seam_src``), which for a planar grid (BNG) or another datum than WGS 84 is a
-    curve in the grid's CRS. The cut boundaries, ``_SEAM_GAP_TRACED_DEG`` on each side of the seam, are traced by
-    bisection along ``_SEAM_TRACE_LINES`` lines across the cell (``_seam_side``); the pieces keep the cell's own edges.
-    None when the seam cannot be traced across the cell (not crossing every line once, the same way), or the cell is
-    around a pole: the caller refuses it.
+    curve in the grid's CRS. On a lon/lat grid the cell's longitudes are unwrapped, a cell around a pole is closed at
+    ``_POLE_CAP_LAT`` (as ``_seam_pieces`` does), the cell is clipped to ``frame.cap_lat`` (above the raster: nearer
+    the pole the seam cannot be traced), and a part wider than 90 degrees is split into 90-degree strips, so each
+    keeps within half a turn of the seam; a part the seam crosses is cut by ``_trace_cut``. None when the seam cannot
+    be traced: the caller refuses the cell.
     """
     from shapely.geometry import Polygon
+    from shapely.geometry import box as _box
 
     if frame.seam_src is None:
         return None
     x, y = np.asarray(gx, dtype="float64"), np.asarray(gy, dtype="float64")
-    if frame.geographic:
-        step = (np.diff(np.append(x, x[0])) + 180.0) % 360.0 - 180.0
-        if abs(float(step.sum())) > 180.0:
-            return None  # around a pole
-        x = x[0] + np.concatenate([[0.0], np.cumsum(step[:-1])])
-    cell = Polygon(zip(x, y))
+    if not frame.geographic:
+        cell = Polygon(zip(x, y))
+        return _trace_cut(frame, cell if cell.is_valid else cell.buffer(0))
+    step = (np.diff(np.append(x, x[0])) + 180.0) % 360.0 - 180.0
+    x = x[0] + np.concatenate([[0.0], np.cumsum(step[:-1])])
+    pts = list(zip(x, y))
+    winding = float(step.sum())
+    if abs(winding) > 180.0:  # around a pole: close over it
+        cap = math.copysign(_POLE_CAP_LAT, float(np.mean(y)))
+        pts += [(x[0] + winding, y[0]), (x[0] + winding, cap), (x[0], cap)]
+    cell = Polygon(pts)
     if not cell.is_valid:
         cell = cell.buffer(0)
+    area = cell.area
+    clipped = cell.intersection(_box(-1e9, -frame.cap_lat, 1e9, frame.cap_lat))
+    out = []
+    for whole in getattr(
+        clipped, "geoms", [clipped]
+    ):  # vectorscan: ok (the parts of one clip)
+        if whole.geom_type != "Polygon" or whole.area <= 1e-12 * area:
+            continue
+        west, south, east, north = whole.bounds
+        if east - west <= 90.0:
+            cut = _trace_cut(frame, whole)
+            if cut is None:
+                return None
+            out.extend(cut)
+            continue
+        for k in range(
+            math.ceil((east - west) / 90.0)
+        ):  # vectorscan: ok (at most 5 strips)
+            part = whole.intersection(
+                _box(
+                    west + 90.0 * k,
+                    south - 1.0,
+                    min(west + 90.0 * (k + 1), east),
+                    north + 1.0,
+                )
+            )
+            for p in getattr(
+                part, "geoms", [part]
+            ):  # vectorscan: ok (the parts of one strip)
+                if p.geom_type != "Polygon" or p.area <= 1e-12 * area:
+                    continue  # a sliver where a strip's edge meets a vertex
+                xy = np.asarray(p.exterior.coords)[:-1]
+                g = _seam_side(frame, xy[:, 0], xy[:, 1])
+                # across the seam, not its antipode (where g wraps a turn but the CRS runs on): a 90-degree
+                # strip cannot hold both
+                if g.max() - g.min() < 180.0 and g.min() < frame.seam_src < g.max():
+                    cut = _trace_cut(frame, p)
+                    if cut is None:
+                        return None
+                    out.extend(cut)
+                else:
+                    out.append((xy[:, 0], xy[:, 1]))
+    return out
+
+
+def _trace_cut(frame: _Frame, cell):
+    """``_trace_once`` with ``_SEAM_TRACE_LINES`` lines, then 4 times as many (up to ``_SEAM_TRACE_MAX_LINES``) while
+    a piece still reaches across the seam between two lines (near a pole a datum shift bends the seam sharply in the
+    grid's longitude): a piece's vertices and edge midpoints must all keep to one side (``_seam_side``).
+    """
+    n = _SEAM_TRACE_LINES
+    while n <= _SEAM_TRACE_MAX_LINES:  # vectorscan: ok (at most 3 tries)
+        out = _trace_once(frame, cell, n)
+        if out is None:
+            return None
+        if all(
+            _one_side(frame, px, py) for px, py in out
+        ):  # vectorscan: ok (per piece)
+            return out
+        n = 4 * (n - 1) + 1
+    return None
+
+
+def _one_side(frame: _Frame, px, py) -> bool:
+    """Whether a piece's vertices and edge midpoints all keep to one side of the seam."""
+    nxt = np.roll(np.arange(px.size), -1)
+    g = _seam_side(
+        frame,
+        np.concatenate([px, 0.5 * (px + px[nxt])]),
+        np.concatenate([py, 0.5 * (py + py[nxt])]),
+    )
+    return bool((g < frame.seam_src).all() or (g > frame.seam_src).all())
+
+
+def _trace_once(frame: _Frame, cell, lines_n: int):
+    """The pieces (rings) of the polygon ``cell`` (grid CRS) on each side of the raster CRS's seam: the cut
+    boundaries, ``_SEAM_GAP_TRACED_DEG`` on each side of it, are traced by bisection along ``lines_n`` lines across
+    the cell (``_seam_side``), and the pieces keep the cell's own edges. None when the seam does not cross every line
+    once, the same way, or the pieces miss more of the cell than the strip between the boundaries can hold (a seam
+    crossing a line three times would drop a middle piece)."""
+    from shapely.geometry import Polygon
+
     x0, y0, x1, y1 = cell.bounds
     mx, my = 0.5 * (x1 - x0) + 1e-9, 0.01 * (y1 - y0) + 1e-12
-    lines = np.linspace(y0 - my, y1 + my, _SEAM_TRACE_LINES)
+    lo_y, hi_y = y0 - my, y1 + my
+    if frame.geographic:  # no line past a pole cell's cap
+        lo_y, hi_y = max(lo_y, -frame.cap_lat), min(hi_y, frame.cap_lat)
+    lines = np.linspace(lo_y, hi_y, lines_n)
     west, east = np.full(lines.size, x0 - mx), np.full(lines.size, x1 + mx)
     g_w, g_e = _seam_side(frame, west, lines), _seam_side(frame, east, lines)
     rising_lines = g_w < g_e
     if not (rising_lines.all() or not rising_lines.any()):
         return None
     rising = bool(rising_lines.all())
-    out = []
+    out, bounds = [], []
     for target in (
         frame.seam_src - _SEAM_GAP_TRACED_DEG,
         frame.seam_src + _SEAM_GAP_TRACED_DEG,
@@ -1455,6 +1592,7 @@ def _traced_pieces(frame: _Frame, gx, gy):
             below = (_seam_side(frame, mid, lines) < target) == rising
             lo, hi = np.where(below, mid, lo), np.where(below, hi, mid)
         xs = 0.5 * (lo + hi)
+        bounds.append(xs)
         # the side of this boundary away from the seam: west of the west one, east of the east one (in g)
         side_x = west if (target < frame.seam_src) == rising else east
         region = Polygon(list(zip(xs, lines)) + list(zip(side_x[::-1], lines[::-1])))
@@ -1464,9 +1602,13 @@ def _traced_pieces(frame: _Frame, gx, gy):
         for p in getattr(
             part, "geoms", [part]
         ):  # vectorscan: ok (the parts of one cut)
-            if p.geom_type == "Polygon" and p.area > 0.0:
+            if p.geom_type == "Polygon" and p.area > 1e-12 * cell.area:
                 xy = np.asarray(p.exterior.coords)[:-1]
                 out.append((xy[:, 0], xy[:, 1]))
+    kept = sum(Polygon(zip(px, py)).area for px, py in out)
+    strip = float(np.abs(bounds[1] - bounds[0]).max()) * (hi_y - lo_y)
+    if cell.area - kept > 2.0 * strip + 1e-9 * cell.area:
+        return None
     return out
 
 
@@ -1577,7 +1719,7 @@ def _covering_band_h3_native(
 
 def _native_polygons(frame: _Frame, cells, ox: float, oy: float):
     """One shapely geometry per cell in the raster's CRS, relative to ``(ox, oy)`` (so GEOS rounds at the raster's
-    scale, not the coordinates'): a polygon, or a multipolygon of the pieces of a cell across the seam.
+    scale, not the coordinates'): a polygon, or the union of the pieces of a cell cut at the seam.
     """
     import shapely
 
@@ -1590,12 +1732,14 @@ def _native_polygons(frame: _Frame, cells, ox: float, oy: float):
         if owner.size == len(chunk) and (owner == np.arange(len(chunk))).all():
             geoms.append(polys)
             continue
-        order = np.argsort(owner, kind="stable")
         merged = np.full(len(chunk), shapely.Polygon(), dtype=object)
-        uniq = np.unique(owner)
-        merged[uniq] = shapely.multipolygons(
-            polys[order], indices=np.searchsorted(uniq, owner[order])
-        )
+        counts = np.bincount(owner, minlength=len(chunk))
+        single = counts[owner] == 1
+        merged[owner[single]] = polys[single]
+        # a cut cell's pieces, unioned: strips of one side touch (a multipolygon of touching parts is invalid, and
+        # GEOS gives it no overlap); the two sides of the seam stay apart
+        for o in np.flatnonzero(counts > 1):  # vectorscan: ok (per cut cell, a few)
+            merged[o] = shapely.union_all(polys[owner == o])
         geoms.append(merged)
     return np.concatenate(geoms) if geoms else np.empty(0, dtype=object)
 

@@ -140,3 +140,39 @@ def test_degenerate_tiles():
         area = h3fit.pixel_area_m2(ds)
         assert area == pytest.approx(_geodesic_centre_area(ds), rel=1e-9)
         assert h3fit.fit_resolution_of(ds) == h3fit.fit_resolution(area)
+
+
+# The centre pixel across 180: its corners come back from the tile CRS on both sides of the antimeridian
+# (179.99 and -179.99). The geodesic area takes each edge the short way, so the area is the area of the same
+# pixel anywhere else on its parallel; no longitude unwrap is needed (checked here, not assumed).
+@pytest.mark.parametrize(
+    "crs,px,lat",
+    [
+        ("EPSG:4326", 0.02, 10.0),
+        ("EPSG:4326", 0.02, 62.0),
+        ("EPSG:3857", 2000.0, 10.0),
+        ("EPSG:3857", 500.0, 60.0),
+    ],
+    ids=["4326-10N", "4326-62N", "3857-10N", "3857-60N"],
+)
+def test_centre_pixel_across_the_antimeridian_has_the_area_elsewhere_on_its_parallel(
+    crs, px, lat
+):
+    areas = {}
+    for lon in (170.0, 180.0, -180.0, -170.0):
+        with _ds(3, 3, crs, _centred(crs, lon, lat, px, n=3)) as ds:
+            areas[lon] = h3fit.pixel_area_m2(ds)
+            assert areas[lon] == pytest.approx(_geodesic_centre_area(ds), rel=1e-9)
+    assert areas[180.0] == pytest.approx(areas[170.0], rel=1e-9)
+    assert areas[-180.0] == pytest.approx(areas[-170.0], rel=1e-9)
+    with _ds(3, 3, crs, _centred(crs, 180.0, lat, px, n=3)) as ds:
+        assert h3fit.fit_resolution_of(ds) == h3fit.fit_resolution(areas[170.0])
+
+
+def test_a_0_360_raster_across_180_has_the_area_of_one_across_zero():
+    # a longitude past 180 (EPSG:4326 with x in 0-360): the corners stay as they are, the area is the same
+    for lon in (180.0, 0.0):
+        with _ds(3, 3, "EPSG:4326", from_origin(lon - 0.03, 10.03, 0.02, 0.02)) as ds:
+            area = h3fit.pixel_area_m2(ds)
+            assert area == pytest.approx(_geodesic_centre_area(ds), rel=1e-9)
+    assert area == pytest.approx(4850786.0, rel=1e-4)

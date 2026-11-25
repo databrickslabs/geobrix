@@ -33,8 +33,8 @@ These facts have been painfully rediscovered by multiple agents. Follow them; do
     # %pip install --quiet "geobrix[vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.6.0+env6-py3-none-any.whl"
     ```
     Keep each notebook's own env and extras; the URL is a literal (no Python variable in `%pip`); no two-step, because a
-    release asset never changes. The Lakeflow bundles list `geobrix[extras]@${var.gbx_wheel}` (no spaces around `@`),
-    `gbx_wheel` defaulting to the same URL. **On a release, move each example's URL to the new release only after that
+    release asset never changes. The Lakeflow bundles stay on a Volume wheel in the `${var.gbx_wheel}[extras]` form:
+    `databricks bundle validate` rejects `geobrix[extras]@<URL>` as a dependency path (colon in the first segment). **On a release, move each example's URL to the new release only after that
     example ran on it.** A dev run installs the build under test through the runner (below), never by editing the
     notebook: `--pip-wheel <staged wheel>` rewrites a geobrix `%pip` line whose source is a release URL or a Volume path
     in the uploaded copy; on a classic cluster a forced install goes before it; the wheel guard compares with the notebook's

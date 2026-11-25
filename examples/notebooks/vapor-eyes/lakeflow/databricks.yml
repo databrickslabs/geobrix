@@ -48,10 +48,9 @@ variables:
   # channel (DBR 18) set pipeline_channel=CURRENT, gbx_wheel to the +env5 wheel and the job
   # environment_version to "5": the wheel must follow the channel.
   pipeline_channel: {default: "PREVIEW"}
-  # The wheel URL: the v0.6.0 GitHub release. With no access to github.com, stage the wheel on a Volume and
-  # set gbx_wheel to its file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.6.0+env6-py3-none-any.whl path.
-  # Other installs: https://databrickslabs.github.io/geobrix/docs/installation
-  gbx_wheel: {default: "https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"}
+  # A bundle installs the wheel from a Volume: bundle dependency paths cannot hold a URL with extras.
+  # Stage the wheel with the steps on the installation page: https://databrickslabs.github.io/geobrix/docs/installation
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"}
   # SQL warehouse for validation queries + the AI/BI dashboard. No portable default —
   # set it in databricks.override.yml (see databricks.override.yml.example).
   warehouse_id: {default: ""}
@@ -89,10 +88,12 @@ resources:
           # >>> Before you deploy, check the Lakeflow runtime channels at
           # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
           # and switch to the matching GeoBrix wheel if they have moved.
-          # Install the geobrix wheel WITH its extras in ONE pip resolution. Lakeflow runs one
-          # unquoted `%pip install` per dependency entry, so write `geobrix[extras]@<wheel URL>` with no
-          # spaces around `@`, and keep every extra on this one line.
-          - geobrix[stac,vizx]@${var.gbx_wheel}
+          # Install the geobrix wheel WITH its extras in ONE pip resolution (the same
+          # `wheel[extras]` form as the notebook's `%pip install`). Lakeflow runs one
+          # `%pip install` per dependency entry, so enumerating the extras separately
+          # defeats pip's resolver. pip's `wheel[extras]` path form keeps it a single
+          # pass and passes DAB path-normalization (no file:// colon).
+          - ${var.gbx_wheel}[stac,vizx]
       configuration:
         vapor_eyes.catalog: ${var.catalog}
         vapor_eyes.schema: ${var.schema}
@@ -135,7 +136,7 @@ resources:
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - geobrix[stac,vizx]@${var.gbx_wheel}
+              - ${var.gbx_wheel}[stac,vizx]
               # The EMIT download (NASA Earthdata) needs earthaccess, which no env wheel
               # extra carries: separate entries, the same pins as the notebook series.
               - earthaccess>=0.11,<1

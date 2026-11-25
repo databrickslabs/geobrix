@@ -176,7 +176,7 @@ The bundle validates and deploys with the committed defaults in `databricks.yml`
 
 - **Schedule**: the job ships paused (`pause_status: PAUSED`, daily at `0 0 7 * * ?` America/Chicago) — unpause it in the workspace once you've confirmed a manual run.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file. This reuses those files and skips the ~4.9 GB download (about 24,000 LAZ tiles for the full city). See `databricks.override.yml.example` for the exact paths.
-- **GeoBrix wheel**: `gbx_wheel` defaults to the v0.6.0 GitHub release wheel. To use a staged Volume wheel, set it to a `file:///Volumes/...` path (see [Installation](https://databrickslabs.github.io/geobrix/docs/installation)).
+- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives. The notebooks install the wheel from the v0.6.0 release; the bundle installs it from a Volume. Stage it with the steps on the [installation page](https://databrickslabs.github.io/geobrix/docs/installation).
 
 ## Configuration
 
@@ -195,7 +195,7 @@ Bundle variables (set in `databricks.yml`; override per-workspace in `databricks
 | `simplify` | `true` | Apply product `st_simplify` to isobands before H3 covering (default True = fast, no coverage loss, needed for full-SF performance; False = exact isobands, heavy/slow). |
 | `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `laz_inventory` and the streaming table `wc_lidar_pts` keep the files and points of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
-| `gbx_wheel` | `https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl` | URL or `file:///Volumes/...` path of the GeoBrix env wheel. |
+| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
 
 Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys in the pipeline `configuration` block. Key defaults:
 
@@ -214,7 +214,7 @@ Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys i
 ## Prerequisites
 
 - **Unity Catalog**: a catalog and schema (defaults `geospatial_docs.wireless_coverage_lf`) and a Volume named `data` under it. The pipeline creates sub-directories inside the Volume, not the Volume itself.
-- **GeoBrix wheel** at the `gbx_wheel` URL or path. The default is the v0.6.0 GitHub release. See [Surfaces & Levels](../api/execution-tiers).
+- **GeoBrix wheel** staged at the `gbx_wheel` path. See [Surfaces & Levels](../api/execution-tiers).
 - **Network access**: the `land` task fetches USGS 3DEP and Overture Maps data over HTTPS — Serverless has outbound internet by default.
 
 ## Validation notebook

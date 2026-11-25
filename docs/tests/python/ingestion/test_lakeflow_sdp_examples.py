@@ -83,8 +83,8 @@ def _pipeline(bundle_text):
 
 def test_bundle_has_the_shape_of_the_example_bundles():
     """The displayed pipeline resource uses only settings the production example
-    bundles use (plus ``channel``), and lists GeoBrix as a Volume
-    wheel path followed by its extras, one entry (the example bundles list ``geobrix[extras]@<wheel URL>``)."""
+    bundles use (plus ``channel``), and lists GeoBrix the way they do: the Volume
+    wheel path followed by its extras, one entry."""
     shown = _pipeline(ex.BUNDLE_PIPELINE)
     assert shown["serverless"] is True
     assert shown["channel"] in ex.CHANNEL_WHEELS
@@ -94,7 +94,7 @@ def test_bundle_has_the_shape_of_the_example_bundles():
         used |= set(example)
         assert example["libraries"] == shown["libraries"]
         geobrix = [d for d in example["environment"]["dependencies"] if "gbx_wheel" in d]
-        assert len(geobrix) == 1 and re.fullmatch(r"geobrix\[[\w,]+\]@\$\{var\.gbx_wheel\}", geobrix[0]), geobrix
+        assert len(geobrix) == 1 and re.fullmatch(r"\$\{var\.gbx_wheel\}\[[\w,]+\]", geobrix[0]), geobrix
     assert set(shown) <= used | {"channel"}
 
     (dep,) = shown["environment"]["dependencies"]

@@ -23,10 +23,9 @@ variables:
   # CURRENT channel (DBR 18) set pipeline_channel=CURRENT, gbx_wheel to the +env5 wheel and the
   # job environment_version to "5": the wheel must follow the channel.
   pipeline_channel: {default: "PREVIEW"}
-  # The wheel URL: the v0.6.0 GitHub release. With no access to github.com, stage the wheel on a Volume and
-  # set gbx_wheel to its file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.6.0+env6-py3-none-any.whl path.
-  # Other installs: https://databrickslabs.github.io/geobrix/docs/installation
-  gbx_wheel: {default: "https://github.com/databrickslabs/geobrix/releases/download/v0.6.0/geobrix-0.6.0+env6-py3-none-any.whl"}
+  # A bundle installs the wheel from a Volume: bundle dependency paths cannot hold a URL with extras.
+  # Stage the wheel with the steps on the installation page: https://databrickslabs.github.io/geobrix/docs/installation
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"}
 
 resources:
   pipelines:
@@ -53,10 +52,10 @@ resources:
           # >>> Before you deploy, check the Lakeflow runtime channels at
           # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
           # and switch to the matching GeoBrix wheel if they have moved.
-          # Installed WITH its extras in ONE pip resolution: Lakeflow runs one unquoted `%pip install`
-          # per dependency entry, so write `geobrix[extras]@<wheel URL>` with no spaces around `@`,
-          # and keep every extra on this one line.
-          - geobrix[vizx,stac]@${var.gbx_wheel}
+          # Installed WITH its extras in ONE pip resolution: Lakeflow runs one `%pip install`
+          # per dependency entry, so splitting the extras defeats pip's resolver.
+          # The `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
+          - ${var.gbx_wheel}[vizx,stac]
           # No Overture CLI here: the pipeline only reads the water mask the land task staged
           # (OvertureClient.read is a parquet read). The CLI needs click>=8.3, and Lakeflow
           # installs each entry under a constraint that holds the runtime's click 8.2.1, so the
@@ -154,7 +153,7 @@ resources:
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - geobrix[vizx,stac]@${var.gbx_wheel}
+              - ${var.gbx_wheel}[vizx,stac]
               # The Overture CLI (the bbox fast path of the land task's water-mask download)
               # is not an env wheel extra: a separate entry. It raises click and tqdm.
               - overturemaps>=1.0.2,<2

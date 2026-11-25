@@ -542,21 +542,82 @@ def _warped_partial(b, res, assignment):
     return _partial(warped, "h3", res, assignment=assignment)
 
 
-def test_a_cell_across_the_crs_seam_takes_the_warp():
-    # EPSG:3857 wraps at 180E: a cell across it has no outline in the raster's CRS, so covering warps, as before;
-    # centroid needs no outline and stays native
-    seam = 20037508.342789244
-    b = _tif(
+_SEAM_3857 = 20037508.342789244
+# EPSG:3857 rasters whose east edge sits on its seam (180E), at 2 to 156 km pixels, and a zoom-2 world raster
+_SEAM_RASTERS = {
+    f"seam-{int(px / 1000)}km": _tif(
         _ramp(10, 10, holes=False),
         "EPSG:3857",
-        from_origin(seam - 2000.0 * 10 - 100.0, 5.6e6, 2000.0, 2000.0),
+        from_origin(_SEAM_3857 - px * 10, 5.6e6, px, px),
     )
-    assert _partial(b, "h3", 5) == _warped_partial(b, 5, "covering")
-    ref = _centroid_reference(b, "EPSG:3857", "h3", 5)
-    lib = _partial(b, "h3", 5, assignment="centroid")
-    assert {c: r["count"] for c, r in lib.items()} == {
-        c: n for c, (n, _) in ref.items()
-    }
+    for px in (2000.0, 20000.0, 50000.0, 156543.0)
+}
+_SEAM_RASTERS["world-z2"] = _tif(
+    _ramp(256, 256, holes=False),
+    "EPSG:3857",
+    from_origin(-_SEAM_3857, _SEAM_3857, 2 * _SEAM_3857 / 256, 2 * _SEAM_3857 / 256),
+)
+_SEAM_CASES = [
+    (name, grid, res)
+    for name in _SEAM_RASTERS
+    for grid, res in (
+        [("h3", 0), ("h3", 1), ("h3", 2), ("quadbin", 3)]
+        if name == "world-z2"
+        else [("h3", 1), ("h3", 2), ("h3", 3), ("h3", 4), ("quadbin", 4)]
+    )
+]
+
+
+@pytest.mark.parametrize("assignment", ["covering", "centroid"])
+@pytest.mark.parametrize("name,grid,res", _SEAM_CASES)
+def test_cells_across_the_crs_seam_are_cut_there(
+    name, grid, res, assignment, monkeypatch
+):
+    # EPSG:3857 wraps at 180E: a cell across it is cut on that meridian and each piece moved on its own side, so the
+    # raster grids natively at any pixel size (the warp gave no cells, wrong totals or a GEOS error here)
+    def no_warp(*a, **k):
+        raise AssertionError("the warp ran")
+
+    monkeypatch.setattr(gridagg, "_warp_to_4326_if_needed", no_warp)
+    b = _SEAM_RASTERS[name]
+    with _open(b) as ds:
+        data = ds.read(1).astype("float64")
+    lib = _partial(b, grid, res, coverage="complete", assignment=assignment)
+    # every pixel shared out whole, once
+    assert sum(c["count"] for c in lib.values()) == pytest.approx(data.size, rel=1e-6)
+    assert sum(c["sum"] or 0.0 for c in lib.values()) == pytest.approx(
+        data.sum(), rel=1e-6
+    )
+    if assignment == "centroid":
+        ref = _centroid_reference(b, "EPSG:3857", grid, res)
+        assert {c: r["count"] for c, r in lib.items() if r["count"]} == {
+            c: n for c, (n, _) in ref.items()
+        }
+
+
+def test_the_per_pixel_pass_holds_a_bounded_number_of_pairs(monkeypatch):
+    # memory: the pass shares pixels out in batches of at most _NATIVE_LOOP_PAIRS (cell, pixel) pairs (plus the last
+    # pixel's), and the batching does not change the states
+    b, _ = RASTERS["utm"]
+    want = _partial(b, "h3", 10, coverage="complete")
+    sizes = []
+    real = gridagg._native_pair_weights
+
+    def spy(frame, cells, pair_cell, pair_pix, *a, **k):
+        sizes.append(len(pair_cell))
+        return real(frame, cells, pair_cell, pair_pix, *a, **k)
+
+    monkeypatch.setattr(gridagg, "_native_pair_weights", spy)
+    monkeypatch.setattr(gridagg, "_NATIVE_LOOP_PAIRS", 40)
+    got = _partial(b, "h3", 10, coverage="complete")
+    assert len(sizes) > 3 and max(sizes) <= 40 + 20
+    assert set(got) == set(want)
+    for cid, w in want.items():
+        for field in gridagg.PARTIAL_FIELDS:
+            if w[field] is None:
+                assert got[cid][field] is None
+            else:
+                assert got[cid][field] == pytest.approx(w[field], rel=1e-12, abs=1e-12)
 
 
 @pytest.mark.parametrize(
@@ -615,7 +676,7 @@ def test_the_weight_floor_holds_for_distorted_rings_in_a_projected_crs(key, crs)
     x0, y0 = get_transformer(4326, crs).transform(lon, lat)
     px = 1.5 * 2 * h3.average_hexagon_edge_length(res, "m")
     with _open(_tif(np.zeros((8, 8)), crs, from_origin(x0, y0, px, px))) as ds:
-        vx, vy = gridagg._native_rings(
+        vx, vy, _ = gridagg._native_rings(
             gridagg._Frame(ds, crs, "h3"), [h3.str_to_int(cell)]
         )
     ring = list(zip(vx[0], vy[0]))

@@ -172,7 +172,7 @@ H3 and quadbin cells are in EPSG:4326, and BNG cells in EPSG:27700. `rst_<grid>_
 - **`covering`** moves each cell into the raster's CRS and shares every valid pixel out by the overlapping area.
 - **`centroid`** moves each valid pixel's centre to the grid's CRS and bins it there.
 
-Pixel values are never resampled, and `count` is in source pixels. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster. A cell that crosses the raster CRS's own seam (for example EPSG:3857 at 180°) cannot be moved into it. A raster with such a cell is reprojected to the grid's CRS first, with nearest-neighbour resampling.
+Pixel values are never resampled, and `count` is in source pixels. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster. A cell that crosses the raster CRS's own seam (for example EPSG:3857 at 180°) is cut on that meridian, and each piece is moved on its own side. A seam that is not a meridian is refused, with a Fix. Only a raster with points that do not transform is reprojected to the grid's CRS first, with nearest-neighbour resampling.
 
 ### Performance
 

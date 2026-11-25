@@ -147,7 +147,7 @@ Examples at 42°N:
 **CRS handling:**
 - `rst_h3_tessellate` reprojects the tile extent to **EPSG:4326** internally before H3 cell lookups. Any CRS supported by GDAL is accepted; no pre-transformation of the tile is required.
 - `rst_h3_rastertogrid*` grids the tile in its own CRS, so pixels are never resampled. With `covering`, each H3 cell is moved into the tile's CRS and shares out the pixels it overlaps. With `centroid`, each pixel centre is moved to EPSG:4326. A tile in a projected CRS (e.g., UTM) needs no upstream `rst_transform`. A tile with no CRS is assumed to be in EPSG:4326 already.
-- A tile across the antimeridian or around a pole is gridded the same way. Only a cell that crosses the tile CRS's own seam cannot be moved into it (for example EPSG:3857 at 180°). Such a tile is reprojected to EPSG:4326 first, with nearest-neighbour resampling.
+- A tile across the antimeridian or around a pole is gridded the same way. A cell across the tile CRS's own seam (for example EPSG:3857 at 180°) is cut on that meridian, and each piece is moved on its own side. Only a tile with points that do not transform is reprojected to EPSG:4326 first, with nearest-neighbour resampling.
 
 **Resolution:** an integer level 0–15 (higher = finer hexagons; level 7 ≈ 5 km² per cell; level 9 ≈ 0.1 km²).
 

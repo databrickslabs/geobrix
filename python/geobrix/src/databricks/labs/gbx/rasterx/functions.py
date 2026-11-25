@@ -744,8 +744,8 @@ def rst_bng_rastertogridavg(
         the band's valid pixels in the cell. A pixel is valid when the band's NoData and
         mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; pixels
-        outside Great Britain are left out.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. Pixels outside Great Britain are left out.
 
     SQL: ``gbx_rst_bng_rastertogridavg(tile, resolution, [coverage], [assignment])``
     """
@@ -787,8 +787,8 @@ def rst_bng_rastertogridcount(
         their area shares). A pixel is valid when the band's NoData and mask (and the
         alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
         error tile and a tile that cannot be read give no rows. A raster in another CRS
-        is gridded on its own pixels, with no reprojection; pixels outside Great Britain
-        are left out.
+        is gridded on its own pixels; it is reprojected first only when some of its
+        points do not transform. Pixels outside Great Britain are left out.
 
     SQL: ``gbx_rst_bng_rastertogridcount(tile, resolution, [coverage], [assignment])``
     """
@@ -829,8 +829,9 @@ def rst_bng_rastertogridmax(
         value of the band's valid pixels in the cell. A pixel is valid when the band's
         NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
         a NULL resolution, an error tile and a tile that cannot be read give no rows. A
-        raster in another CRS is gridded on its own pixels, with no reprojection; pixels
-        outside Great Britain are left out.
+        raster in another CRS is gridded on its own pixels; it is reprojected first only
+        when some of its points do not transform. Pixels outside Great Britain are left
+        out.
 
     SQL: ``gbx_rst_bng_rastertogridmax(tile, resolution, [coverage], [assignment])``
     """
@@ -871,8 +872,8 @@ def rst_bng_rastertogridmedian(
         of the band's valid pixels in the cell. A pixel is valid when the band's NoData
         and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; pixels
-        outside Great Britain are left out.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. Pixels outside Great Britain are left out.
 
     SQL: ``gbx_rst_bng_rastertogridmedian(tile, resolution, [coverage], [assignment])``
     """
@@ -913,8 +914,9 @@ def rst_bng_rastertogridmin(
         value of the band's valid pixels in the cell. A pixel is valid when the band's
         NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
         a NULL resolution, an error tile and a tile that cannot be read give no rows. A
-        raster in another CRS is gridded on its own pixels, with no reprojection; pixels
-        outside Great Britain are left out.
+        raster in another CRS is gridded on its own pixels; it is reprojected first only
+        when some of its points do not transform. Pixels outside Great Britain are left
+        out.
 
     SQL: ``gbx_rst_bng_rastertogridmin(tile, resolution, [coverage], [assignment])``
     """
@@ -956,7 +958,8 @@ def rst_bng_rastertogridstddev(
         cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
         the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
         tile that cannot be read give no rows. A raster in another CRS is gridded on its
-        own pixels, with no reprojection; pixels outside Great Britain are left out.
+        own pixels; it is reprojected first only when some of its points do not
+        transform. Pixels outside Great Britain are left out.
 
     SQL: ``gbx_rst_bng_rastertogridstddev(tile, resolution, [coverage], [assignment])``
     """
@@ -997,8 +1000,8 @@ def rst_bng_rastertogridsum(
         the band's valid pixels in the cell. A pixel is valid when the band's NoData and
         mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; pixels
-        outside Great Britain are left out.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. Pixels outside Great Britain are left out.
 
     SQL: ``gbx_rst_bng_rastertogridsum(tile, resolution, [coverage], [assignment])``
     """
@@ -1040,7 +1043,8 @@ def rst_bng_rastertogridvariance(
         is valid when the band's NoData and mask (and the alpha band, if the raster has
         one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
         cannot be read give no rows. A raster in another CRS is gridded on its own
-        pixels, with no reprojection; pixels outside Great Britain are left out.
+        pixels; it is reprojected first only when some of its points do not transform.
+        Pixels outside Great Britain are left out.
 
     SQL: ``gbx_rst_bng_rastertogridvariance(tile, resolution, [coverage], [assignment])``
     """
@@ -3202,8 +3206,9 @@ def rst_h3_rastertogridavg(
         the band's valid pixels in the cell. A pixel is valid when the band's NoData and
         mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; a raster with
-        no CRS is taken as already in EPSG:4326.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. A raster with no CRS is taken as already in
+        EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridavg(tile, resolution, [coverage], [assignment])``
     """
@@ -3244,8 +3249,8 @@ def rst_h3_rastertogridcount(
         their area shares). A pixel is valid when the band's NoData and mask (and the
         alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
         error tile and a tile that cannot be read give no rows. A raster in another CRS
-        is gridded on its own pixels, with no reprojection; a raster with no CRS is
-        taken as already in EPSG:4326.
+        is gridded on its own pixels; it is reprojected first only when some of its
+        points do not transform. A raster with no CRS is taken as already in EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridcount(tile, resolution, [coverage], [assignment])``
     """
@@ -3285,8 +3290,9 @@ def rst_h3_rastertogridmax(
         value of the band's valid pixels in the cell. A pixel is valid when the band's
         NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
         a NULL resolution, an error tile and a tile that cannot be read give no rows. A
-        raster in another CRS is gridded on its own pixels, with no reprojection; a
-        raster with no CRS is taken as already in EPSG:4326.
+        raster in another CRS is gridded on its own pixels; it is reprojected first only
+        when some of its points do not transform. A raster with no CRS is taken as
+        already in EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridmax(tile, resolution, [coverage], [assignment])``
     """
@@ -3326,8 +3332,9 @@ def rst_h3_rastertogridmedian(
         of the band's valid pixels in the cell. A pixel is valid when the band's NoData
         and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; a raster with
-        no CRS is taken as already in EPSG:4326.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. A raster with no CRS is taken as already in
+        EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridmedian(tile, resolution, [coverage], [assignment])``
     """
@@ -3367,8 +3374,9 @@ def rst_h3_rastertogridmin(
         value of the band's valid pixels in the cell. A pixel is valid when the band's
         NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
         a NULL resolution, an error tile and a tile that cannot be read give no rows. A
-        raster in another CRS is gridded on its own pixels, with no reprojection; a
-        raster with no CRS is taken as already in EPSG:4326.
+        raster in another CRS is gridded on its own pixels; it is reprojected first only
+        when some of its points do not transform. A raster with no CRS is taken as
+        already in EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridmin(tile, resolution, [coverage], [assignment])``
     """
@@ -3409,8 +3417,8 @@ def rst_h3_rastertogridstddev(
         cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
         the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
         tile that cannot be read give no rows. A raster in another CRS is gridded on its
-        own pixels, with no reprojection; a raster with no CRS is taken as already in
-        EPSG:4326.
+        own pixels; it is reprojected first only when some of its points do not
+        transform. A raster with no CRS is taken as already in EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridstddev(tile, resolution, [coverage], [assignment])``
     """
@@ -3450,8 +3458,9 @@ def rst_h3_rastertogridsum(
         the band's valid pixels in the cell. A pixel is valid when the band's NoData and
         mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; a raster with
-        no CRS is taken as already in EPSG:4326.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. A raster with no CRS is taken as already in
+        EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridsum(tile, resolution, [coverage], [assignment])``
     """
@@ -3492,8 +3501,8 @@ def rst_h3_rastertogridvariance(
         is valid when the band's NoData and mask (and the alpha band, if the raster has
         one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
         cannot be read give no rows. A raster in another CRS is gridded on its own
-        pixels, with no reprojection; a raster with no CRS is taken as already in
-        EPSG:4326.
+        pixels; it is reprojected first only when some of its points do not transform. A
+        raster with no CRS is taken as already in EPSG:4326.
 
     SQL: ``gbx_rst_h3_rastertogridvariance(tile, resolution, [coverage], [assignment])``
     """
@@ -4602,8 +4611,9 @@ def rst_quadbin_rastertogridavg(
         the band's valid pixels in the cell. A pixel is valid when the band's NoData and
         mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; a raster with
-        no CRS is taken as already in EPSG:4326.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. A raster with no CRS is taken as already in
+        EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridavg(tile, resolution, [coverage], [assignment])``
     """
@@ -4644,8 +4654,8 @@ def rst_quadbin_rastertogridcount(
         their area shares). A pixel is valid when the band's NoData and mask (and the
         alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
         error tile and a tile that cannot be read give no rows. A raster in another CRS
-        is gridded on its own pixels, with no reprojection; a raster with no CRS is
-        taken as already in EPSG:4326.
+        is gridded on its own pixels; it is reprojected first only when some of its
+        points do not transform. A raster with no CRS is taken as already in EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridcount(tile, resolution, [coverage], [assignment])``
     """
@@ -4685,8 +4695,9 @@ def rst_quadbin_rastertogridmax(
         value of the band's valid pixels in the cell. A pixel is valid when the band's
         NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
         a NULL resolution, an error tile and a tile that cannot be read give no rows. A
-        raster in another CRS is gridded on its own pixels, with no reprojection; a
-        raster with no CRS is taken as already in EPSG:4326.
+        raster in another CRS is gridded on its own pixels; it is reprojected first only
+        when some of its points do not transform. A raster with no CRS is taken as
+        already in EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridmax(tile, resolution, [coverage], [assignment])``
     """
@@ -4726,8 +4737,9 @@ def rst_quadbin_rastertogridmedian(
         of the band's valid pixels in the cell. A pixel is valid when the band's NoData
         and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; a raster with
-        no CRS is taken as already in EPSG:4326.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. A raster with no CRS is taken as already in
+        EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridmedian(tile, resolution, [coverage], [assignment])``
     """
@@ -4767,8 +4779,9 @@ def rst_quadbin_rastertogridmin(
         value of the band's valid pixels in the cell. A pixel is valid when the band's
         NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
         a NULL resolution, an error tile and a tile that cannot be read give no rows. A
-        raster in another CRS is gridded on its own pixels, with no reprojection; a
-        raster with no CRS is taken as already in EPSG:4326.
+        raster in another CRS is gridded on its own pixels; it is reprojected first only
+        when some of its points do not transform. A raster with no CRS is taken as
+        already in EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridmin(tile, resolution, [coverage], [assignment])``
     """
@@ -4809,8 +4822,8 @@ def rst_quadbin_rastertogridstddev(
         cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
         the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
         tile that cannot be read give no rows. A raster in another CRS is gridded on its
-        own pixels, with no reprojection; a raster with no CRS is taken as already in
-        EPSG:4326.
+        own pixels; it is reprojected first only when some of its points do not
+        transform. A raster with no CRS is taken as already in EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridstddev(tile, resolution, [coverage], [assignment])``
     """
@@ -4850,8 +4863,9 @@ def rst_quadbin_rastertogridsum(
         the band's valid pixels in the cell. A pixel is valid when the band's NoData and
         mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
         resolution, an error tile and a tile that cannot be read give no rows. A raster
-        in another CRS is gridded on its own pixels, with no reprojection; a raster with
-        no CRS is taken as already in EPSG:4326.
+        in another CRS is gridded on its own pixels; it is reprojected first only when
+        some of its points do not transform. A raster with no CRS is taken as already in
+        EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridsum(tile, resolution, [coverage], [assignment])``
     """
@@ -4892,8 +4906,8 @@ def rst_quadbin_rastertogridvariance(
         is valid when the band's NoData and mask (and the alpha band, if the raster has
         one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
         cannot be read give no rows. A raster in another CRS is gridded on its own
-        pixels, with no reprojection; a raster with no CRS is taken as already in
-        EPSG:4326.
+        pixels; it is reprojected first only when some of its points do not transform. A
+        raster with no CRS is taken as already in EPSG:4326.
 
     SQL: ``gbx_rst_quadbin_rastertogridvariance(tile, resolution, [coverage], [assignment])``
     """

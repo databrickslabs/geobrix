@@ -635,4 +635,23 @@ def test_rastertogrid_from_a_virtual_tile(spark, tmp_path, agg):
         # fill, so the 65535 row of a source with no NoData is data
         assert sum(out[True].values()) == N * N - len(MASKED_ROWS) * N
     else:
-        assert MARKER not in out[True].values(), "a masked source pixel was aggregated"
+        # every cell's max is the max of its own unmasked pixels (binned by their centres in
+        # EPSG:27700); no cell holds both a masked pixel and a 65535 one, so a leaked 9999
+        # raises the max of the cell it lands in
+        from databricks.labs.gbx.core.crs import get_transformer
+        from databricks.labs.gbx.pygx import _bng
+
+        vals = _values()[0].astype("float64")
+        rr, cc = np.mgrid[0:N, 0:N]
+        e, n = get_transformer(4326, 27700).transform(
+            ORIGIN[0] + (cc + 0.5) * PX, ORIGIN[1] - (rr + 0.5) * PX
+        )
+        cells = np.array(
+            [_bng.format(int(c)) for c in _bng.point_to_cell_id_vec(e, n, 3).ravel()]
+        )
+        masked = np.isin(rr, MASKED_ROWS).ravel()
+        assert not set(cells[masked]) & set(cells[vals.ravel() == 65535])
+        want = {}
+        for ref, v in zip(cells[~masked], vals.ravel()[~masked]):
+            want[ref] = max(want.get(ref, -np.inf), v)
+        assert out[True] == want, "a cell's max is not that of its unmasked pixels"

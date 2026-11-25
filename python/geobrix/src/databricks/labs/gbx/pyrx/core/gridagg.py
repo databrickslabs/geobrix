@@ -644,16 +644,30 @@ def _covering_band_h3_vectorised(
 
 def _box_pairs_reduce(vx, vy, ids, band, mask, gt, px_area, agg) -> list:
     """``{"cellID", "measure"}`` of the cells ``ids`` (rings ``vx``, ``vy``: cells x M, in the frame of the north-up
-    geotransform ``gt``) over the valid pixels of ``band``: every (cell, pixel) pair of the cells' bounding windows,
-    weighted by ``_box_overlap_area`` / ``px_area`` and kept above ``_COVER_WEIGHT_FLOOR``. An H3 id is below 2**63,
-    so an int id is already the signed Long ``tessellate._encode_cellid`` gives."""
+    geotransform ``gt``) over the valid pixels of ``band``: the pairs of ``_box_pairs``, grouped by cell. An H3 id is
+    below 2**63, so an int id is already the signed Long ``tessellate._encode_cellid`` gives.
+    """
+    cell, w, vals = _box_pairs(vx, vy, band, mask, gt, px_area)
+    if cell.size == 0:
+        return []
+    uniq, measures = _grouped_measures(cell, vals, agg, weights=w)
+    return [
+        {"cellID": ids[c], "measure": m}
+        for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
+    ]
+
+
+def _box_pairs(vx, vy, band, mask, gt, px_area) -> tuple:
+    """``(ring, weight, value)`` of every (ring, valid pixel) pair of the rings' bounding windows (rings ``vx``, ``vy``:
+    rings x M, in the frame of the north-up geotransform ``gt``), weighted by ``_box_overlap_area`` / ``px_area`` and
+    kept above ``_COVER_WEIGHT_FLOOR``."""
     height, width = mask.shape
     bounds = np.stack([vx.min(1), vy.min(1), vx.max(1), vy.max(1)], axis=1)
     cell, rows, cols = _cell_pixel_pairs(bounds, gt, height, width)
     ok = mask[rows, cols]
     cell, rows, cols = cell[ok], rows[ok], cols[ok]
     if cell.size == 0:
-        return []
+        return cell, np.empty(0), np.empty(0)
     xl, xr = gt[0] + cols * gt[1], gt[0] + (cols + 1) * gt[1]
     yt, yb = gt[3] + rows * gt[5], gt[3] + (rows + 1) * gt[5]
     area = _box_overlap_area(
@@ -667,18 +681,11 @@ def _box_pairs_reduce(vx, vy, ids, band, mask, gt, px_area, agg) -> list:
     )
     w = area / px_area
     keep = w > _COVER_WEIGHT_FLOOR
-    cell, w, vals = (
+    return (
         cell[keep],
         w[keep],
         band[rows[keep], cols[keep]].astype("float64"),
     )
-    if cell.size == 0:
-        return []
-    uniq, measures = _grouped_measures(cell, vals, agg, weights=w)
-    return [
-        {"cellID": ids[c], "measure": m}
-        for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
-    ]
 
 
 def _complete_coverage_pass(
@@ -739,9 +746,21 @@ def _complete_coverage_pass(
 # the raster's CRS. Each edge is walked with as many points as keep the chord between two of them within this fraction
 # of the shorter of the edge and the pixel side, so a covering weight is within about this fraction of the bent cell's.
 _NATIVE_EDGE_TOLERANCE = 1e-4
-# An edge that needs more points than this does not bend smoothly in the raster's CRS: it crosses the CRS's own seam
-# (where its longitudes wrap), so the cell has no outline there and the raster takes the warp instead.
+# The most points an edge is walked with (a bend this sharp at this pixel size is left at the cap).
 _NATIVE_EDGE_MAX_POINTS = 4096
+# A moved edge whose midpoint is more than this fraction of its chord off the chord may jump across the raster CRS's
+# seam (about 0.5 there); ``_jumping`` then decides, as a sharp bend near a pole can pass it too. Pixel size plays no
+# part.
+_SEAM_DEVIATION = 0.25
+# Halvings of a nominated edge that tell a jump from a sharp bend or a stretch (``_jumping``).
+_SEAM_BISECTIONS = 50
+# Degrees kept clear on each side of the seam meridian where a cell is cut.
+_SEAM_GAP_DEG = 1e-9
+# The latitude that closes a cell around a pole before it is cut, for a CRS in which the pole is not a point.
+_POLE_CAP_LAT = 89.99999
+# Valid pixels the per-pixel pass moves at a time, and the most (cell, pixel) pairs it sends to GEOS in one batch.
+_NATIVE_LOOP_PIXELS = 16_384
+_NATIVE_LOOP_PAIRS = 100_000
 # Cells x vertices x vertices one vectorised chunk may hold (``_ring_supporting_edges``): about 20 MB per array.
 _NATIVE_RING_BUDGET = 2_500_000
 # Pixels between two points of a window outline that is moved to the grid's CRS (at least 20 points per side).
@@ -749,7 +768,7 @@ _OUTLINE_STEP_PIXELS = 16
 
 
 class _NeedsWarp(Exception):
-    """The native frame cannot hold the raster: a point does not transform, or a cell crosses its CRS's seam."""
+    """The native frame cannot hold the raster: a point does not transform."""
 
 
 def _move(transform, x, y):
@@ -1001,7 +1020,10 @@ class _Frame:
     def __init__(self, ds, src_crs, grid: str):
         from databricks.labs.gbx.core.crs import get_transformer
 
-        self.ds, self.grid = ds, grid
+        self.ds, self.grid, self.src_crs = ds, grid, src_crs
+        self.seam = (
+            None  # the seam's longitude, found when a cell crosses it (``_jumping``)
+        )
         self.geographic = grid != "bng"
         grid_crs = 27700 if grid == "bng" else 4326
         self.to_grid = get_transformer(src_crs, grid_crs).transform
@@ -1068,35 +1090,43 @@ class _Frame:
         return float(area_m2(Polygon(zip(lon, lat)), "EPSG:4326"))
 
 
-def _native_rings(frame: _Frame, cells) -> tuple:
-    """``(x, y)`` vertex arrays, each cells x M, of the cells in the raster's CRS: every edge of ``_grid_rings`` (in
-    lon/lat taken the short way round, across the antimeridian or around a pole) walked with ``n`` points, ``n`` the
-    least that keeps the chord within ``_NATIVE_EDGE_TOLERANCE`` of the shorter of the edge and the pixel side (the
-    chord's distance from the bent edge falls as ``1 / n**2``). ``n`` depends on the edge alone, so two cells walk
-    their shared edge with the same points and still tile. A shorter ring repeats its last vertex.
-
-    Raises ``_NeedsWarp`` for a vertex that does not transform, or an edge that needs more than
-    ``_NATIVE_EDGE_MAX_POINTS`` (a cell across the raster CRS's seam).
+def _move_rings(frame: _Frame, gx, gy, wrap: bool = True) -> tuple:
+    """``(x, y, jumps)``: rings of the grid's CRS (``gx``, ``gy``: rings x K, a shorter ring repeating its last vertex)
+    moved into the raster's CRS. Every edge (in lon/lat taken the short way round, across the antimeridian or around a
+    pole, unless ``wrap`` is off: rings already unwrapped, as the pieces of a cut) is walked with ``n`` points, ``n`` the
+    least that keeps the chord within ``_NATIVE_EDGE_TOLERANCE`` of the
+    shorter of the edge and the pixel side (the chord's distance from the bent edge falls as ``1 / n**2``; at most
+    ``_NATIVE_EDGE_MAX_POINTS``). ``n`` depends on the edge alone, so two cells walk their shared edge with the same
+    points and still tile. ``jumps`` marks a ring with an edge that jumps (``_jumping``, whatever the pixel size): the
+    edge crosses the raster CRS's seam, and the ring's moved points mean nothing (``_native_rings`` cuts it). Raises ``_NeedsWarp`` for a point that does not transform.
     """
-    gx, gy = _grid_rings(cells, frame.grid)
     k = gx.shape[1]
     nxt = np.roll(np.arange(k), -1)
     dx, dy = gx[:, nxt] - gx, gy[:, nxt] - gy
-    if frame.geographic:
+    if frame.geographic and wrap:
         dx = (dx + 180.0) % 360.0 - 180.0
     xs, ys = _move(frame.to_native, gx, gy)
     mx, my = _move(frame.to_native, gx + 0.5 * dx, gy + 0.5 * dy)
     nx_, ny_ = xs[:, nxt], ys[:, nxt]
     length = np.hypot(nx_ - xs, ny_ - ys)
-    dev = np.hypot(mx - 0.5 * (xs + nx_), my - 0.5 * (ys + ny_))
+    offset = np.hypot(mx - 0.5 * (xs + nx_), my - 0.5 * (ys + ny_))
+    jumps = _jumping(frame, gx, gy, dx, dy, offset > _SEAM_DEVIATION * length).any(
+        axis=1
+    )
+    # the chord error: the moved midpoint's distance from the chord's line (a slide along it bends nothing)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dev = np.where(
+            length > 0.0,
+            np.abs((nx_ - xs) * (my - ys) - (ny_ - ys) * (mx - xs)) / length,
+            0.0,
+        )
     tol = _NATIVE_EDGE_TOLERANCE * np.minimum(length, frame.px_side)
     with np.errstate(divide="ignore", invalid="ignore"):
         need = np.where(length > 0.0, np.ceil(np.sqrt(dev / tol)), 1.0)
-    need = np.maximum(need, 1.0)
-    if not (need <= _NATIVE_EDGE_MAX_POINTS).all():
-        raise _NeedsWarp
+    need = np.clip(need, 1.0, _NATIVE_EDGE_MAX_POINTS)
+    need[jumps] = 1.0
     if (need == 1.0).all():
-        return xs, ys
+        return xs, ys, jumps
     per_edge = need.astype(np.intp).ravel()
     total = int(per_edge.sum())
     edge = np.repeat(np.arange(per_edge.size), per_edge)
@@ -1110,14 +1140,141 @@ def _native_rings(frame: _Frame, cells) -> tuple:
         gx.ravel()[e_in] + t * dx.ravel()[e_in],
         gy.ravel()[e_in] + t * dy.ravel()[e_in],
     )
-    per_cell = need.astype(np.intp).sum(axis=1)
-    m = int(per_cell.max())
-    pos = np.arange(total) - np.repeat(np.cumsum(per_cell) - per_cell, per_cell)
-    vx, vy = np.empty((len(cells), m)), np.empty((len(cells), m))
+    per_ring = need.astype(np.intp).sum(axis=1)
+    m = int(per_ring.max())
+    pos = np.arange(total) - np.repeat(np.cumsum(per_ring) - per_ring, per_ring)
+    vx, vy = np.empty((gx.shape[0], m)), np.empty((gx.shape[0], m))
     vx[edge // k, pos], vy[edge // k, pos] = px, py
-    col = np.minimum(np.arange(m)[None, :], per_cell[:, None] - 1)
-    row = np.arange(len(cells))[:, None]
-    return vx[row, col], vy[row, col]
+    col = np.minimum(np.arange(m)[None, :], per_ring[:, None] - 1)
+    row = np.arange(gx.shape[0])[:, None]
+    return vx[row, col], vy[row, col], jumps
+
+
+def _jumping(frame: _Frame, gx, gy, dx, dy, nominated) -> np.ndarray:
+    """``nominated`` (rings x K edges) kept only where the moved edge truly jumps: each is bisected
+    ``_SEAM_BISECTIONS`` times toward its larger moved half; across a seam the last step stays a large part of the
+    moved chord, while a continuous edge, however stretched (Mercator near a pole), shrinks to nothing. Scale-free: the
+    pixel size plays no part. The first jump found gives the seam's longitude (``frame.seam``).
+    """
+    out = np.zeros(nominated.shape, dtype=bool)
+    r, e = np.nonzero(nominated)
+    if r.size == 0:
+        return out
+    ax, ay, bx, by = gx[r, e], gy[r, e], dx[r, e], dy[r, e]
+    x, y = _move(
+        frame.to_native, np.stack([ax, ax + bx], 1), np.stack([ay, ay + by], 1)
+    )
+    chord = np.hypot(x[:, 1] - x[:, 0], y[:, 1] - y[:, 0])
+    lo, hi = np.zeros(r.size), np.ones(r.size)
+    for _ in range(
+        _SEAM_BISECTIONS
+    ):  # vectorscan: ok (a bisection, over the nominated edges)
+        mid = 0.5 * (lo + hi)
+        t = np.stack([lo, mid, hi], 1)
+        x, y = _move(
+            frame.to_native,
+            ax[:, None] + t * bx[:, None],
+            ay[:, None] + t * by[:, None],
+        )
+        left = np.hypot(x[:, 1] - x[:, 0], y[:, 1] - y[:, 0])
+        right = np.hypot(x[:, 2] - x[:, 1], y[:, 2] - y[:, 1])
+        hi = np.where(left > right, mid, hi)
+        lo = np.where(left > right, lo, mid)
+    x, y = _move(
+        frame.to_native,
+        ax[:, None] + np.stack([lo, hi], 1) * bx[:, None],
+        ay[:, None] + np.stack([lo, hi], 1) * by[:, None],
+    )
+    jump = np.hypot(x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]) > 0.01 * chord
+    out[r, e] = jump
+    if jump.any() and frame.seam is None:
+        k = int(np.flatnonzero(jump)[0])
+        lon = ax[k] + 0.5 * (lo[k] + hi[k]) * bx[k]
+        frame.seam = 180.0 - (180.0 - lon) % 360.0  # in (-180, 180]
+    return out
+
+
+def _pad_rings(x, m: int):
+    """``x`` (rings x K) widened to ``m`` columns by repeating each ring's last vertex."""
+    if x.shape[1] >= m:
+        return x
+    return np.concatenate([x, np.repeat(x[:, -1:], m - x.shape[1], axis=1)], axis=1)
+
+
+def _native_rings(frame: _Frame, cells) -> tuple:
+    """``(x, y, owner)``: the rings of the cells in the raster's CRS (``_move_rings``), rings x M, and the index into
+    ``cells`` of each ring. A cell across the raster CRS's seam gives one ring per side (``_seam_pieces``), so ``owner``
+    can repeat an index; a piece that still jumps raises ``ValueError`` with a Fix."""
+    gx, gy = _grid_rings(cells, frame.grid)
+    vx, vy, jumps = _move_rings(frame, gx, gy)
+    owner = np.arange(len(cells))
+    if not jumps.any():
+        return vx, vy, owner
+    pieces, piece_owner = [], []
+    for i in np.flatnonzero(jumps):  # vectorscan: ok (per cell across the seam, a few)
+        for px, py in _seam_pieces(frame, gx[i], gy[i]):
+            pieces.append((px, py))
+            piece_owner.append(i)
+    keep = np.flatnonzero(~jumps)
+    if not pieces:
+        return vx[keep], vy[keep], owner[keep]
+    m = max(len(px) for px, _ in pieces)
+    qx = np.array([np.pad(px, (0, m - len(px)), mode="edge") for px, _ in pieces])
+    qy = np.array([np.pad(py, (0, m - len(py)), mode="edge") for _, py in pieces])
+    qx, qy, still = _move_rings(frame, qx, qy, wrap=False)
+    if still.any():
+        from databricks.labs.gbx.core.crs import crs_to_canonical
+
+        raise ValueError(
+            f"rst_{frame.grid}_rastertogrid: a cell crosses the seam of the raster's CRS "
+            f"({crs_to_canonical(frame.src_crs)}) where it cannot be cut on a meridian. Fix: reproject the raster "
+            "(for example to EPSG:4326 with gbx_rst_transform), or crop it away from the seam."
+        )
+    m = max(vx.shape[1], qx.shape[1])
+    return (
+        np.concatenate([_pad_rings(vx[keep], m), _pad_rings(qx, m)]),
+        np.concatenate([_pad_rings(vy[keep], m), _pad_rings(qy, m)]),
+        np.concatenate([owner[keep], np.asarray(piece_owner, dtype=owner.dtype)]),
+    )
+
+
+def _seam_pieces(frame: _Frame, gx, gy) -> list:
+    """The lon/lat rings (``(x, y)`` arrays) of one cell across the raster CRS's seam, cut on the seam meridian
+    (``frame.seam``, from ``_jumping``), each piece shifted by whole turns to the seam's west side, where the CRS is continuous. A cell
+    around a pole (its longitudes wind once) is closed at ``_POLE_CAP_LAT`` first, for a CRS in which the pole is not a
+    point (Mercator). The cut keeps ``_SEAM_GAP_DEG`` clear of the seam on each side."""
+    from shapely.geometry import Polygon
+    from shapely.geometry import box as _box
+
+    step = (np.diff(np.append(gx, gx[0])) + 180.0) % 360.0 - 180.0
+    lon = gx[0] + np.concatenate([[0.0], np.cumsum(step[:-1])])
+    pts = list(zip(lon, gy))
+    winding = float(step.sum())
+    if (
+        abs(winding) > 180.0
+    ):  # the ring's closing edge ends a turn away; close over the pole
+        cap = math.copysign(_POLE_CAP_LAT, float(np.mean(gy)))
+        pts += [(lon[0] + winding, gy[0]), (lon[0] + winding, cap), (lon[0], cap)]
+    poly = Polygon(pts)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    seam = frame.seam  # set by ``_jumping`` when it found this cell's jump
+    west, _, east, _ = poly.bounds
+    out = []
+    for k in range(
+        math.floor((west - seam) / 360.0), math.floor((east - seam) / 360.0) + 1
+    ):  # vectorscan: ok (one or two turns)
+        left = seam + 360.0 * k
+        part = poly.intersection(
+            _box(left + _SEAM_GAP_DEG, -90.0, left + 360.0 - _SEAM_GAP_DEG, 90.0)
+        )
+        for p in getattr(
+            part, "geoms", [part]
+        ):  # vectorscan: ok (the parts of one cut)
+            if p.geom_type == "Polygon" and p.area > 0.0:
+                xy = np.asarray(p.exterior.coords)[:-1]
+                out.append((xy[:, 0] - 360.0 * (k + 1), xy[:, 1]))
+    return out
 
 
 def _native_id(cell, grid: str):
@@ -1140,7 +1297,8 @@ def _covering_band_h3_native(
 ) -> list:
     """``_covering_band_h3_vectorised`` for a north-up raster in another CRS: the candidate cells come from the moved
     outline of the window of valid pixels (padded by one pixel), and each ring is moved into the raster's CRS
-    (``_native_rings``), where its pixels are axis-aligned boxes."""
+    (``_native_rings``), where its pixels are axis-aligned boxes. The pairs of a chunk are grouped by cell, so the two
+    pieces of a cell across the seam give one state."""
     valid_rows = np.flatnonzero(mask.any(axis=1))
     if valid_rows.size == 0:
         return []
@@ -1154,37 +1312,72 @@ def _covering_band_h3_native(
     step = _H3_VEC_CHUNK_CELLS
     for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound pairs)
         chunk = cells[start : start + step]
-        vx, vy = _native_rings(frame, chunk)
+        vx, vy, owner = _native_rings(frame, chunk)
         sub = max(1, _NATIVE_RING_BUDGET // vx.shape[1] ** 2)
+        parts = []
         for s0 in range(
-            0, len(chunk), sub
+            0, len(owner), sub
         ):  # vectorscan: ok (sub-chunks bound the rings)
-            out.extend(
-                _box_pairs_reduce(
-                    vx[s0 : s0 + sub],
-                    vy[s0 : s0 + sub],
-                    chunk[s0 : s0 + sub],
-                    band,
-                    mask,
-                    frame.gt,
-                    frame.px_area,
-                    agg,
-                )
+            ring, w, vals = _box_pairs(
+                vx[s0 : s0 + sub],
+                vy[s0 : s0 + sub],
+                band,
+                mask,
+                frame.gt,
+                frame.px_area,
             )
+            parts.append((owner[ring + s0], w, vals))
+        cell = np.concatenate([p[0] for p in parts])
+        if cell.size == 0:
+            continue
+        uniq, measures = _grouped_measures(
+            cell,
+            np.concatenate([p[2] for p in parts]),
+            agg,
+            weights=np.concatenate([p[1] for p in parts]),
+        )
+        out.extend(
+            {"cellID": chunk[c], "measure": m}
+            for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
+        )
     return out
 
 
 def _native_polygons(frame: _Frame, cells, ox: float, oy: float):
-    """Shapely polygons of the cells in the raster's CRS, relative to ``(ox, oy)`` (so GEOS rounds at the raster's
-    scale, not the coordinates')."""
+    """One shapely geometry per cell in the raster's CRS, relative to ``(ox, oy)`` (so GEOS rounds at the raster's
+    scale, not the coordinates'): a polygon, or a multipolygon of the pieces of a cell across the seam.
+    """
     import shapely
 
-    polys = []
+    geoms = []
     step = _H3_VEC_CHUNK_CELLS
     for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound the rings)
-        vx, vy = _native_rings(frame, cells[start : start + step])
-        polys.append(shapely.polygons(np.stack([vx - ox, vy - oy], axis=-1)))
-    return np.concatenate(polys) if polys else np.empty(0, dtype=object)
+        chunk = cells[start : start + step]
+        vx, vy, owner = _native_rings(frame, chunk)
+        polys = shapely.polygons(np.stack([vx - ox, vy - oy], axis=-1))
+        if owner.size == len(chunk) and (owner == np.arange(len(chunk))).all():
+            geoms.append(polys)
+            continue
+        order = np.argsort(owner, kind="stable")
+        merged = np.full(len(chunk), shapely.Polygon(), dtype=object)
+        uniq = np.unique(owner)
+        merged[uniq] = shapely.multipolygons(
+            polys[order], indices=np.searchsorted(uniq, owner[order])
+        )
+        geoms.append(merged)
+    return np.concatenate(geoms) if geoms else np.empty(0, dtype=object)
+
+
+def _native_pair_weights(frame: _Frame, cells, pair_cell, pair_pix, qx, qy, ox, oy):
+    """GEOS overlap of each pair's cell (``cells[pair_cell]``, moved into the raster's CRS) and pixel quad
+    (``qx``, ``qy``: pixels x 4, rows ``pair_pix``), over the pixel's area: one batch of the per-pixel pass.
+    """
+    import shapely
+
+    polys = _native_polygons(frame, cells, ox, oy)
+    pixels = shapely.polygons(np.stack([qx - ox, qy - oy], axis=-1))
+    area = shapely.area(shapely.intersection(polys[pair_cell], pixels[pair_pix]))
+    return area / frame.px_area
 
 
 def _covering_band_native_loop(
@@ -1192,68 +1385,92 @@ def _covering_band_native_loop(
 ) -> list:
     """``_covering_band``'s per-pixel pass for a raster in another CRS (any geotransform): each valid pixel's
     candidate cells come from its outline moved to the grid's CRS (``_moved_outlines``, ``_padded_boxes``), and the
-    weight is the GEOS overlap of the pixel quad and the cell moved into the raster's CRS
-    (``_native_rings``), over the pixel's area. quadbin and BNG keep the interior fast path: a pixel whose four
-    corners fall in one cell has weight 1 (the cell's moved edge can bend into the pixel only by its chord tolerance).
-    """
-    import shapely
+    weight is the GEOS overlap of the pixel quad and the cell moved into the raster's CRS (``_native_pair_weights``),
+    over the pixel's area. quadbin and BNG keep the interior fast path: a pixel whose four corners fall in one cell has
+    weight 1 (the cell's moved edge can bend into the pixel only by its chord tolerance).
 
+    Memory is bounded: pixels are moved ``_NATIVE_LOOP_PIXELS`` at a time, and their candidate pairs go to GEOS in
+    batches of at most ``_NATIVE_LOOP_PAIRS`` (plus one pixel's); only the kept pairs' cell, pixel and weight stay.
+    """
     from databricks.labs.gbx.pyrx.core.tessellate import _cell_is_valid
 
     ys, xs = np.nonzero(mask)
     if ys.size == 0:
         return []
     ox, oy = frame.gt[0], frame.gt[3]
-    cols = xs[:, None] + np.array([0, 1, 1, 0])
-    rows = ys[:, None] + np.array([0, 0, 1, 1])
-    nx_, ny_ = frame.native_xy(cols, rows)
-    gx, gy = _move(frame.to_grid, nx_, ny_)
-    vals = band[ys, xs]
-    index: dict = {}  # raw cell -> its index in the pairs
-    pair_cell, pair_pix = [], []
-    interior = np.zeros(ys.size, dtype=bool)
-    fixed_cell = np.empty(0, dtype=np.intp)
-    if grid in _COVERING_FAST_PATH_EXACT:
-        corner = _corner_cells(gx.ravel(), gy.ravel(), resolution, grid).reshape(-1, 4)
-        interior = (corner == corner[:, :1]).all(axis=1) & (corner[:, 0] >= 0)
-        fixed_cell = np.fromiter(
-            (index.setdefault(int(c), len(index)) for c in corner[interior, 0]),
-            dtype=np.intp,
-            count=int(interior.sum()),
-        )  # vectorscan: ok (per interior pixel, a dict lookup)
-    edge = np.flatnonzero(~interior)
-    out_x, out_y, out_pad, out_pole = _moved_outlines(
-        frame, cols[edge].astype("float64"), rows[edge].astype("float64")
-    )
-    for k, i in enumerate(
-        edge
-    ):  # vectorscan: ok (covering per-pixel, as _covering_band)
-        boxes = _padded_boxes(
-            out_x[k], out_y[k], out_pad[k], out_pole[k], frame.geographic
+    index: dict = {}  # raw cell -> its index in the output
+    kept_cell, kept_pix, kept_w = [], [], []
+    dc, dr = np.array([0, 1, 1, 0]), np.array([0, 0, 1, 1])
+    for b0 in range(
+        0, ys.size, _NATIVE_LOOP_PIXELS
+    ):  # vectorscan: ok (blocks bound memory)
+        cols = xs[b0 : b0 + _NATIVE_LOOP_PIXELS, None] + dc
+        rows = ys[b0 : b0 + _NATIVE_LOOP_PIXELS, None] + dr
+        qx, qy = frame.native_xy(cols, rows)
+        interior = np.zeros(cols.shape[0], dtype=bool)
+        if grid in _COVERING_FAST_PATH_EXACT:
+            gx, gy = _move(frame.to_grid, qx, qy)
+            corner = _corner_cells(gx.ravel(), gy.ravel(), resolution, grid).reshape(
+                -1, 4
+            )
+            interior = (corner == corner[:, :1]).all(axis=1) & (corner[:, 0] >= 0)
+            kept_cell.append(
+                np.fromiter(
+                    (index.setdefault(int(c), len(index)) for c in corner[interior, 0]),
+                    dtype=np.intp,
+                    count=int(interior.sum()),
+                )  # vectorscan: ok (per interior pixel, a dict lookup)
+            )
+            kept_pix.append(b0 + np.flatnonzero(interior))
+            kept_w.append(np.ones(int(interior.sum())))
+        edge = np.flatnonzero(~interior)
+        out_x, out_y, out_pad, out_pole = _moved_outlines(
+            frame, cols[edge].astype("float64"), rows[edge].astype("float64")
         )
-        for cell in _box_cells(boxes, resolution, grid):
-            if _cell_is_valid(cell, grid):
-                pair_cell.append(index.setdefault(cell, len(index)))
-                pair_pix.append(i)
-    raw = list(index)
-    pair_cell = np.asarray(pair_cell, dtype=np.intp)
-    pair_pix = np.asarray(pair_pix, dtype=np.intp)
-    w = np.empty(0)
-    if pair_cell.size:
-        cell_polys = _native_polygons(frame, raw, ox, oy)
-        pixels = shapely.polygons(np.stack([nx_ - ox, ny_ - oy], axis=-1))
-        area = shapely.area(
-            shapely.intersection(cell_polys[pair_cell], pixels[pair_pix])
-        )
-        w = area / frame.px_area
-        keep = w > 0.0
-        pair_cell, pair_pix, w = pair_cell[keep], pair_pix[keep], w[keep]
-    cell = np.concatenate([fixed_cell, pair_cell])
+        pending: dict = {}  # raw cell -> its index in this batch
+        pair_cell, pair_pix = [], []
+
+        def flush():
+            if not pair_cell:
+                return
+            raw = list(pending)
+            w = _native_pair_weights(
+                frame, raw, np.asarray(pair_cell), np.asarray(pair_pix), qx, qy, ox, oy
+            )
+            keep = w > 0.0
+            to_out = np.fromiter(
+                (index.setdefault(c, len(index)) for c in raw),
+                dtype=np.intp,
+                count=len(raw),
+            )  # vectorscan: ok (per cell, a dict lookup)
+            kept_cell.append(to_out[np.asarray(pair_cell)[keep]])
+            kept_pix.append(b0 + np.asarray(pair_pix)[keep])
+            kept_w.append(w[keep])
+            pending.clear()
+            pair_cell.clear()
+            pair_pix.clear()
+
+        for k, i in enumerate(
+            edge
+        ):  # vectorscan: ok (covering per-pixel, as _covering_band)
+            boxes = _padded_boxes(
+                out_x[k], out_y[k], out_pad[k], out_pole[k], frame.geographic
+            )
+            for cell in _box_cells(boxes, resolution, grid):
+                if _cell_is_valid(cell, grid):
+                    pair_cell.append(pending.setdefault(cell, len(pending)))
+                    pair_pix.append(i)
+            if len(pair_cell) >= _NATIVE_LOOP_PAIRS:
+                flush()
+        flush()
+    cell = np.concatenate(kept_cell) if kept_cell else np.empty(0, dtype=np.intp)
     if cell.size == 0:
         return []
-    weights = np.concatenate([np.ones(fixed_cell.size), w])
-    values = np.concatenate([vals[interior], vals[pair_pix]])
-    uniq, measures = _grouped_measures(cell, values, agg, weights=weights)
+    pix = np.concatenate(kept_pix)
+    uniq, measures = _grouped_measures(
+        cell, band[ys[pix], xs[pix]], agg, weights=np.concatenate(kept_w)
+    )
+    raw = list(index)
     return [
         {"cellID": _native_id(raw[c], grid), "measure": m}
         for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
@@ -1303,7 +1520,8 @@ def _complete_coverage_native(
 ):
     """``_complete_coverage_pass`` in the raster's own CRS: a candidate cell (from the moved outline of the raster,
     padded by one pixel) that is valid and not in ``band_result`` is added, empty, when the cell moved into the
-    raster's CRS has a positive-area overlap with the raster's outline there."""
+    raster's CRS has a positive-area overlap with the raster's outline there (in chunks of cells).
+    """
     import shapely
     from shapely.geometry import Polygon
 
@@ -1326,15 +1544,20 @@ def _complete_coverage_native(
         np.array([0, 0, ds.height, ds.height], dtype="float64"),
     )
     outline = Polygon(zip(cx - ox, cy - oy))
-    polys = _native_polygons(frame, todo, ox, oy)
-    hit = shapely.intersects(polys, outline)
-    hit[hit] = shapely.area(shapely.intersection(polys[hit], outline)) > 0.0
     empty_value = _EMPTY_STATE if agg == _PARTIAL else (0.0 if agg == "count" else None)
-    return band_result + [
-        {"cellID": _native_id(c, grid), "measure": empty_value}
-        for c, h in zip(todo, hit)  # vectorscan: ok (per cell)
-        if h
-    ]
+    extra = []
+    step = _H3_VEC_CHUNK_CELLS
+    for start in range(0, len(todo), step):  # vectorscan: ok (chunks bound the rings)
+        chunk = todo[start : start + step]
+        polys = _native_polygons(frame, chunk, ox, oy)
+        hit = shapely.intersects(polys, outline)
+        hit[hit] = shapely.area(shapely.intersection(polys[hit], outline)) > 0.0
+        extra.extend(
+            {"cellID": _native_id(c, grid), "measure": empty_value}
+            for c, h in zip(chunk, hit)  # vectorscan: ok (per cell)
+            if h
+        )
+    return band_result + extra
 
 
 def _grid_native(

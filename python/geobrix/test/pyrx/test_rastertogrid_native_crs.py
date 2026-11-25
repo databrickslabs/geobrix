@@ -113,6 +113,15 @@ RASTERS = {
         ),
         "EPSG:32660",
     ),
+    # MODIS sinusoidal tile h25v03 (10 km pixels): edges bend strongly far from the central meridian
+    "sinu": (
+        _tif(
+            _ramp(111, 111),
+            "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs",
+            from_origin(7 * 1111950.5197665233, 6 * 1111950.5197665233, 10e3, 10e3),
+        ),
+        "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs",
+    ),
     # EPSG:3413 (NSIDC north polar stereographic): around the pole
     "pole": (
         _tif(
@@ -209,11 +218,22 @@ def _grid_cells(ds, src_crs, grid, res):
                     ]
 
 
-def _native_cells(ds, src_crs, grid, res):
+def _native_cells(ds, src_crs, grid, res, unwrap=None, forward=None):
     """``{cell id: the cell's polygon in the raster CRS}``: each grid-CRS edge walked with 64 points (or 16 per pixel
-    side of the edge's moved length, up to 2048: a long edge near a pole bends far), then moved.
+    side of the edge's moved length, up to 2048: a long edge near a pole bends far), then moved. ``unwrap`` (moved
+    x -> x) makes the raster CRS continuous past its seam, for a cell across it.
     """
-    to_native = get_transformer(27700 if grid == "bng" else 4326, src_crs).transform
+    # the inverse of the raster -> grid operation, as the library moves cells (PROJ may pick another one for the
+    # grid -> raster direction)
+    forward = forward or get_transformer(src_crs, 27700 if grid == "bng" else 4326)
+
+    def move(x, y):
+        return forward.transform(x, y, direction="INVERSE")
+
+    def to_native(x, y):
+        x, y = move(x, y)
+        return (x, y) if unwrap is None else (unwrap(np.asarray(x)), y)
+
     side = abs(ds.transform.determinant) ** 0.5
     out = {}
     for cid, ring in _grid_cells(ds, src_crs, grid, res):
@@ -233,7 +253,7 @@ def _native_cells(ds, src_crs, grid, res):
     return out
 
 
-def _native_reference(b, src_crs, grid, res):
+def _native_reference(b, src_crs, grid, res, unwrap=None, forward=None):
     """``{cell id: (count, sum, m2, min, max, smallest pair weight, partial pairs)}``: the valid pixels shared over the
     cells by exact overlap area in the raster's CRS (shapely), weight = overlap / pixel area; a partial pair is one
     with a weight below 1 (a pixel on the cell's edge)."""
@@ -241,7 +261,7 @@ def _native_reference(b, src_crs, grid, res):
         band = ds.read(1).astype("float64").ravel()
         mask = band_valid_mask(ds, 1).ravel()
         quads, _, _ = _pixel_quads(ds)
-        cells = _native_cells(ds, src_crs, grid, res)
+        cells = _native_cells(ds, src_crs, grid, res, unwrap, forward)
     quads, vals = quads[mask], band[mask]
     px_area = shapely.area(quads[0])
     tree = STRtree(quads)
@@ -354,6 +374,12 @@ COVERING_CASES = {
     "pole-h3-r7": ("pole", "h3", 7),  # vectorised, the pole cell included
     "pole-h3-r3": ("pole", "h3", 3),
     "across-180-quadbin-z12": ("across-180", "quadbin", 12),
+    "sinu-quadbin-z4": (
+        "sinu",
+        "quadbin",
+        4,
+    ),  # cells far larger than the pixels, edges bent
+    "sinu-h3-r3": ("sinu", "h3", 3),
 }
 
 
@@ -534,14 +560,6 @@ def test_a_grid_native_raster_never_enters_the_native_frame(monkeypatch):
         assert _partial(bng, "bng", 4, coverage="complete", assignment=assignment)
 
 
-def _warped_partial(b, res, assignment):
-    """What the grid of ``b`` was before: its EPSG:4326 nearest-neighbour warp, gridded."""
-    with _open(b) as ds:
-        warped = gridagg._warp_to_4326_if_needed(ds, None)
-    assert warped is not None
-    return _partial(warped, "h3", res, assignment=assignment)
-
-
 _SEAM_3857 = 20037508.342789244
 # EPSG:3857 rasters whose east edge sits on its seam (180E), at 2 to 156 km pixels, and a zoom-2 world raster
 _SEAM_RASTERS = {
@@ -687,3 +705,124 @@ def test_the_weight_floor_holds_for_distorted_rings_in_a_projected_crs(key, crs)
     assert (exact > 0).sum() > 100 and (exact == 0).sum() > 100
     assert (np.abs(got - exact) / pa).max() <= 1e-14
     assert ((got / pa > gridagg._COVER_WEIGHT_FLOOR) == (exact > 0)).all()
+
+
+def test_a_bent_edge_is_walked_to_the_tolerance():
+    # the walk takes its points from the moved midpoint's distance from the chord's midpoint, which bounds the bend
+    # where the moved edge also runs unevenly along its chord: a sinusoidal quadbin z4 cell holds ~3,000 pixels and
+    # its count is within 3e-3 of a pixel of the exact one
+    b, crs = RASTERS["sinu"]
+    ref = _native_reference(b, crs, "quadbin", 4)
+    lib = _partial(b, "quadbin", 4)
+    assert max(abs(lib[c]["count"] - r[0]) for c, r in ref.items()) <= 3e-3
+
+
+# +proj=merc +lon_0=180: its seam is the Greenwich meridian, across England
+_MERC180 = "+proj=merc +lon_0=180 +datum=WGS84 +units=m +no_defs"
+_MERC180_SEAM = get_transformer(4326, _MERC180).transform(-1e-9, 0.0)[0]
+_GREENWICH = _tif(
+    _ramp(20, 20),
+    _MERC180,
+    from_origin(
+        _MERC180_SEAM - 20 * 2000.0,
+        get_transformer(4326, _MERC180).transform(-0.5, 52.0)[1],
+        2000.0,
+        2000.0,
+    ),
+)
+
+
+@pytest.mark.parametrize("res", [2, 3])
+def test_bng_cells_across_the_raster_crs_seam_match_the_exact_reference(res):
+    # BNG cells (EPSG:27700 squares) across the raster CRS's seam: the cut runs on the seam meridian, found in
+    # lon/lat, not in eastings. The reference moves each cell continuously past the seam (closed form: a moved x
+    # below 0 is on the far side, one turn east of the raster)
+    def unwrap(x):
+        return np.where(x < 0.0, x + 2.0 * _MERC180_SEAM, x)
+
+    # one operation both ways (for this CRS pair PROJ picks different ones per direction, 122 m apart), as the library
+    from databricks.labs.gbx.core.crs import get_operation_transformer
+
+    forward = get_operation_transformer(_MERC180, 27700, (-1.0, 51.5, 0.5, 52.5))
+    ref = _native_reference(_GREENWICH, _MERC180, "bng", res, unwrap, forward)
+    lib = _partial(_GREENWICH, "bng", res)
+    assert {c for c, r in ref.items() if r[0] > _SLIVER} <= set(lib)
+    for cid, r in ref.items():
+        if r[0] > _SLIVER:
+            assert lib[cid]["count"] == pytest.approx(
+                r[0], abs=_W_TOL * max(r[6], 1)
+            ), cid
+            assert lib[cid]["sum"] == pytest.approx(
+                r[1], rel=1e-4, abs=17 * _W_TOL * max(r[6], 1)
+            ), cid
+    # the cut keeps 1e-6 degrees (~0.1 m) clear of the seam on each side: 7e-5 of a 2 km pixel along it
+    with _open(_GREENWICH) as ds:
+        data = ds.read(1)[band_valid_mask(ds, 1)].astype("float64")
+    assert sum(c["count"] for c in lib.values()) == pytest.approx(data.size, rel=1e-5)
+    assert sum(c["sum"] for c in lib.values()) == pytest.approx(data.sum(), rel=1e-5)
+
+
+@pytest.mark.parametrize(
+    "name,x0,width",
+    [
+        ("world", -_SEAM_3857, 128),
+        ("west-half", -_SEAM_3857, 64),
+        ("east-half", 0.0, 64),
+    ],
+)
+@pytest.mark.parametrize("z", [0, 1])
+def test_quadbin_cells_half_the_globe_wide_keep_their_way_round(name, x0, width, z):
+    # a quadbin z1 cell is 180 degrees wide, z0 360: its edges are walked east, never the "short way". In EPSG:3857 a
+    # z1 tile of a 128 x 128 world raster is exactly 64 x 64 pixels
+    px = 2 * _SEAM_3857 / 128
+    b = _tif(np.ones((128, width)), "EPSG:3857", from_origin(x0, _SEAM_3857, px, px))
+    lib = _partial(b, "quadbin", z)
+    got = {
+        quadbin.cell_to_tile(c): r["count"]
+        for c, r in lib.items()
+        if r["count"] > _SLIVER
+    }
+    if z == 0:
+        want = {(0, 0, 0): 128.0 * width}
+    else:
+        cols = {"world": (0, 1), "west-half": (0,), "east-half": (1,)}[name]
+        want = {(x, y, 1): 4096.0 for x in cols for y in (0, 1)}
+    assert set(got) == set(want)
+    for tile, n in want.items():
+        assert got[tile] == pytest.approx(n, abs=1e-6), tile
+
+
+_OMERC = (
+    "+proj=omerc +lat_0=4 +lonc=102.25 +alpha=323.0257905 +k=0.99984 +x_0=804671 +y_0=0 +no_uoff "
+    "+gamma=323.1301023611111 +ellps=GRS80 +units=m +no_defs"
+)
+
+
+def test_a_seam_that_is_no_meridian_is_refused_with_a_fix():
+    # an 8,000 km oblique Mercator raster: its seam is not a meridian, so a cell across it cannot be cut there
+    b = _tif(np.ones((40, 40)), None, from_origin(-12e6, 12e6, 6e5, 6e5))
+    with pytest.raises(ValueError) as err:
+        _partial(b, "h3", 1, crs=_OMERC)
+    msg = str(err.value)
+    assert msg.startswith("gbx_rst_h3_rastertogrid_partial:") and "Fix:" in msg
+    assert "PROJCS" not in msg and len(msg) < 400
+
+
+def test_points_that_do_not_transform_take_the_warp():
+    # a Mollweide raster whose padded outline leaves the globe's edge (no lon/lat there): covering takes the warp to
+    # EPSG:4326, as before; centroid needs no outline and stays native
+    moll = "+proj=moll +lon_0=0 +datum=WGS84 +units=m +no_defs"
+    edge = get_transformer(4326, moll).transform(180.0, 1.0)[0]
+    b = _tif(
+        _ramp(10, 10, holes=False),
+        moll,
+        from_origin(edge - 10 * 20000.0 - 5000.0, 100000.0, 20000.0, 20000.0),
+    )
+    with _open(b) as ds:
+        warped = gridagg._warp_to_4326_if_needed(ds, None)
+    assert _partial(b, "h3", 5) == _partial(warped, "h3", 5)
+    ref = _centroid_reference(b, moll, "h3", 5)
+    lib = _partial(b, "h3", 5, assignment="centroid")
+    assert {c: r["count"] for c, r in lib.items()} == {
+        c: n for c, (n, _) in ref.items()
+    }

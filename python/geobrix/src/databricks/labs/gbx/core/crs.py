@@ -517,6 +517,31 @@ def get_transformer(src, dst):
     return tr
 
 
+def get_operation_transformer(src, dst, area=None):
+    """A ``pyproj.Transformer`` of ONE coordinate operation from ``src`` to ``dst``: the most relevant for ``area``
+    (``(west, south, east, north)`` in lon/lat; None for anywhere), built with ``always_xy=True``.
+
+    :func:`get_transformer`'s transformer lets PROJ pick an operation per point and per direction, by area of use, and
+    for some CRS pairs the two directions pick different ones, so a point moved there and back misses (measured:
+    122 m between EPSG:27700 and a PROJ-string Mercator on ``+datum=WGS84``). This one's inverse is its operation's
+    inverse. Not cached: a caller asks for it once, when it finds the round trip off.
+    """
+    import warnings
+
+    from pyproj.aoi import AreaOfInterest
+    from pyproj.transformer import TransformerGroup
+
+    aoi = None if area is None else AreaOfInterest(*area)
+    with (
+        warnings.catch_warnings()
+    ):  # "best transformation is not available": the best one at hand is taken
+        warnings.simplefilter("ignore", UserWarning)
+        group = TransformerGroup(
+            _as_crs(src), _as_crs(dst), always_xy=True, area_of_interest=aoi
+        )
+    return group.transformers[0] if group.transformers else get_transformer(src, dst)
+
+
 def in_target_domain(lonlat_coords, target_crs) -> "Optional[bool]":
     """Is every lon/lat coordinate inside target_crs's area_of_use bbox?
 

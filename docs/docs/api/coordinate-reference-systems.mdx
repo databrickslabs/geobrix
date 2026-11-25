@@ -167,7 +167,7 @@ Absent or CRS-less input **never throws**. It degrades to a sensible assumption:
 
 ### Grid aggregation works in the raster's own CRS {#grid-aggregation-works-in-the-rasters-own-crs}
 
-H3 and quadbin cells are in EPSG:4326, and BNG cells in EPSG:27700. `rst_<grid>_rastertogrid*` grids a raster in another CRS on its own pixels, with no reprojection:
+H3 and quadbin cells are in EPSG:4326, and BNG cells in EPSG:27700. `rst_<grid>_rastertogrid*` grids a raster in another CRS on its own pixels:
 
 - **`covering`** moves each cell into the raster's CRS and shares every valid pixel out by the overlapping area.
 - **`centroid`** moves each valid pixel's centre to the grid's CRS and bins it there.

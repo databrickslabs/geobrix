@@ -126,16 +126,16 @@ test = [
 # wheels declare the other family's names the same way. The version is __version__'s (a guard
 # row checks it); [light-base] is gone: its packages are the base dependencies above.
 # ---------------------------------------------------------------------------
-light_dbr17 = ["geobrix==0.6.0+env5"]
-light_dbr18 = ["geobrix==0.6.0+env5"]
-light_env5 = ["geobrix==0.6.0+env5"]
-light_dbr17_all = ["geobrix==0.6.0+env5"]
-light_dbr18_all = ["geobrix==0.6.0+env5"]
-light_env5_all = ["geobrix==0.6.0+env5"]
-light_dbr19 = ["geobrix==0.6.0+env6"]
-light_env6 = ["geobrix==0.6.0+env6"]
-light_dbr19_all = ["geobrix==0.6.0+env6"]
-light_env6_all = ["geobrix==0.6.0+env6"]
+light_dbr17 = ["geobrix==0.6.1+env5"]
+light_dbr18 = ["geobrix==0.6.1+env5"]
+light_env5 = ["geobrix==0.6.1+env5"]
+light_dbr17_all = ["geobrix==0.6.1+env5"]
+light_dbr18_all = ["geobrix==0.6.1+env5"]
+light_env5_all = ["geobrix==0.6.1+env5"]
+light_dbr19 = ["geobrix==0.6.1+env6"]
+light_env6 = ["geobrix==0.6.1+env6"]
+light_dbr19_all = ["geobrix==0.6.1+env6"]
+light_env6_all = ["geobrix==0.6.1+env6"]
 # ---------------------------------------------------------------------------
 # Zarr transactional stores (gbx.zarr). Canonical body: zarr_dbr19. Alias: zarr_env6. Dev loop
 # only: the dev container installs zarr_dbr19 (ensure_zarr_extra in scripts/commands/common.sh) and
@@ -238,9 +238,9 @@ vizx = [
 #     (the env5 base's CUDA-12 torch pair; OpenCV 4.x, as 5.x aborts in its FIPS self-test on the
 #     GPU node: gbx.models.serving.MODEL_DEPS)
 # ---------------------------------------------------------------------------
-photogrammetry_gpu_env5 = ["geobrix==0.6.0+env6"]
-models_gpu_env5 = ["geobrix==0.6.0+env6"]
-gpu_env5_all = ["geobrix==0.6.0+env6"]
+photogrammetry_gpu_env5 = ["geobrix==0.6.1+env6"]
+models_gpu_env5 = ["geobrix==0.6.1+env6"]
+gpu_env5_all = ["geobrix==0.6.1+env6"]
 
 [tool.coverage.run]
 # Exclude sample-data bundle from coverage total so reported % reflects main library (gridx, rasterx, vectorx)

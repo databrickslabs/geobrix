@@ -629,7 +629,7 @@ def test_the_summary_lists_the_table_the_failures_and_the_skips(tmp_path):
 
 
 def test_the_jar_is_copied_out_and_named_by_its_content(tmp_path):
-    jar = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     jar.write_bytes(b"jar bytes")
     got = launcher.stage_jar(jar, REPO_ROOT)
     assert Path(got["local"]) != jar and Path(got["local"]).read_bytes() == b"jar bytes"
@@ -1408,7 +1408,7 @@ def test_a_missing_wheel_does_not_stop_a_plan_but_does_stop_a_launch(monkeypatch
 
 
 def test_a_plan_that_only_explains_makes_no_copy_of_the_jar(tmp_path):
-    jar = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     jar.write_bytes(b"jar")
     got = launcher.stage_jar(jar, REPO_ROOT, copy=False)
     assert got["local"] == str(jar) and got["sha256"] and got["dir"].startswith("test-pool-jars/")
@@ -1436,7 +1436,7 @@ def test_wheel_takes_a_file_or_the_folder_that_holds_the_newest_env6_wheel(tmp_p
 
 
 def test_jar_path_takes_a_file_or_the_folder_that_holds_the_jar(tmp_path):
-    jar = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     jar.write_bytes(b"PK")
     (tmp_path / "geobrix-0.6.0.jar").write_bytes(b"PK")  # the thin JAR is not the one
     assert launcher.jar_source(str(tmp_path)) == jar

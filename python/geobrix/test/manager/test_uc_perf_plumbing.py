@@ -14,8 +14,8 @@ from databricks.labs.gbx import manifest, uc
 from databricks.labs.gbx.uc import ddl, sqlbody
 
 RAW = json.loads((Path(manifest.__file__).with_name("functions.json")).read_text())
-WHEEL = "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
-JAR = "/Volumes/c/s/v/geobrix-0.6.0-jar-with-dependencies.jar"
+WHEEL = "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl"
+JAR = "/Volumes/c/s/v/geobrix-0.6.1-jar-with-dependencies.jar"
 
 
 def _row(raw, name):

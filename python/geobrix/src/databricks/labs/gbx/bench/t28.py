@@ -90,7 +90,7 @@ class Params:
     # the folder that holds the env 6 wheel alone: "" means <volroot>/t28/<sha12> of the checkout's HEAD
     volume_dir: str = ""
     jar: str = (
-        f"{DEFAULT_VOLROOT}/geobrix/0.6.0/jar/geobrix-0.6.0-jar-with-dependencies.jar"
+        f"{DEFAULT_VOLROOT}/geobrix/0.6.1/jar/geobrix-0.6.1-jar-with-dependencies.jar"
     )
     volroot: str = (
         DEFAULT_VOLROOT  # where the flat env wheels are staged (gbx:data:stage-wheel --env both)

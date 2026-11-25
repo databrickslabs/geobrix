@@ -131,7 +131,7 @@ import base64
 import hashlib
 
 
-def _wheel(tmp_path, *, version="0.6.0", env=6, jar_names=None, jar_bytes=None, recorded=None, record=True):
+def _wheel(tmp_path, *, version="0.6.1", env=6, jar_names=None, jar_bytes=None, recorded=None, record=True):
     """An env wheel with a RECORD, as pip lists it. ``recorded``: the sha256 hex the RECORD says (default: the JAR's)."""
     jar_names = [f"geobrix-{version}-jar-with-dependencies.jar"] if jar_names is None else jar_names
     if jar_bytes is None:
@@ -207,8 +207,8 @@ def test_from_wheel_stages_the_jar_then_its_sidecar_into_the_versioned_jar_folde
     whl, sha, size = _wheel(tmp_path)
     files = _Files()
     assert from_wheel(whl, files) == 0
-    name = "geobrix-0.6.0-jar-with-dependencies.jar"
-    folder = "/Volumes/c/s/v/geobrix/0.6.0/jar"
+    name = "geobrix-0.6.1-jar-with-dependencies.jar"
+    folder = "/Volumes/c/s/v/geobrix/0.6.1/jar"
     assert [c[:2] for c in files.calls] == [("mkdir", folder), ("upload", f"{folder}/{name}"),
                                            ("upload", f"{folder}/{name}.sha256")]  # fmt: skip
     assert len(files.calls[1][2]) == size  # the JAR's own bytes
@@ -217,7 +217,7 @@ def test_from_wheel_stages_the_jar_then_its_sidecar_into_the_versioned_jar_folde
 
 def test_from_wheel_stops_on_a_short_upload_before_the_sidecar(from_wheel, tmp_path, capsys):
     whl, _, _ = _wheel(tmp_path)
-    files = _Files(short={"geobrix-0.6.0-jar-with-dependencies.jar"})
+    files = _Files(short={"geobrix-0.6.1-jar-with-dependencies.jar"})
     assert from_wheel(whl, files) == 1
     assert "upload verification failed" in capsys.readouterr().err
     assert not [c for c in files.calls if c[0] == "upload" and c[1].endswith(".sha256")]
@@ -227,9 +227,9 @@ def test_from_wheel_stops_on_a_short_upload_before_the_sidecar(from_wheel, tmp_p
     "kw, why",
     [
         ({"jar_names": []}, "bundles 0 JARs"),
-        ({"jar_names": ["geobrix-0.6.0-jar-with-dependencies.jar", "geobrix-0.5.2-jar-with-dependencies.jar"]},
+        ({"jar_names": ["geobrix-0.6.1-jar-with-dependencies.jar", "geobrix-0.5.2-jar-with-dependencies.jar"]},
          "bundles 2 JARs"),
-        ({"jar_names": ["geobrix-0.5.2-jar-with-dependencies.jar"]}, "wheel is version 0.6.0"),
+        ({"jar_names": ["geobrix-0.5.2-jar-with-dependencies.jar"]}, "wheel is version 0.6.1"),
         ({"recorded": "ab" * 32}, "RECORD lists abababababab"),
         ({"record": False}, "holds 0 RECORD files"),
     ],
@@ -281,7 +281,7 @@ def test_from_wheel_needs_a_path(stage, monkeypatch, capsys):
 def test_from_wheel_refuses_a_jar_member_with_a_bad_crc_as_one_clear_line(from_wheel, tmp_path, capsys):
     whl, _, _ = _wheel(tmp_path)
     data = bytearray(whl.read_bytes())
-    jar_name = b"databricks/labs/gbx/_jar/geobrix-0.6.0-jar-with-dependencies.jar"
+    jar_name = b"databricks/labs/gbx/_jar/geobrix-0.6.1-jar-with-dependencies.jar"
     start = data.index(jar_name) + len(jar_name) + 4  # a few bytes into the stored member, past its name
     data[start] ^= 0xFF  # the member is stored (not deflated): its CRC no longer matches
     whl.write_bytes(bytes(data))
@@ -321,10 +321,10 @@ def test_dest_stages_the_jar_and_sidecar_to_that_folder_then_removes_the_other_j
     old = "geobrix-0.5.2-jar-with-dependencies.jar"
     files = _FolderFiles(
         present=[old, old + ".sha256", "geobrix-0.6.0+env6-py3-none-any.whl", "notes.txt",
-                 "geobrix-0.6.0-jar-with-dependencies.jar", "geobrix-0.6.0-jar-with-dependencies.jar.sha256"],
+                 "geobrix-0.6.1-jar-with-dependencies.jar", "geobrix-0.6.1-jar-with-dependencies.jar.sha256"],
     )  # fmt: skip
     assert from_wheel(whl, files, dest="/Volumes/c/s/v/t28/uc-scala/") == 0
-    name = "geobrix-0.6.0-jar-with-dependencies.jar"
+    name = "geobrix-0.6.1-jar-with-dependencies.jar"
     folder = "/Volumes/c/s/v/t28/uc-scala"
     kinds = [(c[0], c[1]) for c in files.calls]
     assert kinds[:3] == [("mkdir", folder), ("upload", f"{folder}/{name}"), ("upload", f"{folder}/{name}.sha256")]
@@ -336,14 +336,14 @@ def test_dest_stages_the_jar_and_sidecar_to_that_folder_then_removes_the_other_j
 def test_dest_removes_nothing_when_the_upload_did_not_land(from_wheel, tmp_path, capsys):
     whl, _, _ = _wheel(tmp_path)
     files = _FolderFiles(present=["geobrix-0.5.2-jar-with-dependencies.jar"],
-                         short={"geobrix-0.6.0-jar-with-dependencies.jar"})  # fmt: skip
+                         short={"geobrix-0.6.1-jar-with-dependencies.jar"})  # fmt: skip
     assert from_wheel(whl, files, dest="/Volumes/c/s/v/t28/uc-scala") == 1
     assert not [c for c in files.calls if c[0] == "delete"]  # the JAR already there survives a failed upload
 
 
 def test_prune_other_jars_deletes_only_the_other_jars_and_their_sidecars(stage):
     module, _ = stage
-    keep = "geobrix-0.6.0-jar-with-dependencies.jar"
+    keep = "geobrix-0.6.1-jar-with-dependencies.jar"
     old = "geobrix-0.5.2-jar-with-dependencies.jar"
     files = _FolderFiles(present=[keep, keep + ".sha256", old, old + ".sha256", "geobrix-0.5.2+env6-py3-none-any.whl", "notes.txt"])
     assert module._prune_other_jars(types.SimpleNamespace(files=files), "/Volumes/c/s/v/f", keep) == 0
@@ -357,7 +357,7 @@ def test_prune_other_jars_reports_a_failed_delete_as_one_line_and_exit_1(stage, 
         def delete(self, path):
             raise RuntimeError("denied")
 
-    keep = "geobrix-0.6.0-jar-with-dependencies.jar"
+    keep = "geobrix-0.6.1-jar-with-dependencies.jar"
     files = _Broken(present=[keep, "geobrix-0.5.2-jar-with-dependencies.jar"])
     assert module._prune_other_jars(types.SimpleNamespace(files=files), "/Volumes/c/s/v/f", keep) == 1
     err = capsys.readouterr().err

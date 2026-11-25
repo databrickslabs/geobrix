@@ -82,7 +82,7 @@ Each weather, soil and vegetation dataset goes onto H3 once, at the resolution t
 ## Prerequisites
 
 - **Serverless environment 6.** The series runs at the Python level, with no JAR.
-- **The `+env6` wheel.** `config_nb` installs `geobrix-0.6.1+env6-py3-none-any.whl` from the sample-data Volume, with the `vizx` extra. See [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path).
+- **The `+env6` wheel.** `config_nb` installs the env6 wheel from the v0.6.1 GitHub release, with the `vizx` extra (other installs: [Installation](https://databrickslabs.github.io/geobrix/docs/installation)).
 - **Unity Catalog.** Set `catalog_name` and `schema_name` in `config_nb`. The defaults are `geospatial_docs` and `h3_pixels_crop_yield`. A Volume named `data` must already exist under the schema. The notebooks create folders in it but not the Volume.
 - **An Earthdata Login token.** GRACE-DA and HLS need it. `config_nb` reads it from the Unity Catalog secret named by `EARTHDATA_UC_SECRET`, with `dbutils.secrets.get(catalog, schema, key)`. The default is `geospatial_docs.vapor_eyes.earthdata_token`, the secret the Vapor Eyes series uses. Without it, the other datasets still run.
 - **Network access.** All downloaders fetch over HTTPS.

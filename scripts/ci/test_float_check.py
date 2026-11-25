@@ -169,7 +169,7 @@ def hostenv(tmp_path, monkeypatch):
     import pins
 
     (tmp_path / "dist" / "env6").mkdir(parents=True)
-    wheel = tmp_path / "dist" / "env6" / "geobrix-0.6.0-py3-none-any.whl"
+    wheel = tmp_path / "dist" / "env6" / "geobrix-0.6.1-py3-none-any.whl"
     wheel.write_text("")
     monkeypatch.setattr(fc, "REPO", tmp_path)
     monkeypatch.setattr(pins, "tag_hash", lambda root, arch: "abc123def456")

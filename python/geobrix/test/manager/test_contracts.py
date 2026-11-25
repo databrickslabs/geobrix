@@ -243,7 +243,7 @@ def _caps(**kw):
     return caps_mod.Capabilities(**base)
 
 
-OK_JAR = caps_mod.JarIdentity("0.6.0", "dev")
+OK_JAR = caps_mod.JarIdentity("0.6.1", "dev")
 
 
 def _l1_shape_ok(fn):
@@ -262,7 +262,7 @@ def _l1_shape_ok(fn):
         ("no-jar", dict()),
         (
             "stale-jar",
-            dict(jar=None, jar_reason="JAR 0.5.3 on classpath != wheel 0.6.0"),
+            dict(jar=None, jar_reason="JAR 0.5.3 on classpath != wheel 0.6.1"),
         ),
         ("dedicated", dict(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)),
         (
@@ -843,7 +843,7 @@ def test_java_udf_classes_exist_in_source(fqn):
         ("unknown|abc", False),
         ("dev|dev", False),
         ("0.5.3|abc", False),
-        ("0.6.0|abc", True),
+        ("0.6.1|abc", True),
     ],
 )
 def test_jar_identity_is_judged_against_the_wheel(monkeypatch, identity, jar_found):
@@ -872,7 +872,7 @@ def test_detect_points_the_jvm_at_the_wheel_natives_before_probing_gdal(monkeypa
     from databricks.labs.gbx.manager import jvm
 
     seen = []
-    monkeypatch.setattr(caps_mod, "_identity", lambda spark, connect: ("0.6.0|abc", ""))
+    monkeypatch.setattr(caps_mod, "_identity", lambda spark, connect: ("0.6.1|abc", ""))
     monkeypatch.setattr(caps_mod, "_expected_sha", lambda: "abc")
     monkeypatch.setattr(
         jvm, "_point_jvm_at_payload", lambda spark: seen.append("point")
@@ -997,7 +997,7 @@ def tvf_inner(fn):
     return fn.levels["L4"]["tvf_over"]
 
 
-JAR = "/Volumes/c/s/v/geobrix-0.6.0-jar-with-dependencies.jar"
+JAR = "/Volumes/c/s/v/geobrix-0.6.1-jar-with-dependencies.jar"
 
 
 @pytest.mark.parametrize("fn", UC_FNS, ids=lambda f: f.sql_name)
@@ -1006,9 +1006,9 @@ def test_uc_ddl_contract(fn):
         fn,
         "cat",
         "sch",
-        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl",
         MAN.uc_dependencies,
-        "0.6.0",
+        "0.6.1",
     )
     impl = stmts[0]
     assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only
@@ -1022,7 +1022,7 @@ def test_uc_ddl_contract(fn):
             and "PYTHON" not in text
             and "ENVIRONMENT" not in text
         )
-        assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in text
+        assert f"COMMENT {ddl.quote_str('geobrix 0.6.1: ' + fn.doc.summary)}" in text
         for p in fn.params:
             assert (
                 f"{p.name} {ddl.sql_type(p.uc)}"
@@ -1038,7 +1038,7 @@ def test_uc_ddl_contract(fn):
             p.default for p in MAN.functions[over].params
         ):  # its public name is a SQL wrapper
             over = f"gbx__{over[len('gbx_'):]}"
-        assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in tvf
+        assert f"COMMENT {ddl.quote_str('geobrix 0.6.1: ' + fn.doc.summary)}" in tvf
         assert "LANGUAGE PYTHON" not in tvf
         assert f"RETURNS TABLE ({', '.join(f'{n} {t}' for n, t in fn.columns)})" in tvf
         call = f"`cat`.`sch`.{over}({', '.join(p.name for p in fn.params)})"
@@ -1063,7 +1063,7 @@ def test_uc_ddl_contract(fn):
                 assert f"{p.name} {ddl.sql_type(p.uc)} DEFAULT {p.default}" in tvf
         return
     assert "environment_version = '6'" in impl and "geobrix @ file:///Volumes/" in impl
-    assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in impl
+    assert f"COMMENT {ddl.quote_str('geobrix 0.6.1: ' + fn.doc.summary)}" in impl
     assert "LANGUAGE PYTHON" in impl and "LANGUAGE SCALA" not in impl
     has_default = any(p.default for p in fn.params)
     assert len(stmts) == (2 if has_default else 1)
@@ -1094,13 +1094,13 @@ def test_uc_scala_ddl_contract(fn):
         fn,
         "cat",
         "sch",
-        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl",
         MAN.uc_dependencies,
-        "0.6.0",
+        "0.6.1",
     )
     (impl,) = ddl.function_ddl(*args, jar_uri=JAR)
     assert "LANGUAGE SCALA\nDETERMINISTIC\n" in impl and "LANGUAGE PYTHON" not in impl
-    assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in impl
+    assert f"COMMENT {ddl.quote_str('geobrix 0.6.1: ' + fn.doc.summary)}" in impl
     assert (
         f"ENVIRONMENT (java_dependencies = '[\"{JAR}\"]', environment_version = '6')"
         in impl
@@ -1125,7 +1125,7 @@ def test_uc_scala_jar_path_is_checked_like_the_wheel():
             "sch",
             "file:///v/w.whl",
             MAN.uc_dependencies,
-            "0.6.0",
+            "0.6.1",
             jar_uri="/Volumes/a'b.jar",
         )
 
@@ -1135,9 +1135,9 @@ def test_uc_batch_style_is_python_even_with_a_jar():
         MAN.functions["gbx_bng_eastnorthasbng"],
         "cat",
         "sch",
-        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl",
         MAN.uc_dependencies,
-        "0.6.0",
+        "0.6.1",
         style="batch",
         name="gbx_probe_bng_eastnorthasbng_batch",
         jar_uri=JAR,
@@ -1150,9 +1150,9 @@ def test_uc_ddl_batch_style_names_a_pandas_handler_beside_the_product_function()
         MAN.functions["gbx_bng_eastnorthasbng"],
         "cat",
         "sch",
-        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl",
         MAN.uc_dependencies,
-        "0.6.0",
+        "0.6.1",
         style="batch",
         name="gbx_probe_bng_eastnorthasbng_batch",
     )
@@ -1167,9 +1167,9 @@ def test_uc_ddl_names_a_bench_probe_copys_implementation_beside_its_wrapper():
         MAN.functions["gbx_bng_geomkring"],
         "cat",
         "sch",
-        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl",
         MAN.uc_dependencies,
-        "0.6.0",
+        "0.6.1",
         name="gbx_probe_bng_geomkring",
     )
     assert impl.startswith(
@@ -1401,10 +1401,10 @@ class _UcSpark:
         return type("R", (), {"collect": lambda _s, r=rows: r})()
 
 
-ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
-ENV5_WHEEL = "geobrix-0.6.0+env5-py3-none-any.whl"
-PLAIN_WHEEL = "geobrix-0.6.0-py3-none-any.whl"
-UC_NAMES = {f.sql_name: f"geobrix 0.6.0: {f.doc.summary}" for f in UC_FNS}
+ENV6_WHEEL = "geobrix-0.6.1+env6-py3-none-any.whl"
+ENV5_WHEEL = "geobrix-0.6.1+env5-py3-none-any.whl"
+PLAIN_WHEEL = "geobrix-0.6.1-py3-none-any.whl"
+UC_NAMES = {f.sql_name: f"geobrix 0.6.1: {f.doc.summary}" for f in UC_FNS}
 # the private routines a table function reads are created and verified with it
 PRIV_TVF = sorted(
     {
@@ -1416,13 +1416,13 @@ PRIV_TVF = sorted(
 # the private routines a SQL body calls (L4 `private`) are created and verified with it too
 PRIV_SQL = sorted({p for f in UC_FNS for p in f.levels["L4"].get("private", ())})
 UC_NAMES.update(
-    {n: f"geobrix 0.6.0: {MAN.private[n].summary}" for n in PRIV_TVF + PRIV_SQL}
+    {n: f"geobrix 0.6.1: {MAN.private[n].summary}" for n in PRIV_TVF + PRIV_SQL}
 )
 # the SQL helpers of a kernel are created and verified with it (one definition however many functions name it)
 SQL_HELPERS = {h["name"]: h for f in UC_SQL_FNS for h in sqlbody.l4_source(f)[1]}
 UC_NAMES.update(
     {
-        n: f"geobrix 0.6.0: {h.get('summary') or 'SQL helper of a kernel'}"
+        n: f"geobrix 0.6.1: {h.get('summary') or 'SQL helper of a kernel'}"
         for n, h in SQL_HELPERS.items()
     }
 )
@@ -1494,11 +1494,11 @@ def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
 ):
     from databricks.labs.gbx import uc
 
-    volume.files = [ENV6_WHEEL, "geobrix-0.6.0-jar-with-dependencies.jar"]
+    volume.files = [ENV6_WHEEL, "geobrix-0.6.1-jar-with-dependencies.jar"]
     monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
     spark = _UcSpark(UC_NAMES)
     stmts = uc.install("cat", "sch", VOLUME_DIR, spark=spark)
-    jar = f"{VOLUME_DIR}/geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = f"{VOLUME_DIR}/geobrix-0.6.1-jar-with-dependencies.jar"
     scala = [s for s in stmts if "LANGUAGE SCALA" in s]
     assert len(scala) == len(UC_SCALA_FNS) and all(jar in s for s in scala)
     assert {re.search(r"FUNCTION `cat`.`sch`.(\w+)\(", s).group(1) for s in scala} == {
@@ -1520,18 +1520,18 @@ def test_uc_install_takes_the_exact_jar_beside_other_geobrix_jars(volume, monkey
 
     volume.files = [
         ENV6_WHEEL,
-        "geobrix-0.6.0.jar",
-        "geobrix-0.6.0-sources.jar",
+        "geobrix-0.6.1.jar",
+        "geobrix-0.6.1-sources.jar",
         "geobrix-0.5.3-jar-with-dependencies.jar",
-        "geobrix-0.6.0-jar-with-dependencies.jar",
+        "geobrix-0.6.1-jar-with-dependencies.jar",
     ]
     monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
     stmts = uc.install("cat", "sch", VOLUME_DIR, spark=_UcSpark(UC_NAMES))
-    jar = f"{VOLUME_DIR}/geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = f"{VOLUME_DIR}/geobrix-0.6.1-jar-with-dependencies.jar"
     scala = [s for s in stmts if "LANGUAGE SCALA" in s]
     assert len(scala) == len(UC_SCALA_FNS) and all(jar in s for s in scala)
     # the exact JAR twice is refused
-    volume.files = [ENV6_WHEEL, *(["geobrix-0.6.0-jar-with-dependencies.jar"] * 2)]
+    volume.files = [ENV6_WHEEL, *(["geobrix-0.6.1-jar-with-dependencies.jar"] * 2)]
     with pytest.raises(RuntimeError, match=r"more than once.*Fix: keep one copy"):
         uc.install("cat", "sch", VOLUME_DIR, spark=_UcSpark(UC_NAMES))
 
@@ -1539,9 +1539,9 @@ def test_uc_install_takes_the_exact_jar_beside_other_geobrix_jars(volume, monkey
 @pytest.mark.parametrize(
     "jars",
     [
-        ["geobrix-0.6.0.jar"],
+        ["geobrix-0.6.1.jar"],
         ["geobrix-0.5.3-jar-with-dependencies.jar"],
-        ["geobrix-0.6.0.jar", "geobrix-0.5.3-jar-with-dependencies.jar"],
+        ["geobrix-0.6.1.jar", "geobrix-0.5.3-jar-with-dependencies.jar"],
     ],
     ids=["thin-only", "other-version", "two-others"],
 )
@@ -1554,7 +1554,7 @@ def test_uc_install_refuses_a_folder_without_the_jar_with_dependencies_of_this_w
     monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
     spark = _UcSpark(UC_NAMES)
     with pytest.raises(
-        RuntimeError, match=r"Fix: stage geobrix-0\.6\.0-jar-with-dependencies\.jar"
+        RuntimeError, match=r"Fix: stage geobrix-0\.6\.1-jar-with-dependencies\.jar"
     ):
         uc.install("cat", "sch", VOLUME_DIR, spark=spark)
     assert not spark.stmts
@@ -1721,7 +1721,7 @@ def test_register_session_says_once_when_the_uc_schema_has_another_version(
     register(session, only=["gbx_bng_cellarea"], catalog="cat", schema="sch")
     out = capsys.readouterr().out
     line = (
-        "geobrix: Unity Catalog schema cat.sch has geobrix 0.5.3, 0.5.4, this wheel is 0.6.0; unqualified gbx_ names "
+        "geobrix: Unity Catalog schema cat.sch has geobrix 0.5.3, 0.5.4, this wheel is 0.6.1; unqualified gbx_ names "
         "resolve to the session functions (re-run gbx.uc.install to update UC)"
     )
     assert out.count(line) == 1  # once per session, whatever the number of calls
@@ -1801,7 +1801,7 @@ def _standard_stub(monkeypatch, tmp_path, jar=True):
     monkeypatch.setattr(
         caps_mod, "_expected_sha", lambda: None
     )  # not the payload's bundled JAR
-    path = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    path = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     path.write_bytes(b"PK")
     if jar:
         monkeypatch.setenv("GBX_JAR_PATH", str(path))
@@ -3214,7 +3214,7 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
 
 
 def _fake_wheel(
-    tmp_path, jars, record_hash=None, name="geobrix-0.6.0+env6-py3-none-any.whl"
+    tmp_path, jars, record_hash=None, name="geobrix-0.6.1+env6-py3-none-any.whl"
 ):
     """A wheel with the given JAR names (bytes b"jar-bytes") and a RECORD listing each one's sha256
     (``record_hash`` overrides the listed hash)."""
@@ -3231,7 +3231,7 @@ def _fake_wheel(
             z.writestr(member, b"jar-bytes")
             rows.append(f"{member},sha256={record_hash or good.decode()},9")
         z.writestr("databricks/labs/gbx/__init__.py", b"")
-        z.writestr("geobrix-0.6.0.dist-info/RECORD", "\n".join(rows) + "\n")
+        z.writestr("geobrix-0.6.1.dist-info/RECORD", "\n".join(rows) + "\n")
     return str(whl)
 
 
@@ -3240,7 +3240,7 @@ def test_jar_from_wheel_takes_the_one_jar_and_refuses_otherwise(tmp_path):
 
     assert (
         stage.jar_from_wheel(
-            _fake_wheel(tmp_path, ["geobrix-0.6.0-jar-with-dependencies.jar"])
+            _fake_wheel(tmp_path, ["geobrix-0.6.1-jar-with-dependencies.jar"])
         )
         == b"jar-bytes"
     )
@@ -3252,7 +3252,7 @@ def test_jar_from_wheel_refuses_a_jar_of_another_version(tmp_path):
     from databricks.labs.gbx import stage
 
     whl = _fake_wheel(tmp_path, ["geobrix-0.5.3-jar-with-dependencies.jar"])
-    with pytest.raises(ValueError, match=r"0\.5\.3.*0\.6\.0.*Fix:.*rebuild"):
+    with pytest.raises(ValueError, match=r"0\.5\.3.*0\.6\.1.*Fix:.*rebuild"):
         stage.jar_from_wheel(whl)
 
 
@@ -3261,7 +3261,7 @@ def test_jar_from_wheel_refuses_bytes_that_differ_from_the_record(tmp_path):
 
     whl = _fake_wheel(
         tmp_path,
-        ["geobrix-0.6.0-jar-with-dependencies.jar"],
+        ["geobrix-0.6.1-jar-with-dependencies.jar"],
         record_hash="A" * 43,
     )
     with pytest.raises(ValueError, match=r"RECORD.*Fix:.*rebuild"):
@@ -3275,7 +3275,7 @@ def test_stage_jar_writes_the_jar_and_its_sha_and_refuses_a_second_jar(
 
     from databricks.labs.gbx import _native, stage
 
-    src = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    src = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     src.write_bytes(b"jar-bytes")
     vol = tmp_path / "vol"
     monkeypatch.setattr(_native, "jar_path", lambda root=None: str(src))
@@ -3297,7 +3297,7 @@ def test_stage_jar_recopies_a_jar_that_is_gone_or_truncated_behind_its_sidecar(
 ):
     from databricks.labs.gbx import _native, stage
 
-    src = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    src = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     src.write_bytes(b"jar-bytes")
     vol = tmp_path / "vol"
     monkeypatch.setattr(_native, "jar_path", lambda root=None: str(src))
@@ -3322,7 +3322,7 @@ def test_stage_jar_without_a_bundled_jar_or_off_a_volume_says_how_to_fix_it(
     monkeypatch.setattr(_native, "jar_path", lambda root=None: None)
     with pytest.raises(RuntimeError, match="Fix:.*env wheel"):
         stage.stage_jar("/Volumes/c/s/v/jars")
-    src = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    src = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     src.write_bytes(b"jar-bytes")
     monkeypatch.setattr(_native, "jar_path", lambda root=None: str(src))
     with pytest.raises(ValueError, match="Fix:"):
@@ -3810,16 +3810,16 @@ def test_the_reminder_links_to_an_existing_page():
 
 
 # --- private routines and procedures ---------------------------------------------------------------------------------
-WHEEL_URI = "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+WHEEL_URI = "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl"
 
 
 @pytest.mark.parametrize("name", sorted(MAN.private))
 def test_uc_private_routine_ddl_contract(name):
     pf = MAN.private[name]
-    stmt = ddl.private_ddl(pf, "cat", "sch", WHEEL_URI, MAN.uc_dependencies, "0.6.0")
+    stmt = ddl.private_ddl(pf, "cat", "sch", WHEEL_URI, MAN.uc_dependencies, "0.6.1")
     assert stmt.startswith(f"CREATE OR REPLACE FUNCTION `cat`.`sch`.{name}(")
     assert "LANGUAGE PYTHON" in stmt and "environment_version = '6'" in stmt
-    assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + pf.summary)}" in stmt
+    assert f"COMMENT {ddl.quote_str('geobrix 0.6.1: ' + pf.summary)}" in stmt
     assert "DEFAULT" not in stmt  # a Python function cannot declare one
     assert all(
         (

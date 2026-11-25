@@ -64,7 +64,7 @@ def _default_spec(env: str = "6") -> str:
     catalog = os.environ.get("GBX_BUNDLE_VOLUME_CATALOG", "main")
     schema = os.environ.get("GBX_BUNDLE_VOLUME_SCHEMA", "default")
     volume = os.environ.get("GBX_BUNDLE_VOLUME_NAME", "geobrix_samples")
-    ver = os.environ.get("GBX_VERSION", "0.6.0")
+    ver = os.environ.get("GBX_VERSION", "0.6.1")
     return (
         f"geobrix @ file:///Volumes/{catalog}/{schema}/{volume}/"
         f"geobrix-{ver}+env{env}-py3-none-any.whl"

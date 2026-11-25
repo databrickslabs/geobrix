@@ -48,7 +48,7 @@ def _payload(root):
         "_jar",
     ):
         (root / d).mkdir(parents=True)
-    (root / "_jar" / "geobrix-0.6.0-jar-with-dependencies.jar").write_bytes(b"PK")
+    (root / "_jar" / "geobrix-0.6.1-jar-with-dependencies.jar").write_bytes(b"PK")
     return root
 
 
@@ -106,7 +106,7 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
         _native.libgdal_path(r, "x86_64")
         == f"{r}/_native/x86_64/lib/libgdal-0a1b2c3d.so.39"
     )
-    assert _native.jar_path(r) == f"{r}/_jar/geobrix-0.6.0-jar-with-dependencies.jar"
+    assert _native.jar_path(r) == f"{r}/_jar/geobrix-0.6.1-jar-with-dependencies.jar"
     assert _native.projsync_path(r, "x86_64") == f"{r}/_native/x86_64/bin/projsync"
 
     # A second call changes nothing.

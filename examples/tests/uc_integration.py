@@ -640,7 +640,7 @@ class Gate:
             say(f"reuse {dist[-1].name}: {'yes' if ok else 'no'}, {why}")
             if ok:
                 return dist[-1]
-        jar = REPO_ROOT / "target" / "geobrix-0.6.0-jar-with-dependencies.jar"
+        jar = REPO_ROOT / "target" / "geobrix-0.6.1-jar-with-dependencies.jar"
         if jar_stale(jar):
             say("building the JAR (target/ is missing or older than the Scala sources)")
             rc, out = run_cmd(["bash", str(CMD / "gbx-data-stage-jar.sh")], self.run_dir / "build-jar.log", "JAR build", env={"GBX_BUNDLE_SKIP_JAR_UPLOAD": "1"})

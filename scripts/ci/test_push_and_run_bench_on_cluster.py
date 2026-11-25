@@ -159,7 +159,7 @@ def test_serverless_zarr_installs_the_wheel_and_extras_through_the_job_environme
 
     (env,) = sdk.submits[0]["environments"]
     deps = env.spec.dependencies
-    assert deps[0].endswith("geobrix-0.6.0+env6-py3-none-any.whl")  # the env wheel
+    assert deps[0].endswith("geobrix-0.6.1+env6-py3-none-any.whl")  # the env wheel
     assert any(d.startswith("zarr") for d in deps) and deps[-1] == "markdown"
     assert not any(d.startswith("geobrix[") for d in deps)  # extras are expanded
     (_, notebook), = sdk.uploads
@@ -342,8 +342,8 @@ def test_resume_needs_the_run_id_it_resumes(launch, sdk):
 # ---- the staged wheel and the profile
 
 
-VERSIONED = "/Volumes/c/s/v/geobrix/0.6.0/env6/geobrix-0.6.0+env6-py3-none-any.whl"
-FLAT = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
+VERSIONED = "/Volumes/c/s/v/geobrix/0.6.1/env6/geobrix-0.6.1+env6-py3-none-any.whl"
+FLAT = "/Volumes/c/s/v/geobrix-0.6.1+env6-py3-none-any.whl"
 
 
 def test_the_launcher_finds_the_versioned_staged_wheel_without_a_path_by_hand(launch, sdk):
@@ -358,7 +358,7 @@ def test_without_a_versioned_wheel_the_launcher_keeps_the_flat_path_and_an_expli
     assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t1") == 0
     assert sdk.submits[0]["environments"][0].spec.dependencies[0] == FLAT
     sdk.staged.add(VERSIONED)
-    mine = "/Volumes/c/s/v/mine/geobrix-0.6.0+env6-py3-none-any.whl"
+    mine = "/Volumes/c/s/v/mine/geobrix-0.6.1+env6-py3-none-any.whl"
     assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t2", GBX_BUNDLE_WHEEL_VOLUME_PATH=mine) == 0
     assert sdk.submits[1]["environments"][0].spec.dependencies[0] == mine
 

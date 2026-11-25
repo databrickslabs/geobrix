@@ -408,7 +408,7 @@ def test_the_jar_check_leaves_a_matching_cluster_alone_and_reinstalls_a_mismatch
 ):
     w = FakeW()
     c = w.add("a", tags={"gbx_jar": "none"})
-    jar = f"{VOL}/geobrix/0.6.0/jar/geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = f"{VOL}/geobrix/0.6.1/jar/geobrix-0.6.1-jar-with-dependencies.jar"
     # a clean cluster, no jar wanted: nothing to do
     assert (
         pool.sync_jars(w, "a", [], say=lambda s: None)["action"] == "ok" and not w.calls

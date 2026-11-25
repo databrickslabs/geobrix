@@ -454,7 +454,7 @@ def _new_cluster_task(cluster):
 
 
 def test_a_new_cluster_run_carries_the_jar_as_a_library_of_the_task(fake_sdk):
-    jar = "/Volumes/c/s/v/geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = "/Volumes/c/s/v/geobrix-0.6.1-jar-with-dependencies.jar"
 
     task = _new_cluster_task(rns.JobCluster(user_name="me@example.com", jar=jar))
 

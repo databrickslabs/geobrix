@@ -72,8 +72,8 @@ def _lists(tmp_path, monkeypatch, core, extras=None, env=6):
 
 def test_the_list_format_round_trips_and_refuses_an_unhashed_or_repeated_pin():
     pins = {"h3": ("4.5.0", "a" * 64), "typing-extensions": ("4.16.0", "b" * 64)}
-    text = _deps.format_list("geobrix 0.6.0 aarch64\nline two", pins)
-    assert text.startswith("# geobrix 0.6.0 aarch64\n# line two\n")
+    text = _deps.format_list("geobrix 0.6.1 aarch64\nline two", pins)
+    assert text.startswith("# geobrix 0.6.1 aarch64\n# line two\n")
     assert _deps.parse_list(text) == pins
     with pytest.raises(ValueError, match="hash"):
         _deps.parse_list("h3==4.5.0\n")
@@ -111,7 +111,7 @@ def test_a_plain_wheel_has_no_lists_and_says_how_to_fix_it(monkeypatch):
     monkeypatch.setattr(_native, "deps_dir", lambda root=None: None)
     with pytest.raises(RuntimeError, match="Fix: install an env wheel"):
         stage.dep_pins("aarch64", env=6)
-    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.0")
+    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.1")
     with pytest.raises(RuntimeError, match="not an env wheel"):
         stage._installed_env()
 
@@ -131,14 +131,14 @@ def test_the_offline_check_counts_the_base_as_installed_and_refuses_a_missing_wh
     gbx = _wheel(
         str(tmp_path),
         "geobrix",
-        "0.6.0+env6",
+        "0.6.1+env6",
         ["h3>=4.1,<5", "numexpr>=2.14", "numpy>=2.3.4,<2.4"],
     )
     _wheel(folder, "h3", "4.5.0", ["numpy>=1.26"])
     _wheel(folder, "numexpr", "2.14.2", ["numpy>=1.26"])
     got = stage.check_offline(folder, "aarch64", [gbx, "h3==4.5.0"], BASE)
     assert got == [
-        "geobrix==0.6.0+env6",
+        "geobrix==0.6.1+env6",
         "h3==4.5.0",
         "numexpr==2.14.2",
     ]  # numpy: the base has it
@@ -157,13 +157,13 @@ def test_the_offline_check_counts_the_base_as_installed_and_refuses_a_missing_wh
 @needs_pip
 def test_the_offline_check_takes_only_wheels_for_the_target_platform(tmp_path):
     folder = str(tmp_path / "x86_64")
-    gbx = _wheel(str(tmp_path), "geobrix", "0.6.0+env6", ["h3>=4.1,<5"])
+    gbx = _wheel(str(tmp_path), "geobrix", "0.6.1+env6", ["h3>=4.1,<5"])
     _wheel(folder, "h3", "4.5.0", tag="cp312-cp312-manylinux_2_28_aarch64")
     with pytest.raises(RuntimeError, match="h3"):
         stage.check_offline(folder, "x86_64", [gbx], BASE)
     _wheel(folder, "h3", "4.5.0", tag="cp312-cp312-manylinux_2_28_x86_64")
     assert stage.check_offline(folder, "x86_64", [gbx], BASE) == [
-        "geobrix==0.6.0+env6",
+        "geobrix==0.6.1+env6",
         "h3==4.5.0",
     ]
 
@@ -235,8 +235,8 @@ def test_deps_downloads_both_arches_hash_checked_checks_offline_and_writes_wheel
             "test", {n: (v, s) for n, (v, s, _) in index["x86_64"].items()}
         )
     )
-    whl = _wheel(str(tmp_path / "dl"), "geobrix", "0.6.0+env6", ["h3>=4.1,<5"])
-    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.0+env6")
+    whl = _wheel(str(tmp_path / "dl"), "geobrix", "0.6.1+env6", ["h3>=4.1,<5"])
+    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.1+env6")
     seen = []
     out = tmp_path / "out"
     path = stage.download_deps(
@@ -258,7 +258,7 @@ def test_deps_downloads_both_arches_hash_checked_checks_offline_and_writes_wheel
     rows = stage.read_wheels_txt(str(out))
     rels = sorted(r for _, r in rows)
     assert rels[0] == "aarch64/h3-4.5.0-cp312-cp312-manylinux_2_28_aarch64.whl"
-    assert "geobrix-0.6.0+env6-py3-none-any.whl" in rels and len(rels) == 7
+    assert "geobrix-0.6.1+env6-py3-none-any.whl" in rels and len(rels) == 7
     assert all(_sha(open(out / r, "rb").read()) == s for s, r in rows)
     assert path == str(out / "wheels.txt")
     assert "offline install check passed" in capsys.readouterr().out
@@ -272,7 +272,7 @@ def test_deps_refuses_a_wheel_that_does_not_match_its_pin_or_a_stray_wheel(
     _lists(tmp_path, monkeypatch, core)
     out = tmp_path / "out"
     _wheel(str(out / "aarch64"), "stray", "1.0")
-    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.0+env6")
+    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.1+env6")
     with pytest.raises(
         RuntimeError, match=r"stray-1\.0.*Fix: download into an empty --out folder"
     ):
@@ -295,7 +295,7 @@ def test_deps_raises_with_pips_answer_when_the_offline_check_fails(
     _lists(
         tmp_path, monkeypatch, {n: (v, s) for n, (v, s, _) in index["aarch64"].items()}
     )
-    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.0+env6")
+    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.1+env6")
     monkeypatch.setattr(stage, "_requirement_lines", lambda extras: ["h3>=4.1,<5"])
     with pytest.raises(
         RuntimeError, match="(?s)No matching distribution found for numexpr.*Fix:"
@@ -335,7 +335,7 @@ def test_the_cli_defaults_to_both_arches_and_reports_a_failure(
 
 # --- gbx.stage_deps -------------------------------------------------------------------------------------------------
 
-WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
+WHEEL = "geobrix-0.6.1+env6-py3-none-any.whl"
 
 
 def _src(tmp_path):
@@ -425,7 +425,7 @@ def test_stage_deps_off_databricks_uploads_through_the_files_api_and_checks_what
     tmp_path, monkeypatch
 ):
     src, files = _src(tmp_path)
-    vol = "/Volumes/c/s/v/geobrix/0.6.0/deps"
+    vol = "/Volumes/c/s/v/geobrix/0.6.1/deps"
     w = type("W", (), {"files": _Files()})()
     stage.stage_deps(vol, str(src), client=w)
     assert all(w.files.store[f"{vol}/{r}"] == d for r, d in files.items())
@@ -533,7 +533,7 @@ REQUIRES = [
     "numexpr>=2.14.1",
     'zarr<3.5,>=3.4.1; extra == "zarr"',
     'pystac-client<1,>=0.7; extra == "stac"',
-    'geobrix==0.6.0+env5; extra == "light-env5"',  # a tripwire
+    'geobrix==0.6.1+env5; extra == "light-env5"',  # a tripwire
 ]
 
 
@@ -541,7 +541,7 @@ def test_requirement_lines_are_the_installed_wheels_unmarked_and_chosen_extras(
     tmp_path, monkeypatch
 ):
     monkeypatch.syspath_prepend(
-        str(_dist_info(tmp_path / "site", "0.6.0+env6", REQUIRES))
+        str(_dist_info(tmp_path / "site", "0.6.1+env6", REQUIRES))
     )
     assert stage._requirement_lines(()) == ["h3<5,>=4.1", "numexpr>=2.14.1"]
     assert stage._requirement_lines(("zarr",)) == [
@@ -611,9 +611,9 @@ def test_the_wheel_less_download_checks_the_installed_requirements_with_the_uc_p
     )
     monkeypatch.setenv("GBX_NATIVE_ROOT", str(payload))
     monkeypatch.syspath_prepend(
-        str(_dist_info(tmp_path / "site", "0.6.0+env6", REQUIRES))
+        str(_dist_info(tmp_path / "site", "0.6.1+env6", REQUIRES))
     )
-    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.0+env6")
+    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.1+env6")
     seen, checked = [], []
     fake = _fake_pip(index, seen)
 

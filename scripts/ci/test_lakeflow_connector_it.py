@@ -693,7 +693,7 @@ def test_a_given_wheel_must_be_an_existing_env6_wheel(it, tmp_path):
     with pytest.raises(it.StepFailed, match=r"not an env 6 wheel.*Fix: pass the \+env6 wheel"):
         wheel_run(it, tmp_path, "--geobrix-wheel", str(env5)).geobrix_wheel()
     with pytest.raises(it.StepFailed, match="not an env 6 wheel"):
-        wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "geobrix-0.6.0-py3-none-any.whl")).geobrix_wheel()
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "geobrix-0.6.1-py3-none-any.whl")).geobrix_wheel()
     with pytest.raises(it.StepFailed, match="no such file. Fix:"):
         wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "gone" / good.name)).geobrix_wheel()
 

@@ -505,7 +505,7 @@ def test_volume_deps_stage_the_wheel_through_stage_deps_not_the_wheel_script(dri
     monkeypatch.setattr(driver, "run_cmd", fake_run)
     monkeypatch.setattr(driver.Gate, "client", lambda self: SimpleNamespace(files=SimpleNamespace(list_directory_contents=lambda d: [
         SimpleNamespace(name="geobrix-0.6.0+env6-py3-none-any.whl", file_size=10, is_directory=False),
-        SimpleNamespace(name="geobrix-0.6.0-jar-with-dependencies.jar", file_size=5, is_directory=False),
+        SimpleNamespace(name="geobrix-0.6.1-jar-with-dependencies.jar", file_size=5, is_directory=False),
         SimpleNamespace(name="x86_64", file_size=0, is_directory=True)])))
     from databricks.labs.gbx import stage
 

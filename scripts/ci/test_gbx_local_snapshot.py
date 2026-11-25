@@ -107,7 +107,7 @@ def test_working_tree_keeps_gitignored_local_files_and_drops_run_state(repo):
     write(r, "build/out.txt")
     write(r, "target/classes/A.class")
     write(r, "scripts/docker/m2/repo/x.jar")
-    write(r, "python/geobrix/lib/geobrix-0.6.0-jar-with-dependencies.jar")
+    write(r, "python/geobrix/lib/geobrix-0.6.1-jar-with-dependencies.jar")
     write(r, "python/geobrix/lib/README.md")
     write(r, "docs/node_modules/pkg/index.js")
     write(r, "src/__pycache__/m.cpython-312.pyc")
@@ -128,7 +128,7 @@ def test_working_tree_keeps_gitignored_local_files_and_drops_run_state(repo):
         "build/out.txt",
         "target/classes/A.class",
         "scripts/docker/m2/repo/x.jar",
-        "python/geobrix/lib/geobrix-0.6.0-jar-with-dependencies.jar",
+        "python/geobrix/lib/geobrix-0.6.1-jar-with-dependencies.jar",
         "docs/node_modules/pkg/index.js",
         "src/__pycache__/m.cpython-312.pyc",
         "test-logs/run.log",

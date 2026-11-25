@@ -118,7 +118,7 @@ Measured on Serverless environment 6 for the 2023 season in Story and Boone coun
 ## Prerequisites {#prerequisites}
 
 - **Serverless environment 6.** The series runs at the Python level, with no JAR.
-- **The `+env6` wheel.** `config_nb` installs it from the sample-data Volume, with the `vizx` extra.
+- **The `+env6` wheel.** `config_nb` installs it from the v0.6.1 GitHub release, with the `vizx` extra (other installs: [Installation](../installation)).
 - **Unity Catalog.** Set `catalog_name` and `schema_name` in `config_nb`. A Volume named `data` must already exist under the schema.
 - **An Earthdata Login token.** GRACE-DA and HLS need it. `config_nb` reads it from the Unity Catalog secret named by `EARTHDATA_UC_SECRET`. Without it, the other datasets still run.
 - **Network access.** All downloaders fetch over HTTPS.

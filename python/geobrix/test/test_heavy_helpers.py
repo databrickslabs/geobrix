@@ -128,7 +128,7 @@ class _Session:
 
 
 def test_session_has_jar_sees_spark_jars_and_a_jar_the_cluster_installed_as_a_library():
-    jar = "/repo/python/geobrix/lib/geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = "/repo/python/geobrix/lib/geobrix-0.6.1-jar-with-dependencies.jar"
     assert session_has_jar(
         _Session(jars=jar), jar
     ), "the local session started with spark.jars"

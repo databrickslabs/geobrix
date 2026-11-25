@@ -70,7 +70,7 @@ def test_the_preflight_refuses_a_spec_without_the_wheel_a_wrong_family_and_a_sta
 
 def test_a_plain_staged_wheel_is_checked_when_dist_has_it_and_skipped_with_a_reason_when_not(tmp_path, capsys):
     """A wheel without +env<N> has no env family to look up: it is not a launch failure by itself."""
-    plain = "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+    plain = "/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl"
 
     class Files:
         @staticmethod
@@ -81,7 +81,7 @@ def test_a_plain_staged_wheel_is_checked_when_dist_has_it_and_skipped_with_a_rea
     assert _preflight.wheel_problems(w, plain, tmp_path) == []  # nothing in dist/: skipped, and says why
     assert "no +env<N> in the name" in capsys.readouterr().out
     (tmp_path / "dist").mkdir()
-    built = tmp_path / "dist" / "geobrix-0.6.0-py3-none-any.whl"
+    built = tmp_path / "dist" / "geobrix-0.6.1-py3-none-any.whl"
     built.write_bytes(b"the build")
     assert _preflight.wheel_problems(w, plain, tmp_path) == []  # in dist/: the bytes are compared
     built.write_bytes(b"another build")

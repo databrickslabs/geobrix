@@ -455,7 +455,7 @@ def test_two_tiles_one_after_the_other_each_get_their_own_windows():
 
 
 # --- the shape of the SQL ------------------------------------------------------------------------------------------------
-WHEEL = "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+WHEEL = "file:///Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl"
 
 
 @pytest.mark.parametrize("name,private", sorted(FAMILY.items()))

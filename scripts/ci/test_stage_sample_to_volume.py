@@ -152,8 +152,8 @@ ELSEWHERE = {
     f"{EXAMPLES}/nyc/boroughs/nyc_boroughs.geojson": b"FULL SIZE",
     f"{EXAMPLES}/nyc/sentinel2/nyc_sentinel2_red.tif": b"FULL SIZE",
     f"{EXAMPLES}/london/boroughs/london_boroughs.geojson": b"FULL SIZE",
-    f"{VOL}/geobrix-0.6.0-py3-none-any.whl": b"wheel",
-    f"{VOL}/geobrix-0.6.0-jar-with-dependencies.jar": b"jar",
+    f"{VOL}/geobrix-0.6.1-py3-none-any.whl": b"wheel",
+    f"{VOL}/geobrix-0.6.1-jar-with-dependencies.jar": b"jar",
     f"{VOL}/other-dataset/keep.txt": b"keep",
 }
 
@@ -394,7 +394,7 @@ BESIDE = {  # on the Volume next to the corpus rows: none of it is the command's
     f"{VOL}/bench-corpus/netcdf/a.nc": b"netcdf",
     f"{VOL}/bench-corpus-cog-multiwindow/m.tif": b"cog",
     f"{EXAMPLES}/nyc/x.geojson": b"x",
-    f"{VOL}/geobrix-0.6.0-py3-none-any.whl": b"wheel",
+    f"{VOL}/geobrix-0.6.1-py3-none-any.whl": b"wheel",
 }
 
 

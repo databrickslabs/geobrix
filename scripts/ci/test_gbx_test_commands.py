@@ -2363,11 +2363,11 @@ def _extra(env, name):
         (ENV6, [], "6", [ENV6]),  # the bare env wheel: its core is the wheel's own Requires-Dist
         (ENV6, ["light_env6"], "6", "needs no light extra"),
         (ENV6.replace("env6", "env5"), ["models_gpu_env5"], "5", "--extra-deps 'torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86'"),
-        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["photogrammetry_gpu_env5"], "5", "--extra-deps 'pycolmap-cuda12==4.2.1'"),
-        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["light_env6"], "6", "it requires geobrix==0.6.0+env6"),
+        ("/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", ["photogrammetry_gpu_env5"], "5", "--extra-deps 'pycolmap-cuda12==4.2.1'"),
+        ("/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", ["light_env6"], "6", "it requires geobrix==0.6.1+env6"),
         (ENV6, ["overture"], "6", "has no [overture]"),
         (ENV6, ["vizx"], "5", "Fix: pass --env-version 6"),
-        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["vizx"], "6", None),  # the plain wheel: pyproject's [vizx]
+        ("/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", ["vizx"], "6", None),  # the plain wheel: pyproject's [vizx]
     ],
 )  # fmt: skip
 def test_the_serverless_runner_installs_an_env_wheel_with_its_own_extras(monkeypatch, wheel, extras, env_version, want):
@@ -2399,9 +2399,9 @@ def test_the_serverless_runner_installs_an_env_wheel_with_its_own_extras(monkeyp
         (ENV6, "Light-Env6", "needs no light extra"),
         (ENV6.replace("env6", "env5"), "models-gpu-env5", "a 0.5.x GPU extra, dropped in 0.6.0"),
         (ENV6.replace("env6", "env5"), "GPU.ENV5.ALL", "a 0.5.x GPU extra, dropped in 0.6.0"),
-        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", "models-gpu-env5", "a 0.5.x GPU extra, dropped in 0.6.0"),
-        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", "light-dbr19", "a 0.5.x name; it requires geobrix=="),
-        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", "Light.Env6", "it requires geobrix==0.6.0+env6"),
+        ("/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", "models-gpu-env5", "a 0.5.x GPU extra, dropped in 0.6.0"),
+        ("/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", "light-dbr19", "a 0.5.x name; it requires geobrix=="),
+        ("/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", "Light.Env6", "it requires geobrix==0.6.1+env6"),
     ],
 )  # fmt: skip
 def test_the_serverless_runner_normalizes_extra_names_before_it_refuses_one(monkeypatch, wheel, extra, want):
@@ -2413,12 +2413,12 @@ def test_the_serverless_runner_normalizes_extra_names_before_it_refuses_one(monk
 def test_the_serverless_runner_finds_an_extra_under_any_spelling(monkeypatch):
     runner = _launcher("run_notebooks_serverless", monkeypatch)
     assert runner._build_dep_list(ENV6, ["STAC"], [], "6") == runner._build_dep_list(ENV6, ["stac"], [], "6")
-    plain = "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+    plain = "/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl"
     assert runner._build_dep_list(plain, ["Zarr-Env6"], [], "6") == runner._build_dep_list(plain, ["zarr_env6"], [], "6")
     assert runner._build_dep_list(plain, ["zarr-env6"], [], "6")[1:]  # it has packages: not "not found"
 
 
-@pytest.mark.parametrize("wheel", [ENV6, "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"])
+@pytest.mark.parametrize("wheel", [ENV6, "/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl"])
 def test_an_empty_extras_option_means_the_wheel_alone(monkeypatch, wheel):
     """--extras '' (the CSV is empty) must reach the job environment as the wheel and nothing else."""
     runner = _launcher("run_notebooks_serverless", monkeypatch)
@@ -2540,7 +2540,7 @@ def _run_main_to_the_workspace_client(runner, monkeypatch, argv):
         ("19.x-scala2.13", ENV6.replace("env6", "env5"), "takes the env6 wheel"),
         ("17.3.x-scala2.13", ENV6.replace("env6", "env5"), None),
         ("19.x-scala2.13", ENV6, None),
-        ("19.x-scala2.13", "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", None),  # the plain wheel has no env
+        ("19.x-scala2.13", "/Volumes/c/s/v/geobrix-0.6.1-py3-none-any.whl", None),  # the plain wheel has no env
     ],
 )  # fmt: skip
 def test_the_serverless_python_task_checks_the_wheel_against_the_cluster_runtime(
@@ -2747,7 +2747,7 @@ class _FakeFiles:
 def test_stage_wheel_env_puts_each_env_wheel_on_the_bundle_volroot_by_its_own_name(tmp_path, monkeypatch, args):
     # The artifact Volume dir's plain wheel (another lane's) is never listed, pruned or overwritten.
     stage = _launcher("stage_wheel_to_volume", monkeypatch)
-    files = _FakeFiles(["geobrix-0.6.0-py3-none-any.whl"])
+    files = _FakeFiles(["geobrix-0.6.1-py3-none-any.whl"])
     sdk = type(sys)("databricks.sdk")
     sdk.WorkspaceClient = lambda **kw: type("W", (), {"files": files})()
     monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
@@ -2795,7 +2795,7 @@ def test_stage_wheel_env_versioned_gives_each_env_its_own_folder_and_keeps_only_
     root = "/Volumes/c/s/v/geobrix/0.6.0"
     held = {  # what each folder holds before the stage
         f"{root}/env5": ["geobrix-0.5.2+env5-py3-none-any.whl", "geobrix-0.6.0+env5-py3-none-any.whl", "notes.txt"],
-        f"{root}/env6": ["geobrix-0.6.0-py3-none-any.whl", "geobrix-0.6.0+env6-py3-none-any.whl"],
+        f"{root}/env6": ["geobrix-0.6.1-py3-none-any.whl", "geobrix-0.6.0+env6-py3-none-any.whl"],
     }
     files = _FakeFiles([])
     real = files.list_directory_contents
@@ -2812,7 +2812,7 @@ def test_stage_wheel_env_versioned_gives_each_env_its_own_folder_and_keeps_only_
     # every other wheel of a folder goes, this env's own is overwritten, notes.txt is no wheel
     assert [c for c in calls if c[0] == "delete"] == [
         ("delete", f"{root}/env5/geobrix-0.5.2+env5-py3-none-any.whl"),
-        ("delete", f"{root}/env6/geobrix-0.6.0-py3-none-any.whl"),
+        ("delete", f"{root}/env6/geobrix-0.6.1-py3-none-any.whl"),
     ]
     assert not [c for c in calls if c[1].rstrip("/") == "/Volumes/c/s/v"]  # the volroot itself is never touched
 
@@ -2839,9 +2839,9 @@ def test_the_plain_wheel_stage_prunes_only_other_plain_wheels(monkeypatch):
     # if GBX_ARTIFACT_VOLUME is the bundle volroot, a plain stage must not delete the env wheels staged there
     av = _launcher("_artifact_volume", monkeypatch)
     files = _FakeFiles(["geobrix-0.5.2-py3-none-any.whl", "geobrix-0.6.0+env5-py3-none-any.whl",
-                        "geobrix-0.6.0+env6-py3-none-any.whl", "geobrix-0.6.0-py3-none-any.whl", "other.txt"])  # fmt: skip
+                        "geobrix-0.6.0+env6-py3-none-any.whl", "geobrix-0.6.1-py3-none-any.whl", "other.txt"])  # fmt: skip
     w = type("W", (), {"files": files})()
-    removed = av.prune_stale(w, "/Volumes/c/s/v", "geobrix-", ".whl", "geobrix-0.6.0-py3-none-any.whl", exclude="+env")
+    removed = av.prune_stale(w, "/Volumes/c/s/v", "geobrix-", ".whl", "geobrix-0.6.1-py3-none-any.whl", exclude="+env")
     assert removed == ["/Volumes/c/s/v/geobrix-0.5.2-py3-none-any.whl"]
     text = (REPO_ROOT / "examples/tests/stage_wheel_to_volume.py").read_text()
     assert 'whl.name, exclude="+env")' in text  # the stage passes it

@@ -13,7 +13,7 @@ from databricks.labs.gbx import manifest
 from databricks.labs.gbx.bench import oracles, probes, uc_perf
 
 WHEEL = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
-JAR = "/Volumes/c/s/v/geobrix-0.6.0-jar-with-dependencies.jar"
+JAR = "/Volumes/c/s/v/geobrix-0.6.1-jar-with-dependencies.jar"
 RAW = json.loads((Path(manifest.__file__).with_name("functions.json")).read_text())
 
 

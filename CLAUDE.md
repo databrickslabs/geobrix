@@ -8,7 +8,7 @@ core. The index of those rules is at the bottom.
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.6.0**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.6.1**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
 
 Every function runs at the Python level from the env wheel (Python UDFs, some with a Rust kernel). The JAR (Scala/Spark) is a performance add-on that adds a JVM level where measured faster, on dedicated compute only. Vocabulary: a **surface** is what you call (SQL, the Python API, Unity Catalog SQL, Scala); a **level** is what runs it — SQL expression (L0), JVM (L1), Python (L3), Unity Catalog function (L4). *Lightweight* = the Python level and *heavyweight* = the JVM level are shorthand only, defined in `api/execution-tiers`, installation and performance.
 

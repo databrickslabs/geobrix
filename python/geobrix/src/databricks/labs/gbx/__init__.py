@@ -1,4 +1,4 @@
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 # An env wheel refuses the other environment's runtime, then serves its native payload (the
 # bindings under their public names, GDAL/PROJ data, CA): both before anything imports a binding.

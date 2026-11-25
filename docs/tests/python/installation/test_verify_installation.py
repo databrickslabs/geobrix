@@ -55,7 +55,7 @@ def test_stage_jar_snippet_copies_the_jar_and_refuses_a_second(tmp_path, monkeyp
     from databricks.labs.gbx import _native, stage
 
     assert "gbx.stage_jar(" in verify_installation.STAGE_JAR_PYTHON
-    jar = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    jar = tmp_path / "geobrix-0.6.1-jar-with-dependencies.jar"
     jar.write_bytes(b"jar bytes")
     monkeypatch.setattr(_native, "jar_path", lambda: str(jar))
     monkeypatch.setattr(stage, "check_volume_dir", lambda p: p)  # the folder is a local one in this test

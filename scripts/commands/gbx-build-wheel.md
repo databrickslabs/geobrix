@@ -165,7 +165,7 @@ The two native builds are skipped when `build/native/out/<arch>/` already holds 
 ## Examples
 
 ```bash
-bash scripts/commands/gbx-build-wheel.sh --env 6 --jar target/geobrix-0.6.0-jar-with-dependencies.jar
+bash scripts/commands/gbx-build-wheel.sh --env 6 --jar target/geobrix-0.6.1-jar-with-dependencies.jar
 bash scripts/commands/gbx-build-wheel.sh --env 5 --log env5-wheel.log
 bash scripts/commands/gbx-build-wheel.sh --env 6 --no-rs --allow-dirty   # a dev build without the Rust kernels
 bash scripts/commands/gbx-build-wheel.sh --env 6 --verify aarch64

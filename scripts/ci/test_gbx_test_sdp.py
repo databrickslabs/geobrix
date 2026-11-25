@@ -47,7 +47,7 @@ def test_the_default_wheel_is_the_versioned_staged_env6_wheel(sdp):
         text = sdp.bundle_text(sdp.BUNDLES[name])
         assert sdp.wheel_problem(w, text) is None
         assert "refuses to import" in sdp.wheel_problem(w.replace("env6", "env5"), text)
-        assert "not an env wheel" in sdp.wheel_problem("/Volumes/x/geobrix-0.6.0-py3-none-any.whl", text)
+        assert "not an env wheel" in sdp.wheel_problem("/Volumes/x/geobrix-0.6.1-py3-none-any.whl", text)
 
 
 def test_the_bundles_run_the_pipeline_on_the_preview_channel_with_a_fallback_variable(sdp):

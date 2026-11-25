@@ -210,8 +210,8 @@ def _axis_scale(axis, crs_unit_m: float) -> float:
         return 1.0
     if unit not in _METRES_PER_UNIT:
         raise ValueError(
-            f"netcdf_gbx: the axis {axis.name!r} has units {unit!r}, not metres or kilometres. "
-            "Fix: set the axis units to m or km (CF units), or drop them when the values are in the units of the CRS."
+            f"netcdf_gbx: the axis {axis.name!r} has units {unit!r}, which are none of m, km, ft or US_survey_foot. "
+            "Fix: set the axis units to one of these (CF units), or drop them when the values are in the units of the CRS."
         )
     return _METRES_PER_UNIT[unit] / crs_unit_m
 
@@ -586,13 +586,17 @@ def point_arrays(
 
 
 def _warn_dropped_slices(ds, variable: str, lat) -> None:
-    """Vector mode places one point per cell of the 2-D lat / lon, so a variable with another dimension longer than
-    one (a leading ``time``) gives its first slice only. The result is unchanged; the warning names the variable and
-    the slice taken (the Python logger of the reading process, as ``array_2d``'s)."""
+    """Vector mode places one point per cell of the 2-D lat / lon and reads a variable's values in file order, the
+    first one per point. A dimension beside lat / lon longer than one is not split: when every dimension before it
+    has size 1 the points get its first slice (index 0), and otherwise (``y, time, x``) the values of its slices
+    interleave and do not line up with the points. The result is unchanged; the warning says which (the Python
+    logger of the reading process, as ``array_2d``'s)."""
     da = ds[variable]
-    for dim in da.dims:
+    for pos, dim in enumerate(da.dims):
         size = int(da.sizes[dim])
-        if dim not in lat.dims and size > 1:
+        if dim in lat.dims or size <= 1:
+            continue
+        if all(int(da.sizes[earlier]) == 1 for earlier in da.dims[:pos]):
             _logger.warning(
                 "netcdf_gbx: variable %r has dimension %r of size %d; vector mode reads one point per cell, so it "
                 "takes index 0 of %r and drops the other %d slice(s).",
@@ -601,6 +605,17 @@ def _warn_dropped_slices(ds, variable: str, lat) -> None:
                 size,
                 dim,
                 size - 1,
+            )
+        else:
+            _logger.warning(
+                "netcdf_gbx: variable %r has dimension %r of size %d after another dimension; vector mode reads one "
+                "point per cell and takes the values in file order, so %r is not split and its values do not line "
+                "up with the points. Fix: select one %r slice before writing the file.",
+                variable,
+                dim,
+                size,
+                dim,
+                dim,
             )
 
 

@@ -139,11 +139,13 @@ def test_survey_feet_on_a_survey_foot_crs_need_no_scale(tmp_path):
     assert t.a == pytest.approx(CELL_KM, rel=1e-9)
 
 
-def test_an_unknown_unit_is_still_refused_with_the_same_message(tmp_path):
+def test_an_unknown_unit_is_still_refused_and_the_message_lists_the_known_ones(
+    tmp_path,
+):
     p = _write_projected(str(tmp_path / "furlong.nc"), units="furlong")
-    with pytest.raises(ValueError, match="not metres or kilometres") as err:
+    with pytest.raises(ValueError, match="none of m, km, ft or US_survey_foot") as err:
         _transform_crs(p)
-    assert "set the axis units to m or km" in str(err.value)
+    assert "set the axis units to one of these" in str(err.value)
 
 
 # --- vector mode over a stack of slices -------------------------------------------------------------------------
@@ -182,3 +184,33 @@ def test_vector_mode_over_one_slice_stays_quiet(tmp_path, caplog):
         _, rows = _vector_rows(p)
     assert len(rows) == 12
     assert not [r for r in caplog.records if "temp" in r.getMessage()]
+
+
+def test_a_dimension_after_another_is_not_called_index_zero(tmp_path, caplog):
+    # (y, time, x): the values of the slices interleave in file order, so "index 0 of time" would be false
+    p = _write_swath_stack(str(tmp_path / "ytx.nc"), nt=3, dim_order=("y", "time", "x"))
+    with caplog.at_level(logging.WARNING, logger=_netcdf.__name__):
+        _, rows = _vector_rows(p)
+    texts = [r.getMessage() for r in caplog.records if "temp" in r.getMessage()]
+    assert len(texts) == 1
+    assert "file order" in texts[0] and "index 0" not in texts[0]
+    assert "'time'" in texts[0]
+    assert len(rows) == 12
+
+
+def test_a_regular_grid_with_a_stack_is_not_read_in_vector_mode_at_all(tmp_path):
+    # a GRID variable has no 2-D lat / lon to place its points: with time > 1 it is refused or left out, never
+    # read silently from slice 0, so the warning does not apply to it
+    p = str(tmp_path / "gridstack.nc")
+    with Dataset(p, "w") as ds:
+        ds.createDimension("time", 3)
+        ds.createDimension("lat", 2)
+        ds.createDimension("lon", 3)
+        ds.createVariable("lat", "f8", ("lat",))[:] = [10.5, 10.0]
+        ds.createVariable("lon", "f8", ("lon",))[:] = [5.0, 5.5, 6.0]
+        ds["lat"].standard_name, ds["lon"].standard_name = "latitude", "longitude"
+        ds.createVariable("data", "f4", ("time", "lat", "lon"))[:] = np.zeros(
+            (3, 2, 3), dtype="f4"
+        )
+    with _netcdf.open_dataset(p, None) as ds:
+        assert _netcdf.readable_variables(ds, "vector") == []

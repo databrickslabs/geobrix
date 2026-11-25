@@ -147,9 +147,9 @@ def test_axes_with_no_units_are_in_the_unit_of_the_crs(tmp_path):
 
 def test_an_axis_unit_it_does_not_know_is_refused_with_a_fix(tmp_path):
     p = _write_projected(str(tmp_path / "furlong.nc"), units="furlong")
-    with pytest.raises(ValueError, match="not metres or kilometres") as err:
+    with pytest.raises(ValueError, match="none of m, km, ft or US_survey_foot") as err:
         _transform_crs(p)
-    assert "set the axis units to m or km" in str(err.value)
+    assert "set the axis units to one of these" in str(err.value)
     assert "the CRS then fixes the unit" not in str(err.value)
 
 

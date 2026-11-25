@@ -50,6 +50,9 @@ from databricks.labs.gbx._transport import (  # noqa: F401  (re-exported)
     _ARRAY_FIX,
     _SCALAR_FIX,
     SessionTileUdf,
+)
+from databricks.labs.gbx._transport import SessionTileUdtf as _SessionTileUdtf
+from databricks.labs.gbx._transport import (  # noqa: F401  (re-exported)
     _exact_member,
     _LossyCellId,
 )
@@ -3951,11 +3954,21 @@ _GRID_FLAT_STRING_SCHEMA = _grid_flat_schema(DoubleType(), StringType())
 
 
 def _rastertogrid_rows(
-    tile, resolution, grid, agg, coverage, assignment, cellid_is_str, grid_struct=None
+    tile,
+    resolution,
+    grid,
+    agg,
+    coverage,
+    assignment,
+    cellid_is_str,
+    grid_struct=None,
+    grid_dirs=None,
 ):
     """The (band, cellID, measure) rows of one raster->grid call. A NULL tile, resolution or grid gives no rows. A
     resolution the grid does not define, or a coverage or assignment word that names none, raises naming it, also
-    for a tile that is an error tile or cannot be read. Those tiles give no rows."""
+    for a tile that is an error tile or cannot be read. Those tiles give no rows. *grid_dirs* are the PROJ grid
+    directories the driver registered, carried to this worker (None: this process's own registry).
+    """
     if tile is None or resolution is None or (grid == "custom" and grid_struct is None):
         return
     if grid == "bng":  # a size such as '1km' is its index, as in the grid functions
@@ -3968,7 +3981,7 @@ def _rastertogrid_rows(
         return
     from databricks.labs.gbx.pyrx import _env
 
-    _env.configure_gdal_env()
+    _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
     with _open_or_none(tile) as ds:
         if ds is None:  # bytes GDAL cannot read
             return
@@ -4013,11 +4026,12 @@ _GRID_PARTIAL_STRING_SCHEMA = _grid_partial_schema(StringType())
 
 
 def _rastertogrid_partial_cells(
-    tile, resolution, grid, coverage, assignment, grid_struct=None
+    tile, resolution, grid, coverage, assignment, grid_struct=None, grid_dirs=None
 ):
     """The cells of one raster->grid call as partial-state rows (a list of dicts), or None: for a NULL tile or resolution,
     an error tile and a tile that cannot be read. The arguments are checked first, as :func:`_rastertogrid_rows` checks
-    them, so a wrong word raises also for a tile that has nothing to read."""
+    them, so a wrong word raises also for a tile that has nothing to read. *grid_dirs*: as in :func:`_rastertogrid_rows`.
+    """
     if tile is None or resolution is None or (grid == "custom" and grid_struct is None):
         return None
     if grid == "bng":  # a size such as '1km' is its index, as in the table functions
@@ -4032,7 +4046,7 @@ def _rastertogrid_partial_cells(
         return None
     from databricks.labs.gbx.pyrx import _env
 
-    _env.configure_gdal_env()
+    _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
     with _open_or_none(tile) as ds:
         if ds is None:
             return None
@@ -4055,66 +4069,98 @@ def _rastertogrid_partial_cells(
     ]
 
 
-@_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
-def _h3_rastertogrid_partial_udf(
-    tile, resolution, coverage="complete", assignment="centroid"
-):  # the row's defaults: no SQL wrapper
-    return _rastertogrid_partial_cells(tile, resolution, "h3", coverage, assignment)
+def _build_rastertogrid_partial_udf(grid, grid_dirs):
+    """The ``gbx_rst_<grid>_rastertogrid_partial`` UDF of a registration: it carries the PROJ grid directories
+    registered on the driver (a worker has no registry), as the accessor UDFs do."""
+    if grid == "custom":
+
+        @_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
+        def _udf(
+            tile, grid_struct, resolution, coverage="complete", assignment="centroid"
+        ):
+            return _rastertogrid_partial_cells(
+                tile,
+                resolution,
+                grid,
+                coverage,
+                assignment,
+                grid_struct,
+                grid_dirs=grid_dirs,
+            )
+
+        return _udf
+
+    schema = _GRID_PARTIAL_STRING_SCHEMA if grid == "bng" else _GRID_PARTIAL_SCHEMA
+
+    @_tile_udf(returns=schema)
+    def _udf(tile, resolution, coverage="complete", assignment="centroid"):
+        return _rastertogrid_partial_cells(
+            tile, resolution, grid, coverage, assignment, grid_dirs=grid_dirs
+        )
+
+    return _udf
 
 
-@_tile_udf(returns=IntegerType())
-def _h3_fitresolution_udf(tile, rule="not_larger"):  # the row's default: no SQL wrapper
-    """gbx_rst_h3_fitresolution: the H3 resolution fitted to the centre pixel (header read only)."""
-    # a bad rule raises, tile or not
-    rule = h3fit.check_rule(h3fit.DEFAULT_RULE if rule is None else rule)
-    if _tile_is_empty(tile):
-        return None
-    from databricks.labs.gbx.pyrx import _env
-
-    try:
-        _env.configure_gdal_env()
-        with ot.open_header(tile) as ds:
-            return h3fit.fit_resolution_of(ds, rule)
-    except Exception:  # noqa: BLE001 - an unreadable or error tile is NULL
-        return None
+def _build_h3_rastertogrid_partial_udf(grid_dirs):
+    return _build_rastertogrid_partial_udf("h3", grid_dirs)
 
 
-@_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
-def _quadbin_rastertogrid_partial_udf(
-    tile, resolution, coverage="complete", assignment="centroid"
+def _build_quadbin_rastertogrid_partial_udf(grid_dirs):
+    return _build_rastertogrid_partial_udf("quadbin", grid_dirs)
+
+
+def _build_bng_rastertogrid_partial_udf(grid_dirs):
+    return _build_rastertogrid_partial_udf("bng", grid_dirs)
+
+
+def _build_custom_rastertogrid_partial_udf(grid_dirs):
+    return _build_rastertogrid_partial_udf("custom", grid_dirs)
+
+
+def _build_h3_fitresolution_udf(grid_dirs):
+    """``gbx_rst_h3_fitresolution``: the H3 resolution fitted to the centre pixel (header read only). It carries the
+    PROJ grid directories registered on the driver, so a CRS that needs a grid file transforms on a worker.
+    """
+
+    @_tile_udf(returns=IntegerType())
+    def _udf(tile, rule="not_larger"):  # the row's default: no SQL wrapper
+        # a bad rule raises, tile or not
+        rule = h3fit.check_rule(h3fit.DEFAULT_RULE if rule is None else rule)
+        if _tile_is_empty(tile):
+            return None
+        from databricks.labs.gbx.pyrx import _env
+
+        try:
+            _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+            with ot.open_header(tile) as ds:
+                return h3fit.fit_resolution_of(ds, rule)
+        except Exception:  # noqa: BLE001 - an unreadable or error tile is NULL
+            return None
+
+    return _udf
+
+
+def _make_rastertogrid_udtf(
+    grid, agg, flat_schema, cellid_is_str=False, grid_dirs=None
 ):
-    return _rastertogrid_partial_cells(
-        tile, resolution, "quadbin", coverage, assignment
-    )
-
-
-@_tile_udf(returns=_GRID_PARTIAL_STRING_SCHEMA)
-def _bng_rastertogrid_partial_udf(
-    tile, resolution, coverage="complete", assignment="centroid"
-):
-    return _rastertogrid_partial_cells(tile, resolution, "bng", coverage, assignment)
-
-
-@_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
-def _custom_rastertogrid_partial_udf(
-    tile, grid_struct, resolution, coverage="complete", assignment="centroid"
-):
-    return _rastertogrid_partial_cells(
-        tile, resolution, "custom", coverage, assignment, grid_struct
-    )
-
-
-def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
     """Factory for raster->grid aggregation UDTFs.
 
     For ``grid="custom"`` the UDTF eval signature includes a ``grid`` struct arg
     immediately after ``tile`` (SQL arg order: tile, grid, resolution, [coverage],
     [assignment]) — matching the pinned heavy arg order.  All other grids have
     the standard signature (tile, resolution, [coverage], [assignment]).
+
+    *grid_dirs* are the PROJ grid directories the driver registered; the UDTF a registration uses is built again
+    with them (:meth:`SessionTileUdtf.with_grid_dirs`), since a worker has no registry. None: this process's own.
     """
+
+    def rebuild(dirs):
+        return _make_rastertogrid_udtf(
+            grid, agg, flat_schema, cellid_is_str, grid_dirs=tuple(dirs)
+        )
+
     if grid == "custom":
 
-        @_tile_udtf(returnType=flat_schema)
         class _CustomRasterToGridUDTF:
             def eval(
                 self, tile, grid_struct, resolution, coverage=None, assignment=None
@@ -4128,18 +4174,25 @@ def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
                     assignment,
                     cellid_is_str,
                     grid_struct,
+                    grid_dirs=grid_dirs,
                 )
 
-        return _CustomRasterToGridUDTF
+        return _SessionTileUdtf(_CustomRasterToGridUDTF, flat_schema, rebuild=rebuild)
 
-    @_tile_udtf(returnType=flat_schema)
     class _RasterToGridUDTF:
         def eval(self, tile, resolution, coverage=None, assignment=None):
             yield from _rastertogrid_rows(
-                tile, resolution, grid, agg, coverage, assignment, cellid_is_str
+                tile,
+                resolution,
+                grid,
+                agg,
+                coverage,
+                assignment,
+                cellid_is_str,
+                grid_dirs=grid_dirs,
             )
 
-    return _RasterToGridUDTF
+    return _SessionTileUdtf(_RasterToGridUDTF, flat_schema, rebuild=rebuild)
 
 
 _RstH3RasterToGridAvgUDTF = _make_rastertogrid_udtf(

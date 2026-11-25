@@ -401,11 +401,12 @@ class SessionTileUdtf:
     It reads as the pickled form (``func``, ``returnType``, ``evalType``); a registrar asks for :meth:`for_session`.
     """
 
-    def __init__(self, cls, return_type):
+    def __init__(self, cls, return_type, rebuild=None):
         from pyspark.sql.functions import udtf
 
         self._cls = cls
         self._return_type = return_type
+        self._rebuild = rebuild
         self._forms = {"pickle": udtf(cls, returnType=return_type, useArrow=False)}
         self._lock = threading.Lock()
         functools.update_wrapper(self, cls, updated=())
@@ -424,6 +425,11 @@ class SessionTileUdtf:
                     self._cls, returnType=self._return_type, useArrow=True
                 )
             return self._forms[label]
+
+    def with_grid_dirs(self, dirs):
+        """This UDTF as a registration carries it: built again with the PROJ grid directories *dirs* (a worker has no
+        driver registry). A UDTF written without them is returned as it is."""
+        return self if self._rebuild is None else self._rebuild(dirs)
 
     def for_session(self, spark):
         """The UDTF form *spark* runs: the capability registry's choice of transport for that session."""

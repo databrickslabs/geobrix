@@ -133,6 +133,10 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
         )
     elif "udtf" in spec:
         table_fn = resolve_ref(spec["udtf"])
+        if spec.get("factory_args") == "proj_grid_dirs":
+            # a table function that reads the raster is built with the driver's PROJ grid directories (a worker has
+            # no registry), as a UDF's factory is
+            table_fn = table_fn.with_grid_dirs(*_factory_args("proj_grid_dirs"))
         if spec.get("arrow"):
             # a table function over tiles or large BINARY: Arrow batches between the JVM and Python where the session
             # hands an Arrow UDTF its arguments exactly (``arrow_tile_udtf_transport``), pickles elsewhere

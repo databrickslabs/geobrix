@@ -17,19 +17,15 @@ from contextlib import contextmanager, nullcontext
 
 import h3
 import numpy as np
+import shapely
 import shapely.wkb
 from rasterio.io import MemoryFile
-from rasterio.warp import transform_geom
 from rasterio.windows import Window
-from shapely.geometry import Polygon, mapping, shape
+from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
 from databricks.labs.gbx._gdal_policy import open_bytes
-from databricks.labs.gbx.core.crs import (
-    authority_srid_of,
-    crs_to_canonical,
-    get_transformer,
-)
+from databricks.labs.gbx.core.crs import authority_srid_of, crs_to_canonical
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
 from databricks.labs.gbx.pyrx.core._nodata import valid_mask
@@ -97,6 +93,18 @@ def _quadbin_uint64_to_signed_int64(cell: int) -> int:
     if cell >= 2**63:
         return cell - 2**64
     return int(cell)
+
+
+def _lonlat_moves(ds):
+    """``(to_lonlat, to_raster)``: the transforms between a raster's CRS and EPSG:4326, one operation for both ways
+    (``gridagg._Frame``: the inverse of the operation that moves pixels to lon/lat, pinned when PROJ picks another
+    operation for the way back; measured, an ED50 / UTM 31N raster at 4E 59N came back 3 m away, and its covering
+    chips missed the pixels their own cells' centres held). Footprint, centroids, cells and empty chips share them.
+    """
+    from databricks.labs.gbx.pyrx.core.gridagg import _Frame
+
+    frame = _Frame(ds, ds.crs, "h3")
+    return frame.to_grid, frame.to_native
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +302,7 @@ def _footprint_polygon(ds, work_ds, grid: str) -> Polygon:
     ys = t.f + rows * t.e
     if not reproject:
         return orient(Polygon(zip(xs, ys)), 1.0)
-    xs, ys = get_transformer(ds.crs, _WGS84).transform(xs, ys)
+    xs, ys = _lonlat_moves(ds)[0](xs, ys)
     if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
         raise ValueError(
             f"rst_{grid}_tessellate: the raster corners cannot be transformed "
@@ -347,7 +355,7 @@ def _empty_chip_builder(work_ds, grid: str, conf=None):
         and work_ds.crs is not None
         and authority_srid_of(work_ds.crs) != 4326
     ):
-        to_work = get_transformer(4326, work_ds.crs).transform
+        to_work = _lonlat_moves(work_ds)[1]
     inv = ~work_ds.transform
     last_col, last_row = work_ds.width - 1, work_ds.height - 1
     nd = _chip_nodata(work_ds)
@@ -504,7 +512,7 @@ def _assign_pixels(work_ds, resolution, grid: str, conf=None):
         and work_ds.crs is not None
         and authority_srid_of(work_ds.crs) != 4326
     ):
-        to_lonlat = get_transformer(work_ds.crs, 4326).transform
+        to_lonlat = _lonlat_moves(work_ds)[0]
 
     labels = np.full((height, width), -1, dtype=np.int32)
     windows = _grow_windows(np.empty((4, 0), dtype=np.int32), 0)
@@ -764,6 +772,7 @@ def iter_tessellate(
         # each cell reads as NoData rather than as valid zero pixels; with an alpha band it
         # gets none, and the clip's 0 fill is transparent (see _chip_nodata).
         fill = _chip_nodata(work_ds)
+        to_raster = _lonlat_moves(work_ds)[1] if need_reproject else None
 
         for cell in covered:
             if not _cell_is_valid(cell, grid, conf=conf):
@@ -776,8 +785,10 @@ def iter_tessellate(
             if not _has_positive_area_overlap(cell_poly, footprint):
                 continue
             if need_reproject:
-                geom = transform_geom(_WGS84, work_ds.crs, mapping(cell_poly))
-                cell_poly = shape(geom)
+                cell_poly = shapely.transform(
+                    cell_poly,
+                    lambda xy: np.column_stack(to_raster(xy[:, 0], xy[:, 1])),
+                )
             try:
                 # all_touched=True: boundary pixels touched by the cell edge are
                 # included in the chip, consistent with the covering selection.

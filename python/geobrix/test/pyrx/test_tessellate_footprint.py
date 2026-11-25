@@ -193,12 +193,11 @@ def test_footprint_enclosing_a_pole_fails_loudly():
 
 
 def test_footprint_names_the_crs_when_corners_do_not_transform(monkeypatch):
-    class _Inf:
-        @staticmethod
-        def transform(xs, ys):
-            return np.full(len(xs), np.inf), np.full(len(ys), np.inf)
+    def _inf(xs, ys):
+        return np.full(len(xs), np.inf), np.full(len(ys), np.inf)
 
-    monkeypatch.setattr(T, "get_transformer", lambda src, dst: _Inf)
+    # the footprint moves the corners by the raster's lon/lat pair (one operation both ways)
+    monkeypatch.setattr(T, "_lonlat_moves", lambda ds: (_inf, _inf))
     with MemoryFile(_utm_scene()) as mf, mf.open() as ds:
         with pytest.raises(ValueError, match="cannot be transformed from EPSG:32618"):
             T._footprint_polygon(ds, ds, "quadbin")

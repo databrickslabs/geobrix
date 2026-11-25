@@ -165,9 +165,14 @@ Absent or CRS-less input **never throws**. It degrades to a sensible assumption:
 
 `rst_rasterize`, `rst_gridfrompoints`, and `rst_dtmfromgeoms` reproject the input geometry from its **source** CRS into the **output** CRS (`out_crs`/`out_srid`) before burning. A geometry in one CRS burned into an extent declared in another is therefore correct, not garbage. When no `out_*` is given, the output carries the geometry's own source CRS (not a forced default). A CRS-less geometry is assumed already in the output CRS.
 
-### Grid aggregation auto-reprojects to grid-native
+### Grid aggregation works in the raster's own CRS {#grid-aggregation-works-in-the-rasters-own-crs}
 
-`rst_h3_rastertogrid*` and `rst_quadbin_rastertogrid*` interpret pixels as EPSG:4326, and `rst_bng_rastertogrid*` as EPSG:27700. A raster carrying a **different** CRS is **auto-reprojected** to the grid-native CRS (nearest-neighbour, so pixel statistics are never interpolated) before the pixel→cell mapping. This closes a prior footgun where a non-4326 raster's easting/northing were silently read as lon/lat. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster.
+H3 and quadbin cells are in EPSG:4326, and BNG cells in EPSG:27700. `rst_<grid>_rastertogrid*` grids a raster in another CRS on its own pixels, with no reprojection:
+
+- **`covering`** moves each cell into the raster's CRS and shares every valid pixel out by the overlapping area.
+- **`centroid`** moves each valid pixel's centre to the grid's CRS and bins it there.
+
+Pixel values are never resampled, and `count` is in source pixels. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster. A cell that crosses the raster CRS's own seam (for example EPSG:3857 at 180°) cannot be moved into it. A raster with such a cell is reprojected to the grid's CRS first, with nearest-neighbour resampling.
 
 ### Performance
 
@@ -406,8 +411,8 @@ Every CRS-touching function across GeoBrix, with its CRS parameter(s) and role. 
 | RasterX | [`rst_gridfrompoints`](./raster-functions#rst_gridfrompoints) (+`_agg`) | both | `out_srid` / `out_crs` | output | output raster CRS (points assumed in it) |
 | RasterX | [`rst_dtmfromgeoms`](./raster-functions#rst_dtmfromgeoms) (+`_agg`) | both | `out_srid` / `out_crs` | output | output raster CRS (points assumed in it) |
 | RasterX | `rst_{h3,quadbin,bng}_rasterize_agg` | both | `out_srid` / `out_crs` | output | output raster CRS (bng always 27700; a non-NULL `out_crs` is refused on both levels) |
-| RasterX | `rst_{h3,quadbin}_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 4326 |
-| RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 27700 |
+| RasterX | `rst_{h3,quadbin}_rastertogrid*` | both | `crs` | source | raster gridded in its own CRS (cells in 4326) |
+| RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster gridded in its own CRS (cells in 27700) |
 | RasterX | `rst_h3_gridspec` | Python | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |
 | GridX | `gbx_h3_cell_bbox` | both | `srid` / `out_crs` | output | cell bbox in the output CRS |
 | VectorX | [`st_crs`](./vectorx-functions#st_crs) | both | — | accessor | returns the geometry's CRS string, or NULL when it carries no SRID |

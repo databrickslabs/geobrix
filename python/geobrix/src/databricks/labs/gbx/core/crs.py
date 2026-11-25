@@ -457,11 +457,21 @@ def _transformer_key(crs: CRS) -> str:
     tradeoff the heavyweight tier already makes — GDAL's ``crsToCanonical`` returns full
     WKT for a CRS with no authority node, and ``transformPlan`` keys on it — and a
     correct answer at the cost of a longer dict key is the right trade.
+
+    The key is kept per WKT (:func:`_wkt_transformer_key`): a full-confidence authority
+    search that finds nothing takes ~40 ms (an authority-less CRS such as NWS HRAP), and
+    every :func:`get_transformer` call needs the key before it can look in its cache.
     """
-    auth = crs.to_authority(confidence_threshold=100)
+    return _wkt_transformer_key(crs.to_wkt())
+
+
+@lru_cache(maxsize=256)
+def _wkt_transformer_key(wkt: str) -> str:
+    """:func:`_transformer_key` of the CRS whose WKT is ``wkt``."""
+    auth = CRS.from_wkt(wkt).to_authority(confidence_threshold=100)
     if auth:
         return f"{auth[0]}:{auth[1]}"
-    return crs.to_wkt()
+    return wkt
 
 
 def _transformer_cache() -> "OrderedDict":

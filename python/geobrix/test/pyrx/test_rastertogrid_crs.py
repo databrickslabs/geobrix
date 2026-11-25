@@ -1,7 +1,7 @@
-"""rst_{h3,quadbin}_rastertogrid* must
-auto-reproject a differently-CRS'd raster to grid-native EPSG:4326 (instead of
-silently treating easting/northing as lon/lat), with a `crs` override for a
-CRS-less-but-known raster, and never error on a CRS-less raster.
+"""rst_{h3,quadbin,bng}_rastertogrid* must grid a raster in another CRS than the
+grid's in that CRS (instead of silently treating easting/northing as lon/lat),
+with a `crs` override for a CRS-less-but-known raster, and never error on a
+CRS-less raster.
 """
 
 import h3
@@ -41,7 +41,7 @@ def _cells_of(out):
     return [c["cellID"] for band in out for c in band]
 
 
-def test_h3_rastertogrid_utm_reprojects_not_silently_wrong():
+def test_h3_rastertogrid_utm_is_not_silently_wrong():
     b = _utm33n_raster_bytes()
     with MemoryFile(b) as mf, mf.open() as ds:
         out = gridagg.raster_to_grid(
@@ -60,7 +60,7 @@ def test_h3_rastertogrid_utm_reprojects_not_silently_wrong():
     assert all(6.0 < lo < 24.0 for lo in lons), f"UTM-33N lon out of range: {lons[:3]}"
 
 
-def test_quadbin_rastertogrid_utm_reprojects():
+def test_quadbin_rastertogrid_utm_gives_cells():
     b = _utm33n_raster_bytes()
     with MemoryFile(b) as mf, mf.open() as ds:
         out = gridagg.raster_to_grid(
@@ -71,7 +71,7 @@ def test_quadbin_rastertogrid_utm_reprojects():
             coverage="sparse",
             assignment="centroid",
         )
-    assert _cells_of(out), "expected non-empty quadbin grid after reprojection"
+    assert _cells_of(out), "expected a non-empty quadbin grid"
 
 
 def test_h3_rastertogrid_crsless_assumes_4326_no_error():
@@ -152,14 +152,14 @@ def test_h3_rastertogrid_already_4326_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# The warp to the grid CRS aggregates only the source's valid pixels
+# A source in another CRS aggregates only its valid pixels
 # ---------------------------------------------------------------------------
 
 _N = 40
 _FALLBACK_ROW = 3
 _MASKED_ROWS = (10, 11)
-# Norfolk, far from the EPSG:27700 central meridian: either warp rotates the grid by
-# about 2.4 degrees and fills the corners.
+# Norfolk, far from the EPSG:27700 central meridian: the two grids are rotated about
+# 2.4 degrees from each other.
 _SRC_27700 = dict(crs="EPSG:27700", origin=(600000.0, 320000.0), px=100.0)
 _SRC_4326 = dict(crs="EPSG:4326", origin=(1.00, 52.60), px=0.005)
 # grid -> (source, grid CRS, resolution)
@@ -209,34 +209,17 @@ def _warp_source(*, crs, origin, px, masked, nodata):
             return mf.read()
 
 
-def _expected_warp_totals(src_crs, src, dst_crs, masked, nodata):
-    """(count, sum) of the valid source pixels the nearest-neighbour warp maps: an
-    index raster of the source (pixel p holds p + 1) warped to the same grid."""
-    from rasterio.warp import Resampling, calculate_default_transform, reproject
-
-    tf = from_origin(src["origin"][0], src["origin"][1], src["px"], src["px"])
-    left, top = src["origin"]
-    right, bottom = left + _N * src["px"], top - _N * src["px"]
-    dst_tf, w, h = calculate_default_transform(
-        src_crs, dst_crs, _N, _N, left, bottom, right, top
-    )
-    index = (np.arange(_N * _N) + 1).reshape(_N, _N).astype("uint32")
-    out = np.zeros((h, w), dtype="uint32")
-    reproject(
-        index,
-        out,
-        src_transform=tf,
-        src_crs=src_crs,
-        dst_transform=dst_tf,
-        dst_crs=dst_crs,
-        resampling=Resampling.nearest,
-        dst_nodata=0,
-    )
-    p = out[out > 0].astype("int64") - 1
-    vals = _warp_source_values().ravel().astype("int64")[p]
-    keep = vals != (65535 if nodata is None else nodata)
+def _expected_totals(masked, nodata):
+    """(count, sum) of the valid source pixels, by GDAL's mask rule (``band_valid_mask``,
+    as for a raster in the grid's CRS): a source's own mask band decides alone, else the
+    declared NoData. With no NoData declared, 65535 is data (there is no warp fill)."""
+    vals = _warp_source_values().ravel().astype("int64")
     if masked:
-        keep &= ~np.isin(p // _N, _MASKED_ROWS)
+        keep = ~np.isin(np.arange(vals.size) // _N, _MASKED_ROWS)
+    elif nodata is not None:
+        keep = vals != nodata
+    else:
+        keep = np.ones(vals.size, dtype=bool)
     return int(keep.sum()), int(vals[keep].sum())
 
 
@@ -254,20 +237,15 @@ def _totals(b, grid, resolution, crs=None):
 
 @pytest.mark.parametrize("label", list(_WARP_SOURCES))
 @pytest.mark.parametrize("grid", list(_WARP_GRIDS))
-def test_rastertogrid_warp_aggregates_only_valid_source_pixels(grid, label):
-    """A source in another CRS: the warp fill is not aggregated as zeros, nor are the
-    masked pixels or the pixels equal to the NoData (the fallback 65535, or the
-    source's own 7, which keeps 65535 a real value)."""
-    src, dst_crs, resolution = _WARP_GRIDS[grid]
+def test_rastertogrid_aggregates_only_valid_source_pixels(grid, label):
+    """A source in another CRS: every valid source pixel is binned once (centroid), and
+    no masked pixel is aggregated."""
+    src, _, resolution = _WARP_GRIDS[grid]
     masked, nodata = _WARP_SOURCES[label]
     b = _warp_source(**src, masked=masked, nodata=nodata)
-    count, total, smallest, largest = _totals(b, grid, resolution)
-    exp_count, exp_total = _expected_warp_totals(
-        src["crs"], src, dst_crs, masked, nodata
-    )
-    assert smallest >= 1, f"{grid} {label}: a warp-fill 0 was aggregated"
-    if nodata is None:
-        assert largest <= _N * _N, f"{grid} {label}: a 65535 (or 65534) was aggregated"
+    count, total, smallest, _ = _totals(b, grid, resolution)
+    exp_count, exp_total = _expected_totals(masked, nodata)
+    assert smallest >= 1, f"{grid} {label}: a 0 was aggregated"
     assert (
         count == exp_count
     ), f"{grid} {label}: {count} pixels aggregated, expected {exp_count}"
@@ -277,9 +255,9 @@ def test_rastertogrid_warp_aggregates_only_valid_source_pixels(grid, label):
 @pytest.mark.parametrize("grid", ["h3", "bng"])
 def test_rastertogrid_crs_override_keeps_the_mask(grid):
     """A CRS-less masked source given its CRS by the ``crs`` override keeps its mask."""
-    src, dst_crs, resolution = _WARP_GRIDS[grid]
+    src, _, resolution = _WARP_GRIDS[grid]
     b = _warp_source(**{**src, "crs": None}, masked=True, nodata=None)
     count, total, smallest, _ = _totals(b, grid, resolution, crs=src["crs"])
-    exp_count, exp_total = _expected_warp_totals(src["crs"], src, dst_crs, True, None)
-    assert smallest >= 1, f"{grid}: a warp-fill 0 was aggregated"
+    exp_count, exp_total = _expected_totals(True, None)
+    assert smallest >= 1, f"{grid}: a 0 was aggregated"
     assert (count, total) == (exp_count, exp_total), f"{grid}: masked pixels aggregated"

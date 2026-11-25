@@ -614,7 +614,7 @@ def _valid_values(raster_bytes):
 
 @pytest.mark.parametrize("agg", ["count", "max"])
 def test_rastertogrid_from_a_virtual_tile(spark, tmp_path, agg):
-    """BNG raster-to-grid of a 4326 source (warped to EPSG:27700): same cells and
+    """BNG raster-to-grid of a 4326 source (gridded in its own CRS): same cells and
     measures from a virtual tile as from its bytes, with no masked pixel aggregated."""
     from databricks.labs.gbx import manager as gbx_manager
 
@@ -631,7 +631,8 @@ def test_rastertogrid_from_a_virtual_tile(spark, tmp_path, agg):
     assert out[False], "the bytes tile aggregated nothing"
     assert out[True] == out[False], f"{agg}: virtual start differs from bytes start"
     if agg == "count":
-        # at most the valid source pixels: the masked rows and the 65535 row are out
-        assert sum(out[True].values()) <= N * N - 80 - 40
+        # every valid source pixel, once: the masked rows are out; with no warp there is no
+        # fill, so the 65535 row of a source with no NoData is data
+        assert sum(out[True].values()) == N * N - len(MASKED_ROWS) * N
     else:
-        assert max(out[True].values()) < MARKER, "a masked source pixel was aggregated"
+        assert MARKER not in out[True].values(), "a masked source pixel was aggregated"

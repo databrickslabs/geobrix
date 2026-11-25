@@ -1,14 +1,17 @@
 """Spark-free raster->discrete-global-grid aggregation (H3 + quadbin + BNG).
 
-Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
-
 * Per band, every valid pixel is mapped to a grid cell id by
   the pixel-centroid world coordinate (0.5-pixel offset through the
-  geotransform). H3/quadbin work in EPSG:4326 lon/lat: a raster in another CRS is
-  warped to EPSG:4326 (nearest) up front, and one with no CRS (and no ``crs``
-  override) is taken as 4326 already. BNG has no lon/lat path, so the raster is
-  warped to EPSG:27700 (nearest) up front and pixels outside GB are dropped via
-  ``pygx._bng.is_valid``.
+  geotransform). H3/quadbin cells are in EPSG:4326 lon/lat, BNG cells in EPSG:27700;
+  a raster with no CRS (and no ``crs`` override) is taken as in the grid's CRS
+  already, and pixels outside GB are dropped via ``pygx._bng.is_valid``.
+* A raster in another CRS is gridded on its own pixels, in its own CRS (the native
+  frame, ``_Frame`` / ``_grid_native``): ``centroid`` moves each pixel centre to the
+  grid's CRS; ``covering`` moves each cell into the raster's CRS (``_native_rings``,
+  each edge walked to within ``_NATIVE_EDGE_TOLERANCE``) and shares the native pixels
+  by overlap area, so ``count`` is in source pixels. Only a raster the frame cannot
+  hold (a cell across its CRS's own seam, or a point that does not transform) is
+  warped to the grid's CRS (nearest) first, as all were before.
   A pixel is valid for a band when the band's own mask says so (NoData, the raster's
   own mask band) and, for a raster with an alpha band, its alpha is above 0
   (``_nodata.band_valid_mask``): every band is judged alone, and a transparent pixel
@@ -143,8 +146,8 @@ def _h3_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
 def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
     """Per-valid-pixel BNG cell ids (Long int64), fully vectorized.
 
-    ``e``/``n`` are EPSG:27700 eastings/northings (pixel centroids of the WARPED
-    raster). Delegates to ``pygx._bng.point_to_cell_id_vec`` -- the SAME shared
+    ``e``/``n`` are EPSG:27700 eastings/northings (pixel centroids, of a 27700 raster or
+    moved there from the raster's own CRS). Delegates to ``pygx._bng.point_to_cell_id_vec`` -- the SAME shared
     numpy core the scalar ``point_to_cell_id`` wraps, so cell ids are identical.
     """
     return _bng.point_to_cell_id_vec(e, n, resolution)
@@ -449,9 +452,10 @@ def _covering_band(
     ]
 
 
-def _use_h3_vectorised(work_ds, resolution, gt) -> bool:
+def _use_h3_vectorised(work_ds, resolution, gt, area=None) -> bool:
     """True when the H3 covering pass takes the vectorised path: the flag is on, the grid is north-up (no rotation
-    terms) and the average cell is smaller than the centre pixel (``h3fit``, the recommender's own pixel area).
+    terms) and the average cell is smaller than the centre pixel (``h3fit``, the recommender's own pixel area; or
+    ``area``, the centre pixel's area in m2 when the caller knows the raster's CRS better than ``work_ds`` does).
 
     A resolution outside 0..15 raises (``_validate_resolution``). A pixel area that is not a positive finite number
     (a degenerate geotransform) is not applicable and keeps the per-pixel loop; any other error surfaces.
@@ -462,7 +466,8 @@ def _use_h3_vectorised(work_ds, resolution, gt) -> bool:
 
     resolution = int(resolution)
     _validate_resolution(resolution, "h3")
-    area = pixel_area_m2(work_ds)
+    if area is None:
+        area = pixel_area_m2(work_ds)
     if not (math.isfinite(area) and area > 0.0):
         return False
     return H3_AVG_CELL_AREA_M2[resolution] < area
@@ -622,7 +627,6 @@ def _covering_band_h3_vectorised(
     if valid_rows.size == 0:
         return []  # no valid pixel: no cell, and no candidate built
     valid_cols = np.flatnonzero(mask.any(axis=0))
-    height, width = mask.shape
     px_area = abs(gt[1] * gt[5])
     window = (
         (int(valid_rows[0]), int(valid_rows[-1])),
@@ -634,39 +638,47 @@ def _covering_band_h3_vectorised(
     for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound pairs)
         chunk = cells[start : start + step]
         vx, vy = _h3_hexagons(chunk)
-        bounds = np.stack([vx.min(1), vy.min(1), vx.max(1), vy.max(1)], axis=1)
-        cell, rows, cols = _cell_pixel_pairs(bounds, gt, height, width)
-        ok = mask[rows, cols]
-        cell, rows, cols = cell[ok], rows[ok], cols[ok]
-        if cell.size == 0:
-            continue
-        xl, xr = gt[0] + cols * gt[1], gt[0] + (cols + 1) * gt[1]
-        yt, yb = gt[3] + rows * gt[5], gt[3] + (rows + 1) * gt[5]
-        area = _box_overlap_area(
-            vx,
-            vy,
-            cell,
-            np.minimum(xl, xr),
-            np.minimum(yt, yb),
-            np.maximum(xl, xr),
-            np.maximum(yt, yb),
-        )
-        w = area / px_area
-        keep = w > _COVER_WEIGHT_FLOOR
-        cell, w, vals = (
-            cell[keep],
-            w[keep],
-            band[rows[keep], cols[keep]].astype("float64"),
-        )
-        if cell.size == 0:
-            continue
-        uniq, measures = _grouped_measures(cell, vals, agg, weights=w)
-        # an H3 id is below 2**63, so the int id is already the signed Long ``tessellate._encode_cellid`` gives
-        out.extend(
-            {"cellID": chunk[c], "measure": m}
-            for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
-        )
+        out.extend(_box_pairs_reduce(vx, vy, chunk, band, mask, gt, px_area, agg))
     return out
+
+
+def _box_pairs_reduce(vx, vy, ids, band, mask, gt, px_area, agg) -> list:
+    """``{"cellID", "measure"}`` of the cells ``ids`` (rings ``vx``, ``vy``: cells x M, in the frame of the north-up
+    geotransform ``gt``) over the valid pixels of ``band``: every (cell, pixel) pair of the cells' bounding windows,
+    weighted by ``_box_overlap_area`` / ``px_area`` and kept above ``_COVER_WEIGHT_FLOOR``. An H3 id is below 2**63,
+    so an int id is already the signed Long ``tessellate._encode_cellid`` gives."""
+    height, width = mask.shape
+    bounds = np.stack([vx.min(1), vy.min(1), vx.max(1), vy.max(1)], axis=1)
+    cell, rows, cols = _cell_pixel_pairs(bounds, gt, height, width)
+    ok = mask[rows, cols]
+    cell, rows, cols = cell[ok], rows[ok], cols[ok]
+    if cell.size == 0:
+        return []
+    xl, xr = gt[0] + cols * gt[1], gt[0] + (cols + 1) * gt[1]
+    yt, yb = gt[3] + rows * gt[5], gt[3] + (rows + 1) * gt[5]
+    area = _box_overlap_area(
+        vx,
+        vy,
+        cell,
+        np.minimum(xl, xr),
+        np.minimum(yt, yb),
+        np.maximum(xl, xr),
+        np.maximum(yt, yb),
+    )
+    w = area / px_area
+    keep = w > _COVER_WEIGHT_FLOOR
+    cell, w, vals = (
+        cell[keep],
+        w[keep],
+        band[rows[keep], cols[keep]].astype("float64"),
+    )
+    if cell.size == 0:
+        return []
+    uniq, measures = _grouped_measures(cell, vals, agg, weights=w)
+    return [
+        {"cellID": ids[c], "measure": m}
+        for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
+    ]
 
 
 def _complete_coverage_pass(
@@ -717,6 +729,653 @@ def _complete_coverage_pass(
             extra.append({"cellID": encoded, "measure": empty_value})
 
     return band_result + extra
+
+
+# ---------------------------------------------------------------------------
+# The native frame: a raster in another CRS than the grid's, gridded on its own pixels (no warp)
+# ---------------------------------------------------------------------------
+
+# A cell edge is straight in the grid's CRS (lon/lat for h3 and quadbin, EPSG:27700 for BNG) and bends once moved into
+# the raster's CRS. Each edge is walked with as many points as keep the chord between two of them within this fraction
+# of the shorter of the edge and the pixel side, so a covering weight is within about this fraction of the bent cell's.
+_NATIVE_EDGE_TOLERANCE = 1e-4
+# An edge that needs more points than this does not bend smoothly in the raster's CRS: it crosses the CRS's own seam
+# (where its longitudes wrap), so the cell has no outline there and the raster takes the warp instead.
+_NATIVE_EDGE_MAX_POINTS = 4096
+# Cells x vertices x vertices one vectorised chunk may hold (``_ring_supporting_edges``): about 20 MB per array.
+_NATIVE_RING_BUDGET = 2_500_000
+# Pixels between two points of a window outline that is moved to the grid's CRS (at least 20 points per side).
+_OUTLINE_STEP_PIXELS = 16
+
+
+class _NeedsWarp(Exception):
+    """The native frame cannot hold the raster: a point does not transform, or a cell crosses its CRS's seam."""
+
+
+def _move(transform, x, y):
+    """``transform`` (a ``pyproj`` transform) of the arrays ``x``, ``y``, shapes kept; raises ``_NeedsWarp`` for a
+    point that does not transform."""
+    xs, ys = transform(np.ravel(x), np.ravel(y))
+    xs = np.asarray(xs, dtype="float64").reshape(np.shape(x))
+    ys = np.asarray(ys, dtype="float64").reshape(np.shape(y))
+    if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
+        raise _NeedsWarp
+    return xs, ys
+
+
+def _outline_boxes(x, y, pole: int = 0, geographic: bool = True) -> list:
+    """``(w, s, e, n)`` boxes of the grid's CRS that hold the closed outline through the points ``x``, ``y`` (in
+    order). In lon/lat (``geographic``) an outline that crosses the antimeridian gives one box on each side, and one
+    that holds a pole (``pole``: 1 north, -1 south) the band of latitudes from its farthest point to the pole, in six
+    boxes of 60 degrees (a box must span less than 180 degrees of longitude)."""
+    x, y = np.asarray(x, dtype="float64"), np.asarray(y, dtype="float64")
+    if not geographic:
+        return [(x.min(), y.min(), x.max(), y.max())]
+    if pole:
+        s, n = (float(y.min()), 90.0) if pole > 0 else (-90.0, float(y.max()))
+        return [(float(w), s, float(w) + 60.0, n) for w in range(-180, 180, 60)]
+    # longitudes along the outline, each step taken the short way round
+    step = (np.diff(x) + 180.0) % 360.0 - 180.0
+    lon = x[0] + np.concatenate([[0.0], np.cumsum(step)])
+    shift = 360.0 * math.floor((lon.min() + 180.0) / 360.0)
+    w, e = float(lon.min() - shift), float(lon.max() - shift)
+    s, n = float(y.min()), float(y.max())
+    if e <= 180.0:
+        return [(w, s, e, n)]
+    return [(w, s, 180.0, n), (-180.0, s, e - 360.0, n)]
+
+
+def _moved_outlines(frame, cs, rs) -> tuple:
+    """K closed outlines in pixel coordinates (``cs``, ``rs``: K x P, in order) moved to the grid's CRS, with what
+    ``_padded_boxes`` needs to hold each: ``(x, y, pad, pole)``. ``x``, ``y`` (K x 2P) are the moved points and the
+    moved midpoints between them; ``pad`` (K x 2) is the largest distance, per axis, of a moved midpoint from the
+    chord of its moved ends (how far a moved side bends out: past the midpoint it bends out by about a quarter of that
+    again, so the pad holds it); ``pole`` is the pole within two pixels of the outline (1, -1, or 0), where a side
+    near the pole sweeps longitudes too fast for a pad."""
+    k, p = cs.shape
+    nxt = np.roll(np.arange(p), -1)
+    mc, mr = 0.5 * (cs + cs[:, nxt]), 0.5 * (rs + rs[:, nxt])
+    gx, gy = _move(
+        frame.to_grid,
+        *frame.native_xy(
+            np.concatenate([cs, mc], axis=1), np.concatenate([rs, mr], axis=1)
+        ),
+    )
+    ax, ay, bx, by = gx[:, :p], gy[:, :p], gx[:, p:], gy[:, p:]
+    step = ax[:, nxt] - ax
+    if frame.geographic:  # a longitude step taken the short way round
+        step = (step + 180.0) % 360.0 - 180.0
+    dev_x = bx - (ax + 0.5 * step)
+    if frame.geographic:
+        dev_x = (dev_x + 180.0) % 360.0 - 180.0
+    dev_y = by - 0.5 * (ay + ay[:, nxt])
+    x, y = np.empty((k, 2 * p)), np.empty((k, 2 * p))
+    x[:, 0::2], x[:, 1::2], y[:, 0::2], y[:, 1::2] = ax, bx, ay, by
+    pad = np.stack([np.abs(dev_x).max(axis=1), np.abs(dev_y).max(axis=1)], axis=1)
+    pole = np.zeros(k, dtype=np.intp)
+    for sign, (c, r) in frame.poles.items():
+        near = (cs.min(axis=1) - 2 <= c) & (c <= cs.max(axis=1) + 2)
+        near &= (rs.min(axis=1) - 2 <= r) & (r <= rs.max(axis=1) + 2)
+        pole[near] = sign
+    return x, y, pad, pole
+
+
+def _padded_boxes(x, y, pad, pole, geographic: bool) -> list:
+    """``_outline_boxes`` of one moved outline of ``_moved_outlines``, each box grown by ``pad`` and 1% of its size
+    (in lon/lat kept within the globe: the other side of the antimeridian has its own box).
+    """
+    out = []
+    for w, s, e, n in _outline_boxes(x, y, int(pole), geographic):
+        pw = pad[0] + 0.01 * (e - w) + 1e-12
+        ph = pad[1] + 0.01 * (n - s) + 1e-12
+        w, s, e, n = w - pw, s - ph, e + pw, n + ph
+        if geographic:
+            w, s, e, n = max(w, -180.0), max(s, -90.0), min(e, 180.0), min(n, 90.0)
+        out.append((w, s, e, n))
+    return out
+
+
+_EARTH_RADIUS_M = 6371007.2
+
+
+def _lon_spans(w: float, e: float) -> list:
+    """The longitudes ``[w, e]`` (degrees, possibly past +-180) as spans within [-180, 180], each at most 90 wide."""
+    if e - w >= 360.0:
+        w, e = -180.0, 180.0
+    shift = 360.0 * math.floor((w + 180.0) / 360.0)
+    w, e = w - shift, e - shift
+    pieces = [(w, min(e, 180.0))] + ([(-180.0, e - 360.0)] if e > 180.0 else [])
+    spans = []
+    for a, b in pieces:  # vectorscan: ok (at most two pieces)
+        k = max(1, math.ceil((b - a) / 90.0))
+        spans.extend((a + (b - a) * i / k, a + (b - a) * (i + 1) / k) for i in range(k))
+    return spans
+
+
+def _h3_true_cell_boxes(boxes, resolution: int) -> list:
+    """The lon/lat ``boxes`` grown so that h3's overlap test (on its own cells, whose edges are great-circle arcs) finds
+    every cell whose lon/lat ring (straight edges, ``_h3_hexagons``) overlaps a box. An arc of length L at latitude
+    phi bows from the straight lon/lat edge by about L**2 tan(phi) / (8 R); the boxes grow by twice that, for L twice
+    the resolution's average edge, and never by more than that L (the two share their vertices).
+    """
+    from h3.api import basic_int as h3i
+
+    edge = 2.0 * h3i.average_hexagon_edge_length(resolution, "m")
+    out = []
+    for w, s, e, n in boxes:  # vectorscan: ok (per box)
+        lat = math.radians(min(max(abs(s), abs(n)), 90.0))
+        bow = (
+            edge
+            if lat > math.radians(89.0)
+            else min(edge, edge * edge * math.tan(lat) / (4.0 * _EARTH_RADIUS_M))
+        )
+        dlat = math.degrees(bow / _EARTH_RADIUS_M)
+        cos_lat = math.cos(min(lat + math.radians(dlat), math.pi / 2.0))
+        dlon = (
+            360.0 if cos_lat < 1e-9 else math.degrees(bow / (_EARTH_RADIUS_M * cos_lat))
+        )
+        s, n = max(s - dlat, -90.0), min(n + dlat, 90.0)
+        out.extend((a, s, b, n) for a, b in _lon_spans(w - dlon, e + dlon))
+    return out
+
+
+def _h3_box_cells(w: float, s: float, e: float, n: float, resolution: int) -> list:
+    """Every H3 cell (int id) that overlaps the lon/lat box (a superset).
+
+    * A box smaller than half an edge: the cell of its centre and that cell's neighbours (a point within an edge of a
+      cell is in it or in a neighbour).
+    * Else ``polygon_to_cells_experimental`` in overlap mode, with the centre's cell added, except within a degree
+      and three cells of the antimeridian. That call can miss cells: measured, a box within half a degree of 180W
+      missed one in up to a quarter of cases, and a 30 m box inside a res-9 cell in Iowa returned only a neighbour.
+    * Near the antimeridian the box is sampled at the least inner radius of a cell, and the cells of the samples and
+      their neighbours are taken: a cell that overlaps the box holds a sample or is next to a cell that does.
+    """
+    from h3.api import basic_int as h3i
+
+    edge = h3i.average_hexagon_edge_length(resolution, "m")
+    lat_c, lon_c = 0.5 * (s + n), (0.5 * (w + e) + 180.0) % 360.0 - 180.0
+    centre = h3i.latlng_to_cell(lat_c, lon_c, resolution)
+    lat_low = (
+        0.0 if s * n <= 0.0 else min(abs(s), abs(n))
+    )  # the box's latitude nearest the equator
+    diag = _EARTH_RADIUS_M * math.hypot(
+        math.radians(n - s), math.radians(e - w) * math.cos(math.radians(lat_low))
+    )
+    if diag < 0.5 * edge:
+        return list(h3i.grid_disk(centre, 1))
+    cos_lat = max(math.cos(math.radians(min(max(abs(s), abs(n)), 90.0))), 1e-9)
+    margin = 1.0 + math.degrees(3.0 * 2.0 * edge / (_EARTH_RADIUS_M * cos_lat))
+    near_w, near_e = max(w, 180.0 - margin), min(e, -180.0 + margin)
+    out = [centre]
+    mid = (
+        min(e, 180.0 - margin),
+        max(w, -180.0 + margin),
+    )  # the part away from the antimeridian
+    if mid[0] > mid[1]:
+        out.extend(
+            h3i.polygon_to_cells_experimental(
+                h3i.LatLngPoly([(s, mid[1]), (n, mid[1]), (n, mid[0]), (s, mid[0])]),
+                resolution,
+                contain="overlap",
+            )
+        )
+    # the least inner radius: half the average edge (a distorted cell's shortest), times sqrt(3) / 2
+    step = math.degrees(0.5 * edge * math.sqrt(3.0) / 2.0 / _EARTH_RADIUS_M)
+    lats = np.append(np.arange(s, n, step), n)
+    for a, b in ((near_w, e), (w, near_e)):  # vectorscan: ok (the two strips)
+        if a > b:
+            continue
+        hit = set()
+        for (
+            lat
+        ) in lats:  # vectorscan: ok (per row: the longitude step widens with latitude)
+            row_cos = math.cos(math.radians(min(abs(lat) + step, 90.0)))
+            k = min(int((b - a) * row_cos / step) + 1, 1_000_000)
+            hit.update(
+                h3i.latlng_to_cell(float(lat), float(x), resolution)
+                for x in np.linspace(a, b, k + 1)  # vectorscan: ok (h3 no array API)
+            )
+        out.extend(
+            d for c in hit for d in h3i.grid_disk(c, 1)
+        )  # vectorscan: ok (per cell)
+    return out
+
+
+def _box_cells(boxes, resolution, grid: str) -> list:
+    """The cells of ``grid`` that may overlap one of ``boxes`` (a superset; empty overlaps drop), each once, in
+    first-seen order: int ids for h3 (``polygon_to_cells_experimental`` in overlap mode), the ``_polyfill_cells`` ids
+    for quadbin and BNG."""
+    from itertools import chain
+
+    from shapely.geometry import box as _box
+
+    from databricks.labs.gbx.pyrx.core.tessellate import _polyfill_cells
+
+    if grid == "h3":
+        parts = (
+            _h3_box_cells(w, s, e, n, resolution)
+            for w, s, e, n in _h3_true_cell_boxes(
+                boxes, resolution
+            )  # vectorscan: ok (per box)
+        )
+    else:
+        parts = (
+            _polyfill_cells(_box(w, s, e, n), resolution, grid) for w, s, e, n in boxes
+        )  # vectorscan: ok (per box)
+    return list(dict.fromkeys(chain.from_iterable(parts)))
+
+
+def _grid_rings(cells, grid: str) -> tuple:
+    """``(x, y)`` vertex arrays, each cells x M, of the cells in the grid's CRS: the H3 hexagons of ``_h3_hexagons``
+    (lon, lat), the lon/lat box of a quadbin cell, the EPSG:27700 square of a BNG cell.
+    """
+    if grid == "h3":
+        return _h3_hexagons(cells)
+    if grid == "quadbin":
+        import quadbin
+
+        b = np.array(
+            [
+                quadbin.cell_to_bounding_box(int(c)) for c in cells
+            ],  # vectorscan: ok (no array API)
+            dtype="float64",
+        ).reshape(-1, 4)
+    else:
+        b = np.array(
+            [
+                _bng.cell_id_to_geometry(int(c)).bounds for c in cells
+            ],  # vectorscan: ok (no array API)
+            dtype="float64",
+        ).reshape(-1, 4)
+    w, s, e, n = b.T
+    return np.stack([w, e, e, w], axis=1), np.stack([s, s, n, n], axis=1)
+
+
+class _Frame:
+    """A raster in its own CRS as a grid sees it: the transforms between the two CRSs and the raster's pixel geometry.
+
+    ``gt`` is the raster's geotransform (rotation terms included), ``px_area`` / ``px_side`` its pixel's area and side
+    in the raster's units, ``poles`` the ``(col, row)`` in the raster of each pole that transforms (h3 / quadbin).
+    """
+
+    def __init__(self, ds, src_crs, grid: str):
+        from databricks.labs.gbx.core.crs import get_transformer
+
+        self.ds, self.grid = ds, grid
+        self.geographic = grid != "bng"
+        grid_crs = 27700 if grid == "bng" else 4326
+        self.to_grid = get_transformer(src_crs, grid_crs).transform
+        self.to_native = get_transformer(grid_crs, src_crs).transform
+        self.gt = gt = ds.transform.to_gdal()
+        self.px_area = abs(gt[1] * gt[5] - gt[2] * gt[4])
+        self.px_side = math.sqrt(self.px_area)
+        self.poles = {}
+        if self.geographic:
+            inv = ~ds.transform
+            for sign in (1, -1):
+                x, y = self.to_native(0.0, 90.0 * sign)
+                if math.isfinite(x) and math.isfinite(y):
+                    self.poles[sign] = inv * (x, y)
+
+    def native_xy(self, cols, rows):
+        """Raster CRS coordinates of the pixel coordinates ``cols``, ``rows`` (the full geotransform)."""
+        gt = self.gt
+        return gt[0] + cols * gt[1] + rows * gt[2], gt[3] + cols * gt[4] + rows * gt[5]
+
+    def window_boxes(self, rows, cols, pad: int = 1) -> list:
+        """``_padded_boxes`` of the pixel window ``rows`` x ``cols`` (``(first, last)``, inclusive) padded by ``pad``
+        pixels: its outline walked every ``_OUTLINE_STEP_PIXELS`` pixels (at least 20 per side) and moved to the grid's
+        CRS."""
+        r0, r1 = rows[0] - pad, rows[1] + 1 + pad
+        c0, c1 = cols[0] - pad, cols[1] + 1 + pad
+        n = max(20, math.ceil(max(r1 - r0, c1 - c0) / _OUTLINE_STEP_PIXELS))
+        frac = np.arange(n) / n
+        cs = np.concatenate(
+            [
+                c0 + frac * (c1 - c0),
+                np.full(n, c1),
+                c1 - frac * (c1 - c0),
+                np.full(n, c0),
+            ]
+        )
+        rs = np.concatenate(
+            [
+                np.full(n, r0),
+                r0 + frac * (r1 - r0),
+                np.full(n, r1),
+                r1 - frac * (r1 - r0),
+            ]
+        )
+        x, y, gpad, pole = _moved_outlines(self, cs[None, :], rs[None, :])
+        return _padded_boxes(x[0], y[0], gpad[0], pole[0], self.geographic)
+
+    def pixel_area_m2(self) -> float:
+        """Geodesic area in m2 of the centre pixel (as ``h3fit.pixel_area_m2``, through this frame's CRS)."""
+        from shapely.geometry import Polygon
+
+        from databricks.labs.gbx.core.crs import area_m2
+
+        col, row = self.ds.width // 2, self.ds.height // 2
+        xs, ys = self.native_xy(
+            np.array([col, col + 1, col + 1, col], dtype="float64"),
+            np.array([row, row, row + 1, row + 1], dtype="float64"),
+        )
+        try:
+            lon, lat = _move(self.to_grid, xs, ys)
+        except _NeedsWarp:
+            return math.nan
+        lon = lon[0] + (lon - lon[0] + 180.0) % 360.0 - 180.0
+        return float(area_m2(Polygon(zip(lon, lat)), "EPSG:4326"))
+
+
+def _native_rings(frame: _Frame, cells) -> tuple:
+    """``(x, y)`` vertex arrays, each cells x M, of the cells in the raster's CRS: every edge of ``_grid_rings`` (in
+    lon/lat taken the short way round, across the antimeridian or around a pole) walked with ``n`` points, ``n`` the
+    least that keeps the chord within ``_NATIVE_EDGE_TOLERANCE`` of the shorter of the edge and the pixel side (the
+    chord's distance from the bent edge falls as ``1 / n**2``). ``n`` depends on the edge alone, so two cells walk
+    their shared edge with the same points and still tile. A shorter ring repeats its last vertex.
+
+    Raises ``_NeedsWarp`` for a vertex that does not transform, or an edge that needs more than
+    ``_NATIVE_EDGE_MAX_POINTS`` (a cell across the raster CRS's seam).
+    """
+    gx, gy = _grid_rings(cells, frame.grid)
+    k = gx.shape[1]
+    nxt = np.roll(np.arange(k), -1)
+    dx, dy = gx[:, nxt] - gx, gy[:, nxt] - gy
+    if frame.geographic:
+        dx = (dx + 180.0) % 360.0 - 180.0
+    xs, ys = _move(frame.to_native, gx, gy)
+    mx, my = _move(frame.to_native, gx + 0.5 * dx, gy + 0.5 * dy)
+    nx_, ny_ = xs[:, nxt], ys[:, nxt]
+    length = np.hypot(nx_ - xs, ny_ - ys)
+    dev = np.hypot(mx - 0.5 * (xs + nx_), my - 0.5 * (ys + ny_))
+    tol = _NATIVE_EDGE_TOLERANCE * np.minimum(length, frame.px_side)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        need = np.where(length > 0.0, np.ceil(np.sqrt(dev / tol)), 1.0)
+    need = np.maximum(need, 1.0)
+    if not (need <= _NATIVE_EDGE_MAX_POINTS).all():
+        raise _NeedsWarp
+    if (need == 1.0).all():
+        return xs, ys
+    per_edge = need.astype(np.intp).ravel()
+    total = int(per_edge.sum())
+    edge = np.repeat(np.arange(per_edge.size), per_edge)
+    j = np.arange(total) - np.repeat(np.cumsum(per_edge) - per_edge, per_edge)
+    px, py = xs.ravel()[edge], ys.ravel()[edge]
+    inner = j > 0
+    e_in = edge[inner]
+    t = j[inner] / per_edge[e_in]
+    px[inner], py[inner] = _move(
+        frame.to_native,
+        gx.ravel()[e_in] + t * dx.ravel()[e_in],
+        gy.ravel()[e_in] + t * dy.ravel()[e_in],
+    )
+    per_cell = need.astype(np.intp).sum(axis=1)
+    m = int(per_cell.max())
+    pos = np.arange(total) - np.repeat(np.cumsum(per_cell) - per_cell, per_cell)
+    vx, vy = np.empty((len(cells), m)), np.empty((len(cells), m))
+    vx[edge // k, pos], vy[edge // k, pos] = px, py
+    col = np.minimum(np.arange(m)[None, :], per_cell[:, None] - 1)
+    row = np.arange(len(cells))[:, None]
+    return vx[row, col], vy[row, col]
+
+
+def _native_id(cell, grid: str):
+    """The output id of a raw cell: the Long of an h3 / quadbin id, the formatted BNG reference."""
+    return _bng.format(int(cell)) if grid == "bng" else int(cell)
+
+
+def _corner_cells(gx, gy, resolution, grid: str) -> np.ndarray:
+    """The quadbin / BNG cell (int64) of each grid-CRS point, -1 for a point outside BNG."""
+    if grid == "quadbin":
+        from databricks.labs.gbx.pygx import _quadbin
+
+        return _quadbin.point_as_cell_vec(gx, gy, resolution)
+    cells = _bng_cells(gx, gy, resolution)
+    return np.where(_bng.is_valid_vec(cells, resolution), cells, -1)
+
+
+def _covering_band_h3_native(
+    frame: _Frame, band, mask, resolution: int, agg: str
+) -> list:
+    """``_covering_band_h3_vectorised`` for a north-up raster in another CRS: the candidate cells come from the moved
+    outline of the window of valid pixels (padded by one pixel), and each ring is moved into the raster's CRS
+    (``_native_rings``), where its pixels are axis-aligned boxes."""
+    valid_rows = np.flatnonzero(mask.any(axis=1))
+    if valid_rows.size == 0:
+        return []
+    valid_cols = np.flatnonzero(mask.any(axis=0))
+    boxes = frame.window_boxes(
+        (int(valid_rows[0]), int(valid_rows[-1])),
+        (int(valid_cols[0]), int(valid_cols[-1])),
+    )
+    cells = _box_cells(boxes, resolution, "h3")
+    out = []
+    step = _H3_VEC_CHUNK_CELLS
+    for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound pairs)
+        chunk = cells[start : start + step]
+        vx, vy = _native_rings(frame, chunk)
+        sub = max(1, _NATIVE_RING_BUDGET // vx.shape[1] ** 2)
+        for s0 in range(
+            0, len(chunk), sub
+        ):  # vectorscan: ok (sub-chunks bound the rings)
+            out.extend(
+                _box_pairs_reduce(
+                    vx[s0 : s0 + sub],
+                    vy[s0 : s0 + sub],
+                    chunk[s0 : s0 + sub],
+                    band,
+                    mask,
+                    frame.gt,
+                    frame.px_area,
+                    agg,
+                )
+            )
+    return out
+
+
+def _native_polygons(frame: _Frame, cells, ox: float, oy: float):
+    """Shapely polygons of the cells in the raster's CRS, relative to ``(ox, oy)`` (so GEOS rounds at the raster's
+    scale, not the coordinates')."""
+    import shapely
+
+    polys = []
+    step = _H3_VEC_CHUNK_CELLS
+    for start in range(0, len(cells), step):  # vectorscan: ok (chunks bound the rings)
+        vx, vy = _native_rings(frame, cells[start : start + step])
+        polys.append(shapely.polygons(np.stack([vx - ox, vy - oy], axis=-1)))
+    return np.concatenate(polys) if polys else np.empty(0, dtype=object)
+
+
+def _covering_band_native_loop(
+    frame: _Frame, band, mask, resolution, grid: str, agg: str
+) -> list:
+    """``_covering_band``'s per-pixel pass for a raster in another CRS (any geotransform): each valid pixel's
+    candidate cells come from its outline moved to the grid's CRS (``_moved_outlines``, ``_padded_boxes``), and the
+    weight is the GEOS overlap of the pixel quad and the cell moved into the raster's CRS
+    (``_native_rings``), over the pixel's area. quadbin and BNG keep the interior fast path: a pixel whose four
+    corners fall in one cell has weight 1 (the cell's moved edge can bend into the pixel only by its chord tolerance).
+    """
+    import shapely
+
+    from databricks.labs.gbx.pyrx.core.tessellate import _cell_is_valid
+
+    ys, xs = np.nonzero(mask)
+    if ys.size == 0:
+        return []
+    ox, oy = frame.gt[0], frame.gt[3]
+    cols = xs[:, None] + np.array([0, 1, 1, 0])
+    rows = ys[:, None] + np.array([0, 0, 1, 1])
+    nx_, ny_ = frame.native_xy(cols, rows)
+    gx, gy = _move(frame.to_grid, nx_, ny_)
+    vals = band[ys, xs]
+    index: dict = {}  # raw cell -> its index in the pairs
+    pair_cell, pair_pix = [], []
+    interior = np.zeros(ys.size, dtype=bool)
+    fixed_cell = np.empty(0, dtype=np.intp)
+    if grid in _COVERING_FAST_PATH_EXACT:
+        corner = _corner_cells(gx.ravel(), gy.ravel(), resolution, grid).reshape(-1, 4)
+        interior = (corner == corner[:, :1]).all(axis=1) & (corner[:, 0] >= 0)
+        fixed_cell = np.fromiter(
+            (index.setdefault(int(c), len(index)) for c in corner[interior, 0]),
+            dtype=np.intp,
+            count=int(interior.sum()),
+        )  # vectorscan: ok (per interior pixel, a dict lookup)
+    edge = np.flatnonzero(~interior)
+    out_x, out_y, out_pad, out_pole = _moved_outlines(
+        frame, cols[edge].astype("float64"), rows[edge].astype("float64")
+    )
+    for k, i in enumerate(
+        edge
+    ):  # vectorscan: ok (covering per-pixel, as _covering_band)
+        boxes = _padded_boxes(
+            out_x[k], out_y[k], out_pad[k], out_pole[k], frame.geographic
+        )
+        for cell in _box_cells(boxes, resolution, grid):
+            if _cell_is_valid(cell, grid):
+                pair_cell.append(index.setdefault(cell, len(index)))
+                pair_pix.append(i)
+    raw = list(index)
+    pair_cell = np.asarray(pair_cell, dtype=np.intp)
+    pair_pix = np.asarray(pair_pix, dtype=np.intp)
+    w = np.empty(0)
+    if pair_cell.size:
+        cell_polys = _native_polygons(frame, raw, ox, oy)
+        pixels = shapely.polygons(np.stack([nx_ - ox, ny_ - oy], axis=-1))
+        area = shapely.area(
+            shapely.intersection(cell_polys[pair_cell], pixels[pair_pix])
+        )
+        w = area / frame.px_area
+        keep = w > 0.0
+        pair_cell, pair_pix, w = pair_cell[keep], pair_pix[keep], w[keep]
+    cell = np.concatenate([fixed_cell, pair_cell])
+    if cell.size == 0:
+        return []
+    weights = np.concatenate([np.ones(fixed_cell.size), w])
+    values = np.concatenate([vals[interior], vals[pair_pix]])
+    uniq, measures = _grouped_measures(cell, values, agg, weights=weights)
+    return [
+        {"cellID": _native_id(raw[c], grid), "measure": m}
+        for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
+    ]
+
+
+def _covering_band_native(frame: _Frame, band, mask, resolution, grid: str, agg: str):
+    """Covering in the raster's own CRS: the vectorised H3 pass where ``_use_h3_vectorised`` holds, else the
+    per-pixel pass."""
+    if grid == "h3" and _use_h3_vectorised(
+        frame.ds, resolution, frame.gt, area=frame.pixel_area_m2()
+    ):
+        return _covering_band_h3_native(frame, band, mask, int(resolution), agg)
+    return _covering_band_native_loop(frame, band, mask, resolution, grid, agg)
+
+
+def _centroid_band_native(frame: _Frame, band, mask, resolution, grid: str, agg: str):
+    """Centroid assignment in the raster's own CRS: each valid pixel's centre (the full geotransform) is moved to the
+    grid's CRS and binned there, as ``tessellate._assign_pixels`` does; a BNG centre outside the grid drops.
+    """
+    ys, xs = np.nonzero(mask)
+    if ys.size == 0:
+        return []
+    gx, gy = _move(frame.to_grid, *frame.native_xy(xs + 0.5, ys + 0.5))
+    vals = band[ys, xs]
+    if grid == "h3":
+        cids = _h3_cells(gx, gy, resolution)
+    elif grid == "quadbin":
+        from databricks.labs.gbx.pygx import _quadbin
+
+        cids = _quadbin.point_as_cell_vec(gx, gy, resolution)
+    else:
+        cids = _bng_cells(gx, gy, resolution)
+        keep = _bng.is_valid_vec(cids, resolution)
+        cids, vals = cids[keep], vals[keep]
+        if cids.size == 0:
+            return []
+    uniq, measures = _grouped_measures(cids, vals, agg)
+    return [
+        {"cellID": _native_id(c, grid), "measure": m}
+        for c, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
+    ]
+
+
+def _complete_coverage_native(
+    band_result: list, frame: _Frame, resolution, grid: str, agg: str
+):
+    """``_complete_coverage_pass`` in the raster's own CRS: a candidate cell (from the moved outline of the raster,
+    padded by one pixel) that is valid and not in ``band_result`` is added, empty, when the cell moved into the
+    raster's CRS has a positive-area overlap with the raster's outline there."""
+    import shapely
+    from shapely.geometry import Polygon
+
+    from databricks.labs.gbx.pyrx.core.tessellate import _cell_is_valid
+
+    ds = frame.ds
+    existing = {r["cellID"] for r in band_result}
+    todo = [
+        c
+        for c in _box_cells(
+            frame.window_boxes((0, ds.height - 1), (0, ds.width - 1)), resolution, grid
+        )
+        if _cell_is_valid(c, grid) and _native_id(c, grid) not in existing
+    ]  # vectorscan: ok (per cell)
+    if not todo:
+        return band_result
+    ox, oy = frame.gt[0], frame.gt[3]
+    cx, cy = frame.native_xy(
+        np.array([0, ds.width, ds.width, 0], dtype="float64"),
+        np.array([0, 0, ds.height, ds.height], dtype="float64"),
+    )
+    outline = Polygon(zip(cx - ox, cy - oy))
+    polys = _native_polygons(frame, todo, ox, oy)
+    hit = shapely.intersects(polys, outline)
+    hit[hit] = shapely.area(shapely.intersection(polys[hit], outline)) > 0.0
+    empty_value = _EMPTY_STATE if agg == _PARTIAL else (0.0 if agg == "count" else None)
+    return band_result + [
+        {"cellID": _native_id(c, grid), "measure": empty_value}
+        for c, h in zip(todo, hit)  # vectorscan: ok (per cell)
+        if h
+    ]
+
+
+def _grid_native(
+    ds, src_crs, resolution, grid: str, agg: str, coverage: str, assignment: str
+):
+    """Grid ``ds`` (its CRS ``src_crs``, not the grid's) on its own pixels: one list per band, as ``_run`` gives, or
+    None when the native frame cannot hold the raster (``_NeedsWarp``) and the caller warps it instead.
+    """
+    frame = _Frame(ds, src_crs, grid)
+    if not (math.isfinite(frame.px_area) and frame.px_area > 0.0):
+        return None
+    try:
+        out = []
+        for bi in range(1, ds.count + 1):
+            band = ds.read(bi).astype("float64")
+            mask = band_valid_mask(ds, bi)  # False = NoData, masked or transparent
+            if assignment == "centroid":
+                result = _centroid_band_native(frame, band, mask, resolution, grid, agg)
+            else:
+                result = _covering_band_native(frame, band, mask, resolution, grid, agg)
+            if coverage == "complete":
+                result = _complete_coverage_native(result, frame, resolution, grid, agg)
+            out.append(result)
+        return out
+    except _NeedsWarp:
+        return None
+
+
+def _foreign_crs(ds, crs):
+    """The source CRS of an h3 / quadbin raster when it is not EPSG:4326 -- the raster's own, else the ``crs``
+    override of a CRS-less raster -- or None (grid-native: 4326, or CRS-less with no override). The same test as
+    ``_warp_to_4326_if_needed``."""
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    wgs84 = resolve_crs(4326)
+    if ds.crs is not None:
+        return None if ds.crs == wgs84 else ds.crs
+    if crs is None:
+        return None
+    override = resolve_crs(crs)
+    return None if override == wgs84 else override
 
 
 def _stamp_crs_bytes(ds, target_crs) -> bytes:
@@ -926,11 +1585,10 @@ def _raster_to_grid(
 ) -> list:
     """Aggregate raster pixel values into discrete-global-grid cells, per band.
 
-    H3 and quadbin operate in EPSG:4326 lon/lat. The raster is auto-reprojected
-    to EPSG:4326 (nearest-neighbour, so pixel statistics are never interpolated)
-    when it carries a CRS that differs — mirroring what BNG already does for
-    EPSG:27700. This closes a prior silent-wrong-answer footgun where a non-4326
-    (e.g. UTM) raster had its easting/northing read directly as lon/lat.
+    H3 and quadbin cells are in EPSG:4326 lon/lat. A raster that carries another CRS
+    is gridded on its own pixels (``_grid_native``), never with its easting/northing
+    read as lon/lat; only one the native frame cannot hold is warped to EPSG:4326
+    (nearest) first.
 
     Never errors on an absent CRS: a raster with no CRS (and no ``crs`` override)
     is assumed already-in-grid-native (4326) and processed unchanged.
@@ -1033,12 +1691,18 @@ def _raster_to_grid(
             out.append(band_result)
         return out
 
-    # Auto-reproject to 4326 when a source CRS is known and differs. The embedded
-    # raster CRS wins; else the `crs` override (for a CRS-less-but-known raster);
-    # else None -> assume grid-native 4326 and process unchanged (never errors).
-    warped_bytes = _warp_to_4326_if_needed(ds, crs)
-    if warped_bytes is None:
+    # A raster in another CRS is gridded on its own pixels. The embedded raster CRS
+    # wins; else the `crs` override (for a CRS-less-but-known raster); else None ->
+    # assume grid-native 4326 and process unchanged (never errors).
+    src_crs = _foreign_crs(ds, crs)
+    if src_crs is None:
         return _run(ds)
+    native = _grid_native(ds, src_crs, resolution, grid, agg, coverage, assignment)
+    if native is not None:
+        return native
+    # The native frame cannot hold it (a cell across the CRS's seam, or a point that
+    # does not transform): warp to 4326 (nearest), as before.
+    warped_bytes = _warp_to_4326_if_needed(ds, crs)
     from rasterio.io import MemoryFile
 
     with MemoryFile(warped_bytes) as mf, open_bytes(mf) as work_ds:
@@ -1053,12 +1717,11 @@ def _raster_to_bng(
     assignment: str = "centroid",
     crs=None,
 ) -> list:
-    """BNG raster->grid: warp to EPSG:27700, bin per pixel, render String ids.
+    """BNG raster->grid: bin per pixel in EPSG:27700, render String ids.
 
-    Mirrors heavy ``RST_BNG_RasterToGrid``: BNG has no lon/lat input path, so the
-    raster is reprojected to EPSG:27700 (nearest-neighbour, so no interpolated
-    values corrupt the pixel statistics) unless it is already there; pixel
-    centroids are mapped to BNG cell ids via ``pygx._bng.point_to_cell_id``;
+    A raster in another CRS is gridded on its own pixels (``_grid_native``); only one
+    the native frame cannot hold, or one with no CRS at all, is warped to EPSG:27700
+    (nearest) first. Pixel centroids are mapped to BNG cell ids via ``pygx._bng.point_to_cell_id``;
     pixels whose cell falls outside GB are dropped via ``pygx._bng.is_valid``;
     ids are rendered to the user-facing BNG ``str`` via ``pygx._bng.format`` at
     the output boundary. Grouping stays Long-keyed (reuses ``_grouped_measures``).
@@ -1068,8 +1731,8 @@ def _raster_to_bng(
       * ``covering`` distributes pixel values by area fraction
 
     ``crs`` is a source-CRS override for a CRS-less-but-known raster (stamped
-    before the warp so a georeferenced-but-unlabeled raster reprojects correctly);
-    ignored when the raster already carries a CRS.
+    first, so a georeferenced-but-unlabeled raster grids in that CRS); ignored when
+    the raster already carries a CRS.
     """
     from rasterio.io import MemoryFile
 
@@ -1147,7 +1810,13 @@ def _raster_to_bng(
 
     if already_bng:
         return _run(ds)
-    # The warp fill is NoData and a source's own mask still masks (as for h3/quadbin).
+    if ds.crs is not None:
+        # Gridded on its own pixels (the override's CRS was stamped above).
+        native = _grid_native(ds, ds.crs, resolution, "bng", agg, coverage, assignment)
+        if native is not None:
+            return native
+    # The native frame cannot hold it, or the raster has no CRS at all: warp to
+    # 27700 (nearest). The warp fill is NoData and a source's own mask still masks.
     warped_bytes = warp.reproject_to_srid(
         ds, 27700, resampling="nearest", mark_fill_nodata=True
     )

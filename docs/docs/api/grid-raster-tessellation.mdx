@@ -41,6 +41,7 @@ The footprint used for covered-cell enumeration is the raster's **outline** (its
 - **`covering`** — the meaning differs by function family:
   - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData. A source without NoData gets its data type's fallback value (for example 65535 for `uint16`), and its pixels equal to that value are NoData too.
   - **Scalar-reducing (`rst_<grid>_rastertogrid*`):** area-weighted. Each pixel contributes to every cell its footprint overlaps, weighted by the fraction of the pixel's area inside that cell. Interior pixels (entirely within one cell) carry weight 1; only boundary pixels split. This fills centroid-aliasing gaps — a cell that catches no centroid in `centroid` mode receives area-weighted contributions under `covering`. `sum` and `count` remain globally mass-conserving.
+  - The overlap is measured on the raster's own pixels. A raster in another CRS than the grid's is not reprojected: each cell is moved into the raster's CRS instead. So `count` is in source pixels, and a weight is within about 1e-4 of the exact share.
 
 The interaction between the two policies:
 
@@ -145,7 +146,8 @@ Examples at 42°N:
 
 **CRS handling:**
 - `rst_h3_tessellate` reprojects the tile extent to **EPSG:4326** internally before H3 cell lookups. Any CRS supported by GDAL is accepted; no pre-transformation of the tile is required.
-- `rst_h3_rastertogrid*` reprojects the tile to **EPSG:4326** internally, with nearest-neighbour resampling so pixel values are never interpolated, before binning pixels into H3 cells. A tile in a projected CRS (e.g., UTM) needs no upstream `rst_transform`. A tile with no CRS is assumed to be in EPSG:4326 already.
+- `rst_h3_rastertogrid*` grids the tile in its own CRS, so pixels are never resampled. With `covering`, each H3 cell is moved into the tile's CRS and shares out the pixels it overlaps. With `centroid`, each pixel centre is moved to EPSG:4326. A tile in a projected CRS (e.g., UTM) needs no upstream `rst_transform`. A tile with no CRS is assumed to be in EPSG:4326 already.
+- A tile across the antimeridian or around a pole is gridded the same way. Only a cell that crosses the tile CRS's own seam cannot be moved into it (for example EPSG:3857 at 180°). Such a tile is reprojected to EPSG:4326 first, with nearest-neighbour resampling.
 
 **Resolution:** an integer level 0–15 (higher = finer hexagons; level 7 ≈ 5 km² per cell; level 9 ≈ 0.1 km²).
 
@@ -192,7 +194,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **Cell-id type:** `BIGINT` — a Quadbin integer cell ID.
 
-**CRS handling:** tiles are reprojected to geographic coordinates internally. Any CRS supported by GDAL is accepted; no pre-transformation required.
+**CRS handling:** `rst_quadbin_tessellate` reprojects the tile extent to geographic coordinates internally. `rst_quadbin_rastertogrid*` grids the tile in its own CRS, as for H3. Any CRS supported by GDAL is accepted; no pre-transformation required.
 
 **Resolution:** an integer zoom level 0–20 (higher = finer tiles). Quadbin cells align with Web Mercator tile boundaries.
 
@@ -207,7 +209,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **Cell-id type:** `STRING` — a human-readable BNG cell reference (e.g., `TQ38`, `TQ3882`).
 
-**CRS handling:** tiles are reprojected to **EPSG:27700** (British National Grid) internally. Any CRS supported by GDAL is accepted.
+**CRS handling:** `rst_bng_tessellate` reprojects the tile to **EPSG:27700** (British National Grid) internally. `rst_bng_rastertogrid*` grids the tile in its own CRS, as for H3: each BNG cell is moved into the tile's CRS. Any CRS supported by GDAL is accepted.
 
 **Resolution:** an integer index 1–6, where 1 = 100 km, 2 = 10 km, and 3 = 1 km. Index 4 = 100 m, 5 = 10 m, and 6 = 1 m. A string key from the BNG resolution map (e.g., `"1km"`, `"100m"`) also works. Negative indices (−1 to −6) select quadrant sub-cells.
 

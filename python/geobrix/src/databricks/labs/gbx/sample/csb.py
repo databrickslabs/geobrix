@@ -97,14 +97,17 @@ class CsbDownloader:
 
     def _zip(self, out_dir: str) -> str:
         """The Volume copy of the zip, current by size and the server's Last-Modified (kept in ``<zip>.last_modified``)."""
-        from databricks.labs.gbx.stac._download import local_source_copy
+        from databricks.labs.gbx.stac._download import _write_text, local_source_copy
 
         probe = (self._probe or _http.probe_range)(
             self.href, allowed_hosts=_ALLOWED_HOSTS
         )
         cache = os.path.join(out_dir, _SOURCE)
         stamp = os.path.join(cache, os.path.basename(self.href) + ".last_modified")
-        seen = open(stamp).read() if os.path.exists(stamp) else None
+        seen = None
+        if os.path.exists(stamp):
+            with open(stamp) as fh:
+                seen = fh.read()
         if probe.last_modified is not None and seen != probe.last_modified:
             _forget(
                 os.path.join(cache, os.path.basename(self.href))
@@ -118,21 +121,19 @@ class CsbDownloader:
             fetch=self._fetch,
         )
         if probe.last_modified is not None and seen != probe.last_modified:
-            with open(
-                stamp, "w"
-            ) as fh:  # written after the copy is published: a cut-short fetch leaves no stamp
-                fh.write(probe.last_modified)
+            # written after the copy is published (a cut-short fetch leaves no stamp), and published whole
+            scratch = new_scratch_dir(cache)
+            os.makedirs(scratch, exist_ok=True)
+            try:
+                _write_text(stamp, probe.last_modified, scratch)
+            finally:
+                remove_scratch_dir(scratch)
         return path
 
     @staticmethod
     def _extract_local(zip_path: str, local: str) -> str:
         """Copy the zip to the driver's local folder ``local``, extract it there; return the dataset path."""
-        if shutil.disk_usage(local).free < MIN_LOCAL_FREE_BYTES:
-            raise OSError(
-                f"CSB: {shutil.disk_usage(local).free / 1e9:.1f} GB free on the driver's local disk ({local}); the "
-                f"zip and its extract need {MIN_LOCAL_FREE_BYTES / 1e9:.1f} GB. Fix: run on a driver with more local "
-                "disk, or point GBX_LOCAL_TEMP_DIR at a larger local folder."
-            )
+        _check_local_disk(local)
         local_zip = os.path.join(local, os.path.basename(zip_path))
         shutil.copyfile(
             zip_path, local_zip
@@ -175,11 +176,15 @@ class CsbDownloader:
         os.makedirs(out_dir, exist_ok=True)
         dest = os.path.join(out_dir, f"csb_{state_fips}.gpkg")
         if force or not _gpkg_valid(dest):
-            zip_path = self._zip(out_dir)
             local = new_local_temp_dir("gbx_csb_")
-            scratch = new_scratch_dir(out_dir)
-            os.makedirs(scratch, exist_ok=True)
+            scratch = None
             try:
+                _check_local_disk(
+                    local
+                )  # before the 3.76 GB fetch, not only before the extract
+                zip_path = self._zip(out_dir)
+                scratch = new_scratch_dir(out_dir)
+                os.makedirs(scratch, exist_ok=True)
                 src = self._extract_local(zip_path, local)
                 tmp_local = os.path.join(local, os.path.basename(dest))
                 n = clip_gdb_to_state(src, self.layer, state_fips, tmp_local)
@@ -194,7 +199,8 @@ class CsbDownloader:
                 os.replace(tmp, dest)
             finally:
                 shutil.rmtree(local, ignore_errors=True)
-                remove_scratch_dir(scratch)
+                if scratch is not None:
+                    remove_scratch_dir(scratch)
         from databricks.labs.gbx.sample._http_assets import _spark
 
         return _spark(spark).createDataFrame(
@@ -231,6 +237,17 @@ def _refuse_on_worker() -> None:
         raise RuntimeError(
             "CsbDownloader.download runs on the driver only: a Spark worker has about 1 GB of local disk, and the "
             "CSB zip and its extract need about 9 GB. Fix: call it from the notebook, not from a UDF or a task."
+        )
+
+
+def _check_local_disk(local: str) -> None:
+    """Raise when the driver's local disk cannot hold the zip copy and its extract."""
+    free = shutil.disk_usage(local).free
+    if free < MIN_LOCAL_FREE_BYTES:
+        raise OSError(
+            f"CSB: {free / 1e9:.1f} GB free on the driver's local disk ({local}); the "
+            f"zip and its extract need {MIN_LOCAL_FREE_BYTES / 1e9:.1f} GB. Fix: run on a driver with more local "
+            "disk, or point GBX_LOCAL_TEMP_DIR at a larger local folder."
         )
 
 

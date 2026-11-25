@@ -26,6 +26,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 import inspect
 import os
 import re
+import time
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -108,6 +109,27 @@ def _http_status(exc: BaseException) -> Optional[int]:
     return code if isinstance(code, int) else None
 
 
+_SERVER_ERROR_TEXT = re.compile(r"\b5\d\d\s+server\s+error", re.IGNORECASE)
+_CMR_ATTEMPTS = 4
+_CMR_BACKOFF_S = 2.0
+_sleep = time.sleep  # tests replace this to skip the waits
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """A CMR failure worth another try: a 5xx, or a dropped or timed-out connection.
+
+    A status on the error decides (5xx retries, 4xx never does); without one a
+    connection-level ``OSError`` retries, and so does a message that names a 5xx
+    server error. Anything else, a bad argument for instance, is not retried.
+    """
+    status = _http_status(exc)
+    if status is not None:
+        return status >= 500
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    return _SERVER_ERROR_TEXT.search(_URL.sub(" ", str(exc))) is not None
+
+
 def _is_eula_failure(exc: BaseException) -> bool:
     """True when ``exc`` or anything in its cause/context chain is a EULA refusal.
 
@@ -174,6 +196,21 @@ class EarthdataClient:
         # strategy="environment" reads EARTHDATA_TOKEN (Databricks secret -> env).
         self._ea().login(strategy="environment")
 
+    @staticmethod
+    def _cmr_search(ea, kwargs) -> list:
+        """``ea.search_data(**kwargs)``, retried on a 5xx or a dropped connection.
+
+        Waits 2 s, 4 s, 8 s between four tries; a 4xx or any other error is raised at once.
+        """
+        for attempt in range(1, _CMR_ATTEMPTS + 1):
+            try:
+                return list(ea.search_data(**kwargs))
+            except Exception as exc:
+                if attempt == _CMR_ATTEMPTS or not _is_transient(exc):
+                    raise
+                _sleep(_CMR_BACKOFF_S * 2 ** (attempt - 1))
+        raise AssertionError("unreachable")  # pragma: no cover
+
     def _search_rows(
         self,
         short_names: Sequence[str],
@@ -194,7 +231,7 @@ class EarthdataClient:
             )
             if temporal is not None:
                 _kwargs["temporal"] = temporal
-            for g in ea.search_data(**_kwargs):
+            for g in self._cmr_search(ea, _kwargs):
                 for url in g.data_links(access="external"):
                     asset = asset_fn(url)
                     if asset is None:

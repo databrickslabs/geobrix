@@ -1,6 +1,7 @@
 """Offline tests for the shared HTTP asset helper (no network: an injected fetch copies local bytes)."""
 
 import os
+import re
 
 import numpy as np
 import pytest
@@ -244,13 +245,46 @@ def test_repair_rows_refetches_only_matching_rows_and_merges_a_table(tmp_path, s
     assert [r["item_id"] for r in fixed] == ["b"] and fixed[0]["is_out_file_valid"]
     assert len(rec.statements) == 1
     merge = " ".join(rec.statements[0].split())
-    assert merge.startswith("MERGE INTO h3px_assets t USING _gbx_repaired_assets u")
+    view = re.match(r"MERGE INTO `h3px_assets` t USING (_gbx_repaired_\w+) u", merge)
+    assert view and view.group(1) != "_gbx_repaired_assets"  # a per-call view name
+    assert not spark.catalog.tableExists(view.group(1))  # dropped after the MERGE
     assert (
         "ON t.item_id = u.item_id AND t.asset_name = u.asset_name WHEN MATCHED THEN UPDATE SET"
         in merge
     )
     for col in ("out_file_path", "out_file_sz", "is_out_file_valid", "last_update"):
         assert f"{col} = u.{col}" in merge
+
+
+def test_two_repairs_use_their_own_temp_view(tmp_path, spark):
+    src, out, assets, first = _one_valid_one_truncated(tmp_path, spark)
+    first.createOrReplaceTempView("h3px_assets")
+    rec = RecordingSpark(spark)
+    for _ in range(2):
+        H.repair_rows(
+            "h3px_assets",
+            assets,
+            out,
+            H.netcdf_valid("wind_speed"),
+            ("h",),
+            fetch=Fetch(src),
+            spark=rec,
+        )
+    views = [re.search(r"USING (\S+) u", st).group(1) for st in rec.statements]
+    assert len(set(views)) == 2
+
+
+@pytest.mark.parametrize(
+    "target, quoted",
+    [
+        ("t", "`t`"),
+        ("main.gx.assets", "`main`.`gx`.`assets`"),
+        ("`main`.`gx`.`assets`", "`main`.`gx`.`assets`"),
+        ("a`b.c", "`a``b`.`c`"),
+    ],
+)
+def test_the_merge_target_is_quoted_per_part(target, quoted):
+    assert H._quote_table(target) == quoted
 
 
 def test_repair_rows_on_a_dataframe_returns_rows_and_runs_no_merge(tmp_path, spark):

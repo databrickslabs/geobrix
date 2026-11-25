@@ -7,6 +7,8 @@ and valid is kept unless ``force``. The result is the six-column contract of ``E
 """
 
 import os
+import re
+import uuid
 from datetime import datetime
 from typing import Callable, Iterable, Optional, Sequence, Tuple
 
@@ -131,6 +133,12 @@ def discover_frame(assets: Iterable[Asset], spark=None):
     )
 
 
+def _quote_table(name: str) -> str:
+    """A table name with each dot-separated part in backticks (a part already quoted keeps its text)."""
+    parts = re.findall(r"`[^`]*`|[^.]+", name)
+    return ".".join("`" + p.strip("`").replace("`", "``") + "`" for p in parts)
+
+
 def repair_rows(
     target,
     assets: Iterable[Asset],
@@ -154,11 +162,15 @@ def repair_rows(
         todo, out_dir, validate, allowed_hosts, force=True, fetch=fetch, spark=spark
     )
     if isinstance(target, str) and todo:
-        fixed.createOrReplaceTempView("_gbx_repaired_assets")
-        spark.sql(
-            f"MERGE INTO {target} t USING _gbx_repaired_assets u "
-            "ON t.item_id = u.item_id AND t.asset_name = u.asset_name WHEN MATCHED THEN UPDATE SET "
-            "out_file_path = u.out_file_path, out_file_sz = u.out_file_sz, "
-            "is_out_file_valid = u.is_out_file_valid, last_update = u.last_update"
-        )
+        view = f"_gbx_repaired_{uuid.uuid4().hex}"  # one per call: two repairs in a session never share a view
+        fixed.createOrReplaceTempView(view)
+        try:
+            spark.sql(
+                f"MERGE INTO {_quote_table(target)} t USING {view} u "
+                "ON t.item_id = u.item_id AND t.asset_name = u.asset_name WHEN MATCHED THEN UPDATE SET "
+                "out_file_path = u.out_file_path, out_file_sz = u.out_file_sz, "
+                "is_out_file_valid = u.is_out_file_valid, last_update = u.last_update"
+            )
+        finally:
+            spark.catalog.dropTempView(view)
     return fixed

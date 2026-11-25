@@ -207,13 +207,35 @@ def test_download_refuses_inside_a_spark_task(tmp_path, monkeypatch):
 def test_download_refuses_without_local_disk(spark, tmp_path, monkeypatch):
     z = _tiny_national(tmp_path)
     monkeypatch.setattr(C, "MIN_LOCAL_FREE_BYTES", 1 << 62)  # more than any disk
+    f = _Fetch(z)
     dl = CsbDownloader(
         href="https://www.nass.usda.gov/x/NationalCSB_tiny.zip",
-        _fetch=_Fetch(z),
+        _fetch=f,
         _probe=_probe(z),
     )
     with pytest.raises(OSError, match="local disk"):
         dl.download(str(tmp_path / "csb"), spark=spark)
+    assert f.calls == 0  # refused before the 3.76 GB fetch, not after it
+
+
+def test_the_last_modified_stamp_is_published_atomically(spark, tmp_path, monkeypatch):
+    z = _tiny_national(tmp_path)
+    out = str(tmp_path / "csb")
+    replaced = []
+    real_replace = os.replace
+    monkeypatch.setattr(
+        os, "replace", lambda a, b: (replaced.append(b), real_replace(a, b))[1]
+    )
+    CsbDownloader(
+        href="https://www.nass.usda.gov/x/NationalCSB_tiny.zip",
+        _fetch=_Fetch(z),
+        _probe=_probe(z),
+    ).download(out, spark=spark)
+    stamp = os.path.join(out, "_source", "NationalCSB_tiny.zip.last_modified")
+    assert stamp in replaced  # temp file, then os.replace: never a half-written stamp
+    with open(stamp) as fh:
+        assert fh.read() == LAST_MODIFIED
+    assert not [n for n in os.listdir(os.path.join(out, "_source")) if "tmp" in n]
 
 
 def test_a_state_with_no_polys_raises_and_leaves_nothing(spark, tmp_path):

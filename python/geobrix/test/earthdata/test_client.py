@@ -330,3 +330,78 @@ def test_download_other_failure_stays_invalid_row(spark, tmp_path):
         rows, str(tmp_path / "b"), _validate_nonempty, spark=spark
     ).collect()[0]
     assert not r["is_out_file_valid"]
+
+
+# --- CMR search retry: a 5xx / dropped connection is retried, a 4xx is not -----------
+
+
+class _FlakySearch(_FakeEarthaccess):
+    """search_data raises the queued errors in order, then answers."""
+
+    def __init__(self, granules, errors):
+        super().__init__(granules)
+        self._errors = list(errors)
+        self.search_calls = 0
+
+    def search_data(self, **kw):
+        self.search_calls += 1
+        if self._errors:
+            raise self._errors.pop(0)
+        return super().search_data(**kw)
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    from databricks.labs.gbx.earthdata import client as mod
+
+    slept = []
+    monkeypatch.setattr(mod, "_sleep", slept.append)
+    return slept
+
+
+@pytest.mark.parametrize(
+    "err",
+    [
+        _HttpError("Service Unavailable", 503),
+        _HttpError("Bad Gateway", 502),
+        ConnectionResetError("Connection reset by peer"),
+        RuntimeError("CMR said: 500 Server Error: Internal Server Error for url"),
+    ],
+)
+def test_search_rows_retries_a_transient_cmr_failure(no_sleep, err):
+    fake = _FlakySearch([_FakeGranule(["https://x/A_data.tif"])], [err, err])
+    rows = EarthdataClient(_earthaccess=fake)._search_rows(
+        ["SHORT"], "002", BBOX, None, _asset_tif
+    )
+    assert rows == [("A_data", "data", "https://x/A_data.tif")]
+    assert fake.search_calls == 3
+    assert len(no_sleep) == 2 and no_sleep[0] < no_sleep[1]  # backs off
+
+
+def test_search_rows_gives_up_after_a_few_attempts(no_sleep):
+    err = _HttpError("Service Unavailable", 503)
+    fake = _FlakySearch([], [err] * 10)
+    with pytest.raises(_HttpError):
+        EarthdataClient(_earthaccess=fake)._search_rows(
+            ["SHORT"], "002", BBOX, None, _asset_tif
+        )
+    assert fake.search_calls == 4
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_search_rows_does_not_retry_a_4xx(no_sleep, status):
+    fake = _FlakySearch([], [_HttpError("refused", status)])
+    with pytest.raises(_HttpError):
+        EarthdataClient(_earthaccess=fake)._search_rows(
+            ["SHORT"], "002", BBOX, None, _asset_tif
+        )
+    assert fake.search_calls == 1 and no_sleep == []
+
+
+def test_search_rows_does_not_retry_a_programming_error(no_sleep):
+    fake = _FlakySearch([], [ValueError("bad bbox")])
+    with pytest.raises(ValueError):
+        EarthdataClient(_earthaccess=fake)._search_rows(
+            ["SHORT"], "002", BBOX, None, _asset_tif
+        )
+    assert fake.search_calls == 1

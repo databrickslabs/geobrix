@@ -115,19 +115,47 @@ _CMR_BACKOFF_S = 2.0
 _sleep = time.sleep  # tests replace this to skip the waits
 
 
+def _chain(exc: BaseException):
+    """``exc`` and its ``__cause__`` / ``__context__`` chain, each error once."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        yield exc
+        exc = exc.__cause__ or exc.__context__
+
+
+def _connection_types() -> tuple:
+    """The errors of a dropped or timed-out connection: the builtins, and requests' own (which are not subclasses)."""
+    try:
+        import requests
+    except ImportError:
+        return (ConnectionError, TimeoutError)
+    ex = requests.exceptions
+    return (
+        ConnectionError,
+        TimeoutError,
+        ex.ConnectionError,
+        ex.Timeout,
+        ex.ChunkedEncodingError,
+    )
+
+
 def _is_transient(exc: BaseException) -> bool:
     """A CMR failure worth another try: a 5xx, or a dropped or timed-out connection.
 
-    A status on the error decides (5xx retries, 4xx never does); without one a
-    connection-level ``OSError`` retries, and so does a message that names a 5xx
-    server error. Anything else, a bad argument for instance, is not retried.
+    earthaccess raises ``RuntimeError(response.text) from <requests.HTTPError>``, so the status is on the cause, not
+    on the error raised: the whole cause/context chain is read. A status anywhere in it decides (5xx retries, 4xx never
+    does); without one a connection-level error retries, and so does a message that names a 5xx server error.
+    Anything else, a bad argument for instance, is not retried.
     """
-    status = _http_status(exc)
-    if status is not None:
-        return status >= 500
-    if isinstance(exc, (ConnectionError, TimeoutError)):
+    chain = list(_chain(exc))
+    for e in chain:
+        status = _http_status(e)
+        if status is not None:
+            return status >= 500
+    if any(isinstance(e, _connection_types()) for e in chain):
         return True
-    return _SERVER_ERROR_TEXT.search(_URL.sub(" ", str(exc))) is not None
+    return any(_SERVER_ERROR_TEXT.search(_URL.sub(" ", str(e))) for e in chain)
 
 
 def _is_eula_failure(exc: BaseException) -> bool:

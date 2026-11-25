@@ -281,6 +281,8 @@ def test_two_repairs_use_their_own_temp_view(tmp_path, spark):
         ("main.gx.assets", "`main`.`gx`.`assets`"),
         ("`main`.`gx`.`assets`", "`main`.`gx`.`assets`"),
         ("a`b.c", "`a``b`.`c`"),
+        ("`a``b`.c", "`a``b`.`c`"),  # a quoted part with an escaped backtick
+        ("`a.b`.c", "`a.b`.`c`"),  # a quoted part with a dot
     ],
 )
 def test_the_merge_target_is_quoted_per_part(target, quoted):

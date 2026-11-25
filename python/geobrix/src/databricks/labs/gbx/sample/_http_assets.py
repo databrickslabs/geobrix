@@ -134,9 +134,16 @@ def discover_frame(assets: Iterable[Asset], spark=None):
 
 
 def _quote_table(name: str) -> str:
-    """A table name with each dot-separated part in backticks (a part already quoted keeps its text)."""
-    parts = re.findall(r"`[^`]*`|[^.]+", name)
-    return ".".join("`" + p.strip("`").replace("`", "``") + "`" for p in parts)
+    """A table name with each dot-separated part in backticks. A part already quoted keeps its text, an escaped
+    (doubled) backtick and a dot inside it included; a bare part has any backtick in it doubled.
+    """
+    out = []
+    for part in re.findall(r"`(?:[^`]|``)*`|[^.]+", name):
+        if len(part) > 1 and part[0] == part[-1] == "`":
+            out.append(part)
+        else:
+            out.append("`" + part.replace("`", "``") + "`")
+    return ".".join(out)
 
 
 def repair_rows(

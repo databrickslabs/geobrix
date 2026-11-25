@@ -663,14 +663,22 @@ def test_work_that_outlasts_the_wait_names_itself_in_the_timeout(demo):
 
 
 @pytest.mark.parametrize(
-    "held_lock, env, status",
+    "held_lock, env, message",
     [
-        ("work", {"GBX_TEST_LOCK_TIMEOUT": "1"}, "WORK_TIMEOUT"),
-        ("run", {"GBX_LOCK_NO_WAIT": "true"}, "BUSY"),
+        (
+            "work",
+            {"GBX_TEST_LOCK_TIMEOUT": "1"},
+            "Timed out after 1s waiting for earlier work",  # the WORK_TIMEOUT line
+        ),
+        (
+            "run",
+            {"GBX_LOCK_NO_WAIT": "true"},
+            "Another test run holds the container lock",  # the BUSY line
+        ),
     ],
 )
 def test_a_helper_that_ends_right_after_its_status_line_is_not_reported_as_failed(
-    demo, held_lock, env, status
+    demo, held_lock, env, message
 ):
     """The helper writes its final status line (TIMEOUT, BUSY) and exits at once. The host loop reads the status, then
     checks the helper is alive: when the helper ended in between, the line was missed and the run died with exit 70
@@ -687,6 +695,7 @@ def test_a_helper_that_ends_right_after_its_status_line_is_not_reported_as_faile
         res = demo.run("lockdemo.sh", **env)
 
     assert res.returncode == 75, res.output
+    assert message in res.output  # the helper's own last line was read
     assert "exited without taking the lock" not in res.output
     assert _events(demo) == []  # no work was started
 

@@ -359,17 +359,51 @@ def no_sleep(monkeypatch):
     return slept
 
 
+def _earthaccess_error(status, body="CMR said no"):
+    """What earthaccess 0.18 raises (search.py: ``raise RuntimeError(ex.response.text) from ex``): a RuntimeError that
+    carries only the response body, with the requests.HTTPError, and so the status code, on ``__cause__``.
+    """
+    import requests
+
+    resp = requests.Response()
+    resp.status_code = status
+    cause = requests.exceptions.HTTPError(f"{status} error", response=resp)
+    err = RuntimeError(body)
+    err.__cause__ = cause
+    return err
+
+
+def _requests_error(name):
+    import requests
+
+    return getattr(requests.exceptions, name)("link dropped")
+
+
 @pytest.mark.parametrize(
-    "err",
+    "make",
     [
-        _HttpError("Service Unavailable", 503),
-        _HttpError("Bad Gateway", 502),
-        ConnectionResetError("Connection reset by peer"),
-        RuntimeError("CMR said: 500 Server Error: Internal Server Error for url"),
+        lambda: _earthaccess_error(503, "<html>Service Unavailable</html>"),
+        lambda: _earthaccess_error(502),
+        lambda: _earthaccess_error(500),
+        lambda: _requests_error("ConnectionError"),
+        lambda: _requests_error("Timeout"),
+        lambda: _requests_error("ChunkedEncodingError"),
+        lambda: ConnectionResetError("Connection reset by peer"),
+        lambda: _HttpError("Service Unavailable", 503),
+    ],
+    ids=[
+        "wrapped-503",
+        "wrapped-502",
+        "wrapped-500",
+        "requests-ConnectionError",
+        "requests-Timeout",
+        "requests-ChunkedEncodingError",
+        "builtin-ConnectionResetError",
+        "direct-503",
     ],
 )
-def test_search_rows_retries_a_transient_cmr_failure(no_sleep, err):
-    fake = _FlakySearch([_FakeGranule(["https://x/A_data.tif"])], [err, err])
+def test_search_rows_retries_a_transient_cmr_failure(no_sleep, make):
+    fake = _FlakySearch([_FakeGranule(["https://x/A_data.tif"])], [make(), make()])
     rows = EarthdataClient(_earthaccess=fake)._search_rows(
         ["SHORT"], "002", BBOX, None, _asset_tif
     )
@@ -379,19 +413,20 @@ def test_search_rows_retries_a_transient_cmr_failure(no_sleep, err):
 
 
 def test_search_rows_gives_up_after_a_few_attempts(no_sleep):
-    err = _HttpError("Service Unavailable", 503)
-    fake = _FlakySearch([], [err] * 10)
-    with pytest.raises(_HttpError):
+    fake = _FlakySearch([], [_earthaccess_error(503) for _ in range(10)])
+    with pytest.raises(RuntimeError):
         EarthdataClient(_earthaccess=fake)._search_rows(
             ["SHORT"], "002", BBOX, None, _asset_tif
         )
     assert fake.search_calls == 4
 
 
+@pytest.mark.parametrize("wrapped", [True, False], ids=["wrapped", "direct"])
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
-def test_search_rows_does_not_retry_a_4xx(no_sleep, status):
-    fake = _FlakySearch([], [_HttpError("refused", status)])
-    with pytest.raises(_HttpError):
+def test_search_rows_does_not_retry_a_4xx(no_sleep, status, wrapped):
+    err = _earthaccess_error(status) if wrapped else _HttpError("refused", status)
+    fake = _FlakySearch([], [err])
+    with pytest.raises(type(err)):
         EarthdataClient(_earthaccess=fake)._search_rows(
             ["SHORT"], "002", BBOX, None, _asset_tif
         )

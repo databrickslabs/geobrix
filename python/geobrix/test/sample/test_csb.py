@@ -235,7 +235,12 @@ def test_the_last_modified_stamp_is_published_atomically(spark, tmp_path, monkey
     assert stamp in replaced  # temp file, then os.replace: never a half-written stamp
     with open(stamp) as fh:
         assert fh.read() == LAST_MODIFIED
-    assert not [n for n in os.listdir(os.path.join(out, "_source")) if "tmp" in n]
+    source = os.listdir(os.path.join(out, "_source"))
+    assert ".gbx_scratch" not in source  # the stamp's scratch folder is removed
+    assert sorted(source) == [
+        "NationalCSB_tiny.zip",
+        "NationalCSB_tiny.zip.last_modified",
+    ]
 
 
 def test_a_state_with_no_polys_raises_and_leaves_nothing(spark, tmp_path):

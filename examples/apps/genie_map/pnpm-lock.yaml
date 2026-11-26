@@ -98,8 +98,8 @@ importers:
         specifier: 3.2.6
         version: 3.2.6(@loaders.gl/core@4.5.4)(react-dom@18.3.1(react@18.3.1))
       '@loaders.gl/loader-utils':
-        specifier: ^4.3.4
-        version: 4.5.4(@loaders.gl/core@4.5.4)
+        specifier: ^4.5.5
+        version: 4.5.5(@loaders.gl/core@4.5.4)
       '@math.gl/web-mercator':
         specifier: ^3.6.3
         version: 3.6.3
@@ -134,8 +134,8 @@ importers:
         specifier: ^0.5.17
         version: 0.5.20
       '@reduxjs/toolkit':
-        specifier: ^2.14.0
-        version: 2.14.0(@types/react@18.3.31)(react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)
+        specifier: ^2.15.0
+        version: 2.15.0(@types/react@18.3.31)(react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)
       '@types/cors':
         specifier: ^2.8.19
         version: 2.8.19
@@ -173,8 +173,8 @@ importers:
         specifier: ^5.6.0
         version: 5.6.0
       echarts-for-react:
-        specifier: ^3.0.2
-        version: 3.0.6(echarts@5.6.0)(react@18.3.1)
+        specifier: ^3.1.0
+        version: 3.1.0(echarts@5.6.0)(react@18.3.1)
       lodash.debounce:
         specifier: ^4.0.8
         version: 4.0.8
@@ -182,8 +182,8 @@ importers:
         specifier: 1.13.3
         version: 1.13.3
       maplibre-gl:
-        specifier: ^6.18.0
-        version: 6.18.0
+        specifier: ^6.19.0
+        version: 6.19.0(@types/react@18.3.31)(immer@11.2.10)(react@18.3.1)(use-sync-external-store@1.7.0(react@18.3.1))
       process:
         specifier: ^0.11.10
         version: 0.11.10
@@ -252,8 +252,8 @@ importers:
         specifier: ^4.19.2
         version: 4.23.15
       typescript-eslint:
-        specifier: ^8.72.2
-        version: 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+        specifier: ^8.73.0
+        version: 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
       vitest:
         specifier: ^4.1.12
         version: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@22.20.5)(vite@6.4.6(@types/node@22.20.5)(jiti@1.21.7)(lightningcss@1.33.0)(tsx@4.23.15)(yaml@2.9.1))
@@ -974,6 +974,10 @@ packages:
 
   '@eslint-community/regexpp@4.12.2':
     resolution: {integrity: sha512-EriSTlt5OC9/7SXkRSCAhfSxxoSUgBm33OH+IkwbdpgoqsSsUg7y3uh+IICI/Qg4BBWr3U2i39RpmycbxMq4ew==}
+    engines: {node: ^12.0.0 || ^14.0.0 || >=16.0.0}
+
+  '@eslint-community/regexpp@4.12.3':
+    resolution: {integrity: sha512-R76UKbvsqI68DJJVTVyqFKqU98CN4+B+acxNfEA2IFarSzP0SjtKf/3+fFiXzTyv5Fj3PxLkGHe2wnVWWMxobQ==}
     engines: {node: ^12.0.0 || ^14.0.0 || >=16.0.0}
 
   '@eslint/config-array@0.21.2':
@@ -1900,6 +1904,9 @@ packages:
   '@loaders.gl/loader-utils@4.5.4':
     resolution: {integrity: sha512-ZUNn/4+DEn8yTKGUKdjlbA7ok2JyNrica/Lvf1d8dwx7vCUSZ84PBB9cNtrx8VDXmVjkIClQzmnriz16QHjTMQ==}
 
+  '@loaders.gl/loader-utils@4.5.5':
+    resolution: {integrity: sha512-1h7hT3RwOvNCtJGlkk6ilvn4dracXgDiv4S2pDsbeNMQ4MxnnOjM+GqXN3mXSYsKq1xz4g3j1n43TCQ5MjxJsg==}
+
   '@loaders.gl/math@3.4.15':
     resolution: {integrity: sha512-zTN8BUU/1fcppyVc8WzvdZcCyNGVYmNinxcn/A+a7mi1ug4OBGwEsZOj09Wjg0/s52c/cAL3h9ylPIZdjntscQ==}
 
@@ -1937,6 +1944,9 @@ packages:
 
   '@loaders.gl/schema@4.5.4':
     resolution: {integrity: sha512-5CO/TY2OkmM53+qfSvzMt17LwVJhBatqi/QaO45VOn8poTK1jqyZvnI0qvKFqOsMWzHh4yoQVUnxaWiV4CZ41w==}
+
+  '@loaders.gl/schema@4.5.5':
+    resolution: {integrity: sha512-k648CEUf0lwTuYc7WxLXhA1RHYCo15S5GeWIQ2QYq5lkKQmCAWc4KJZ4lkxBoPPunVNj1PW0At5lLKkQr7vNHQ==}
 
   '@loaders.gl/terrain@3.4.15':
     resolution: {integrity: sha512-ouv41J84uOnLEtXLM+iPEPFfeq7aRgIOls6esdvhBx2/dXJRNkt8Mx0wShXAi8VNHz77D+gZFrKARa7wqjmftg==}
@@ -1981,6 +1991,11 @@ packages:
 
   '@loaders.gl/worker-utils@4.5.4':
     resolution: {integrity: sha512-OvVMMLh56QdBQgyMDxuho9doWq6oiz7paqP3rwidb+LqgJB5GvdqcoL+GbUcku2X8k0ZxCldvo+l46Yhpv0bfQ==}
+    peerDependencies:
+      '@loaders.gl/core': ~4.5.0
+
+  '@loaders.gl/worker-utils@4.5.5':
+    resolution: {integrity: sha512-IhVpLnscy8qb96KP5MTaqK5I/5Pgofw8H5+Zszo2/hl9K1OM0nKOYaYUybe9lasEQQLNwwtSWBe8PU48RZOFUA==}
     peerDependencies:
       '@loaders.gl/core': ~4.5.0
 
@@ -2095,15 +2110,15 @@ packages:
     resolution: {integrity: sha512-Es6WcD0nO5l+2BOQS4uLfNPYQaNDfbot3X1XUoloz+x0mPDS3eeORZJl06HXjwBG1fOGwCRnzK88LMdxKRrd6Q==}
     engines: {node: '>=6.0.0'}
 
-  '@maplibre/geojson-vt@6.3.0':
-    resolution: {integrity: sha512-3Zw2jsU9pIJG3G2CQFbLjWj2MlAHodhD7cSY+15iywUuLmmkgzcKRnueVRZ4AcC/5wOtfhidcJAAzBpoBNs3Xg==}
+  '@maplibre/geojson-vt@6.3.3':
+    resolution: {integrity: sha512-sfftN4326foT7uex0aN0jqr+vq/lfgeTfASOd+kvdUd0uMMIgXZDPdntCazKFKKcxPH002NPCy4j396peanWCg==}
 
   '@maplibre/maplibre-gl-style-spec@19.3.3':
     resolution: {integrity: sha512-cOZZOVhDSulgK0meTsTkmNXb1ahVvmTmWmfx9gRBwc6hq98wS9JP35ESIoNq3xqEan+UN+gn8187Z6E4NKhLsw==}
     hasBin: true
 
-  '@maplibre/maplibre-gl-style-spec@26.7.0':
-    resolution: {integrity: sha512-9d7hK1zk1WRx/AFvq7NtmlTlaOGPXS2r+FZXsrMv8453Xy14bnXBpVCPJDBupCfQs/p8FL0/kb0ygbEWTufN0g==}
+  '@maplibre/maplibre-gl-style-spec@26.8.0':
+    resolution: {integrity: sha512-EClj+0m624zGw5gdCOsI5f88bYzkXfgoP2Sj5VGs2AYg9hZaPxvCumX5KDDs6aKFwl2ut+3jAeLhvrSz7hEsBQ==}
     hasBin: true
 
   '@maplibre/mlt@1.3.0':
@@ -4328,8 +4343,8 @@ packages:
       react-redux:
         optional: true
 
-  '@reduxjs/toolkit@2.14.0':
-    resolution: {integrity: sha512-m/PxMwRe0xLL6XUsAgy0YjInklHcfi9uMwFhJk+QINqjxqPvyc89T5cMjszA5bDmTE0gwGc7zr9LRO4gL+mhaw==}
+  '@reduxjs/toolkit@2.15.0':
+    resolution: {integrity: sha512-tHrFdR/AAbhhnL0/D3Abu60mAeyRqMAaq3pMeIKWRFWpzZek9LbGKk9J2U+Cl43FixzEDaYKk3zUoK7sFl98FA==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.9.0 || ^17.0.0 || ^18 || ^19
@@ -4785,8 +4800,8 @@ packages:
   '@turf/union@7.4.0':
     resolution: {integrity: sha512-SYVtsCW9IznTyKlcGWxssRrf90p/hdpch1UeIcZc31pkSVdmeLOyuzPx0ef3UPmaF//fgXAphMph6JWA/FpKbA==}
 
-  '@tybys/wasm-util@0.10.4':
-    resolution: {integrity: sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A==}
+  '@tybys/wasm-util@0.10.5':
+    resolution: {integrity: sha512-dOGOPxlaNV+G046mZzN+9C0dAcQZeSKcXiVaM0TYy/LM4ttTmgSBDxYfovcYI8Em3+eAbiAYpvWLOv8+ZVRJKA==}
 
   '@types/aws-lambda@8.10.164':
     resolution: {integrity: sha512-XOnrazWcOd6yWPnR7DxqCBPPYciDjHq+NN8LPwwqBCJNXLyPJgKo47fZpJ113+oyAn9Zti0Cf6H4k6yPcE3WFg==}
@@ -5065,63 +5080,67 @@ packages:
   '@types/use-sync-external-store@0.0.6':
     resolution: {integrity: sha512-zFDAD+tlpf2r4asuHEj0XH6pY6i0g5NeAHPn+15wk3BV6JA69eERFXC1gyGThDkVa1zCyKr5jox1+2LbV/AMLg==}
 
-  '@typescript-eslint/eslint-plugin@8.72.2':
-    resolution: {integrity: sha512-222PKFXKihmFpi/pS5njoBgdAqsPhj2/GBmFbrNw8Tq8gEG9Sv+kSlKFy4u2q+mJv9ZzJgM2Gkv/bUzRZwZw5g==}
+  '@typescript-eslint/eslint-plugin@8.73.0':
+    resolution: {integrity: sha512-UkygMFer53Yzn29MCYFTHf34hGXf5KJhiDWfIm1tXtXRrym1CS6l5H9Y3yCtPWChpC0/f93H88gdj8tN0dd4kw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
-      '@typescript-eslint/parser': ^8.72.2
+      '@typescript-eslint/parser': ^8.73.0
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/parser@8.72.2':
-    resolution: {integrity: sha512-llP+T1YuJOLlxEciP6OyQGtz5SMxyn+9LA2BvZw5RmToGVa1y4beEDVQL6Gje7T5WFYh19WREjDCN9Ev4gm5AA==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-    peerDependencies:
-      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
-      typescript: '>=4.8.4 <6.1.0'
-
-  '@typescript-eslint/project-service@8.72.2':
-    resolution: {integrity: sha512-6y5dLTZdHhI8Eh3yIQ/bfQhRKwn5e+TpJj64o18Cngc0iW/BCrVvrr6zGYqXPnYH31u6YXAYiFh0+qxX5mybJw==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-    peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
-
-  '@typescript-eslint/scope-manager@8.72.2':
-    resolution: {integrity: sha512-iIoMJ6/8c1/QpFNyFjU0d1YzPco4MsZjQw0k3V+vfzNWAFmUmvhlyMoYEoYYDQZXc+J6Gi1X5XcxlzW2taIIGQ==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-
-  '@typescript-eslint/tsconfig-utils@8.72.2':
-    resolution: {integrity: sha512-+h3iCgZXuTNtoLXcnnjP12ZUHLMqoUcIHPfQrFEXTUqvb9dF8QK9b5nv5VtSo5fLkdHuks8ehbTzZj3rImAm9w==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-    peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
-
-  '@typescript-eslint/type-utils@8.72.2':
-    resolution: {integrity: sha512-STfkR38qIdhfkLpgtXnUjAzsNy4xouqiBO0lrVc/Wpk9Kem5/aHXUx1J8dGC16zpdYN1+yc2ILQ28er1kXX7ag==}
+  '@typescript-eslint/parser@8.73.0':
+    resolution: {integrity: sha512-AuL45bVcmssHfZ3Di3cs9Q0l4gBm4ZFVrJOQEE7VpqW+PVgQaEwSwazz4TVIiFabXkk6U51EprYDwqw+HR8ePw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/types@8.72.2':
-    resolution: {integrity: sha512-Xfn37OLZx03+PCU7qWx9DTv2FCRh1E6fk2+wONeNY15HXIwtcwuveaSwVpGAUptkNmPQegRxW5JyRel9T7wrog==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-
-  '@typescript-eslint/typescript-estree@8.72.2':
-    resolution: {integrity: sha512-pQEGqIK/cqEvKivVWaFLYpe7XYejFxfuAOi4mu1oAWFvIo36aRHI9esRFTUxcIy/z8N482RJyH+LpZB0ZIU7Ow==}
+  '@typescript-eslint/project-service@8.73.0':
+    resolution: {integrity: sha512-/pEf8Rc4Mjk+qJnY0uO1+Gadeal8uv50xpuic+srG2vIVatA0XxvWMUeMtFvs6OCHqftiQ7/+qH4aehG5stzIA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/utils@8.72.2':
-    resolution: {integrity: sha512-hv3eRYbpPbbpezuax1EfGrzpa3C4ySgNZkPUkLOWOAjU8HsOKowEDAr8C7nsNl1C+SBSKDpvno6VKHnlhvp9iA==}
+  '@typescript-eslint/scope-manager@8.73.0':
+    resolution: {integrity: sha512-/TjD738Iq2rzj5z0ixVOi+TsvgjAzZPLPaH1yWdDBytR/HTR5gMpyYWZeCe5WTQZLwk3ho8AV7U3muoQCRtXBQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/tsconfig-utils@8.73.0':
+    resolution: {integrity: sha512-lmtCFOfYaJfpqZywGuXi4FpNtE+NQ+YLe3T0K9rtEDcW8ZuGWvfI++pj8r05sYMI8vWT2CYK4rWyedmD6Rp4og==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/type-utils@8.73.0':
+    resolution: {integrity: sha512-MOC9i4xy1F7KcDde7Ip8jf1SrRiALb2Km4UWxGNjUE2YlhjIEo1ayE27GHIwIQyfWuHTmEonQT14uyurlyC6aA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/visitor-keys@8.72.2':
-    resolution: {integrity: sha512-NAGrjn0Pitjqzq/GkgMC4kBYm233PQ8GffyQ9+kTA3AlNQYEzOf25EIM02BAHZv5FRJSpHpJk+OGUxVkOB93GQ==}
+  '@typescript-eslint/types@8.73.0':
+    resolution: {integrity: sha512-O/1ytYzflF16QDKXx4/qOXg1IuZp+n7hr9t+S0nv7N/2Tl8rJiNCshztV1gcSUvHbPtoX3+zmNbtSAyVbzxVfw==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/typescript-estree@8.73.0':
+    resolution: {integrity: sha512-InjlBkSdWceIwIBWSwS3ENUp+i0O02PGX3Zv2wnihWJC1WDVGvG7mTHuf8b57uAaITj94d6tRPDH+sUEtXdRQQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      '@typescript/native': npm:typescript@>=7.1.0-dev.20261009.1 || >=7.1.0-beta <7.1.0-dev
+      typescript: '>=4.8.4 <6.1.0'
+    peerDependenciesMeta:
+      '@typescript/native':
+        optional: true
+
+  '@typescript-eslint/utils@8.73.0':
+    resolution: {integrity: sha512-j2SVJJvVkXdUL0WcEzo4vEH1mO1vIi8KlVukcYA2MgMZvYN2LlZR4PmsW+GTSxSW24j6Q/EP7+MOifLtg5hmsA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/visitor-keys@8.73.0':
+    resolution: {integrity: sha512-k4lsFVpRZICbltkIEEH4hZRkwXkqDF1GHBpClKQOHQY+RkoZAAuyc1ci3I6p+CB6v3U4jaHIUshc4RzzQXZWLg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   '@ungap/structured-clone@1.4.0':
@@ -5364,8 +5383,8 @@ packages:
   brace-expansion@1.1.21:
     resolution: {integrity: sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==}
 
-  brace-expansion@5.0.12:
-    resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
+  brace-expansion@5.0.13:
+    resolution: {integrity: sha512-Vh3dmFbc4wZeox7M9I/0L9GfFd83Su4+yCck/OF9Gi/P/dAHn0RT7X4K9R7gMNMhDck3DvhR6QXsnQdjjgwNvQ==}
     engines: {node: 20 || >=22}
 
   braces@3.0.3:
@@ -6059,8 +6078,8 @@ packages:
       echarts: ^6.1.0
       react: ^15.0.0 || >=16.0.0
 
-  echarts-for-react@3.0.6:
-    resolution: {integrity: sha512-4zqLgTGWS3JvkQDXjzkR1k1CHRdpd6by0988TWMJgnvDytegWLbeP/VNZmMa+0VJx2eD7Y632bi2JquXDgiGJg==}
+  echarts-for-react@3.1.0:
+    resolution: {integrity: sha512-P/NqSdIDF7oFktmqKLP2Ga9+e5h1g2yjF8k/lLAmJjjeXEFn7UGA1ynZSrqFdMR6RzKDXt+vEeTaWnotK7evag==}
     peerDependencies:
       echarts: ^6.1.0
       react: ^15.0.0 || >=16.0.0
@@ -6706,8 +6725,8 @@ packages:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
 
-  ignore@7.0.14:
-    resolution: {integrity: sha512-wCBiZ77u1tuWde6G/nfOtLaCTYcFDU5yCzARzK10y+rLhzYoL7a7yEemcopcc2Mzow7gZOIjnV2ym1NYmdiJOQ==}
+  ignore@7.0.16:
+    resolution: {integrity: sha512-52N+Y4HRMOJmbLmr+DqO4iSRyyB7N52gm7PWCT6h0p978+oKbqHCB7gIJIwZvBUsjlSdWbrBFqUSmIFNZMpn0A==}
     engines: {node: '>= 4'}
 
   immer@11.2.10:
@@ -7293,8 +7312,8 @@ packages:
     resolution: {integrity: sha512-krg2KFIdOpLPngONDhP6ixCoWl5kbdMINP0moMSJFVX7wX1Clm2M9hlNKXS8vBGlVWwR5R3ZfI6IPrYz7c+aCQ==}
     engines: {node: '>=16.14.0', npm: '>=8.1.0'}
 
-  maplibre-gl@6.18.0:
-    resolution: {integrity: sha512-8ucT+RhJtEZGFvWGPioVQwvOPMAIuUehEgxl2dELw9aJmX4SpUi+OCHHAD33B9EuohNC7kC/gccJacUgTMQfQQ==}
+  maplibre-gl@6.19.0:
+    resolution: {integrity: sha512-3bOrnfddggUYudLGJFsYFvqulUyvSxy4iQzd/uURI7ZhgYEZifdSrECujRSghaCpc+v/ZsFI0Y6ZsGSilEtE+w==}
     engines: {node: '>=16.14.0', npm: '>=8.1.0'}
 
   maplibregl-mapbox-request-transformer@0.0.2:
@@ -7524,8 +7543,8 @@ packages:
     resolution: {integrity: sha512-I9jwMn07Sy/IwOj3zVkVik2JTvgpaykDZEigL6Rx6N9LbMywwUSMtxET+7lVoDLLd3O3IXwJwvuuns8UB/HeAg==}
     engines: {node: '>=4'}
 
-  minimatch@11.0.8:
-    resolution: {integrity: sha512-nFQuYSTVrGvysVBps5Ih+0BdnYFN/Cj3C816r6+p7yK+FHrVLGE4O4N9AFwykrlNlvM2HYt+Rad1Uiro6h88Ig==}
+  minimatch@11.0.9:
+    resolution: {integrity: sha512-KCFkfyjqerNlSstjlhIGNXIKZGA/6O4V4RlhZ+Dsr621SPPw0mzlypE9D9ZOoPiVefHID+j7/XuMMlqfD/F60Q==}
     engines: {node: 20 || >=22}
 
   minimatch@3.1.5:
@@ -7664,6 +7683,10 @@ packages:
 
   object-inspect@1.13.4:
     resolution: {integrity: sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==}
+    engines: {node: '>= 0.4'}
+
+  object-inspect@1.14.0:
+    resolution: {integrity: sha512-IVgHNlp/jwQX271+Xzoq9LZNTWXxZK+cEOrGBOBxXNbn7fapnZ+Ts6TVMgNOuAezwG2wdtnMX97tTPK6VEnuOQ==}
     engines: {node: '>= 0.4'}
 
   object-is@1.1.6:
@@ -7837,8 +7860,8 @@ packages:
     resolution: {integrity: sha512-XDF38WCH3z5OV/OVa8GKUNtLAyneuzbCisx7QUCF8Q6Nutx0WnJrQe5O+kOtBlLfRNUws98Y58Lblp+NJG5T4Q==}
     hasBin: true
 
-  pbf@5.1.2:
-    resolution: {integrity: sha512-mnvGdvOrIvJOBGUEdGkrVXjN8E/VkIJCkf2eS1DH2yv82ORUlLttmDt0rWY38yYZmVwciZwBUvHM20qxBZf40w==}
+  pbf@5.2.0:
+    resolution: {integrity: sha512-R6YptaRZl0t9SVO6MllszYq1IkaOQawzprndmvQxEoFrtvX7fT+oNIPoVD152NOllmLWEC3ThxzUTqBX12q5FQ==}
     hasBin: true
 
   performance-now@0.2.0:
@@ -8609,8 +8632,8 @@ packages:
   secure-json-parse@2.7.0:
     resolution: {integrity: sha512-6aU+Rwsezw7VR8/nyvKTx8QpWH9FrcYiXXlqC4z5d5XQBDRqtbfsRjnwGyqbi3gddNtWHuEk9OANUotL26qKUw==}
 
-  semver@5.7.2:
-    resolution: {integrity: sha512-cBznnQ9KjJqU67B52RMC65CMarK2600WFnbkcaiwWq3xy/5haFJlshgnpjovMVJ+Hff49d8GEn0b87C5pDQ10g==}
+  semver@5.7.3:
+    resolution: {integrity: sha512-kM18BPOqTi0+TB68703/GJRpAML5Me+IDQsR1J26YB3EFKKNEyHIVZuWDX7+WKQB3tHwDwgk24BfhdpWUbytvQ==}
     hasBin: true
 
   semver@6.3.1:
@@ -8626,8 +8649,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  semver@7.8.5:
-    resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
+  semver@7.8.6:
+    resolution: {integrity: sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==}
     engines: {node: '>=10'}
     hasBin: true
 
@@ -9062,8 +9085,8 @@ packages:
     resolution: {integrity: sha512-phPGCwqr2+Qo0fwniCE8e4pKnGu/yFb5nD5Y8bf0EEeiI5GklnACYA9GFy/DrAeRrKHXvHn+1SUsOWgJp6RO+g==}
     engines: {node: '>= 0.4'}
 
-  typescript-eslint@8.72.2:
-    resolution: {integrity: sha512-c/+AKMW1KB81r28Sp0AAdcyXj5dzNmAsZFcsrxKbZTKmcBK2xIwBR31dcSYSDu3bKmzXe8GKrSxO+eDQ401Uzg==}
+  typescript-eslint@8.73.0:
+    resolution: {integrity: sha512-+EnKy9rkYPun4l+kG2bDuYWQ6y1tGVgdR/tY1U9AC6h21CjEwOoc7gsjwe0FXB8uWFzk4QiCFbuRWgX758PiAg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
@@ -9518,6 +9541,24 @@ packages:
   zstd-codec@0.1.5:
     resolution: {integrity: sha512-v3fyjpK8S/dpY/X5WxqTK3IoCnp/ZOLxn144GZVlNUjtwAchzrVo03h+oMATFhCIiJ5KTr4V3vDQQYz4RU684g==}
 
+  zustand@5.1.0:
+    resolution: {integrity: sha512-ciJZlP48M1PTQbVQq81CGVFxHTLpZNrFjKqwjtCU34AWuXTZT/jrF3p9+fI84Cf1eSCMLapxqBy/SNTfwOBuqA==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      immer: '>=9.0.6'
+      react: '>=18.0.0'
+      use-sync-external-store: '>=1.2.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+      use-sync-external-store:
+        optional: true
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -9712,7 +9753,7 @@ snapshots:
       '@babel/helper-validator-option': 7.29.7
       browserslist: 4.29.4
       lru-cache: 5.1.1
-      semver: 6.3.1
+      semver: 6.3.2
 
   '@babel/helper-globals@7.29.7': {}
 
@@ -10124,7 +10165,7 @@ snapshots:
   '@dnd-kit/accessibility@3.1.1(react@18.3.1)':
     dependencies:
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
@@ -10132,26 +10173,26 @@ snapshots:
       '@dnd-kit/utilities': 3.2.2(react@18.3.1)
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@dnd-kit/modifiers@7.0.0(@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@dnd-kit/core': 6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@dnd-kit/utilities': 3.2.2(react@18.3.1)
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@dnd-kit/sortable@8.0.0(@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@dnd-kit/core': 6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@dnd-kit/utilities': 3.2.2(react@18.3.1)
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@dnd-kit/utilities@3.2.2(react@18.3.1)':
     dependencies:
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@duckdb/duckdb-wasm@1.29.0':
     dependencies:
@@ -10358,6 +10399,8 @@ snapshots:
 
   '@eslint-community/regexpp@4.12.2': {}
 
+  '@eslint-community/regexpp@4.12.3': {}
+
   '@eslint/config-array@0.21.2':
     dependencies:
       '@eslint/object-schema': 2.1.7
@@ -10437,34 +10480,34 @@ snapshots:
     dependencies:
       '@formatjs/fast-memoize': 2.2.3
       '@formatjs/intl-localematcher': 0.5.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/ecma402-abstract@2.3.6':
     dependencies:
       '@formatjs/fast-memoize': 2.2.7
       '@formatjs/intl-localematcher': 0.6.2
       decimal.js: 10.6.0
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/fast-memoize@2.2.3':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/fast-memoize@2.2.7':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/icu-messageformat-parser@2.11.4':
     dependencies:
       '@formatjs/ecma402-abstract': 2.3.6
       '@formatjs/icu-skeleton-parser': 1.8.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/icu-messageformat-parser@2.9.4':
     dependencies:
       '@formatjs/ecma402-abstract': 2.2.4
       '@formatjs/icu-skeleton-parser': 1.8.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/icu-skeleton-parser@1.8.16':
     dependencies:
@@ -10474,23 +10517,23 @@ snapshots:
   '@formatjs/icu-skeleton-parser@1.8.8':
     dependencies:
       '@formatjs/ecma402-abstract': 2.2.4
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/intl-displaynames@6.8.5':
     dependencies:
       '@formatjs/ecma402-abstract': 2.2.4
       '@formatjs/intl-localematcher': 0.5.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/intl-listformat@7.7.5':
     dependencies:
       '@formatjs/ecma402-abstract': 2.2.4
       '@formatjs/intl-localematcher': 0.5.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/intl-localematcher@0.5.8':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@formatjs/intl-localematcher@0.6.2':
     dependencies:
@@ -10504,7 +10547,7 @@ snapshots:
       '@formatjs/intl-displaynames': 6.8.5
       '@formatjs/intl-listformat': 7.7.5
       intl-messageformat: 10.7.7
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       typescript: 5.9.3
 
@@ -10520,14 +10563,14 @@ snapshots:
 
   '@geoda/core@0.0.22':
     dependencies:
-      '@loaders.gl/schema': 4.5.4
+      '@loaders.gl/schema': 4.5.5
       geojson: 0.5.0
     transitivePeerDependencies:
       - '@75lb/nature'
 
   '@geoda/lisa@0.0.22':
     dependencies:
-      '@loaders.gl/schema': 4.5.4
+      '@loaders.gl/schema': 4.5.5
       geojson: 0.5.0
     transitivePeerDependencies:
       - '@75lb/nature'
@@ -12785,7 +12828,7 @@ snapshots:
       '@loaders.gl/csv': 4.5.4(@loaders.gl/core@4.5.4)
       '@loaders.gl/gis': 4.5.4(@loaders.gl/core@4.5.4)
       '@loaders.gl/json': 4.5.4(@loaders.gl/core@4.5.4)
-      '@loaders.gl/loader-utils': 4.5.4(@loaders.gl/core@4.5.4)
+      '@loaders.gl/loader-utils': 4.5.5(@loaders.gl/core@4.5.4)
       '@loaders.gl/parquet': 4.5.4(@loaders.gl/core@4.5.4)(apache-arrow@21.1.0)(ws@8.21.0)
       '@loaders.gl/schema': 4.5.4
       '@loaders.gl/wkt': 4.5.4(@loaders.gl/core@4.5.4)
@@ -12838,7 +12881,7 @@ snapshots:
       '@kepler.gl/tasks': 3.2.6(@deck.gl/aggregation-layers@8.9.36(@deck.gl/core@8.9.36)(@deck.gl/layers@8.9.36(@deck.gl/core@8.9.36)(@loaders.gl/core@4.5.4)(@luma.gl/core@8.5.21))(@luma.gl/core@8.5.21))(@loaders.gl/images@4.5.4(@loaders.gl/core@4.5.4))(@luma.gl/core@8.5.21)(@luma.gl/engine@8.5.21)(@luma.gl/gltools@8.5.21)(@luma.gl/shadertools@8.5.21)(@luma.gl/webgl@8.5.21)(@math.gl/core@4.1.0)(@math.gl/web-mercator@3.6.3)(encoding@0.1.13)(enzyme-adapter-utils@1.14.2(react@18.3.1))(enzyme@3.11.0)(gl-matrix@3.4.4)(react-dom@18.3.1(react@18.3.1))(react-test-renderer@16.14.0(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(ws@8.21.0)
       '@kepler.gl/types': 3.2.6
       '@kepler.gl/utils': 3.2.6(@loaders.gl/core@4.5.4)(react-dom@18.3.1(react@18.3.1))
-      '@loaders.gl/loader-utils': 4.5.4(@loaders.gl/core@4.5.4)
+      '@loaders.gl/loader-utils': 4.5.5(@loaders.gl/core@4.5.4)
       '@mapbox/geo-viewport': 0.4.1
       '@math.gl/web-mercator': 3.6.3
       '@turf/bbox': 6.5.0
@@ -12899,7 +12942,7 @@ snapshots:
       '@kepler.gl/table': 3.2.6(@loaders.gl/core@4.5.4)(encoding@0.1.13)(enzyme-adapter-utils@1.14.2(react@18.3.1))(enzyme@3.11.0)(react-dom@18.3.1(react@18.3.1))(react-test-renderer@16.14.0(react@18.3.1))(react@18.3.1)
       '@kepler.gl/types': 3.2.6
       '@kepler.gl/utils': 3.2.6(@loaders.gl/core@4.5.4)(react-dom@18.3.1(react@18.3.1))
-      '@loaders.gl/loader-utils': 4.5.4(@loaders.gl/core@4.5.4)
+      '@loaders.gl/loader-utils': 4.5.5(@loaders.gl/core@4.5.4)
       '@types/keymirror': 0.1.4
       '@types/lodash': 4.17.5
       apache-arrow: 21.1.0
@@ -13262,6 +13305,16 @@ snapshots:
       - '@75lb/nature'
       - '@loaders.gl/core'
 
+  '@loaders.gl/loader-utils@4.5.5(@loaders.gl/core@4.5.4)':
+    dependencies:
+      '@loaders.gl/schema': 4.5.5
+      '@loaders.gl/worker-utils': 4.5.5(@loaders.gl/core@4.5.4)
+      '@probe.gl/log': 4.1.2
+      '@probe.gl/stats': 4.1.2
+    transitivePeerDependencies:
+      - '@75lb/nature'
+      - '@loaders.gl/core'
+
   '@loaders.gl/math@3.4.15':
     dependencies:
       '@loaders.gl/images': 3.4.15
@@ -13362,6 +13415,13 @@ snapshots:
     transitivePeerDependencies:
       - '@75lb/nature'
 
+  '@loaders.gl/schema@4.5.5':
+    dependencies:
+      '@types/geojson': 7946.0.16
+      apache-arrow: 21.1.0
+    transitivePeerDependencies:
+      - '@75lb/nature'
+
   '@loaders.gl/terrain@3.4.15':
     dependencies:
       '@babel/runtime': 7.29.10
@@ -13440,6 +13500,10 @@ snapshots:
       '@loaders.gl/core': 4.5.4
 
   '@loaders.gl/worker-utils@4.5.4(@loaders.gl/core@4.5.4)':
+    dependencies:
+      '@loaders.gl/core': 4.5.4
+
+  '@loaders.gl/worker-utils@4.5.5(@loaders.gl/core@4.5.4)':
     dependencies:
       '@loaders.gl/core': 4.5.4
 
@@ -13598,11 +13662,11 @@ snapshots:
     dependencies:
       '@mapbox/point-geometry': 1.1.0
       '@types/geojson': 7946.0.16
-      pbf: 5.1.2
+      pbf: 5.2.0
 
   '@mapbox/whoots-js@3.1.0': {}
 
-  '@maplibre/geojson-vt@6.3.0':
+  '@maplibre/geojson-vt@6.3.3':
     dependencies:
       kdbush: 4.1.0
 
@@ -13615,7 +13679,7 @@ snapshots:
       rw: 1.3.3
       sort-object: 3.0.3
 
-  '@maplibre/maplibre-gl-style-spec@26.7.0':
+  '@maplibre/maplibre-gl-style-spec@26.8.0':
     dependencies:
       '@mapbox/jsonlint-lines-primitives': 2.0.3
       '@mapbox/unitbezier': 1.0.0
@@ -13632,7 +13696,7 @@ snapshots:
     dependencies:
       '@mapbox/point-geometry': 1.1.0
       '@types/geojson': 7946.0.16
-      pbf: 5.1.2
+      pbf: 5.2.0
 
   '@math.gl/core@3.6.3':
     dependencies:
@@ -13692,7 +13756,7 @@ snapshots:
     dependencies:
       '@emnapi/core': 1.8.1
       '@emnapi/runtime': 1.8.1
-      '@tybys/wasm-util': 0.10.4
+      '@tybys/wasm-util': 0.10.5
     optional: true
 
   '@nebula.gl/edit-modes@1.0.2-alpha.1':
@@ -13823,7 +13887,7 @@ snapshots:
       '@openassistant/plots': 0.5.20(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@openassistant/utils': 0.5.20
       echarts: 5.6.0
-      echarts-for-react: 3.0.6(echarts@5.6.0)(react@18.3.1)
+      echarts-for-react: 3.1.0(echarts@5.6.0)(react@18.3.1)
       framer-motion: 12.43.0(@emotion/is-prop-valid@1.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
@@ -16682,7 +16746,7 @@ snapshots:
       react: 18.3.1
       react-redux: 8.1.3(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(redux@4.2.1)
 
-  '@reduxjs/toolkit@2.14.0(@types/react@18.3.31)(react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)':
+  '@reduxjs/toolkit@2.15.0(@types/react@18.3.31)(react-redux@9.3.1(@types/react@18.3.31)(react@18.3.1)(redux@5.0.1))(react@18.3.1)':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@standard-schema/utils': 0.3.0
@@ -16849,7 +16913,7 @@ snapshots:
 
   '@swc/helpers@0.5.23':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@swc/helpers@0.5.24': {}
 
@@ -16887,14 +16951,14 @@ snapshots:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/area@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/bbox-polygon@6.5.0':
     dependencies:
@@ -16904,7 +16968,7 @@ snapshots:
     dependencies:
       '@turf/helpers': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/bbox@6.5.0':
     dependencies:
@@ -16916,14 +16980,14 @@ snapshots:
       '@turf/helpers': 7.4.0
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/bearing@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/boolean-clockwise@5.1.5':
     dependencies:
@@ -16935,7 +16999,7 @@ snapshots:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/boolean-point-in-polygon@6.5.0':
     dependencies:
@@ -16948,7 +17012,7 @@ snapshots:
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
       point-in-polygon-hao: 1.2.4
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/boolean-point-on-line@6.5.0':
     dependencies:
@@ -16973,7 +17037,7 @@ snapshots:
       '@turf/projection': 7.4.0
       '@types/geojson': 7946.0.16
       d3-geo: 2.0.2
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/center@6.5.0':
     dependencies:
@@ -16985,21 +17049,21 @@ snapshots:
       '@turf/bbox': 7.4.0
       '@turf/helpers': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/centroid@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/circle@7.4.0':
     dependencies:
       '@turf/destination': 7.4.0
       '@turf/helpers': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/clone@5.1.5':
     dependencies:
@@ -17009,14 +17073,14 @@ snapshots:
     dependencies:
       '@turf/helpers': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/destination@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/difference@7.4.0':
     dependencies:
@@ -17024,14 +17088,14 @@ snapshots:
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
       polyclip-ts: 0.16.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/distance@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/ellipse@7.4.0':
     dependencies:
@@ -17041,7 +17105,7 @@ snapshots:
       '@turf/invariant': 7.4.0
       '@turf/transform-rotate': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/helpers@5.1.5': {}
 
@@ -17050,7 +17114,7 @@ snapshots:
   '@turf/helpers@7.4.0':
     dependencies:
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/intersect@7.4.0':
     dependencies:
@@ -17058,7 +17122,7 @@ snapshots:
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
       polyclip-ts: 0.16.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/invariant@5.2.0':
     dependencies:
@@ -17072,7 +17136,7 @@ snapshots:
     dependencies:
       '@turf/helpers': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/jsts@2.7.2':
     dependencies:
@@ -17084,7 +17148,7 @@ snapshots:
       '@types/geojson': 7946.0.16
       robust-predicates: 2.0.4
       tinyqueue: 2.0.3
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/meta@5.2.0':
     dependencies:
@@ -17098,7 +17162,7 @@ snapshots:
     dependencies:
       '@turf/helpers': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/nearest-point-on-line@7.4.0':
     dependencies:
@@ -17107,7 +17171,7 @@ snapshots:
       '@turf/invariant': 7.4.0
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/point-to-line-distance@7.4.0':
     dependencies:
@@ -17121,14 +17185,14 @@ snapshots:
       '@turf/rhumb-bearing': 7.4.0
       '@turf/rhumb-distance': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/polygon-to-line@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/projection@7.4.0':
     dependencies:
@@ -17136,7 +17200,7 @@ snapshots:
       '@turf/helpers': 7.4.0
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/rewind@5.1.5':
     dependencies:
@@ -17154,28 +17218,28 @@ snapshots:
       '@turf/invariant': 7.4.0
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/rhumb-bearing@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/rhumb-destination@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/rhumb-distance@7.4.0':
     dependencies:
       '@turf/helpers': 7.4.0
       '@turf/invariant': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/transform-rotate@7.4.0':
     dependencies:
@@ -17188,7 +17252,7 @@ snapshots:
       '@turf/rhumb-destination': 7.4.0
       '@turf/rhumb-distance': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/transform-scale@7.4.0':
     dependencies:
@@ -17203,7 +17267,7 @@ snapshots:
       '@turf/rhumb-destination': 7.4.0
       '@turf/rhumb-distance': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/transform-translate@7.4.0':
     dependencies:
@@ -17213,7 +17277,7 @@ snapshots:
       '@turf/meta': 7.4.0
       '@turf/rhumb-destination': 7.4.0
       '@types/geojson': 7946.0.16
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@turf/union@7.4.0':
     dependencies:
@@ -17221,9 +17285,9 @@ snapshots:
       '@turf/meta': 7.4.0
       '@types/geojson': 7946.0.16
       polyclip-ts: 0.16.8
-      tslib: 2.8.1
+      tslib: 2.9.1
 
-  '@tybys/wasm-util@0.10.4':
+  '@tybys/wasm-util@0.10.5':
     dependencies:
       tslib: 2.9.1
     optional: true
@@ -17546,95 +17610,99 @@ snapshots:
 
   '@types/use-sync-external-store@0.0.6': {}
 
-  '@typescript-eslint/eslint-plugin@8.72.2(@typescript-eslint/parser@8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
+  '@typescript-eslint/eslint-plugin@8.73.0(@typescript-eslint/parser@8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
     dependencies:
-      '@eslint-community/regexpp': 4.12.2
-      '@typescript-eslint/parser': 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
-      '@typescript-eslint/scope-manager': 8.72.2
-      '@typescript-eslint/type-utils': 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
-      '@typescript-eslint/utils': 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
-      '@typescript-eslint/visitor-keys': 8.72.2
+      '@eslint-community/regexpp': 4.12.3
+      '@typescript-eslint/parser': 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/scope-manager': 8.73.0
+      '@typescript-eslint/type-utils': 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/utils': 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/visitor-keys': 8.73.0
       eslint: 9.39.5(jiti@1.21.7)
-      ignore: 7.0.14
+      ignore: 7.0.16
       natural-compare: 1.4.0
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
     transitivePeerDependencies:
+      - '@typescript/native'
       - supports-color
 
-  '@typescript-eslint/parser@8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
+  '@typescript-eslint/parser@8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/scope-manager': 8.72.2
-      '@typescript-eslint/types': 8.72.2
-      '@typescript-eslint/typescript-estree': 8.72.2(typescript@5.9.3)
-      '@typescript-eslint/visitor-keys': 8.72.2
+      '@typescript-eslint/scope-manager': 8.73.0
+      '@typescript-eslint/types': 8.73.0
+      '@typescript-eslint/typescript-estree': 8.73.0(typescript@5.9.3)
+      '@typescript-eslint/visitor-keys': 8.73.0
       debug: 4.4.3
       eslint: 9.39.5(jiti@1.21.7)
       typescript: 5.9.3
     transitivePeerDependencies:
+      - '@typescript/native'
       - supports-color
 
-  '@typescript-eslint/project-service@8.72.2(typescript@5.9.3)':
+  '@typescript-eslint/project-service@8.73.0(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/tsconfig-utils': 8.72.2(typescript@5.9.3)
-      '@typescript-eslint/types': 8.72.2
+      '@typescript-eslint/tsconfig-utils': 8.73.0(typescript@5.9.3)
+      '@typescript-eslint/types': 8.73.0
       debug: 4.4.3
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/scope-manager@8.72.2':
+  '@typescript-eslint/scope-manager@8.73.0':
     dependencies:
-      '@typescript-eslint/types': 8.72.2
-      '@typescript-eslint/visitor-keys': 8.72.2
+      '@typescript-eslint/types': 8.73.0
+      '@typescript-eslint/visitor-keys': 8.73.0
 
-  '@typescript-eslint/tsconfig-utils@8.72.2(typescript@5.9.3)':
+  '@typescript-eslint/tsconfig-utils@8.73.0(typescript@5.9.3)':
     dependencies:
       typescript: 5.9.3
 
-  '@typescript-eslint/type-utils@8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
+  '@typescript-eslint/type-utils@8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/types': 8.72.2
-      '@typescript-eslint/typescript-estree': 8.72.2(typescript@5.9.3)
-      '@typescript-eslint/utils': 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/types': 8.73.0
+      '@typescript-eslint/typescript-estree': 8.73.0(typescript@5.9.3)
+      '@typescript-eslint/utils': 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
       debug: 4.4.3
       eslint: 9.39.5(jiti@1.21.7)
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
     transitivePeerDependencies:
+      - '@typescript/native'
       - supports-color
 
-  '@typescript-eslint/types@8.72.2': {}
+  '@typescript-eslint/types@8.73.0': {}
 
-  '@typescript-eslint/typescript-estree@8.72.2(typescript@5.9.3)':
+  '@typescript-eslint/typescript-estree@8.73.0(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/project-service': 8.72.2(typescript@5.9.3)
-      '@typescript-eslint/tsconfig-utils': 8.72.2(typescript@5.9.3)
-      '@typescript-eslint/types': 8.72.2
-      '@typescript-eslint/visitor-keys': 8.72.2
+      '@typescript-eslint/project-service': 8.73.0(typescript@5.9.3)
+      '@typescript-eslint/tsconfig-utils': 8.73.0(typescript@5.9.3)
+      '@typescript-eslint/types': 8.73.0
+      '@typescript-eslint/visitor-keys': 8.73.0
       debug: 4.4.3
-      minimatch: 11.0.8
-      semver: 7.8.5
+      minimatch: 11.0.9
+      semver: 7.8.6
       tinyglobby: 0.2.17
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/utils@8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
+  '@typescript-eslint/utils@8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
     dependencies:
       '@eslint-community/eslint-utils': 4.10.1(eslint@9.39.5(jiti@1.21.7))
-      '@typescript-eslint/scope-manager': 8.72.2
-      '@typescript-eslint/types': 8.72.2
-      '@typescript-eslint/typescript-estree': 8.72.2(typescript@5.9.3)
+      '@typescript-eslint/scope-manager': 8.73.0
+      '@typescript-eslint/types': 8.73.0
+      '@typescript-eslint/typescript-estree': 8.73.0(typescript@5.9.3)
       eslint: 9.39.5(jiti@1.21.7)
       typescript: 5.9.3
     transitivePeerDependencies:
+      - '@typescript/native'
       - supports-color
 
-  '@typescript-eslint/visitor-keys@8.72.2':
+  '@typescript-eslint/visitor-keys@8.73.0':
     dependencies:
-      '@typescript-eslint/types': 8.72.2
+      '@typescript-eslint/types': 8.73.0
       eslint-visitor-keys: 5.0.1
 
   '@ungap/structured-clone@1.4.0': {}
@@ -17778,7 +17846,7 @@ snapshots:
       command-line-usage: 7.0.4
       flatbuffers: 25.9.23
       json-bignum: 0.0.3
-      tslib: 2.8.1
+      tslib: 2.9.1
     transitivePeerDependencies:
       - '@75lb/nature'
 
@@ -17788,7 +17856,7 @@ snapshots:
 
   aria-hidden@1.2.6:
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   arr-union@3.1.0: {}
 
@@ -17857,7 +17925,7 @@ snapshots:
 
   async-mutex@0.2.6:
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   asynckit@0.4.0: {}
 
@@ -17911,7 +17979,7 @@ snapshots:
       balanced-match: 1.0.2
       concat-map: 0.0.1
 
-  brace-expansion@5.0.12:
+  brace-expansion@5.0.13:
     dependencies:
       balanced-match: 4.0.4
 
@@ -18553,12 +18621,13 @@ snapshots:
       react: 18.3.1
       size-sensor: 1.0.3
 
-  echarts-for-react@3.0.6(echarts@5.6.0)(react@18.3.1):
+  echarts-for-react@3.1.0(echarts@5.6.0)(react@18.3.1):
     dependencies:
       echarts: 5.6.0
       fast-deep-equal: 3.1.3
       react: 18.3.1
       size-sensor: 1.0.3
+      tslib: 2.9.1
 
   echarts@5.6.0:
     dependencies:
@@ -18642,7 +18711,7 @@ snapshots:
       is-subset: 0.1.1
       lodash.escape: 4.0.1
       lodash.isequal: 4.5.0
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
       object-is: 1.1.6
       object.assign: 4.1.7
       object.entries: 1.1.9
@@ -18660,7 +18729,7 @@ snapshots:
       es-errors: 1.3.0
       es-object-atoms: 1.1.2
       is-callable: 1.2.7
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
 
   es-abstract@1.24.2:
     dependencies:
@@ -18699,7 +18768,7 @@ snapshots:
       is-typed-array: 1.1.15
       is-weakref: 1.1.1
       math-intrinsics: 1.1.0
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
       object-keys: 1.1.1
       object.assign: 4.1.7
       own-keys: 1.0.2
@@ -19107,7 +19176,7 @@ snapshots:
     dependencies:
       motion-dom: 11.18.1
       motion-utils: 11.18.1
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       '@emotion/is-prop-valid': 1.4.0
       react: 18.3.1
@@ -19117,7 +19186,7 @@ snapshots:
     dependencies:
       motion-dom: 12.43.0
       motion-utils: 12.39.0
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       '@emotion/is-prop-valid': 1.4.0
       react: 18.3.1
@@ -19420,7 +19489,7 @@ snapshots:
 
   ignore@5.3.2: {}
 
-  ignore@7.0.14: {}
+  ignore@7.0.16: {}
 
   immer@11.2.10: {}
 
@@ -19481,14 +19550,14 @@ snapshots:
       '@formatjs/ecma402-abstract': 2.3.6
       '@formatjs/fast-memoize': 2.2.7
       '@formatjs/icu-messageformat-parser': 2.11.4
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   intl-messageformat@10.7.7:
     dependencies:
       '@formatjs/ecma402-abstract': 2.2.4
       '@formatjs/fast-memoize': 2.2.3
       '@formatjs/icu-messageformat-parser': 2.9.4
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   invariant@2.2.4:
     dependencies:
@@ -19978,14 +20047,14 @@ snapshots:
       tinyqueue: 2.0.3
       vt-pbf: 3.1.3
 
-  maplibre-gl@6.18.0:
+  maplibre-gl@6.19.0(@types/react@18.3.31)(immer@11.2.10)(react@18.3.1)(use-sync-external-store@1.7.0(react@18.3.1)):
     dependencies:
       '@mapbox/point-geometry': 1.1.0
       '@mapbox/tiny-sdf': 2.3.0
       '@mapbox/unitbezier': 1.0.0
       '@mapbox/vector-tile': 3.0.0
-      '@maplibre/geojson-vt': 6.3.0
-      '@maplibre/maplibre-gl-style-spec': 26.7.0
+      '@maplibre/geojson-vt': 6.3.3
+      '@maplibre/maplibre-gl-style-spec': 26.8.0
       '@maplibre/mlt': 1.3.0
       '@maplibre/vt-pbf': 4.3.3
       '@types/geojson': 7946.0.16
@@ -19994,10 +20063,16 @@ snapshots:
       gl-matrix: 3.4.4
       kdbush: 4.1.0
       murmurhash-js: 1.0.0
-      pbf: 5.1.2
+      pbf: 5.2.0
       potpack: 2.1.0
       quickselect: 3.0.0
       tinyqueue: 3.0.0
+      zustand: 5.1.0(@types/react@18.3.31)(immer@11.2.10)(react@18.3.1)(use-sync-external-store@1.7.0(react@18.3.1))
+    transitivePeerDependencies:
+      - '@types/react'
+      - immer
+      - react
+      - use-sync-external-store
 
   maplibregl-mapbox-request-transformer@0.0.2: {}
 
@@ -20426,10 +20501,10 @@ snapshots:
 
   min-indent@1.0.1: {}
 
-  minimatch@11.0.8:
+  minimatch@11.0.9:
     dependencies:
       '@isaacs/nonrecursive-glob-match': 1.1.0
-      brace-expansion: 5.0.12
+      brace-expansion: 5.0.13
 
   minimatch@3.1.5:
     dependencies:
@@ -20530,14 +20605,14 @@ snapshots:
     dependencies:
       hosted-git-info: 2.8.9
       resolve: 1.22.13
-      semver: 5.7.2
+      semver: 5.7.3
       validate-npm-package-license: 3.0.4
 
   normalize-package-data@3.0.3:
     dependencies:
       hosted-git-info: 4.1.0
       is-core-module: 2.17.0
-      semver: 7.8.5
+      semver: 7.8.6
       validate-npm-package-license: 3.0.4
 
   normalize-path@3.0.0: {}
@@ -20553,6 +20628,8 @@ snapshots:
   object-hash@3.0.0: {}
 
   object-inspect@1.13.4: {}
+
+  object-inspect@1.14.0: {}
 
   object-is@1.1.6:
     dependencies:
@@ -20744,9 +20821,9 @@ snapshots:
       ieee754: 1.2.1
       resolve-protobuf-schema: 2.1.0
 
-  pbf@5.1.2:
+  pbf@5.2.0:
     dependencies:
-      resolve-protobuf-schema: 2.1.0
+      protocol-buffers-schema: 3.6.1
 
   performance-now@0.2.0: {}
 
@@ -21227,7 +21304,7 @@ snapshots:
     dependencies:
       react: 18.3.1
       react-style-singleton: 2.2.3(@types/react@18.3.31)(react@18.3.1)
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       '@types/react': 18.3.31
 
@@ -21236,7 +21313,7 @@ snapshots:
       react: 18.3.1
       react-remove-scroll-bar: 2.3.8(@types/react@18.3.31)(react@18.3.1)
       react-style-singleton: 2.2.3(@types/react@18.3.31)(react@18.3.1)
-      tslib: 2.8.1
+      tslib: 2.9.1
       use-callback-ref: 1.3.3(@types/react@18.3.31)(react@18.3.1)
       use-sidecar: 1.1.3(@types/react@18.3.31)(react@18.3.1)
     optionalDependencies:
@@ -21274,7 +21351,7 @@ snapshots:
     dependencies:
       get-nonce: 1.0.1
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       '@types/react': 18.3.31
 
@@ -21612,7 +21689,7 @@ snapshots:
 
   rxjs@7.8.2:
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   s2-geometry@1.2.10:
     dependencies:
@@ -21656,7 +21733,7 @@ snapshots:
 
   secure-json-parse@2.7.0: {}
 
-  semver@5.7.2: {}
+  semver@5.7.3: {}
 
   semver@6.3.1: {}
 
@@ -21664,7 +21741,7 @@ snapshots:
 
   semver@7.7.3: {}
 
-  semver@7.8.5: {}
+  semver@7.8.6: {}
 
   send@0.19.2:
     dependencies:
@@ -22164,15 +22241,16 @@ snapshots:
       possible-typed-array-names: 1.1.0
       reflect.getprototypeof: 1.0.10
 
-  typescript-eslint@8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3):
+  typescript-eslint@8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3):
     dependencies:
-      '@typescript-eslint/eslint-plugin': 8.72.2(@typescript-eslint/parser@8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
-      '@typescript-eslint/parser': 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
-      '@typescript-eslint/typescript-estree': 8.72.2(typescript@5.9.3)
-      '@typescript-eslint/utils': 8.72.2(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/eslint-plugin': 8.73.0(@typescript-eslint/parser@8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/parser': 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
+      '@typescript-eslint/typescript-estree': 8.73.0(typescript@5.9.3)
+      '@typescript-eslint/utils': 8.73.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
       eslint: 9.39.5(jiti@1.21.7)
       typescript: 5.9.3
     transitivePeerDependencies:
+      - '@typescript/native'
       - supports-color
 
   typescript@5.9.3: {}
@@ -22261,7 +22339,7 @@ snapshots:
   use-callback-ref@1.3.3(@types/react@18.3.31)(react@18.3.1):
     dependencies:
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       '@types/react': 18.3.31
 
@@ -22288,7 +22366,7 @@ snapshots:
     dependencies:
       detect-node-es: 1.1.0
       react: 18.3.1
-      tslib: 2.8.1
+      tslib: 2.9.1
     optionalDependencies:
       '@types/react': 18.3.31
 
@@ -22570,5 +22648,12 @@ snapshots:
       tslib: 2.3.0
 
   zstd-codec@0.1.5: {}
+
+  zustand@5.1.0(@types/react@18.3.31)(immer@11.2.10)(react@18.3.1)(use-sync-external-store@1.7.0(react@18.3.1)):
+    optionalDependencies:
+      '@types/react': 18.3.31
+      immer: 11.2.10
+      react: 18.3.1
+      use-sync-external-store: 1.7.0(react@18.3.1)
 
   zwitch@2.0.4: {}

@@ -25,4 +25,4 @@ testbook==0.4.2
 tornado>=6.6.1
 mistune>=3.3.0
 bleach>=6.4.0
-soupsieve>=4.0.0,<5
+soupsieve>=4.1.2,<5
